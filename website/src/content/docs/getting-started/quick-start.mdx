@@ -1,0 +1,67 @@
+---
+title: Quick start
+description: Build an index and quantify a sample in two commands.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+This walks through the two-command workflow: build an index from a
+transcriptome, then quantify a paired-end sample.
+
+<Steps>
+
+1. **Build an index** from your transcriptome FASTA.
+
+   ```sh
+   salmon index \
+     -t transcripts.fa \
+     -i salmon_index \
+     -p 16
+   ```
+
+   The index is reusable across every sample quantified against the same
+   transcriptome. For decoy-aware indexing, append the genome to the FASTA and
+   pass `-d decoys.txt` (one decoy sequence name per line; decoy records must
+   come last in the FASTA).
+
+2. **Quantify** a paired-end sample. `-l A` auto-detects the library type.
+
+   ```sh
+   salmon quant \
+     -i salmon_index \
+     -l A \
+     -1 reads_1.fastq.gz \
+     -2 reads_2.fastq.gz \
+     -p 16 \
+     -o sample1_quant
+   ```
+
+   For single-end reads, use `-r reads.fastq.gz` instead of `-1/-2`.
+
+3. **Read the results.** `sample1_quant/quant.sf` has one row per transcript:
+
+   ```
+   Name        Length  EffectiveLength  TPM         NumReads
+   NM_004503   1681    1502.723         36410.66    331.969
+   ...
+   ```
+
+   Load it in R with tximport:
+
+   ```r
+   library(tximport)
+   txi <- tximport("sample1_quant/quant.sf", type = "salmon", txOut = TRUE)
+   ```
+
+</Steps>
+
+## Common options
+
+- **Faster, alignment-free mapping:** add `--sketch`. See
+  [mapping modes](../../guides/mapping-modes/).
+- **Bias correction:** `--seqBias`, `--gcBias`, `--posBias`.
+- **Posterior uncertainty:** `--numBootstraps 100` or `--numGibbsSamples 100`.
+  See [inferential replicates](../../guides/inferential-replicates/).
+- **Gene-level output:** `-g txp2gene.gtf` also writes `quant.genes.sf`.
+
+See the [CLI reference](../../reference/cli/) for the full option list.

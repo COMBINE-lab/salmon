@@ -32,7 +32,8 @@
 
 # Rust build artifacts
 /target
-Cargo.lock
+# Cargo.lock IS committed: salmon ships a binary, so a pinned lockfile gives
+# reproducible release/Docker/`--locked` builds (Cargo's guidance for bins).
 
 # Unpacked sample data (the tarball sample_data.tgz is tracked instead)
 /sample_data/

@@ -1,0 +1,59 @@
+---
+title: Inferential replicates
+description: Quantifying inferential uncertainty with bootstrap or Gibbs sampling.
+---
+
+Transcript abundance estimates carry inferential uncertainty: reads that map
+ambiguously to several transcripts can be apportioned in more than one way.
+salmon can quantify this uncertainty by producing **inferential replicates** —
+repeated abundance estimates that downstream tools (fishpond/swish) use to
+separate biological signal from inferential noise.
+
+## Bootstrap replicates
+
+```sh
+salmon quant -i salmon_index -l A \
+  -1 r1.fq.gz -2 r2.fq.gz -p 16 \
+  --numBootstraps 100 \
+  -o out
+```
+
+## Gibbs replicates
+
+Gibbs sampling draws posterior samples from the abundance model. It is mutually
+exclusive with bootstrapping.
+
+```sh
+salmon quant -i salmon_index -l A \
+  -1 r1.fq.gz -2 r2.fq.gz -p 16 \
+  --numGibbsSamples 100 \
+  --thinningFactor 16 \
+  -o out
+```
+
+## Output
+
+Replicates are written to `aux_info/bootstrap/`:
+
+- `names.tsv.gz` — the transcript names, in index order.
+- `bootstraps.gz` — the replicate abundances as raw little-endian `f64`s
+  (`n_replicates × num_transcripts`, contiguous).
+
+`aux_info/meta_info.json` records `num_bootstraps` and `samp_type`
+(`"bootstrap"` or `"gibbs"`). This is the **same format C++ salmon used**, so it
+loads directly in the standard R tools. See the [output format
+specification](../../reference/output-formats/#aux_infobootstrap--inferential-replicates-gzip-numbootstrap--numgibbssamples)
+for the exact byte layout.
+
+## Loading in R
+
+```r
+library(tximport)
+library(fishpond)
+
+# txi$infReps holds the inferential replicate matrices
+txi <- tximport("out/quant.sf", type = "salmon", txOut = TRUE)
+```
+
+`tximport` reads the replicates automatically when they are present; fishpond and
+swish then use them for differential-expression testing with uncertainty.

@@ -1,0 +1,67 @@
+---
+title: Fragment library types
+description: The salmon library-type string and how it maps to common protocols.
+---
+
+RNA-seq library preparation protocols differ in ways that matter for
+quantification: reads can be single-end or paired-end, the protocol can be
+unstranded or strand-specific, and paired-end reads have a relative orientation.
+salmon describes all of these with a short library-type string passed to
+`-l/--libType`.
+
+:::tip[Just use `-l A`]
+If you are unsure, pass `-l A` and salmon will **automatically detect** the
+library type from the data. The explicit codes below are for when you want to
+fix it.
+:::
+
+The library-type string has up to three parts: relative orientation,
+strandedness, and directionality.
+
+## 1. Relative orientation (paired-end only)
+
+| Code | Meaning |
+| --- | --- |
+| `I` | **I**nward — mates point toward each other |
+| `O` | **O**utward — mates point away from each other |
+| `M` | **M**atching — mates point the same way |
+
+## 2. Strandedness
+
+| Code | Meaning |
+| --- | --- |
+| `S` | **S**tranded (strand-specific protocol) |
+| `U` | **U**nstranded |
+
+If the protocol is unstranded (`U`), the string ends here.
+
+## 3. Directionality (stranded protocols only)
+
+| Code | Meaning |
+| --- | --- |
+| `F` | Read 1 (or the single-end read) comes from the **f**orward strand |
+| `R` | Read 1 (or the single-end read) comes from the **r**everse strand |
+
+## Examples
+
+| String | Interpretation |
+| --- | --- |
+| `IU` | Unstranded paired-end, mates face each other |
+| `ISF` | Stranded paired-end, inward, read 1 from the forward strand |
+| `OSR` | Stranded paired-end, outward, read 1 from the reverse strand |
+| `U` | Unstranded single-end |
+| `SF` | Stranded single-end, reads from the forward strand |
+| `SR` | Stranded single-end, reads from the reverse strand |
+
+Single-end libraries omit the orientation part, so the only valid single-end
+strings are `U`, `SF`, and `SR`.
+
+## Correspondence to TopHat library types
+
+| TopHat | salmon (paired-end) | salmon (single-end) |
+| --- | --- | --- |
+| `-fr-unstranded` | `-l IU` | `-l U` |
+| `-fr-firststrand` | `-l ISR` | `-l SR` |
+| `-fr-secondstrand` | `-l ISF` | `-l SF` |
+
+The remaining salmon library strings have no direct TopHat equivalent.

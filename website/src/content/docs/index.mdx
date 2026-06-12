@@ -1,0 +1,48 @@
+---
+title: salmon
+description: Fast, accurate transcript quantification from RNA-seq reads.
+template: splash
+hero:
+  tagline: Fast, accurate transcript-level quantification from RNA-seq reads — now a portable, single-binary Rust tool.
+  actions:
+    - text: Get started
+      link: getting-started/introduction/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/COMBINE-lab/salmon
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What is salmon?
+
+**salmon** quantifies the expression of transcripts from RNA-seq data. It pairs a
+fast mapping stage — *selective alignment* or alignment-free *sketch* mode — with
+a statistical model of the sequencing experiment and an EM/VBEM optimizer to
+produce accurate transcript-level abundance estimates.
+
+salmon **2.0** is a from-scratch **Rust** rewrite of the original C++ tool. It is
+faster, ships as a single portable binary, and is trivial to install — while
+keeping the same workflow and the same output formats your downstream tools
+already read.
+
+<CardGrid stagger>
+  <Card title="Same workflow" icon="seti:config">
+    `salmon index` → `salmon quant` → `quant.sf`. Drop-in for tximport, tximeta,
+    fishpond, and swish.
+  </Card>
+  <Card title="Two mapping modes" icon="random">
+    Selective alignment for maximum accuracy, or `--sketch` for alignment-free
+    speed.
+  </Card>
+  <Card title="Easy to install" icon="rocket">
+    A single binary via the install script, `cargo install`, conda, or Docker —
+    no compiler or system libraries required.
+  </Card>
+  <Card title="Coming from C++ salmon?" icon="open-book">
+    See [what changed in 2.0](migrating/from-cpp/). The biggest one: **rebuild
+    your index.**
+  </Card>
+</CardGrid>

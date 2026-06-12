@@ -1,0 +1,47 @@
+---
+title: Introduction
+description: What salmon does and how the 2.0 Rust release differs from the C++ tool.
+---
+
+salmon estimates transcript-level abundances from RNA-seq reads. Rather than
+producing a full base-to-base alignment of every read to a genome, salmon maps
+reads directly to a **transcriptome** and uses a probabilistic model to assign
+multi-mapping reads, correct for technical biases, and report abundances in TPM
+and estimated read counts.
+
+## The pipeline
+
+1. **`salmon index`** builds a reusable index from a transcriptome FASTA (the set
+   of transcript sequences you want to quantify against, optionally with decoy
+   sequences such as the genome).
+2. **`salmon quant`** maps your reads against that index, fits the experiment
+   model (fragment-length distribution, optional sequence/GC/positional bias),
+   runs the EM/VBEM optimizer over equivalence classes, and writes the results.
+3. **`quant.sf`** is the primary output: one row per transcript with its length,
+   effective length, TPM, and estimated read count. Downstream R/Bioconductor
+   tools (tximport, tximeta, fishpond, swish) read it directly.
+
+## salmon 2.0 (Rust) vs. C++ salmon
+
+salmon 2.0 is a complete rewrite in Rust. The design goals were speed,
+portability, and easy installation, **without** breaking the things downstream
+tools depend on.
+
+- **Same outputs.** `quant.sf`, `cmd_info.json`, `lib_format_counts.json`, and
+  `aux_info/meta_info.json` are unchanged. Inferential replicates
+  (bootstrap/Gibbs) are written in the same format, so tximport/fishpond/swish
+  keep working. See the [output format specification](../reference/output-formats/).
+- **Single portable binary.** No compiler, Boost, or system libraries to install.
+- **A new alignment-free mode** (`--sketch`) for when you want maximum speed.
+- **One breaking change you must act on:** the index format changed, so **you
+  must rebuild your index** with 2.0. Pointing 2.0 at a C++ (pufferfish) index —
+  or C++ salmon at a 2.0 index — is detected and rejected with a clear message.
+
+If you are upgrading from C++ salmon, read [Migrating from C++ salmon](../migrating/from-cpp/)
+for the full list of changed, removed, and new options.
+
+:::note[Single-cell data]
+Single-cell quantification (the old `salmon alevin`) now lives in the
+[alevin-fry](https://github.com/COMBINE-lab/alevin-fry) ecosystem. `salmon
+alevin` in 2.0 just prints a redirect.
+:::

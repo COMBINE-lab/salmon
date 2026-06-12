@@ -1,0 +1,71 @@
+---
+title: Installation
+description: Install salmon 2.0 via the install script, cargo, conda, Docker, or from source.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+salmon 2.0 is a single self-contained binary. Pick whichever method fits your
+environment.
+
+<Tabs>
+  <TabItem label="Install script">
+The release [install script](https://github.com/COMBINE-lab/salmon/releases)
+downloads the right prebuilt binary for your OS/architecture and puts it on your
+`PATH`:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/COMBINE-lab/salmon/releases/latest/download/salmon-cli-installer.sh | sh
+```
+
+Prebuilt binaries are provided for Linux and macOS on both x86-64 and aarch64.
+The x86-64 build targets a broad SIMD floor (SSE4.2-era) and selects AVX2 at
+runtime where available, so one binary runs on essentially any modern CPU.
+  </TabItem>
+
+  <TabItem label="cargo">
+If you have a Rust toolchain (≥ 1.91):
+
+```sh
+cargo install salmon-cli
+```
+
+This builds and installs the `salmon` binary from crates.io.
+  </TabItem>
+
+  <TabItem label="conda">
+```sh
+conda install -c bioconda -c conda-forge salmon
+```
+
+The `salmon` package tracks the 2.0 (Rust) line. The final C++ release remains
+available as `salmon-cpp` for reproducibility.
+  </TabItem>
+
+  <TabItem label="Docker">
+```sh
+docker run --rm -v "$PWD:/data" -w /data \
+  combinelab/salmon:latest salmon --version
+```
+  </TabItem>
+
+  <TabItem label="From source">
+```sh
+git clone https://github.com/COMBINE-lab/salmon
+cd salmon
+cargo build --release
+# binary at target/release/salmon
+```
+
+The repository ships a `.cargo/config.toml` that pins the portable SIMD floor;
+release builds use it automatically.
+  </TabItem>
+</Tabs>
+
+## Verify
+
+```sh
+salmon --version
+salmon --help
+```

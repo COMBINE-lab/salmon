@@ -1,0 +1,117 @@
+---
+title: Command-line interface
+description: salmon 2.0 subcommands and their key options.
+---
+
+salmon is invoked as `salmon <command> [options]`. Run `salmon <command> --help`
+for the authoritative, version-specific option list; this page summarizes the
+main commands and options.
+
+```
+salmon <command>
+
+Commands:
+  index       Build a salmon index from a transcriptome FASTA
+  quant       Quantify transcript abundances from FASTQ reads (or a BAM)
+  quantmerge  Merge a column across samples' quant files into a matrix
+  debug-map   Diagnostic: per-read best-mapping detail
+  alevin      Single-cell (removed; redirects to alevin-fry)
+```
+
+Global: `-q/--quiet`, `-h/--help`, `-V/--version`.
+
+## `salmon index`
+
+Build a reusable index from one or more transcriptome FASTA files.
+
+| Option | Description |
+| --- | --- |
+| `-t, --transcripts <FASTA>…` | Transcript FASTA file(s). **Required.** |
+| `-i, --index <DIR>` | Output index directory. **Required.** |
+| `-k, --kmerLen <N>` | K-mer length (odd, ≤ 31 recommended). Default `31`. |
+| `-m, --minimizerLen <N>` | Minimizer length (`0` = auto). Default `0`. |
+| `-p, --threads <N>` | Worker threads (`0` = all cores). Default `0`. |
+| `-d, --decoys <FILE>` | File of decoy sequence names (one per line; decoy records must come last in the FASTA). |
+| `--keepDuplicates` | Retain exact-duplicate transcript sequences instead of collapsing them. |
+| `--gencode` | GENCODE references: truncate each name at the first `\|`. |
+| `--keepFixedFasta` | Keep the cleaned (non-ACGT-replaced) reference FASTA. |
+| `--keepIntermediate` | Keep intermediate compacted-dBG files. |
+| `--tmpdir <DIR>` | Directory for build intermediates. |
+| `--filterSize <N>` | *Accepted for compatibility; no effect.* |
+
+```sh
+salmon index -t transcripts.fa -i salmon_index -p 16
+```
+
+## `salmon quant`
+
+Quantify from FASTQ reads (reads mode, `-i`) or from a transcriptome BAM
+(alignment mode, `-a`).
+
+### Inputs / outputs
+
+| Option | Description |
+| --- | --- |
+| `-i, --index <DIR>` | Salmon index (reads mode). |
+| `-a, --alignments <BAM>` | Alignment mode: a BAM of reads aligned to the transcriptome. |
+| `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode) — enables the error model. |
+| `-l, --libType <TYPE>` | Library type (e.g. `IU`, `ISR`, `A` for auto). Default `A`. See [library types](../../guides/library-types/). |
+| `-1/-2, --mates1/2 <FASTQ>…` | Paired-end read files. |
+| `-r, --unmatedReads <FASTQ>…` | Single-end read files. |
+| `-o, --output <DIR>` | Output directory. **Required.** |
+| `-p, --threads <N>` | Worker threads (`0` = all cores). |
+| `-g, --geneMap <FILE>` | Transcript-to-gene map (GTF/GFF or 2-column TSV); also writes `quant.genes.sf`. |
+
+### Mapping
+
+| Option | Description |
+| --- | --- |
+| `--sketch` | Alignment-free pseudoalignment path. |
+| `--sketchStrictOrphans` | Strict orphan rule in sketch mode. |
+| `--allowDovetail` | Admit dovetailed short-insert fragments. |
+| `--minScoreFraction <f>` | Min alignment score as a fraction of perfect. Default `0.65`. |
+| `--ma/--mp/--go/--ge` | Match score / mismatch / gap-open / gap-extend. |
+| `--orphanChainSubThresh <f>` | Orphan chain pruning (default `0.0` = align all). |
+| `--noErrorModel` | Disable the alignment error model (alignment mode). |
+
+### Model & bias
+
+| Option | Description |
+| --- | --- |
+| `--seqBias` | Sequence-specific bias correction. |
+| `--gcBias` | Fragment-GC bias correction. |
+| `--posBias` | Positional bias correction. |
+| `--noLengthCorrection` | Use raw reference length (no effective-length correction). |
+
+### Inference
+
+| Option | Description |
+| --- | --- |
+| `--useEM` | Standard EM instead of VBEM. |
+| `--rangeFactorizationBins <N>` | Range-factorization bins (`0` disables). Default `4`. |
+| `--numBootstraps <N>` | Bootstrap replicates for posterior uncertainty. |
+| `--numGibbsSamples <N>` | Gibbs posterior samples (mutually exclusive with bootstraps). |
+| `--thinningFactor <N>` | Gibbs thinning factor. Default `16`. |
+| `--incompatPrior <f>` | Prior weight for strand-incompatible mappings. Default `0`. |
+
+### Diagnostics
+
+| Option | Description |
+| --- | --- |
+| `--dumpEq` / `--dumpEqWeights` | Dump equivalence classes (with weights). |
+| `--writeUnmappedNames` | Write unmapped fragment names. |
+| `-z, --writeMappings <FILE>` | Write per-mapping SAM records. |
+
+```sh
+salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 16 -o out
+```
+
+## `salmon quantmerge`
+
+Merge a chosen column (e.g. `NumReads` or `TPM`) across multiple samples'
+`quant.sf` files into a single matrix.
+
+:::note
+Coming from C++ salmon? See [what changed in 2.0](../../migrating/from-cpp/) for
+removed, renamed, and accepted-but-ignored options.
+:::
