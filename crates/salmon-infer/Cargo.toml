@@ -9,13 +9,13 @@ authors.workspace = true
 description = "Collapsed EM / VBEM abundance estimation over equivalence classes for the salmon Rust port."
 
 [dependencies]
-salmon-core = { path = "../salmon-core" }
-salmon-eqclass = { path = "../salmon-eqclass" }
+salmon-core = { workspace = true }
+salmon-eqclass = { workspace = true }
 statrs = { workspace = true }
 rayon = { workspace = true }
 rand = { workspace = true }
 rand_pcg = { workspace = true }
 rand_distr = { workspace = true }
 
-[lints.rust]
-unsafe_code = "warn"
+[lints]
+workspace = true

@@ -66,7 +66,13 @@ pub fn extend_mem(query: &[u8], ref_seq: &[u8], m: Mem) -> Mem {
 /// (`[base_pos, base_pos + contig_len)`) instead yields a true
 /// **uni-MEM**: an exact match that cannot extend past the unitig boundary,
 /// exactly as pufferfish's `expandHitEfficient` (which stops at `CONTIG_END`).
-pub fn extend_mem_within(query: &[u8], ref_seq: &[u8], mut m: Mem, ref_lo: i32, ref_hi: i32) -> Mem {
+pub fn extend_mem_within(
+    query: &[u8],
+    ref_seq: &[u8],
+    mut m: Mem,
+    ref_lo: i32,
+    ref_hi: i32,
+) -> Mem {
     let qlen = query.len() as i32;
     let reflen = ref_seq.len() as i32;
     let hi = ref_hi.min(reflen);
@@ -204,11 +210,14 @@ fn project_raw_hits_with_contig(
             } else {
                 read_len - (*read_pos + k)
             };
-            groups.entry((tid, rp.is_fw)).or_default().push(SeedWithContig {
-                mem: Mem::new(read_start, rp.pos as i32, k),
-                u_lo: base_pos,
-                u_hi: base_pos + contig_len,
-            });
+            groups
+                .entry((tid, rp.is_fw))
+                .or_default()
+                .push(SeedWithContig {
+                    mem: Mem::new(read_start, rp.pos as i32, k),
+                    u_lo: base_pos,
+                    u_hi: base_pos + contig_len,
+                });
         }
     }
     groups
@@ -348,7 +357,11 @@ mod tests {
         let read = reference[50..130].to_vec();
         // Introduce a mismatch 10 bases to the right of the seed end.
         let break_at = 50 + 31 + 10;
-        reference[break_at] = if reference[break_at] == b'A' { b'C' } else { b'A' };
+        reference[break_at] = if reference[break_at] == b'A' {
+            b'C'
+        } else {
+            b'A'
+        };
         let e = extend_mem(&read, &reference, Mem::new(0, 50, 31));
         // right edge stops just before the mismatch; left edge reaches read 0.
         assert_eq!(e.read_start, 0);
@@ -381,7 +394,15 @@ mod tests {
             .map(|&p| {
                 (
                     p,
-                    ProjectedHits::new(0, p as u32, true, contig_len, 0, k as u32, table.contig_entries(0)),
+                    ProjectedHits::new(
+                        0,
+                        p as u32,
+                        true,
+                        contig_len,
+                        0,
+                        k as u32,
+                        table.contig_entries(0),
+                    ),
                 )
             })
             .collect();
@@ -391,7 +412,15 @@ mod tests {
         assert_eq!(cands.len(), 1);
         let c = &cands[0];
         assert!(c.is_fw);
-        assert_eq!(c.chain.mems.len(), 1, "colinear seeds should collapse to one uni-MEM");
-        assert_eq!(c.chain.covered_read_bases(), 80, "uni-MEM covers the whole read");
+        assert_eq!(
+            c.chain.mems.len(),
+            1,
+            "colinear seeds should collapse to one uni-MEM"
+        );
+        assert_eq!(
+            c.chain.covered_read_bases(),
+            80,
+            "uni-MEM covers the whole read"
+        );
     }
 }

@@ -141,14 +141,22 @@ impl GcFragModel {
 
 /// Per-cell bias ratio `observed / expected`, clamped to `[1/max_ratio, max_ratio]`
 /// (salmon's `GCFragModel::ratio`). Both models are normalized first.
-pub fn gc_ratio(observed: &mut GcFragModel, expected: &mut GcFragModel, max_ratio: f64) -> GcFragModel {
+pub fn gc_ratio(
+    observed: &mut GcFragModel,
+    expected: &mut GcFragModel,
+    max_ratio: f64,
+) -> GcFragModel {
     observed.normalize();
     expected.normalize();
     let min_ratio = 1.0 / max_ratio;
     let mut out = GcFragModel::new(observed.cond_bins, observed.gc_bins);
     for i in 0..out.counts.len() {
         let e = expected.counts[i];
-        let rat = if e != 0.0 { observed.counts[i] / e } else { max_ratio };
+        let rat = if e != 0.0 {
+            observed.counts[i] / e
+        } else {
+            max_ratio
+        };
         out.counts[i] = rat.clamp(min_ratio, max_ratio);
     }
     out.normalized = true; // a ratio model is used directly, not re-normalized
@@ -220,7 +228,11 @@ pub fn gc_prefix(seq: &[u8]) -> Vec<u32> {
 /// GC count in the closed interval `[a, b]` from a cumulative-count prefix.
 #[inline]
 fn gc_in(prefix: &[u32], a: i32, b: i32) -> i64 {
-    let lo = if a > 0 { prefix[(a - 1) as usize] as i64 } else { 0 };
+    let lo = if a > 0 {
+        prefix[(a - 1) as usize] as i64
+    } else {
+        0
+    };
     prefix[b as usize] as i64 - lo
 }
 
@@ -251,14 +263,21 @@ impl GcRank {
                 bv.set(i, true);
             }
         }
-        GcRank { rank: sux::rank_sel::Rank9::new(bv) }
+        GcRank {
+            rank: sux::rank_sel::Rank9::new(bv),
+        }
     }
 
     /// A cumulative-GC view of the transcript occupying `concat[off..off+len]`.
     #[inline]
     pub fn view(&self, off: usize, len: usize) -> GcView<'_> {
         use sux::traits::Rank;
-        GcView::Rank { rank: &self.rank, off, base: self.rank.rank(off), len }
+        GcView::Rank {
+            rank: &self.rank,
+            off,
+            base: self.rank.rank(off),
+            len,
+        }
     }
 }
 
@@ -284,7 +303,9 @@ impl GcView<'_> {
     pub fn cum(&self, p: i32) -> i64 {
         match self {
             GcView::Dense(prefix) => prefix[p as usize] as i64,
-            GcView::Rank { rank, off, base, .. } => {
+            GcView::Rank {
+                rank, off, base, ..
+            } => {
                 use sux::traits::Rank;
                 (rank.rank(off + p as usize + 1) - base) as i64
             }
@@ -307,7 +328,10 @@ impl GcView<'_> {
 #[derive(Clone, Copy)]
 pub enum GcStore<'a> {
     Dense(&'a [Vec<u32>]),
-    Rank { rank: &'a GcRank, offsets: &'a [u64] },
+    Rank {
+        rank: &'a GcRank,
+        offsets: &'a [u64],
+    },
 }
 
 impl<'a> GcStore<'a> {
@@ -432,7 +456,13 @@ impl GcContext {
             fp_count[p] = fpe - fps;
             fp_wlen[p] = if !fp_left { fe_c + 1 } else { fe_c - fs_c };
         }
-        GcContext { cum, fp_count, fp_wlen, tp_count, tp_wlen }
+        GcContext {
+            cum,
+            fp_count,
+            fp_wlen,
+            tp_count,
+            tp_wlen,
+        }
     }
 
     /// GC descriptor `(fragFrac, contextFrac)` for the closed fragment `[s, e]`,
@@ -444,7 +474,11 @@ impl GcContext {
         if context_size == 0.0 {
             return None;
         }
-        let cs = if s > 0 { self.cum[(s - 1) as usize] as i64 } else { 0 };
+        let cs = if s > 0 {
+            self.cum[(s - 1) as usize] as i64
+        } else {
+            0
+        };
         let ce = self.cum[e as usize] as i64;
         let count = (self.fp_count[s as usize] + self.tp_count[e as usize]) as f64;
         let frag_frac = lrint(100.0 * (ce - cs) as f64 / (e - s + 1) as f64);
@@ -565,7 +599,11 @@ pub fn gc_corrected_effective_length(
     elen: f64,
     stride: usize,
 ) -> f64 {
-    let k = if seq_models.is_some() { CONTEXT_LENGTH } else { 1 };
+    let k = if seq_models.is_some() {
+        CONTEXT_LENGTH
+    } else {
+        1
+    };
     let ref_len = seq.len();
     let unprocessed = (ref_len as i32 - elen as i32).max(0);
     let cdf_max_arg = (cdf.len() - 1).min(ref_len);
@@ -584,9 +622,13 @@ pub fn gc_corrected_effective_length(
         for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
             let read_start = frag_start + cu;
             if read_start < ref_len {
-                fw[read_start] =
-                    log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + CONTEXT_LENGTH], false)
-                        .exp();
+                fw[read_start] = log_bias(
+                    obs_fw,
+                    exp_fw,
+                    &seq[frag_start..frag_start + CONTEXT_LENGTH],
+                    false,
+                )
+                .exp();
                 rc[read_start] = log_bias(
                     obs_rc,
                     exp_rc,
@@ -682,7 +724,11 @@ mod tests {
         }
         let r = gc_ratio(&mut obs, &mut exp, GC_MAX_RATIO);
         for gc in 0..=100 {
-            assert!((r.get(gc, 0) - 1.0).abs() < 1e-9, "gc {gc}: {}", r.get(gc, 0));
+            assert!(
+                (r.get(gc, 0) - 1.0).abs() < 1e-9,
+                "gc {gc}: {}",
+                r.get(gc, 0)
+            );
         }
     }
 
@@ -773,7 +819,11 @@ mod tests {
             let n = seq.len() as i32;
             for s in 0..(n - fl) {
                 let e = s + fl - 1;
-                assert_eq!(gc_desc(&dense, s, e), gc_desc(&rview, s, e), "fl={fl} s={s}");
+                assert_eq!(
+                    gc_desc(&dense, s, e),
+                    gc_desc(&rview, s, e),
+                    "fl={fl} s={s}"
+                );
             }
         }
     }
@@ -803,7 +853,10 @@ mod tests {
         exp.inc(75, 0, 1e6); // bin 1 enriched in exp
         let r = gc_ratio(&mut obs, &mut exp, 1000.0);
         for v in [r.get(0, 0), r.get(75, 0)] {
-            assert!(v <= 1000.0 + 1e-6 && v >= 1.0 / 1000.0 - 1e-12, "ratio {v} out of clamp");
+            assert!(
+                (1.0 / 1000.0 - 1e-12..=1000.0 + 1e-6).contains(&v),
+                "ratio {v} out of clamp"
+            );
         }
     }
 }

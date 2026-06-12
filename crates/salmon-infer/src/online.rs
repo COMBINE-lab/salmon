@@ -84,7 +84,10 @@ impl OnlineInference {
             .iter()
             .map(|&l| (alpha * (l.max(1)) as f64).ln())
             .collect();
-        let mass = ref_lens.iter().map(|_| AtomicF64::new(f64::NEG_INFINITY)).collect();
+        let mass = ref_lens
+            .iter()
+            .map(|_| AtomicF64::new(f64::NEG_INFINITY))
+            .collect();
         Self {
             prior_mass,
             mass,

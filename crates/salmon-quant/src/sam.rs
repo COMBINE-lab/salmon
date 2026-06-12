@@ -13,10 +13,10 @@
 use std::io::Write;
 use std::sync::Mutex;
 
-use salmon_index::SalmonIndex;
-use salmon_map::ScoredMapping;
 use salmon_core::MateStatus;
 use salmon_core::RefProvider as _;
+use salmon_index::SalmonIndex;
+use salmon_map::ScoredMapping;
 
 const SAM_VERSION: &str = "1.0";
 
@@ -42,10 +42,22 @@ impl SamWriter {
         let mut w: Box<dyn Write + Send> = Box::new(std::io::BufWriter::with_capacity(1 << 20, f));
         writeln!(w, "@HD\tVN:{SAM_VERSION}\tSO:unknown")?;
         for tid in 0..salmon.num_refs() {
-            writeln!(w, "@SQ\tSN:{}\tLN:{}", salmon.ref_name(tid), salmon.ref_len(tid))?;
+            writeln!(
+                w,
+                "@SQ\tSN:{}\tLN:{}",
+                salmon.ref_name(tid),
+                salmon.ref_len(tid)
+            )?;
         }
-        writeln!(w, "@PG\tID:salmon\tPN:salmon\tVN:{}\tCL:{}", crate::output::SALMON_VERSION, cmd)?;
-        Ok(Self { inner: Mutex::new(w) })
+        writeln!(
+            w,
+            "@PG\tID:salmon\tPN:salmon\tVN:{}\tCL:{}",
+            crate::output::SALMON_VERSION,
+            cmd
+        )?;
+        Ok(Self {
+            inner: Mutex::new(w),
+        })
     }
 
     /// Append a worker thread's accumulated SAM text in one locked write.
@@ -66,6 +78,7 @@ impl SamWriter {
 // SAM flag bits.
 const PAIRED: u16 = 0x1;
 const PROPER_PAIR: u16 = 0x2;
+#[allow(dead_code)] // kept for completeness of the SAM flag-bit set
 const UNMAPPED: u16 = 0x4;
 const MATE_UNMAPPED: u16 = 0x8;
 const IS_RC: u16 = 0x10;
@@ -112,7 +125,10 @@ fn overhang_cigar(pos: i32, read_len: i32, txp_len: i32) -> (String, i32) {
 
 /// Processed read name: up to the first space, with a trailing `/1` or `/2` trimmed.
 fn read_name(id: &[u8]) -> &[u8] {
-    let end = id.iter().position(|&b| b == b' ' || b == b'\t').unwrap_or(id.len());
+    let end = id
+        .iter()
+        .position(|&b| b == b' ' || b == b'\t')
+        .unwrap_or(id.len());
     let n = &id[..end];
     if n.len() > 2 && n[n.len() - 2] == b'/' && matches!(n[n.len() - 1], b'1' | b'2') {
         &n[..n.len() - 2]
@@ -175,14 +191,14 @@ pub fn write_fragment(
                 let as1 = m.r1_score;
                 let as2 = m.score - m.r1_score;
                 // QUAL is `*` (salmon's default writeMappings omits qualities).
-                let _ = write!(
+                let _ = writeln!(
                     buf,
-                    "{name1}\t{f1}\t{refname}\t{}\t1\t{c1}\t=\t{}\t{tlen1}\t{}\t*\tNH:i:{nh}\tHI:i:{hi}\tXT:A:{xt}\tAS:i:{as1}\n",
+                    "{name1}\t{f1}\t{refname}\t{}\t1\t{c1}\t=\t{}\t{tlen1}\t{}\t*\tNH:i:{nh}\tHI:i:{hi}\tXT:A:{xt}\tAS:i:{as1}",
                     p1 + 1, p2 + 1, String::from_utf8_lossy(&seq1),
                 );
-                let _ = write!(
+                let _ = writeln!(
                     buf,
-                    "{name2}\t{f2}\t{refname}\t{}\t1\t{c2}\t=\t{}\t{}\t{}\t*\tNH:i:{nh}\tHI:i:{hi}\tXT:A:{xt}\tAS:i:{as2}\n",
+                    "{name2}\t{f2}\t{refname}\t{}\t1\t{c2}\t=\t{}\t{}\t{}\t*\tNH:i:{nh}\tHI:i:{hi}\tXT:A:{xt}\tAS:i:{as2}",
                     p2 + 1, p1 + 1, -tlen1, String::from_utf8_lossy(&seq2),
                 );
             }
@@ -193,9 +209,9 @@ pub fn write_fragment(
                 }
                 let (c1, p1) = overhang_cigar(m.r1_pos, r1_len, txp_len);
                 let seq1 = if m.is_fw { r1_seq.to_vec() } else { rc(r1_seq) };
-                let _ = write!(
+                let _ = writeln!(
                     buf,
-                    "{name1}\t{f1}\t{refname}\t{}\t1\t{c1}\t*\t0\t0\t{}\t*\tNH:i:{nh}\tHI:i:{hi}\tXT:A:{xt}\tAS:i:{}\n",
+                    "{name1}\t{f1}\t{refname}\t{}\t1\t{c1}\t*\t0\t0\t{}\t*\tNH:i:{nh}\tHI:i:{hi}\tXT:A:{xt}\tAS:i:{}",
                     p1 + 1, String::from_utf8_lossy(&seq1), m.r1_score,
                 );
             }
@@ -209,16 +225,19 @@ pub fn write_fragment(
                 } else {
                     (m.r2_pos, r2_len, r2_seq, &name2, false)
                 };
-                let mut f = PAIRED | secondary | MATE_UNMAPPED
-                    | if is_r1 { READ1 } else { READ2 };
+                let mut f = PAIRED | secondary | MATE_UNMAPPED | if is_r1 { READ1 } else { READ2 };
                 if !m.is_fw {
                     f |= IS_RC;
                 }
                 let (c, p) = overhang_cigar(mapped_pos, mapped_len, txp_len);
-                let seq = if m.is_fw { mapped_seq.to_vec() } else { rc(mapped_seq) };
-                let _ = write!(
+                let seq = if m.is_fw {
+                    mapped_seq.to_vec()
+                } else {
+                    rc(mapped_seq)
+                };
+                let _ = writeln!(
                     buf,
-                    "{mapped_name}\t{f}\t{refname}\t{}\t1\t{c}\t*\t0\t0\t{}\t*\tNH:i:{nh}\tHI:i:{hi}\tXT:A:{xt}\tAS:i:{}\n",
+                    "{mapped_name}\t{f}\t{refname}\t{}\t1\t{c}\t*\t0\t0\t{}\t*\tNH:i:{nh}\tHI:i:{hi}\tXT:A:{xt}\tAS:i:{}",
                     p + 1, String::from_utf8_lossy(&seq), m.r1_score,
                 );
             }

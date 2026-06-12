@@ -9,12 +9,12 @@ authors.workspace = true
 description = "Reads-mode quantification driver for the salmon Rust port (FASTQ -> mapping -> EM -> quant.sf)."
 
 [dependencies]
-salmon-core = { path = "../salmon-core" }
-salmon-index = { path = "../salmon-index" }
-salmon-map = { path = "../salmon-map" }
-salmon-model = { path = "../salmon-model" }
-salmon-eqclass = { path = "../salmon-eqclass" }
-salmon-infer = { path = "../salmon-infer" }
+salmon-core = { workspace = true }
+salmon-index = { workspace = true }
+salmon-map = { workspace = true }
+salmon-model = { workspace = true }
+salmon-eqclass = { workspace = true }
+salmon-infer = { workspace = true }
 piscem-rs = { workspace = true }
 paraseq = "0.4"
 anyhow = { workspace = true }
@@ -28,5 +28,5 @@ jiff = "0.2"
 [dev-dependencies]
 tempfile = { workspace = true }
 
-[lints.rust]
-unsafe_code = "warn"
+[lints]
+workspace = true

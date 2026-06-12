@@ -335,7 +335,8 @@ pub fn corrected_effective_length(
     for frag_start in 0..(ref_len - k) {
         let read_start = frag_start + cu;
         if read_start < ref_len {
-            fw[read_start] = log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + k], false).exp();
+            fw[read_start] =
+                log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + k], false).exp();
             rc[read_start] =
                 log_bias(obs_rc, exp_rc, &rc_seq[frag_start..frag_start + k], false).exp();
         }

@@ -9,10 +9,10 @@
 pub mod atomic;
 pub mod error;
 pub mod genemap;
-pub mod quantmerge;
 pub mod libtype;
-pub mod math;
 pub mod mate;
+pub mod math;
+pub mod quantmerge;
 pub mod refprovider;
 pub mod transcript;
 

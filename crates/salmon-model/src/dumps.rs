@@ -77,7 +77,10 @@ pub fn write_pos_gz(path: &Path, models: &[Vec<f64>]) -> std::io::Result<()> {
 /// deterministic expected histogram `round(10000 * pmf[len])` (same type/layout).
 pub fn write_fld_dump(path: &Path, pmf: &[f64]) -> std::io::Result<()> {
     const N_SAMPLES: f64 = 10000.0;
-    let hist: Vec<i32> = pmf.iter().map(|&p| (p * N_SAMPLES).round() as i32).collect();
+    let hist: Vec<i32> = pmf
+        .iter()
+        .map(|&p| (p * N_SAMPLES).round() as i32)
+        .collect();
     write_i32_gz(path, &hist)
 }
 

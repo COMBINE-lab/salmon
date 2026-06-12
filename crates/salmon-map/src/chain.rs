@@ -75,7 +75,12 @@ impl MemChain {
     /// [`chain_mems`]); single-anchor chains trivially satisfy this.
     pub fn new(mems: Vec<Mem>, score: f32, is_fw: bool) -> Self {
         let covered = merged_read_coverage(&mems);
-        Self { mems, score, is_fw, covered }
+        Self {
+            mems,
+            score,
+            is_fw,
+            covered,
+        }
     }
 
     /// First matched read position in the chain.
@@ -313,7 +318,11 @@ mod tests {
         assert_eq!(chains.len(), 1, "expected a single chain, got {chains:?}");
         assert_eq!(chains[0].mems.len(), 2);
         // diagonal is consistent (gap == 0), so no gap penalty: 15 + min(20,20,15)=15 => 30
-        assert!((chains[0].score - 30.0).abs() < 1e-3, "score={}", chains[0].score);
+        assert!(
+            (chains[0].score - 30.0).abs() < 1e-3,
+            "score={}",
+            chains[0].score
+        );
         assert_eq!(chains[0].covered_read_bases(), 30);
     }
 
@@ -356,8 +365,8 @@ mod tests {
         // One strong colinear pair plus one isolated short anchor far away.
         let mems = [
             Mem::new(0, 100, 30),
-            Mem::new(40, 140, 30),    // chains with the first -> strong
-            Mem::new(5, 5000, 5),     // isolated, weak
+            Mem::new(40, 140, 30), // chains with the first -> strong
+            Mem::new(5, 5000, 5),  // isolated, weak
         ];
         let mut c = cfg();
         c.chain_subopt_thresh = 0.5;

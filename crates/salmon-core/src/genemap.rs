@@ -51,7 +51,10 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
     if map.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("no transcript->gene mappings parsed from {}", path.display()),
+            format!(
+                "no transcript->gene mappings parsed from {}",
+                path.display()
+            ),
         ));
     }
     Ok(map)

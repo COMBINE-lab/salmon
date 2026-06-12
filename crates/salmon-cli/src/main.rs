@@ -22,7 +22,11 @@ use salmon_index::{build as build_index, IndexBuildOptions};
 use salmon_quant::{quantify, QuantOptions};
 
 #[derive(Parser)]
-#[command(name = "salmon", version, about = "RNA-seq transcript quantification (Rust port)")]
+#[command(
+    name = "salmon",
+    version,
+    about = "RNA-seq transcript quantification (Rust port)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -31,6 +35,9 @@ struct Cli {
     quiet: bool,
 }
 
+// clap subcommand args structs differ in size (IndexArgs vs the larger QuantArgs);
+// this enum is constructed exactly once at startup, so the size delta is irrelevant.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Build a salmon index from a transcriptome FASTA.
@@ -41,6 +48,19 @@ enum Command {
     Quantmerge(QuantMergeArgs),
     /// Diagnostic: per-read best-mapping detail (placement, seed coverage, score).
     DebugMap(DebugMapArgs),
+    /// Single-cell quantification (removed; redirects to alevin-fry).
+    #[command(disable_help_flag = true)]
+    Alevin(AlevinArgs),
+}
+
+/// `salmon alevin` is not part of the Rust release — single-cell quantification
+/// lives in the alevin-fry ecosystem. We accept the subcommand (and swallow any
+/// arguments) only so that legacy `salmon alevin ...` invocations get a clear,
+/// actionable redirect instead of a clap "invalid subcommand" error.
+#[derive(Args)]
+struct AlevinArgs {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., hide = true)]
+    _ignored: Vec<String>,
 }
 
 #[derive(Args)]
@@ -453,7 +473,10 @@ fn run_index(args: IndexArgs) -> Result<()> {
     opts.decoys = args.decoys;
     opts.gencode = args.gencode;
     let info = build_index(&opts).context("index build failed")?;
-    println!("indexed {} references (k={}, m={})", info.num_refs, info.k, info.m);
+    println!(
+        "indexed {} references (k={}, m={})",
+        info.num_refs, info.k, info.m
+    );
     Ok(())
 }
 
@@ -536,7 +559,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         tracing::warn!("--hitFilterPolicy is accepted but not yet implemented and has no effect: the Rust port filters hits after chaining (salmon's AFTER default).");
     }
     if args.max_recover_read_occ.is_some() {
-        tracing::warn!("--maxRecoverReadOcc is accepted but not yet implemented and has no effect.");
+        tracing::warn!(
+            "--maxRecoverReadOcc is accepted but not yet implemented and has no effect."
+        );
     }
     if args.validate_mappings {
         tracing::warn!("--validateMappings has no effect (deprecated in salmon too): selective alignment is the default mapping mode; pass --sketch for pseudoalignment.");
@@ -544,11 +569,15 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
     let nthreads = if args.threads == 0 {
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
     } else {
         args.threads
     };
-    let _ = rayon::ThreadPoolBuilder::new().num_threads(nthreads).build_global();
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(nthreads)
+        .build_global();
     let out_dir = args.output.clone();
     let gene_map = args.gene_map.clone();
     // Alignment-based mode: quantify directly from a BAM.
@@ -593,7 +622,15 @@ fn run_quant(args: QuantArgs) -> Result<()> {
             res.num_processed, res.num_mapped, pct, res.num_eq_classes
         );
         if let Some(gm) = &gene_map {
-            write_gene_level(&out_dir, gm, &res.names, &res.lengths, &res.eff_lengths, &res.tpm, &res.counts)?;
+            write_gene_level(
+                &out_dir,
+                gm,
+                &res.names,
+                &res.lengths,
+                &res.eff_lengths,
+                &res.tpm,
+                &res.counts,
+            )?;
         }
         return Ok(());
     }
@@ -688,13 +725,57 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         res.num_processed, res.num_mapped, pct, res.num_eq_classes
     );
     if let Some(gm) = &gene_map {
-        write_gene_level(&out_dir, gm, &res.names, &res.lengths, &res.eff_lengths, &res.tpm, &res.counts)?;
+        write_gene_level(
+            &out_dir,
+            gm,
+            &res.names,
+            &res.lengths,
+            &res.eff_lengths,
+            &res.tpm,
+            &res.counts,
+        )?;
     }
     Ok(())
 }
 
+/// Shown when a legacy C++ invocation uses a removed/renamed option or
+/// subcommand, so users get an actionable pointer instead of a bare clap error.
+const MIGRATION_HINT: &str =
+    "\nnote: salmon 2.0 is the Rust rewrite and changed or removed some command-line \
+options.\n      See the migration guide (MIGRATION.md) for the C++ → 2.0 flag mapping, \
+and note that\n      indices must be rebuilt for 2.0 (the index format changed).";
+
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Parse with a friendly hint: on an unrecognized flag/subcommand (the common
+    // failure mode for an old C++ command line), append the migration pointer to
+    // clap's error. Help/version/other errors keep clap's normal behavior.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            use clap::error::ErrorKind;
+            if matches!(
+                e.kind(),
+                ErrorKind::UnknownArgument | ErrorKind::InvalidSubcommand
+            ) {
+                eprint!("{e}");
+                eprintln!("{MIGRATION_HINT}");
+                std::process::exit(2);
+            }
+            e.exit();
+        }
+    };
+    // Single-cell quant was removed; redirect to alevin-fry and exit.
+    if let Command::Alevin(_) = cli.command {
+        eprintln!(
+            "salmon alevin is not available in salmon 2.0.\n\n\
+             Single-cell quantification has moved to the alevin-fry ecosystem:\n  \
+             - piscem / salmon (this tool) for mapping → RAD\n  \
+             - alevin-fry for cell-barcode/UMI resolution and counting\n\n\
+             See https://github.com/COMBINE-lab/alevin-fry and \
+             https://alevin-fry.readthedocs.io"
+        );
+        std::process::exit(1);
+    }
     // RUST_LOG (if set) wins; otherwise `info`, or `warn` under --quiet.
     let default_level = if cli.quiet { "warn" } else { "info" };
     tracing_subscriber::fmt()
@@ -710,6 +791,7 @@ fn main() -> Result<()> {
         Command::Quant(args) => run_quant(args),
         Command::Quantmerge(args) => run_quantmerge(args),
         Command::DebugMap(args) => run_debug_map(args),
+        Command::Alevin(_) => unreachable!("alevin handled before logging init"),
     }
 }
 
@@ -725,7 +807,11 @@ fn run_quantmerge(args: QuantMergeArgs) -> Result<()> {
     let names: Vec<String> = if args.names.is_empty() {
         args.quants
             .iter()
-            .map(|d| d.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())
+            .map(|d| {
+                d.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
             .collect()
     } else {
         anyhow::ensure!(
@@ -736,7 +822,11 @@ fn run_quantmerge(args: QuantMergeArgs) -> Result<()> {
         );
         args.names.clone()
     };
-    let quant_file = if args.genes { "quant.genes.sf" } else { "quant.sf" };
+    let quant_file = if args.genes {
+        "quant.genes.sf"
+    } else {
+        "quant.sf"
+    };
     let quant_paths: Vec<PathBuf> = args.quants.iter().map(|d| d.join(quant_file)).collect();
     for p in &quant_paths {
         anyhow::ensure!(p.is_file(), "sample quant file not found: {}", p.display());
@@ -744,7 +834,10 @@ fn run_quantmerge(args: QuantMergeArgs) -> Result<()> {
     let n_missing = merge_quants(&quant_paths, &names, column, &args.missing, &args.output)
         .context("merging quant files")?;
     if n_missing > 0 {
-        eprintln!("warning: {n_missing} missing entries written as \"{}\"", args.missing);
+        eprintln!(
+            "warning: {n_missing} missing entries written as \"{}\"",
+            args.missing
+        );
     }
     println!(
         "merged {} samples ({}) -> {}",
@@ -778,7 +871,11 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
         };
         let _ = lines.next(); // '+'
         let _ = lines.next(); // qual
-        let name = header.trim_start_matches('@').split_whitespace().next().unwrap_or("");
+        let name = header
+            .trim_start_matches('@')
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
         if let Some(d) = debug_best_mapping(idx.inner(), &mut hs, &idx, seq.as_bytes(), &cfg) {
             println!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{}\t{:.3}\t{}",

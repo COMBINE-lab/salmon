@@ -13,13 +13,13 @@ name = "salmon"
 path = "src/main.rs"
 
 [dependencies]
-salmon-core = { path = "../salmon-core" }
+salmon-core = { workspace = true }
 mimalloc = "0.1"
 rayon = { workspace = true }
-salmon-index = { path = "../salmon-index" }
-salmon-quant = { path = "../salmon-quant" }
-salmon-align = { path = "../salmon-align" }
-salmon-map = { path = "../salmon-map" }
+salmon-index = { workspace = true }
+salmon-quant = { workspace = true }
+salmon-align = { workspace = true }
+salmon-map = { workspace = true }
 piscem-rs = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
@@ -30,5 +30,5 @@ tracing-subscriber = { workspace = true }
 # Diagnostic: build with the system allocator instead of mimalloc.
 sysalloc = []
 
-[lints.rust]
-unsafe_code = "warn"
+[lints]
+workspace = true

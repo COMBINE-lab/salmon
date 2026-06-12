@@ -29,8 +29,11 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
     write_meta_info(&dir.join("aux_info").join("meta_info.json"), opts, res)?;
     write_ambig_info(&dir.join("aux_info").join("ambig_info.tsv"), res)?;
     std::fs::create_dir_all(dir.join("libParams")).context("creating libParams")?;
-    salmon_model::dumps::write_flen_dist(&dir.join("libParams").join("flenDist.txt"), &res.frag_len_dist)
-        .context("writing flenDist.txt")?;
+    salmon_model::dumps::write_flen_dist(
+        &dir.join("libParams").join("flenDist.txt"),
+        &res.frag_len_dist,
+    )
+    .context("writing flenDist.txt")?;
     write_quant_log(&dir.join("logs").join("salmon_quant.log"), opts, res)?;
     salmon_model::dumps::write_fld_dump(&dir.join("aux_info").join("fld.gz"), &res.frag_len_dist)
         .context("writing fld.gz")?;
@@ -65,7 +68,10 @@ fn write_quant_log(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
     s.push_str(&format!("observed fragments: {}\n", res.num_processed));
     s.push_str(&format!("mapped fragments:   {}\n", res.num_mapped));
     s.push_str(&format!("mapping rate: {pct:.4}%\n"));
-    s.push_str(&format!("number of equivalence classes: {}\n", res.num_eq_classes));
+    s.push_str(&format!(
+        "number of equivalence classes: {}\n",
+        res.num_eq_classes
+    ));
     s.push_str(&format!(
         "fragment length mean (sd): {:.2} ({:.2})\n",
         res.frag_len_mean, res.frag_len_sd

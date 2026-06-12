@@ -71,7 +71,8 @@ pub fn bootstrap(
     (0..num_bootstraps)
         .into_par_iter()
         .map(|bs| {
-            let mut rng = Pcg64Mcg::seed_from_u64(seed ^ (bs as u64).wrapping_mul(0x9E3779B97F4A7C15));
+            let mut rng =
+                Pcg64Mcg::seed_from_u64(seed ^ (bs as u64).wrapping_mul(0x9E3779B97F4A7C15));
             let resampled = multinomial(total, &sample_weights, &mut rng);
             let (mut alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, None, None);
             // truncate tiny values
@@ -201,7 +202,9 @@ pub fn gibbs_sample(
     for &t in &p.labels {
         active_flag[t as usize] = true;
     }
-    let active: Vec<u32> = (0..num_txps as u32).filter(|&t| active_flag[t as usize]).collect();
+    let active: Vec<u32> = (0..num_txps as u32)
+        .filter(|&t| active_flag[t as usize])
+        .collect();
 
     // Per-transcript prior (per-txp = constant; per-nucleotide = prior·max(1,effLen)).
     let prior_alphas: Vec<f64> = (0..num_txps)
@@ -237,7 +240,11 @@ pub fn gibbs_sample(
     let bounds: Vec<(usize, usize)> = (0..nchains)
         .map(|c| {
             let start = c * step;
-            let end = if c == nchains - 1 { num_samples } else { (c + 1) * step };
+            let end = if c == nchains - 1 {
+                num_samples
+            } else {
+                (c + 1) * step
+            };
             (start, end)
         })
         .collect();
@@ -255,11 +262,23 @@ pub fn gibbs_sample(
             let mut out: Vec<Vec<f64>> = Vec::with_capacity(end - start);
             for _ in start..end {
                 for _ in 0..opts.thinning {
-                    gibbs_round(p, &active, eff_lens, &prior_alphas, &mut txp_count, &mut mu, &mut rng);
+                    gibbs_round(
+                        p,
+                        &active,
+                        eff_lens,
+                        &prior_alphas,
+                        &mut txp_count,
+                        &mut mu,
+                        &mut rng,
+                    );
                 }
                 // Extrapolate scaled counts from the final fractions mu.
                 let denom: f64 = (0..num_txps).map(|t| mu[t] * eff_lens[t]).sum();
-                let scale = if denom > 0.0 { num_mapped_frags as f64 / denom } else { 0.0 };
+                let scale = if denom > 0.0 {
+                    num_mapped_frags as f64 / denom
+                } else {
+                    0.0
+                };
                 let mut sample = vec![0.0f64; num_txps];
                 for t in 0..num_txps {
                     let a = mu[t] * eff_lens[t] * scale;
@@ -308,7 +327,11 @@ mod tests {
     fn packed(classes: &[(Vec<u32>, u64)], num_txps: usize) -> PackedEqClasses {
         let b = EquivalenceClassBuilder::new();
         for (txps, count) in classes {
-            b.add_group(TranscriptGroup::new(txps.clone()), vec![1.0; txps.len()], *count);
+            b.add_group(
+                TranscriptGroup::new(txps.clone()),
+                vec![1.0; txps.len()],
+                *count,
+            );
         }
         let mut eq = b.finish();
         eq.update_eff_lengths(&vec![1.0; num_txps]);
@@ -338,18 +361,28 @@ mod tests {
         let bs = bootstrap(&p, &EmOptions::default(), 100, 1000, true, 7);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 100.0;
         let var0: f64 = bs.iter().map(|b| (b[0] - m0).powi(2)).sum::<f64>() / 100.0;
-        assert!(var0 > 0.0, "ambiguous transcript should have nonzero bootstrap variance");
+        assert!(
+            var0 > 0.0,
+            "ambiguous transcript should have nonzero bootstrap variance"
+        );
     }
 
     #[test]
     fn gibbs_runs_and_conserves_scale() {
         let p = packed(&[(vec![0], 300), (vec![1], 700)], 2);
-        let opts = GibbsOptions { num_samples: 20, thinning: 8, ..Default::default() };
+        let opts = GibbsOptions {
+            num_samples: 20,
+            thinning: 8,
+            ..Default::default()
+        };
         let samples = gibbs_sample(&p, &[1.0, 1.0], &[300.0, 700.0], &opts, 1000, 99);
         assert_eq!(samples.len(), 20);
         for s in &samples {
             let tot = s[0] + s[1];
-            assert!((tot - 1000.0).abs() < 50.0, "gibbs total {tot} not near 1000");
+            assert!(
+                (tot - 1000.0).abs() < 50.0,
+                "gibbs total {tot} not near 1000"
+            );
         }
     }
 

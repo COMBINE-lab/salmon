@@ -65,7 +65,7 @@ impl BandMatrix {
             let diag = self.get(i, i);
             self.set_saved_diag(i, 1.0 / diag);
             let j_min = (i as isize - 1).max(0) as usize;
-            let j_max = ((i + 1).min(self.dim - 1)) as usize;
+            let j_max = (i + 1).min(self.dim - 1);
             let s = self.saved_diag(i);
             for j in j_min..=j_max {
                 self.set(i, j, self.get(i, j) * s);
@@ -158,8 +158,7 @@ impl Spline {
             mat.set(i, i - 1, (x[i] - x[i - 1]) / 3.0);
             mat.set(i, i, 2.0 / 3.0 * (x[i + 1] - x[i - 1]));
             mat.set(i, i + 1, (x[i + 1] - x[i]) / 3.0);
-            rhs[i] = (y[i + 1] - y[i]) / (x[i + 1] - x[i])
-                - (y[i] - y[i - 1]) / (x[i] - x[i - 1]);
+            rhs[i] = (y[i + 1] - y[i]) / (x[i + 1] - x[i]) - (y[i] - y[i - 1]) / (x[i] - x[i - 1]);
         }
         // natural (second_deriv = 0) boundary conditions
         mat.set(0, 0, 2.0);
@@ -186,7 +185,15 @@ impl Spline {
         a[n - 1] = 0.0;
         c[n - 1] = 3.0 * a[n - 2] * h * h + 2.0 * b[n - 2] * h + c[n - 2];
 
-        Self { x, y, a, b, c, b0, c0 }
+        Self {
+            x,
+            y,
+            a,
+            b,
+            c,
+            b0,
+            c0,
+        }
     }
 
     /// `m_x[idx] <= x`, with `idx = 0` even when `x < m_x[0]`.
@@ -227,7 +234,11 @@ mod tests {
         let ys = vec![0.0, 1.0, 4.0, 9.0, 16.0]; // ~ x^2
         let s = Spline::new(xs.clone(), ys.clone());
         for (x, y) in xs.iter().zip(&ys) {
-            assert!((s.eval(*x) - y).abs() < 1e-9, "knot {x}: {} != {y}", s.eval(*x));
+            assert!(
+                (s.eval(*x) - y).abs() < 1e-9,
+                "knot {x}: {} != {y}",
+                s.eval(*x)
+            );
         }
     }
 

@@ -9,11 +9,11 @@ authors.workspace = true
 description = "Statistical models for the salmon Rust port: fragment-length distribution and library-type detection."
 
 [dependencies]
-salmon-core = { path = "../salmon-core" }
+salmon-core = { workspace = true }
 statrs = { workspace = true }
 flate2 = { workspace = true }
 rayon = { workspace = true }
 sux = "0.14.0"
 
-[lints.rust]
-unsafe_code = "warn"
+[lints]
+workspace = true

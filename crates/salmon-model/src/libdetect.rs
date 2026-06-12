@@ -71,8 +71,16 @@ impl LibraryTypeDetector {
                 for id in 0..=LibraryFormat::MAX_FORMAT_ID {
                     let f = LibraryFormat::from_format_id(id);
                     let c = count(id);
-                    nf += if f.strandedness == ReadStrandedness::S { c } else { 0 };
-                    nr += if f.strandedness == ReadStrandedness::A { c } else { 0 };
+                    nf += if f.strandedness == ReadStrandedness::S {
+                        c
+                    } else {
+                        0
+                    };
+                    nr += if f.strandedness == ReadStrandedness::A {
+                        c
+                    } else {
+                        0
+                    };
                 }
                 let strandedness = if nf + nr == 0 {
                     ReadStrandedness::U

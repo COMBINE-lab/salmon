@@ -12,5 +12,5 @@ description = "Shared core types for the Rust port of salmon (transcripts, libra
 thiserror = { workspace = true }
 serde = { workspace = true }
 
-[lints.rust]
-unsafe_code = "warn"
+[lints]
+workspace = true

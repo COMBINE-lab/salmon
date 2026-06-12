@@ -260,7 +260,8 @@ fn preprocess_fasta(
     const B: [u8; 4] = *b"ACGT";
     let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut out = std::io::BufWriter::new(
-        std::fs::File::create(out_path).with_context(|| format!("creating {}", out_path.display()))?,
+        std::fs::File::create(out_path)
+            .with_context(|| format!("creating {}", out_path.display()))?,
     );
     let mut replaced = 0u64;
     let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -324,7 +325,9 @@ fn preprocess_fasta(
             let mut seq = orig.into_owned();
             for b in seq.iter_mut() {
                 if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
-                    x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    x = x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     *b = B[((x >> 33) & 3) as usize];
                     replaced += 1;
                 }
@@ -345,17 +348,26 @@ fn preprocess_fasta(
 /// Read a decoy-names file (one name per line; blank lines ignored) into a set,
 /// matching how `name` is extracted in [`preprocess_fasta`] (no `>` prefix).
 fn read_decoy_names(path: &Path) -> Result<ahash::AHashSet<Vec<u8>>> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading decoys file {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("reading decoys file {}", path.display()))?;
     let mut set = ahash::AHashSet::new();
     for line in bytes.split(|&b| b == b'\n') {
         // trim trailing CR and surrounding whitespace
         let line: &[u8] = {
             let mut s = line;
             while let [rest @ .., last] = s {
-                if matches!(last, b'\r' | b' ' | b'\t') { s = rest; } else { break; }
+                if matches!(last, b'\r' | b' ' | b'\t') {
+                    s = rest;
+                } else {
+                    break;
+                }
             }
             while let [first, rest @ ..] = s {
-                if matches!(first, b' ' | b'\t') { s = rest; } else { break; }
+                if matches!(first, b' ' | b'\t') {
+                    s = rest;
+                } else {
+                    break;
+                }
             }
             s
         };
@@ -389,13 +401,20 @@ fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Resu
 /// Build a salmon index from a transcriptome FASTA into `opts.output_dir`.
 pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     anyhow::ensure!(!opts.transcripts.is_empty(), "no transcript files provided");
-    anyhow::ensure!(opts.k >= 1 && opts.k <= 63 && opts.k % 2 == 1, "k must be odd in [1, 63]");
+    anyhow::ensure!(
+        opts.k >= 1 && opts.k <= 63 && opts.k % 2 == 1,
+        "k must be odd in [1, 63]"
+    );
 
     std::fs::create_dir_all(&opts.output_dir)
         .with_context(|| format!("creating index dir {}", opts.output_dir.display()))?;
 
     let threads = effective_threads(opts.threads);
-    let m = if opts.m == 0 { default_minimizer_len(opts.k) } else { opts.m };
+    let m = if opts.m == 0 {
+        default_minimizer_len(opts.k)
+    } else {
+        opts.m
+    };
     // Build intermediates (cleaned FASTA + cDBG files) go to `tmpdir` when set,
     // else the output dir; the final index always lands in the output dir.
     let intermediate_dir = match &opts.tmpdir {
@@ -419,10 +438,19 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // cleaned FASTA feeds the cDBG build and the refseq store, while the hashes
     // below use the original input.
     let cleaned = intermediate_dir.join("cleaned_refs.fa");
-    let pre = preprocess_fasta(&opts.transcripts, &cleaned, opts.keep_duplicates, &decoy_names, opts.gencode)
-        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
+    let pre = preprocess_fasta(
+        &opts.transcripts,
+        &cleaned,
+        opts.keep_duplicates,
+        &decoy_names,
+        opts.gencode,
+    )
+    .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
     if pre.replaced > 0 {
-        info!("replaced {} non-ACGT base(s) with random bases", pre.replaced);
+        info!(
+            "replaced {} non-ACGT base(s) with random bases",
+            pre.replaced
+        );
     }
     if !opts.keep_duplicates {
         if !pre.duplicate_clusters.is_empty() {
@@ -473,7 +501,10 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     let h = compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode)
         .context("hashing reference sequences/names")?;
     if let Some(fdi) = pre.first_decoy_index {
-        info!("{} decoy reference(s) (first decoy index {fdi})", idx.num_refs() - fdi);
+        info!(
+            "{} decoy reference(s) (first decoy index {fdi})",
+            idx.num_refs() - fdi
+        );
     }
     let info = IndexInfo {
         k: opts.k,
@@ -577,11 +608,8 @@ fn write_refseq_store(dir: &Path, transcripts: &[PathBuf], idx: &ReferenceIndex)
 
     std::fs::write(dir.join(REFSEQ_FILE), &concat)
         .with_context(|| format!("writing {REFSEQ_FILE}"))?;
-    std::fs::write(
-        dir.join(REFSEQ_OFFSETS_FILE),
-        serde_json::to_vec(&offsets)?,
-    )
-    .with_context(|| format!("writing {REFSEQ_OFFSETS_FILE}"))?;
+    std::fs::write(dir.join(REFSEQ_OFFSETS_FILE), serde_json::to_vec(&offsets)?)
+        .with_context(|| format!("writing {REFSEQ_OFFSETS_FILE}"))?;
     Ok(())
 }
 
@@ -607,6 +635,19 @@ impl SalmonIndex {
     /// Load a salmon index from a directory produced by [`build`].
     pub fn load(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
+        // Guard: a C++ salmon (pufferfish) index is not readable by salmon 2.0 —
+        // the index format changed. Detect it (no sshash `index.ssi`, but
+        // pufferfish artifacts present) and give an actionable rebuild message
+        // instead of a cryptic parse error from `read_info`.
+        if !dir.join(format!("{INDEX_PREFIX}.ssi")).exists()
+            && (dir.join("ctable.bin").exists() || dir.join("pre_indexing.log").exists())
+        {
+            anyhow::bail!(
+                "{} looks like a C++ salmon (pufferfish) index, which salmon 2.0 cannot read.\n\
+                 The index format changed in 2.0 — rebuild it with `salmon index -t <transcripts> -i <index>`.",
+                dir.display()
+            );
+        }
         let info = read_info(dir)?;
         let index_prefix = dir.join(INDEX_PREFIX);
         // Load the EC table when the index has one (enables pseudoalignment-only mode).
@@ -705,8 +746,8 @@ impl salmon_core::RefProvider for SalmonIndex {
 fn read_info(dir: &Path) -> Result<IndexInfo> {
     let path = dir.join(INFO_FILE);
     let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    let info: IndexInfo = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let info: IndexInfo =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
     Ok(info)
 }
 
@@ -723,7 +764,10 @@ mod tests {
         let seqs = [
             ("t1", format!("{core}GGGGCCCCAAAATTTT{core}")),
             ("t2", format!("{core}TTTTAAAACCCCGGGG{core}")),
-            ("t3", format!("GATTACAGATTACAGATTACA{core}CACACACACACACACACACA")),
+            (
+                "t3",
+                format!("GATTACAGATTACAGATTACA{core}CACACACACACACACACACA"),
+            ),
         ];
         let path = dir.join("txome.fa");
         let mut f = std::fs::File::create(&path).unwrap();
@@ -759,7 +803,11 @@ mod tests {
         // The reference sequence store round-trips and matches the index lengths.
         for tid in 0..idx.num_refs() as u32 {
             let seq = idx.ref_seq(tid);
-            assert_eq!(seq.len() as u64, idx.ref_len(tid as usize), "tid {tid} length");
+            assert_eq!(
+                seq.len() as u64,
+                idx.ref_len(tid as usize),
+                "tid {tid} length"
+            );
             assert!(seq.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')));
         }
     }

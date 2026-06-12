@@ -52,7 +52,10 @@ impl TranscriptGroup {
     /// Build a group from already-sorted, deduplicated ids (no re-sorting), no
     /// range factorization.
     pub fn from_sorted(txps: Vec<u32>) -> Self {
-        debug_assert!(txps.windows(2).all(|w| w[0] < w[1]), "txps must be strictly increasing");
+        debug_assert!(
+            txps.windows(2).all(|w| w[0] < w[1]),
+            "txps must be strictly increasing"
+        );
         let hash = Self::hash_label(&txps, &[]);
         Self {
             txps,
@@ -65,7 +68,10 @@ impl TranscriptGroup {
     /// Build a range-factorized group: sorted ids plus per-transcript bins
     /// (same length, aligned to `txps`).
     pub fn with_bins(txps: Vec<u32>, bins: Vec<u32>) -> Self {
-        debug_assert!(txps.windows(2).all(|w| w[0] < w[1]), "txps must be strictly increasing");
+        debug_assert!(
+            txps.windows(2).all(|w| w[0] < w[1]),
+            "txps must be strictly increasing"
+        );
         debug_assert_eq!(txps.len(), bins.len(), "bins must align with txps");
         let hash = Self::hash_label(&txps, &bins);
         Self {
@@ -248,7 +254,9 @@ impl EquivalenceClassBuilder {
     /// sorted by their transcript label for determinism.
     pub fn finish(self) -> CollapsedEqClasses {
         let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::with_capacity(self.map.len());
-        self.map.iter().for_each(|e| classes.push((e.key().clone(), e.value().clone())));
+        self.map
+            .iter()
+            .for_each(|e| classes.push((e.key().clone(), e.value().clone())));
         classes.sort_by(|a, b| a.0.txps.cmp(&b.0.txps));
         let total_count = classes.iter().map(|(_, v)| v.count).sum();
         CollapsedEqClasses {
@@ -314,7 +322,10 @@ mod tests {
         let mut hb = std::collections::hash_map::DefaultHasher::new();
         a.hash(&mut ha);
         b.hash(&mut hb);
-        assert_eq!(std::hash::Hasher::finish(&ha), std::hash::Hasher::finish(&hb));
+        assert_eq!(
+            std::hash::Hasher::finish(&ha),
+            std::hash::Hasher::finish(&hb)
+        );
     }
 
     #[test]

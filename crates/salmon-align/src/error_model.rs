@@ -38,25 +38,31 @@ fn ref_2bit(b: u8) -> usize {
 /// A CIGAR operation (the subset salmon distinguishes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlnOp {
-    Match,        // M
-    SeqMatch,     // =
-    SeqMismatch,  // X
-    Ins,          // I
-    Del,          // D
-    RefSkip,      // N
-    SoftClip,     // S
-    HardClip,     // H
-    Pad,          // P
+    Match,       // M
+    SeqMatch,    // =
+    SeqMismatch, // X
+    Ins,         // I
+    Del,         // D
+    RefSkip,     // N
+    SoftClip,    // S
+    HardClip,    // H
+    Pad,         // P
 }
 
 impl AlnOp {
     #[inline]
     fn consume_seq(self) -> bool {
-        matches!(self, AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Ins | AlnOp::SoftClip)
+        matches!(
+            self,
+            AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Ins | AlnOp::SoftClip
+        )
     }
     #[inline]
     fn consume_ref(self) -> bool {
-        matches!(self, AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Del | AlnOp::RefSkip)
+        matches!(
+            self,
+            AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Del | AlnOp::RefSkip
+        )
     }
     /// salmon's `setBasesFromCIGAROp_`: adjust the (ref, read) symbols for the op.
     #[inline]
@@ -222,8 +228,16 @@ impl AlignmentModel {
                 if op.consume_ref() && ref_idx >= ref_bytes.len() {
                     return;
                 }
-                let mut cur_read = if op.consume_seq() { read_2bit[read_idx] as usize } else { 0 };
-                let mut cur_ref = if op.consume_ref() { ref_2bit(ref_bytes[ref_idx]) } else { 0 };
+                let mut cur_read = if op.consume_seq() {
+                    read_2bit[read_idx] as usize
+                } else {
+                    0
+                };
+                let mut cur_ref = if op.consume_ref() {
+                    ref_2bit(ref_bytes[ref_idx])
+                } else {
+                    0
+                };
                 op.set_bases(&mut cur_ref, &mut cur_read);
                 let bin = ((read_idx as f64 * inv_len) as usize).min(read_bins - 1);
                 let cur = cur_ref * NUM_STATES + cur_read;
@@ -252,10 +266,21 @@ impl AlignmentModel {
     ) {
         // Collect transitions first (immutable walk), then apply (mutable).
         let mut trans: Vec<(usize, usize, usize)> = Vec::new();
-        Self::walk(self.read_bins, read_2bit, ref_bytes, pos, ops, |bin, prev, cur| {
-            trans.push((bin, prev, cur));
-        });
-        let mats = if is_left { &mut self.left } else { &mut self.right };
+        Self::walk(
+            self.read_bins,
+            read_2bit,
+            ref_bytes,
+            pos,
+            ops,
+            |bin, prev, cur| {
+                trans.push((bin, prev, cur));
+            },
+        );
+        let mats = if is_left {
+            &mut self.left
+        } else {
+            &mut self.right
+        };
         for (bin, prev, cur) in trans {
             mats[bin].increment(prev, cur, log_weight);
         }
@@ -275,10 +300,17 @@ impl AlignmentModel {
         let mats = if is_left { &self.left } else { &self.right };
         let mut fg = 0.0; // LOG_1
         let mut bg = 0.0;
-        Self::walk(self.read_bins, read_2bit, ref_bytes, pos, ops, |bin, prev, cur| {
-            fg += mats[bin].get(prev, cur);
-            bg += mats[bin].get(0, 0);
-        });
+        Self::walk(
+            self.read_bins,
+            read_2bit,
+            ref_bytes,
+            pos,
+            ops,
+            |bin, prev, cur| {
+                fg += mats[bin].get(prev, cur);
+                bg += mats[bin].get(0, 0);
+            },
+        );
         (fg, bg)
     }
 }
@@ -337,8 +369,12 @@ pub struct SharedAlignmentModel {
 impl SharedAlignmentModel {
     pub fn new(alpha: f64, read_bins: usize) -> Self {
         Self {
-            left: (0..read_bins).map(|_| SharedTransMatrix::new(alpha)).collect(),
-            right: (0..read_bins).map(|_| SharedTransMatrix::new(alpha)).collect(),
+            left: (0..read_bins)
+                .map(|_| SharedTransMatrix::new(alpha))
+                .collect(),
+            right: (0..read_bins)
+                .map(|_| SharedTransMatrix::new(alpha))
+                .collect(),
             read_bins,
         }
     }
@@ -356,10 +392,17 @@ impl SharedAlignmentModel {
         let mats = if is_left { &self.left } else { &self.right };
         let mut fg = 0.0;
         let mut bg = 0.0;
-        AlignmentModel::walk(self.read_bins, read_2bit, ref_bytes, pos, ops, |bin, prev, cur| {
-            fg += mats[bin].get(prev, cur);
-            bg += mats[bin].get(0, 0);
-        });
+        AlignmentModel::walk(
+            self.read_bins,
+            read_2bit,
+            ref_bytes,
+            pos,
+            ops,
+            |bin, prev, cur| {
+                fg += mats[bin].get(prev, cur);
+                bg += mats[bin].get(0, 0);
+            },
+        );
         (fg, bg)
     }
 

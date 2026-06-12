@@ -9,7 +9,7 @@ authors.workspace = true
 description = "Index construction and loading for the salmon Rust port (wraps cf1-rs + piscem-rs)."
 
 [dependencies]
-salmon-core = { path = "../salmon-core" }
+salmon-core = { workspace = true }
 cf1-rs = { workspace = true }
 piscem-rs = { workspace = true }
 anyhow = { workspace = true }
@@ -33,5 +33,5 @@ ensure_simd = { version = "0.1.0", features = ["scalar"] }
 [dev-dependencies]
 tempfile = { workspace = true }
 
-[lints.rust]
-unsafe_code = "warn"
+[lints]
+workspace = true

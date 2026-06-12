@@ -97,8 +97,8 @@ pub fn perfect_score(read_len: usize, cfg: &AlignConfig) -> i32 {
 /// Minimum alignment score for a read of `read_len` to be accepted, matching
 /// salmon/pufferfish's `minAcceptedScore = floor(minScoreFraction · matchScore ·
 /// readLen)` with acceptance `score > minAcceptedScore` (strict). Using `floor`
-/// + strict `>` (rather than `score (f32) >= frac·perfect`) avoids an off-by-one
-/// at read lengths where `frac·matchScore·len` is an integer.
+/// with strict `>` (rather than `score (f32) >= frac·perfect`) avoids an
+/// off-by-one at read lengths where `frac·matchScore·len` is an integer.
 #[inline]
 pub fn min_accepted_score(read_len: usize, cfg: &AlignConfig) -> i32 {
     (cfg.min_score_fraction as f64 * cfg.match_score as f64 * read_len as f64).floor() as i32
@@ -191,7 +191,12 @@ fn gap_cache_insert(
 /// cached results for repeated substrings. Treating MEMs as fixed exact matches
 /// is what makes this cheaper than a full-read DP; it can be marginally lower
 /// than the global optimum when re-aligning across a MEM boundary would help.
-fn anchored_align_score(query: &[u8], ref_seq: &[u8], mems: &[crate::mem::Mem], cfg: &AlignConfig) -> i32 {
+fn anchored_align_score(
+    query: &[u8],
+    ref_seq: &[u8],
+    mems: &[crate::mem::Mem],
+    cfg: &AlignConfig,
+) -> i32 {
     if mems.is_empty() {
         return i32::MIN / 4;
     }
@@ -233,7 +238,8 @@ fn anchored_align_score(query: &[u8], ref_seq: &[u8], mems: &[crate::mem::Mem], 
     let last = mems.last().unwrap();
     if last.read_end() < qlen {
         let qf = &query[last.read_end() as usize..qlen as usize];
-        let r_hi = (last.ref_end() + (qlen - last.read_end()) + cfg.indel_margin as i32).min(reflen);
+        let r_hi =
+            (last.ref_end() + (qlen - last.read_end()) + cfg.indel_margin as i32).min(reflen);
         let tf = &ref_seq[last.ref_end() as usize..r_hi as usize];
         score += cached_flank_score(qf, tf, cfg, /*anchor_right=*/ false);
     }
@@ -340,10 +346,18 @@ fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool
     // neither extension is valid (e.g. band-clipped), matching the prior guard.
     if cfg.softclip {
         let s = ez.mqe.max(ez.mte);
-        if s > KSW_NEG_INF { s.max(0) } else { (ez.max as i32).max(0) }
+        if s > KSW_NEG_INF {
+            s.max(0)
+        } else {
+            (ez.max as i32).max(0)
+        }
     } else if cfg.softclip_overhangs {
         let s = ez.mqe.max(ez.mte);
-        if s > KSW_NEG_INF { s } else { ez.max as i32 }
+        if s > KSW_NEG_INF {
+            s
+        } else {
+            ez.max as i32
+        }
     } else if ez.mqe > KSW_NEG_INF {
         ez.mqe
     } else {
@@ -533,8 +547,14 @@ mod tests {
         let qf = b"ACGTACGTAC";
         let tf = b"ACGTA";
         let none = AlignConfig::default();
-        let overhang = AlignConfig { softclip_overhangs: true, ..AlignConfig::default() };
-        let full = AlignConfig { softclip: true, ..AlignConfig::default() };
+        let overhang = AlignConfig {
+            softclip_overhangs: true,
+            ..AlignConfig::default()
+        };
+        let full = AlignConfig {
+            softclip: true,
+            ..AlignConfig::default()
+        };
         let s_none = ksw2_flank_extend(qf, tf, &none, false);
         let s_oh = ksw2_flank_extend(qf, tf, &overhang, false);
         let s_full = ksw2_flank_extend(qf, tf, &full, false);
@@ -596,7 +616,11 @@ mod tests {
         // read exactly matches ref[100..160]; two MEMs with an exact gap between.
         let reference = gen_seq(400, 73);
         let read = reference[100..160].to_vec();
-        let chain = MemChain::new(vec![Mem::new(0, 100, 25), Mem::new(30, 130, 30)], 55.0, true);
+        let chain = MemChain::new(
+            vec![Mem::new(0, 100, 25), Mem::new(30, 130, 30)],
+            55.0,
+            true,
+        );
         let cfg = AlignConfig::default();
         let a = align_chain(&read, &reference, &chain, &cfg).unwrap();
         assert_eq!(a.score, perfect_score(read.len(), &cfg), "got {}", a.score);
@@ -613,7 +637,11 @@ mod tests {
         let cfg = AlignConfig::default();
         let aln = align_chain(&read, &reference, &fw_chain(50, 31), &cfg).unwrap();
         let perfect = perfect_score(read.len(), &cfg);
-        assert!(aln.score < perfect, "score {} should be < {perfect}", aln.score);
+        assert!(
+            aln.score < perfect,
+            "score {} should be < {perfect}",
+            aln.score
+        );
         // one mismatch: (len-1)*match + (-mismatch)
         let expected = (read.len() as i32 - 1) * cfg.match_score as i32 - cfg.mismatch_pen as i32;
         assert_eq!(aln.score, expected);
@@ -639,7 +667,11 @@ mod tests {
         let foreign = gen_seq(80, 999); // unrelated
         let cfg = AlignConfig::default();
         let aln = align_chain(&foreign, &reference, &fw_chain(50, 31), &cfg).unwrap();
-        assert!(!aln.valid, "unrelated read should not validate (score {})", aln.score);
+        assert!(
+            !aln.valid,
+            "unrelated read should not validate (score {})",
+            aln.score
+        );
     }
 
     #[test]
@@ -650,7 +682,12 @@ mod tests {
         let read = window[40..120].to_vec();
         let cfg = AlignConfig::default();
         let a = align_in_window(&read, &window, &cfg).unwrap();
-        assert_eq!(a.score, perfect_score(read.len(), &cfg), "score {}", a.score);
+        assert_eq!(
+            a.score,
+            perfect_score(read.len(), &cfg),
+            "score {}",
+            a.score
+        );
         assert!(a.valid);
         assert_eq!(a.end_col, 120, "end_col {}", a.end_col);
     }
@@ -675,7 +712,11 @@ mod tests {
         let foreign = gen_seq(80, 54321);
         let cfg = AlignConfig::default();
         let a = align_in_window(&foreign, &window, &cfg).unwrap();
-        assert!(!a.valid, "unrelated read should not validate (score {})", a.score);
+        assert!(
+            !a.valid,
+            "unrelated read should not validate (score {})",
+            a.score
+        );
     }
 
     #[test]
@@ -689,7 +730,11 @@ mod tests {
         let cfg = AlignConfig::default();
         let aln = align_chain(&read, &reference, &fw_chain(100, 31), &cfg).unwrap();
         // a 2bp gap: most bases still match, should remain valid
-        assert!(aln.valid, "score {} should validate a 2bp deletion", aln.score);
+        assert!(
+            aln.valid,
+            "score {} should validate a 2bp deletion",
+            aln.score
+        );
         assert!(aln.score < perfect_score(read.len(), &cfg));
     }
 }

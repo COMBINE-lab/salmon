@@ -138,8 +138,15 @@ pub fn optimize_packed_with_init(
     init_alphas: Option<&[f64]>,
     eff_lens: Option<&[f64]>,
 ) -> EmResult {
-    let (mut alphas, iters, converged) =
-        run_em_counts(p, &p.counts, opts, parallel, opts.min_iter, init_alphas, eff_lens);
+    let (mut alphas, iters, converged) = run_em_counts(
+        p,
+        &p.counts,
+        opts,
+        parallel,
+        opts.min_iter,
+        init_alphas,
+        eff_lens,
+    );
     // truncate negligible abundances (matches salmon's cutoff)
     for a in &mut alphas {
         if *a < opts.min_alpha {
@@ -168,7 +175,11 @@ pub(crate) fn run_em_counts(
 ) -> (Vec<f64>, u32, bool) {
     let num_txps = p.num_txps;
     let total: u64 = counts.iter().sum();
-    let init = if num_txps > 0 { total as f64 / num_txps as f64 } else { 0.0 };
+    let init = if num_txps > 0 {
+        total as f64 / num_txps as f64
+    } else {
+        0.0
+    };
     // Warm start from a supplied initialization (e.g. the online-phase abundance
     // estimates blended with uniform, matching salmon's count-blended init) when
     // its length matches; otherwise start uniform over the total fragment count.
@@ -204,15 +215,28 @@ pub(crate) fn run_em_counts(
     let mut it = 0u32;
     while it < opts.max_iter {
         match (opts.use_vbem, parallel) {
-            (false, true) => packed::em_step_par(p, counts, &alphas, &mut alphas_prime, &mut shards),
+            (false, true) => {
+                packed::em_step_par(p, counts, &alphas, &mut alphas_prime, &mut shards)
+            }
             (false, false) => {
                 packed::em_step_seq(p, counts, &alphas, &mut alphas_prime, &mut scratch)
             }
             (true, true) => packed::vbem_step_par(
-                p, counts, &prior_alphas, &alphas, &mut alphas_prime, &mut exp_theta, &mut shards,
+                p,
+                counts,
+                &prior_alphas,
+                &alphas,
+                &mut alphas_prime,
+                &mut exp_theta,
+                &mut shards,
             ),
             (true, false) => packed::vbem_step_seq(
-                p, counts, &prior_alphas, &alphas, &mut alphas_prime, &mut exp_theta,
+                p,
+                counts,
+                &prior_alphas,
+                &alphas,
+                &mut alphas_prime,
+                &mut exp_theta,
                 &mut scratch,
             ),
         }

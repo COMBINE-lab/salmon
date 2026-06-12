@@ -4,136 +4,102 @@ on:
   push:
     branches:
       - "**"
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # Unified MSRV across the salmon workspace and its COMBINE-lab deps (see plan R2).
+  RUST_TOOLCHAIN: "1.91.1"
+
 jobs:
-  precheck:
-    runs-on: ubuntu-latest
-    outputs:
-      run_ci: ${{ steps.decide.outputs.run_ci }}
-    steps:
-      - id: decide
-        shell: bash
-        run: |
-          set -euo pipefail
-          msg="$(jq -r '.head_commit.message // ""' "$GITHUB_EVENT_PATH")"
-          ref="${GITHUB_REF#refs/heads/}"
-          run_ci=false
-
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            run_ci=true
-          fi
-          if [[ "$ref" == "master" ]]; then
-            run_ci=true
-          fi
-          if [[ "$msg" == *"[run-ci]"* ]]; then
-            run_ci=true
-          fi
-
-          {
-            echo "run_ci=$run_ci"
-          } >> "$GITHUB_OUTPUT"
-
   build-test:
-    needs: precheck
-    if: ${{ needs.precheck.outputs.run_ci == 'true' }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
             target_id: linux-x86_64
-            build_parallel: 2
           - os: ubuntu-24.04-arm
             target_id: linux-aarch64
-            build_parallel: 2
           - os: macos-15-intel
             target_id: macos-x86_64
-            build_parallel: 3
           - os: macos-14
             target_id: macos-arm64
-            build_parallel: 3
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout salmon
+        uses: actions/checkout@v4
 
-      - name: Install Linux Build Dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            git \
-            curl \
-            libcurl4-openssl-dev \
-            libbz2-dev \
-            liblzma-dev
-
-      - name: Configure
-        run: |
-          cmake -S . -B build-ci \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSALMON_ENABLE_TESTS=ON \
-            -DSALMON_USE_SYSTEM_DEPS=OFF \
-            -DSALMON_FETCH_MISSING_DEPS=ON \
-            -DSALMON_BOOST_USE_STATIC_LIBS=ON
-
-      - name: Build
-        run: cmake --build build-ci --target salmon unitTests --parallel ${{ matrix.build_parallel }}
-
-      - name: Run Unit Tests
-        run: ./build-ci/src/unitTests
-
-      - name: CLI Smoke
-        run: ./build-ci/src/salmon -h
-
-      - name: Prepare Sample Data
+      # --- Dev path-dep bridge -------------------------------------------------
+      # On the rust-rewrite branch the workspace still references cf1-rs/piscem-rs
+      # (../) and ksw2rs (../../../) as local path deps. Clone the sibling repos to
+      # the matching relative locations so cargo can resolve them. This step is
+      # removed once R3 lands and the manifest points at the crates.io versions.
+      - name: Vendor COMBINE-lab path deps (bridge until R3)
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! -d sample_data ]]; then
-            tar -xzf sample_data.tgz
-          fi
+          clone() { # repo branch dest
+            if [[ ! -d "$3" ]]; then
+              git clone --depth 1 --branch "$2" "https://github.com/COMBINE-lab/$1.git" "$3"
+            fi
+          }
+          clone cf1-rs    main                  "$GITHUB_WORKSPACE/../cf1-rs"
+          clone piscem-rs main                  "$GITHUB_WORKSPACE/../piscem-rs"
+          clone ksw2rs    simd-runtime-dispatch "$GITHUB_WORKSPACE/../../../ksw2rs"
 
-      - name: Sample Data Smoke (Mapping)
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build (release, portable floor)
+        # .cargo/config.toml pins the x86-64-v2 / NEON SIMD floor; ksw2rs picks
+        # AVX2/SSE4.1/NEON at runtime.
+        run: cargo build --workspace --release
+
+      - name: Test
+        run: cargo test --workspace --release
+
+      - name: CLI smoke
+        run: ./target/release/salmon --help
+
+      - name: Sample data smoke (mapping)
+        shell: bash
         run: |
-          ./build-ci/src/salmon index \
+          set -euo pipefail
+          [[ -d sample_data ]] || tar -xzf sample_data.tgz
+          ./target/release/salmon index \
             -t sample_data/transcripts.fasta \
-            -i build-ci/sample_index
-          ./build-ci/src/salmon quant \
-            -l A \
-            -i build-ci/sample_index \
+            -i target/sample_index
+          ./target/release/salmon quant \
+            -l A -i target/sample_index \
             -1 sample_data/reads_1.fastq \
             -2 sample_data/reads_2.fastq \
-            -o build-ci/sample_quant_mapping
+            -o target/sample_quant_mapping
+          test -s target/sample_quant_mapping/quant.sf
 
-      - name: Sample Data Smoke (Alignment)
-        run: |
-          ./build-ci/src/salmon quant \
-            -l A \
-            -t sample_data/transcripts.fasta \
-            -a sample_data/sample_alignments.bam \
-            -o build-ci/sample_quant_alignment
-
-      - name: Package Binary Artifact
+      - name: Sample data smoke (alignment)
         shell: bash
         run: |
           set -euo pipefail
-          pkg_dir="release/salmon-${{ matrix.target_id }}"
-          mkdir -p "$pkg_dir/bin"
-          cp build-ci/src/salmon "$pkg_dir/bin/"
-          cp LICENSE "$pkg_dir/"
-          cp README.md "$pkg_dir/"
-          tar -C release -czf "salmon-${{ matrix.target_id }}.tar.gz" "salmon-${{ matrix.target_id }}"
-
-      - name: Upload Binary Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: salmon-${{ matrix.target_id }}
-          path: salmon-${{ matrix.target_id }}.tar.gz
-          if-no-files-found: error
+          ./target/release/salmon quant \
+            -l A -t sample_data/transcripts.fasta \
+            -a sample_data/sample_alignments.bam \
+            -o target/sample_quant_alignment
+          test -s target/sample_quant_alignment/quant.sf

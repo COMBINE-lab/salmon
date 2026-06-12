@@ -67,8 +67,11 @@ impl FragmentLengthDistribution {
         let mut tot_mass;
 
         if prior_mu > 0.0 {
-            let norm = Normal::new(prior_mu / bin_size as f64, prior_sigma / (bin_size * bin_size) as f64)
-                .expect("valid normal prior");
+            let norm = Normal::new(
+                prior_mu / bin_size as f64,
+                prior_sigma / (bin_size * bin_size) as f64,
+            )
+            .expect("valid normal prior");
             hist = (0..=max_val).map(|_| AtomicF64::new(LOG_0)).collect();
             tot_mass = LOG_0;
             for (i, slot) in hist.iter().enumerate() {
@@ -350,10 +353,18 @@ mod tests {
         let cm = fld.conditional_means();
         // conditional means are non-decreasing
         for w in cm.windows(2) {
-            assert!(w[1] >= w[0] - 1e-9, "cond means not monotonic: {} < {}", w[1], w[0]);
+            assert!(
+                w[1] >= w[0] - 1e-9,
+                "cond means not monotonic: {} < {}",
+                w[1],
+                w[0]
+            );
         }
         let short = smoothed_effective_length(&cm, 201);
-        assert!(short < 201.0 && short > 1.0, "short effLen {short} not shrunk");
+        assert!(
+            short < 201.0 && short > 1.0,
+            "short effLen {short} not shrunk"
+        );
         // a long transcript keeps most of its length
         let long = smoothed_effective_length(&cm, 5000);
         assert!(long > 4000.0, "long effLen {long} shrunk too much");

@@ -23,7 +23,8 @@ fn main() {
     let ridx = idx.inner();
     let k = ridx.k();
     let mut hs = HitSearcher::new(ridx);
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(json).unwrap()).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(json).unwrap()).unwrap();
     for (ord, rec) in v.as_object().unwrap() {
         let r1 = rec["r1"].as_str().unwrap().as_bytes();
         let r2 = rec["r2"].as_str().unwrap().as_bytes();
@@ -46,7 +47,8 @@ fn main() {
             if std::env::var_os("TRACE_TSV").is_some() {
                 // classify the best (lowest-tid) shared placement
                 let mut bucket = "no_shared";
-                for &t in &shared {
+                // classify only the best (lowest-tid) shared placement
+                if let Some(&t) = shared.first() {
                     let l = left.accepted_hits.iter().find(|h| h.tid==t).unwrap();
                     let r = right.accepted_hits.iter().find(|h| h.tid==t).unwrap();
                     if l.is_fw == r.is_fw { bucket = "same_orientation"; }
@@ -57,7 +59,6 @@ fn main() {
                                  else if fl <= -32 { "dovetail_neg" }
                                  else { "too_far_pos" };
                     }
-                    break;
                 }
                 println!("{ord}\t{}\t{}\t{bucket}", left.accepted_hits.len(), right.accepted_hits.len());
             } else {

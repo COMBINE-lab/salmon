@@ -161,7 +161,9 @@ pub struct AlignQuantResult {
 
 /// Current local time as an asctime-style string, matching salmon's timestamps.
 fn asctime_now() -> String {
-    jiff::Zoned::now().strftime("%a %b %e %H:%M:%S %Y").to_string()
+    jiff::Zoned::now()
+        .strftime("%a %b %e %H:%M:%S %Y")
+        .to_string()
 }
 
 /// Extract an integer tag value (e.g. `AS`) as `i32`.
@@ -212,7 +214,9 @@ fn pair_records(recs: &[FragRecord]) -> Vec<Placement> {
         let r1 = &recs[i];
         // Only mates aligned to the *same* transcript form a single-transcript
         // pair placement; a mate on another transcript leaves r1 an orphan.
-        let (Some(mtid), Some(mpos)) = (r1.mate_tid, r1.mate_pos) else { continue };
+        let (Some(mtid), Some(mpos)) = (r1.mate_tid, r1.mate_pos) else {
+            continue;
+        };
         if mtid != r1.tid {
             continue;
         }
@@ -251,7 +255,10 @@ fn pair_records(recs: &[FragRecord]) -> Vec<Placement> {
     }
     for i in 0..n {
         if !used[i] {
-            placements.push(Placement { tid: recs[i].tid, idxs: vec![i] });
+            placements.push(Placement {
+                tid: recs[i].tid,
+                idxs: vec![i],
+            });
         }
     }
     placements
@@ -280,21 +287,56 @@ fn logsumexp(xs: &[f64]) -> f64 {
 /// keyed on which mate is forward (read 1 forward → SA, read 2 forward → AS).
 fn frag_format(recs: &[FragRecord], idxs: &[usize]) -> (Option<LibraryFormat>, bool, MateStatus) {
     if idxs.len() >= 2 {
-        let r1 = idxs.iter().map(|&i| &recs[i]).find(|r| r.is_read1).unwrap_or(&recs[idxs[0]]);
-        let r2 = idxs.iter().map(|&i| &recs[i]).find(|r| !r.is_read1).unwrap_or(&recs[idxs[1]]);
+        let r1 = idxs
+            .iter()
+            .map(|&i| &recs[i])
+            .find(|r| r.is_read1)
+            .unwrap_or(&recs[idxs[0]]);
+        let r2 = idxs
+            .iter()
+            .map(|&i| &recs[i])
+            .find(|r| !r.is_read1)
+            .unwrap_or(&recs[idxs[1]]);
         let (r1_fw, r2_fw) = (!r1.is_reverse, !r2.is_reverse);
         let (orientation, strandedness) = if r1_fw != r2_fw {
             let (fw, rc) = if r1_fw { (r1, r2) } else { (r2, r1) };
-            let orientation = if fw.pos <= rc.pos { ReadOrientation::Toward } else { ReadOrientation::Away };
-            let strandedness = if r1_fw { ReadStrandedness::SA } else { ReadStrandedness::AS };
+            let orientation = if fw.pos <= rc.pos {
+                ReadOrientation::Toward
+            } else {
+                ReadOrientation::Away
+            };
+            let strandedness = if r1_fw {
+                ReadStrandedness::SA
+            } else {
+                ReadStrandedness::AS
+            };
             (orientation, strandedness)
         } else {
-            (ReadOrientation::Same, if r1_fw { ReadStrandedness::S } else { ReadStrandedness::A })
+            (
+                ReadOrientation::Same,
+                if r1_fw {
+                    ReadStrandedness::S
+                } else {
+                    ReadStrandedness::A
+                },
+            )
         };
-        (Some(LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)), r1_fw, MateStatus::PairedEndPaired)
+        (
+            Some(LibraryFormat::new(
+                ReadType::PairedEnd,
+                orientation,
+                strandedness,
+            )),
+            r1_fw,
+            MateStatus::PairedEndPaired,
+        )
     } else {
         let r = &recs[idxs[0]];
-        let status = if r.is_read1 { MateStatus::PairedEndLeft } else { MateStatus::PairedEndRight };
+        let status = if r.is_read1 {
+            MateStatus::PairedEndLeft
+        } else {
+            MateStatus::PairedEndRight
+        };
         (None, !r.is_reverse, status)
     }
 }
@@ -324,7 +366,9 @@ fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
         f.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b]
     };
     let reader: Box<dyn BufRead> = if is_gz {
-        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(file)))
+        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(
+            file,
+        )))
     } else {
         Box::new(std::io::BufReader::new(file))
     };
@@ -430,11 +474,12 @@ fn is_sam_path(p: &Path) -> bool {
 /// Open a SAM file (transparently gunzipping `.sam.gz`) as a noodles reader over
 /// a boxed `BufRead`, so plain and gzipped inputs share one concrete type.
 fn open_sam_reader(path: &Path) -> Result<sam::io::Reader<Box<dyn BufRead + Send>>> {
-    let file =
-        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let lower = path.to_string_lossy().to_ascii_lowercase();
     let inner: Box<dyn BufRead + Send> = if lower.ends_with(".gz") {
-        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(file)))
+        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(
+            file,
+        )))
     } else {
         Box::new(std::io::BufReader::new(file))
     };
@@ -444,7 +489,9 @@ fn open_sam_reader(path: &Path) -> Result<sam::io::Reader<Box<dyn BufRead + Send
 /// Read just the header from a SAM/BAM input (chosen by extension).
 fn read_alignment_header(path: &Path) -> Result<Header> {
     if is_sam_path(path) {
-        open_sam_reader(path)?.read_header().context("reading SAM header")
+        open_sam_reader(path)?
+            .read_header()
+            .context("reading SAM header")
     } else {
         let mut reader = bam::io::Reader::new(
             std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?,
@@ -488,7 +535,12 @@ fn record_to_frag<R: sam::alignment::Record>(
         .collect();
     let ref_span: usize = ops
         .iter()
-        .filter(|(o, _)| matches!(o, AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Del | AlnOp::RefSkip))
+        .filter(|(o, _)| {
+            matches!(
+                o,
+                AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Del | AlnOp::RefSkip
+            )
+        })
         .map(|(_, l)| l)
         .sum();
     let ops = if need_seq { ops } else { Vec::new() };
@@ -504,7 +556,11 @@ fn record_to_frag<R: sam::alignment::Record>(
     // Mate linkage as the aligner recorded it (RNEXT/PNEXT); a mate that is
     // unmapped or absent leaves these `None`, making the record an orphan.
     let mate_tid = (!flags.is_mate_unmapped())
-        .then(|| record.mate_reference_sequence_id(header).and_then(|r| r.ok()))
+        .then(|| {
+            record
+                .mate_reference_sequence_id(header)
+                .and_then(|r| r.ok())
+        })
         .flatten()
         .map(|t| t as u32);
     let mate_pos = record
@@ -576,7 +632,10 @@ struct PassCfg<'a> {
 struct PassAccum {
     seq_obs: Option<(salmon_model::SBModel, salmon_model::SBModel)>,
     gc_obs: Option<salmon_model::GcFragModel>,
-    pos_obs: Option<(Vec<salmon_model::SimplePosBias>, Vec<salmon_model::SimplePosBias>)>,
+    pos_obs: Option<(
+        Vec<salmon_model::SimplePosBias>,
+        Vec<salmon_model::SimplePosBias>,
+    )>,
     num_processed: u64,
     num_mapped: u64,
 }
@@ -615,7 +674,9 @@ where
 
     // Shared atomic error model: read concurrently for `basis`, updated by the
     // workers flushing their per-thread deltas into it between minibatches.
-    let shared_model = cfg.use_error_model.then(|| SharedAlignmentModel::new(1.0, cfg.error_bins));
+    let shared_model = cfg
+        .use_error_model
+        .then(|| SharedAlignmentModel::new(1.0, cfg.error_bins));
     let shared_model_ref = shared_model.as_ref();
     let minibatch = cfg.minibatch;
     let need_seq = cfg.need_seq;
@@ -670,8 +731,15 @@ where
         for _ in 0..cfg.nthreads {
             let rx = rx.clone();
             workers.push(scope.spawn(move || -> (Local, u64) {
-                let mut local =
-                    Local::new(cfg.use_error_model, cfg.error_bins, cfg.seq_bias, cfg.gc_bias, cfg.cond_gc_bins, cfg.gc_bins, cfg.pos_bias);
+                let mut local = Local::new(
+                    cfg.use_error_model,
+                    cfg.error_bins,
+                    cfg.seq_bias,
+                    cfg.gc_bias,
+                    cfg.cond_gc_bins,
+                    cfg.gc_bins,
+                    cfg.pos_bias,
+                );
                 let mut count = 0u64;
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
@@ -735,7 +803,15 @@ where
             .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))??;
 
         // Merge the per-worker bias accumulators + counts.
-        let mut merged = Local::new(cfg.use_error_model, cfg.error_bins, cfg.seq_bias, cfg.gc_bias, cfg.cond_gc_bins, cfg.gc_bins, cfg.pos_bias);
+        let mut merged = Local::new(
+            cfg.use_error_model,
+            cfg.error_bins,
+            cfg.seq_bias,
+            cfg.gc_bias,
+            cfg.cond_gc_bins,
+            cfg.gc_bins,
+            cfg.pos_bias,
+        );
         let mut total = 0u64;
         for w in workers {
             let (local, count) = w
@@ -811,7 +887,10 @@ struct Local {
     model: Option<AlignmentModel>,
     seq_obs: Option<(salmon_model::SBModel, salmon_model::SBModel)>,
     gc_obs: Option<salmon_model::GcFragModel>,
-    pos_obs: Option<(Vec<salmon_model::SimplePosBias>, Vec<salmon_model::SimplePosBias>)>,
+    pos_obs: Option<(
+        Vec<salmon_model::SimplePosBias>,
+        Vec<salmon_model::SimplePosBias>,
+    )>,
 }
 
 impl Local {
@@ -879,7 +958,9 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
     if frag_len > 0 {
         ctx.fld.add_val(frag_len as usize, 0.0);
     }
-    let use_aux = ctx.online.is_none_or(|o| o.num_assigned() >= ctx.pre_burnin);
+    let use_aux = ctx
+        .online
+        .is_none_or(|o| o.num_assigned() >= ctx.pre_burnin);
 
     // Per surviving placement (one reported alignment): conditional log-weight
     // (eq-class) + online log-aux + fragment geometry.
@@ -896,7 +977,11 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
         if ctx.discard_orphans && ctx.paired_lib && idxs.len() < 2 {
             continue;
         }
-        let refseq = ctx.ref_bytes.get(tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+        let refseq = ctx
+            .ref_bytes
+            .get(tid as usize)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         // Conditional log-weight basis = salmon's `errLike` (Σ(fg−bg) over the
         // mate(s) under the error model; uniform 0.0 when it is disabled).
         let basis = if let Some(m) = ctx.model {
@@ -925,7 +1010,11 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
             -((rl.max(1) as f64).ln())
         };
         let log_frag_prob = if proper {
-            if use_aux { ctx.fld.pmf(flen as usize) } else { 0.0 }
+            if use_aux {
+                ctx.fld.pmf(flen as usize)
+            } else {
+                0.0
+            }
         } else if ctx.paired_lib {
             LOG_EPSILON
         } else {
@@ -981,7 +1070,11 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
     // abundance-aware posteriors (online), per distinct transcript
     let post: Vec<f64> = match ctx.online {
         Some(o) => {
-            let maps: Vec<(u32, f64)> = tids.iter().cloned().zip(online_log.iter().cloned()).collect();
+            let maps: Vec<(u32, f64)> = tids
+                .iter()
+                .cloned()
+                .zip(online_log.iter().cloned())
+                .collect();
             o.assign_fragment(&maps, ctx.log_fm)
         }
         None => weights.clone(),
@@ -996,7 +1089,11 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
                 continue;
             }
             let online_log_tid = online_log[ti];
-            let refseq = ctx.ref_bytes.get(*tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+            let refseq = ctx
+                .ref_bytes
+                .get(*tid as usize)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
             for &k in ks {
                 let p = p_tid * (sp_online[k] - online_log_tid).exp();
                 if p <= 0.0 {
@@ -1041,13 +1138,21 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
                     if let Some(five) = fwd_five {
                         let s = five as i32 - CONTEXT_LEFT as i32;
                         if s >= 0 && (s as usize + CONTEXT_LENGTH) <= rl {
-                            obs.0.add_context(&refseq[s as usize..s as usize + CONTEXT_LENGTH], false, p);
+                            obs.0.add_context(
+                                &refseq[s as usize..s as usize + CONTEXT_LENGTH],
+                                false,
+                                p,
+                            );
                         }
                     }
                     if let Some(five) = rev_five {
                         let s = five as i32 - CONTEXT_RIGHT as i32;
                         if s >= 0 && (s as usize + CONTEXT_LENGTH) <= rl {
-                            obs.1.add_context(&refseq[s as usize..s as usize + CONTEXT_LENGTH], true, p);
+                            obs.1.add_context(
+                                &refseq[s as usize..s as usize + CONTEXT_LENGTH],
+                                true,
+                                p,
+                            );
                         }
                     }
                 }
@@ -1089,7 +1194,9 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
 /// reject when coordinate-sorted AND not query-grouped. (Query-name *sorted* files
 /// report `SO:queryname`, not coordinate, and pass.)
 fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
-    let Some(hd) = header.header() else { return false };
+    let Some(hd) = header.header() else {
+        return false;
+    };
     let mut so_coord = false;
     let mut go_query = false;
     // `SO`/`GO` are non-standard tags in this noodles version → read from other_fields.
@@ -1156,8 +1263,14 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // model and bias models are trained/collected with abundance-aware posteriors
     // in a single streaming pass (salmon's online phase), rather than two passes.
     let ref_lens_u64: Vec<u64> = lengths.iter().map(|&l| l as u64).collect();
-    let online = (use_error_model || bias_on)
-        .then(|| salmon_infer::OnlineInference::new(&ref_lens_u64, 0.05, opts.forgetting_factor, opts.num_aux_model_samples));
+    let online = (use_error_model || bias_on).then(|| {
+        salmon_infer::OnlineInference::new(
+            &ref_lens_u64,
+            0.05,
+            opts.forgetting_factor,
+            opts.num_aux_model_samples,
+        )
+    });
 
     // Per-transcript inputs the bias collection needs (the observed bias models
     // themselves are accumulated per-worker inside the pass).
@@ -1179,14 +1292,20 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         (None, Vec::new())
     };
     let gc_store = match &gc_rank {
-        Some(r) => salmon_model::GcStore::Rank { rank: r, offsets: &gc_offsets },
+        Some(r) => salmon_model::GcStore::Rank {
+            rank: r,
+            offsets: &gc_offsets,
+        },
         None => salmon_model::GcStore::Dense(&[]),
     };
     let length_quantiles: Option<Vec<u32>> = opts.pos_bias.then(|| {
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES)
     });
     let length_class: Option<Vec<usize>> = length_quantiles.as_ref().map(|q| {
-        lengths.iter().map(|&l| salmon_model::length_class_index(q, l)).collect()
+        lengths
+            .iter()
+            .map(|&l| salmon_model::length_class_index(q, l))
+            .collect()
     });
 
     // ---- online pass (reader/worker pipeline) ------------------------------
@@ -1248,7 +1367,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             num_mapped: 0,
         };
         stream_online_pass(&opts.bam, &cfg, &mut acc)?;
-        (acc.seq_obs, acc.gc_obs, acc.pos_obs, acc.num_processed, acc.num_mapped)
+        (
+            acc.seq_obs,
+            acc.gc_obs,
+            acc.pos_obs,
+            acc.num_processed,
+            acc.num_mapped,
+        )
     };
 
     // ---- base effective lengths --------------------------------------------
@@ -1278,7 +1403,11 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         } else {
             vec![0.0; num_refs]
         };
-        let uniform_prior = if num_refs > 0 { total_reads / num_refs as f64 } else { 0.0 };
+        let uniform_prior = if num_refs > 0 {
+            total_reads / num_refs as f64
+        } else {
+            0.0
+        };
         // salmon's numRequiredFragments default (the online-phase target)
         const NUM_REQUIRED_FRAGMENTS: f64 = 50_000_000.0;
         let frac_observed = (total_reads / NUM_REQUIRED_FRAGMENTS).min(0.999);
@@ -1292,11 +1421,21 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let mut em = if opts.skip_quant {
         // `--skipQuant`: emit eq-classes + library type + metadata, skip the
         // optimizer and quant.sf. Abundances left at zero.
-        salmon_infer::EmResult { alphas: vec![0.0; num_refs], iters: 0, converged: true }
+        salmon_infer::EmResult {
+            alphas: vec![0.0; num_refs],
+            iters: 0,
+            converged: true,
+        }
     } else if opts.init_uniform {
         optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
     } else {
-        optimize_with_init(&collapsed, num_refs, &opts.em, init_alphas.as_deref(), Some(&eff_lengths))
+        optimize_with_init(
+            &collapsed,
+            num_refs,
+            &opts.em,
+            init_alphas.as_deref(),
+            Some(&eff_lengths),
+        )
     };
 
     // ---- bias-corrected effective lengths (shared with reads mode) ----------
@@ -1311,8 +1450,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         let seq = seq_obs.map(|(mut of, mut or)| {
             of.normalize();
             or.normalize();
-            let (ef, er) =
-                salmon_model::build_expected(num_refs, refseq_of, &em.alphas, &eff_lengths, &fld_cdf);
+            let (ef, er) = salmon_model::build_expected(
+                num_refs,
+                refseq_of,
+                &em.alphas,
+                &eff_lengths,
+                &fld_cdf,
+            );
             (of, or, ef, er)
         });
         if let Some((of, or, ef, er)) = seq.as_ref() {
@@ -1340,7 +1484,11 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             exp.normalize();
             bias_dump.obs_gc = obs.dump().to_vec();
             bias_dump.exp_gc = exp.dump().to_vec();
-            Some(salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO))
+            Some(salmon_model::gc_ratio(
+                &mut obs,
+                &mut exp,
+                salmon_model::gcbias::GC_MAX_RATIO,
+            ))
         } else {
             None
         };
@@ -1360,7 +1508,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             (of, or, ef, er)
         });
         if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
-            let masses = |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
+            let masses =
+                |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
             bias_dump.obs5_pos = masses(ofw);
             bias_dump.obs3_pos = masses(orc);
             bias_dump.exp5_pos = masses(efw);
@@ -1372,24 +1521,27 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 continue;
             }
             let s = ref_bytes[tid].as_slice();
-            let pos_vecs: Option<(Vec<f64>, Vec<f64>)> = pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
-                let lc = length_class.as_ref().unwrap()[tid];
-                let rl = s.len();
-                let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
-                let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
-                ofw[lc].project_weights(&mut o5);
-                efw[lc].project_weights(&mut e5);
-                orc[lc].project_weights(&mut o3);
-                erc[lc].project_weights(&mut e3);
-                (
-                    salmon_model::positional_factor(&o5, &e5),
-                    salmon_model::positional_factor(&o3, &e3),
-                )
-            });
+            let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
+                pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
+                    let lc = length_class.as_ref().unwrap()[tid];
+                    let rl = s.len();
+                    let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
+                    let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
+                    ofw[lc].project_weights(&mut o5);
+                    efw[lc].project_weights(&mut e5);
+                    orc[lc].project_weights(&mut o3);
+                    erc[lc].project_weights(&mut e3);
+                    (
+                        salmon_model::positional_factor(&o5, &e5),
+                        salmon_model::positional_factor(&o3, &e3),
+                    )
+                });
             let bias = salmon_model::BiasInputs {
                 seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
                 gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
-                pos: pos_vecs.as_ref().map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
+                pos: pos_vecs
+                    .as_ref()
+                    .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
             };
             eff_lengths[tid] = salmon_model::corrected_effective_length_full(
                 s,
@@ -1408,12 +1560,24 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let counts = em.alphas;
 
     let rates: Vec<f64> = (0..num_refs)
-        .map(|i| if eff_lengths[i] > 0.0 { counts[i] / eff_lengths[i] } else { 0.0 })
+        .map(|i| {
+            if eff_lengths[i] > 0.0 {
+                counts[i] / eff_lengths[i]
+            } else {
+                0.0
+            }
+        })
         .collect();
     let rate_sum: f64 = rates.iter().sum();
     let tpm: Vec<f64> = rates
         .iter()
-        .map(|r| if rate_sum > 0.0 { r / rate_sum * 1e6 } else { 0.0 })
+        .map(|r| {
+            if rate_sum > 0.0 {
+                r / rate_sum * 1e6
+            } else {
+                0.0
+            }
+        })
         .collect();
 
     let length_classes =
@@ -1559,8 +1723,11 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
 
     // libParams/flenDist.txt, logs/salmon_quant.log, and the aux dumps (shared).
     std::fs::create_dir_all(dir.join("libParams")).context("creating libParams")?;
-    salmon_model::dumps::write_flen_dist(&dir.join("libParams").join("flenDist.txt"), &res.frag_len_dist)
-        .context("writing flenDist.txt")?;
+    salmon_model::dumps::write_flen_dist(
+        &dir.join("libParams").join("flenDist.txt"),
+        &res.frag_len_dist,
+    )
+    .context("writing flenDist.txt")?;
     salmon_model::dumps::write_fld_dump(&dir.join("aux_info").join("fld.gz"), &res.frag_len_dist)
         .context("writing fld.gz")?;
     salmon_model::dumps::write_aux_bias_dumps(&dir.join("aux_info"), &res.bias_dump)
@@ -1579,7 +1746,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         res.frag_len_mean,
         res.frag_len_sd,
     );
-    std::fs::write(dir.join("logs").join("salmon_quant.log"), log).context("writing salmon_quant.log")?;
+    std::fs::write(dir.join("logs").join("salmon_quant.log"), log)
+        .context("writing salmon_quant.log")?;
 
     // aux_info/ambig_info.tsv
     {
@@ -1618,7 +1786,10 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         output: opts.output_dir.display().to_string(),
         aux_dir: "aux_info".to_string(),
     };
-    std::fs::write(dir.join("cmd_info.json"), serde_json::to_string_pretty(&cmd)?)?;
+    std::fs::write(
+        dir.join("cmd_info.json"),
+        serde_json::to_string_pretty(&cmd)?,
+    )?;
     Ok(())
 }
 

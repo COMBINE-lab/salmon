@@ -182,7 +182,13 @@ fn collected_candidate_validates_by_alignment() {
     let mut mut_read = read.to_vec();
     mut_read[20] = if mut_read[20] == b'A' { b'C' } else { b'A' };
     mut_read[70] = if mut_read[70] == b'G' { b'T' } else { b'G' };
-    let cands2 = best_per_target(collect_read_mems(idx.inner(), &mut hs, &mut_read, true, &cfg));
+    let cands2 = best_per_target(collect_read_mems(
+        idx.inner(),
+        &mut hs,
+        &mut_read,
+        true,
+        &cfg,
+    ));
     let best2 = cands2
         .iter()
         .max_by_key(|c| c.chain.covered_read_bases())
@@ -228,7 +234,11 @@ fn assembled_paired_read_mapper_concordant() {
     assert_eq!(maps[0].tid, 0);
     assert_eq!(maps[0].status, MateStatus::PairedEndPaired);
     // fragment spans ~ [50, 430)
-    assert!((maps[0].fragment_len - 380).abs() <= 5, "frag {}", maps[0].fragment_len);
+    assert!(
+        (maps[0].fragment_len - 380).abs() <= 5,
+        "frag {}",
+        maps[0].fragment_len
+    );
 }
 
 #[test]
@@ -239,8 +249,8 @@ fn orphan_recovery_promotes_to_pair() {
     let mut hs = HitSearcher::new(idx.inner());
 
     let r1 = transcript[60..160].to_vec(); // maps cleanly, forward
-    // mate2: rc of a downstream window, with every 25th base broken so it has
-    // no exact k-mers (won't be collected) but still aligns well.
+                                           // mate2: rc of a downstream window, with every 25th base broken so it has
+                                           // no exact k-mers (won't be collected) but still aligns well.
     let r2 = break_kmers(&revcomp(&transcript[400..500]), 25);
 
     // Without recovery -> the pair degrades to a left orphan.
@@ -256,7 +266,11 @@ fn orphan_recovery_promotes_to_pair() {
     };
     let m1 = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &recover);
     assert_eq!(m1.len(), 1, "{m1:?}");
-    assert_eq!(m1[0].status, MateStatus::PairedEndPaired, "recovery should pair");
+    assert_eq!(
+        m1[0].status,
+        MateStatus::PairedEndPaired,
+        "recovery should pair"
+    );
 }
 
 #[test]
@@ -268,14 +282,37 @@ fn pseudoalignment_only_mode() {
 
     // single-end sketch
     let read = &transcript[100..200];
-    let s = map_single_read_sketch(idx.inner(), &mut hs, &mut scratch, read, SkippingStrategy::Permissive, 256, 2500);
+    let s = map_single_read_sketch(
+        idx.inner(),
+        &mut hs,
+        &mut scratch,
+        read,
+        SkippingStrategy::Permissive,
+        256,
+        2500,
+    );
     assert!(s.iter().any(|m| m.tid == 0), "sketch single: {s:?}");
 
     // paired sketch -> intersection on tid 0
     let r1 = transcript[50..130].to_vec();
     let r2 = revcomp(&transcript[350..430]);
-    let sp = map_read_pair_sketch(idx.inner(), &mut hs, &mut scratch, &r1, &r2, false, false, SkippingStrategy::Permissive, 256, 2500);
-    assert!(sp.iter().any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired), "sketch pair: {sp:?}");
+    let sp = map_read_pair_sketch(
+        idx.inner(),
+        &mut hs,
+        &mut scratch,
+        &r1,
+        &r2,
+        false,
+        false,
+        SkippingStrategy::Permissive,
+        256,
+        2500,
+    );
+    assert!(
+        sp.iter()
+            .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
+        "sketch pair: {sp:?}"
+    );
 }
 
 #[test]
@@ -292,6 +329,15 @@ fn unmappable_read_yields_no_candidates() {
 
     // A different random sequence should not map.
     let foreign = gen_seq(100, 0x9999);
-    let cands = collect_read_mems(idx.inner(), &mut hs, &foreign, true, &MemCollectorConfig::default());
-    assert!(cands.is_empty(), "foreign read unexpectedly mapped: {cands:?}");
+    let cands = collect_read_mems(
+        idx.inner(),
+        &mut hs,
+        &foreign,
+        true,
+        &MemCollectorConfig::default(),
+    );
+    assert!(
+        cands.is_empty(),
+        "foreign read unexpectedly mapped: {cands:?}"
+    );
 }

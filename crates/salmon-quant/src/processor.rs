@@ -18,11 +18,11 @@ use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 use salmon_core::{is_compatible, LibraryFormat, MateStatus};
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
 use salmon_index::SalmonIndex;
+use salmon_infer::OnlineInference;
 use salmon_map::{
     map_read_pair, map_read_pair_sketch, map_single_read, map_single_read_sketch, MapConfig,
     ScoredMapping,
 };
-use salmon_infer::OnlineInference;
 use salmon_model::seqbias::{SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
 use salmon_model::{
     gc_desc, FragmentLengthDistribution, GcFragModel, LibraryTypeDetector, SimplePosBias,
@@ -130,8 +130,12 @@ impl<'a> QuantProcessor<'a> {
             .then(|| GcFragModel::new(shared.cond_gc_bins, shared.gc_bins));
         let posbias = shared.collect_posbias.then(|| {
             (
-                (0..NUM_LENGTH_CLASSES).map(|_| SimplePosBias::default()).collect(),
-                (0..NUM_LENGTH_CLASSES).map(|_| SimplePosBias::default()).collect(),
+                (0..NUM_LENGTH_CLASSES)
+                    .map(|_| SimplePosBias::default())
+                    .collect(),
+                (0..NUM_LENGTH_CLASSES)
+                    .map(|_| SimplePosBias::default())
+                    .collect(),
             )
         });
         Self {
@@ -166,18 +170,27 @@ pub(crate) const NUM_PRE_BURNIN: u64 = 5000;
 /// context feeds the forward model; a reverse read's 5' context
 /// (reverse-complemented) feeds the RC model. For a paired fragment the opposite
 /// end feeds the other model.
-fn collect_context(salmon: &SalmonIndex, m: &ScoredMapping, weight: f64, obs: &mut (SBModel, SBModel)) {
+fn collect_context(
+    salmon: &SalmonIndex,
+    m: &ScoredMapping,
+    weight: f64,
+    obs: &mut (SBModel, SBModel),
+) {
     let seq = salmon.ref_seq(m.tid);
     let n = seq.len() as i32;
-    let (cl, cr, k) = (CONTEXT_LEFT as i32, CONTEXT_RIGHT as i32, CONTEXT_LENGTH as i32);
+    let (cl, cr, k) = (
+        CONTEXT_LEFT as i32,
+        CONTEXT_RIGHT as i32,
+        CONTEXT_LENGTH as i32,
+    );
 
-    let mut add_fwd = |obs: &mut SBModel, five_prime: i32| {
+    let add_fwd = |obs: &mut SBModel, five_prime: i32| {
         let s = five_prime - cl;
         if s >= 0 && s + k <= n {
             obs.add_context(&seq[s as usize..(s + k) as usize], false, weight);
         }
     };
-    let mut add_rev = |obs: &mut SBModel, five_prime: i32| {
+    let add_rev = |obs: &mut SBModel, five_prime: i32| {
         let s = five_prime - cr;
         if s >= 0 && s + k <= n {
             obs.add_context(&seq[s as usize..(s + k) as usize], true, weight);
@@ -229,7 +242,9 @@ fn collect_pos(
     bias_w: &[f64],
     pos: &mut (Vec<SimplePosBias>, Vec<SimplePosBias>),
 ) {
-    let Some(length_class) = sh.length_class else { return };
+    let Some(length_class) = sh.length_class else {
+        return;
+    };
     for (i, (m, _)) in compat.iter().enumerate() {
         if bias_w[i] <= 0.0 {
             continue;
@@ -446,7 +461,10 @@ fn accumulate_vm_stats(sh: &Shared, maps_empty: bool) {
 /// The read name written to unmapped_names.txt: the id up to the first
 /// whitespace (the conventional fragment name), lossily decoded.
 fn read_name(id: &[u8]) -> String {
-    let end = id.iter().position(|b| b.is_ascii_whitespace()).unwrap_or(id.len());
+    let end = id
+        .iter()
+        .position(|b| b.is_ascii_whitespace())
+        .unwrap_or(id.len());
     String::from_utf8_lossy(&id[..end]).into_owned()
 }
 
@@ -485,7 +503,16 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         pairs: impl Iterator<Item = (RefRecord<'r>, RefRecord<'r>)>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, sketch_scratch, seqbias, gcbias, posbias, unmapped, sam_buf } = self;
+        let QuantProcessor {
+            shared,
+            hs,
+            sketch_scratch,
+            seqbias,
+            gcbias,
+            posbias,
+            unmapped,
+            sam_buf,
+        } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -501,7 +528,18 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             let s1 = r1.seq();
             let s2 = r2.seq();
             let mut maps = if sh.sketch {
-                map_read_pair_sketch(idx, hs, sketch_scratch.as_mut().unwrap(), s1.as_ref(), s2.as_ref(), sh.sketch_strict_orphan, sh.map_cfg.pair.allow_dovetail, sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
+                map_read_pair_sketch(
+                    idx,
+                    hs,
+                    sketch_scratch.as_mut().unwrap(),
+                    s1.as_ref(),
+                    s2.as_ref(),
+                    sh.sketch_strict_orphan,
+                    sh.map_cfg.pair.allow_dovetail,
+                    sh.skip,
+                    sh.map_cfg.collect.max_hit_occ,
+                    sh.max_read_occ,
+                )
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
@@ -518,11 +556,22 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             }
             if sh.sam.is_some() && !maps.is_empty() {
                 crate::sam::write_fragment(
-                    sam_buf, sh.salmon, r1.id(), s1.as_ref(),
-                    Some((r2.id(), s2.as_ref())), &maps,
+                    sam_buf,
+                    sh.salmon,
+                    r1.id(),
+                    s1.as_ref(),
+                    Some((r2.id(), s2.as_ref())),
+                    &maps,
                 );
             }
-            record(&sh, &maps, log_fm, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
+            record(
+                &sh,
+                &maps,
+                log_fm,
+                seqbias.as_mut(),
+                gcbias.as_mut(),
+                posbias.as_mut(),
+            );
         }
         Ok(())
     }
@@ -545,7 +594,16 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         records: impl Iterator<Item = RefRecord<'r>>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, sketch_scratch, seqbias, gcbias, posbias, unmapped, sam_buf } = self;
+        let QuantProcessor {
+            shared,
+            hs,
+            sketch_scratch,
+            seqbias,
+            gcbias,
+            posbias,
+            unmapped,
+            sam_buf,
+        } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -559,7 +617,15 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         for rec in records {
             let s = rec.seq();
             let mut maps = if sh.sketch {
-                map_single_read_sketch(idx, hs, sketch_scratch.as_mut().unwrap(), s.as_ref(), sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
+                map_single_read_sketch(
+                    idx,
+                    hs,
+                    sketch_scratch.as_mut().unwrap(),
+                    s.as_ref(),
+                    sh.skip,
+                    sh.map_cfg.collect.max_hit_occ,
+                    sh.max_read_occ,
+                )
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };
@@ -573,11 +639,16 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 accumulate_vm_stats(&sh, maps.is_empty());
             }
             if sh.sam.is_some() && !maps.is_empty() {
-                crate::sam::write_fragment(
-                    sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps,
-                );
+                crate::sam::write_fragment(sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps);
             }
-            record(&sh, &maps, log_fm, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
+            record(
+                &sh,
+                &maps,
+                log_fm,
+                seqbias.as_mut(),
+                gcbias.as_mut(),
+                posbias.as_mut(),
+            );
         }
         Ok(())
     }

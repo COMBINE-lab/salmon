@@ -14,7 +14,11 @@ use std::hint::black_box;
 use std::time::Instant;
 
 fn main() {
-    let alloc_name = if cfg!(feature = "sysalloc") { "system" } else { "mimalloc" };
+    let alloc_name = if cfg!(feature = "sysalloc") {
+        "system"
+    } else {
+        "mimalloc"
+    };
     let n: u64 = 30_000_000;
 
     // alloc + free, every iteration (what the current sketch path does per read)
@@ -35,5 +39,8 @@ fn main() {
     let clear_ns = t.elapsed().as_nanos() as f64 / n as f64;
 
     println!("[{alloc_name}] MappingCache::new = {new_ns:.1} ns/op   clear(reuse) = {clear_ns:.1} ns/op   alloc overhead = {:.1} ns/op", new_ns - clear_ns);
-    println!("  per read pair (left+right+out = 3 caches): {:.1} ns of alloc avoided by reuse", 3.0 * (new_ns - clear_ns));
+    println!(
+        "  per read pair (left+right+out = 3 caches): {:.1} ns of alloc avoided by reuse",
+        3.0 * (new_ns - clear_ns)
+    );
 }

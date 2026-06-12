@@ -9,10 +9,10 @@ authors.workspace = true
 description = "Equivalence-class data structures and concurrent builder for the salmon Rust port."
 
 [dependencies]
-salmon-core = { path = "../salmon-core" }
+salmon-core = { workspace = true }
 scc = { workspace = true }
 dashmap = { workspace = true }
 xxhash-rust = { workspace = true }
 
-[lints.rust]
-unsafe_code = "warn"
+[lints]
+workspace = true

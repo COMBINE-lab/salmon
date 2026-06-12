@@ -74,8 +74,13 @@ pub struct JointMapping {
 impl JointMapping {
     /// Combined read-coverage of whichever mates are present (pairing-quality key).
     fn coverage(&self) -> i32 {
-        self.left.as_ref().map_or(0, |c| c.chain.covered_read_bases())
-            + self.right.as_ref().map_or(0, |c| c.chain.covered_read_bases())
+        self.left
+            .as_ref()
+            .map_or(0, |c| c.chain.covered_read_bases())
+            + self
+                .right
+                .as_ref()
+                .map_or(0, |c| c.chain.covered_read_bases())
     }
 }
 
@@ -354,14 +359,19 @@ mod tests {
         let left = vec![cand(0, true, 100, 50), cand(1, true, 100, 10)];
         let right = vec![cand(0, false, 300, 50), cand(1, false, 300, 10)];
         let paired = |js: &[JointMapping]| {
-            js.iter().filter(|m| m.status == MateStatus::PairedEndPaired).count()
+            js.iter()
+                .filter(|m| m.status == MateStatus::PairedEndPaired)
+                .count()
         };
         // Off by default: both concordant pairs survive.
         let j = join_reads_and_filter(left.clone(), right.clone(), &PairingConfig::default());
         assert_eq!(paired(&j), 2);
         // thresh 0.5 -> cutoff ceil(0.5*100)=50; tid 1 (cov 20) is pruned and,
         // being already paired, does not fall back to an orphan.
-        let cfg = PairingConfig { post_merge_chain_sub_thresh: 0.5, ..PairingConfig::default() };
+        let cfg = PairingConfig {
+            post_merge_chain_sub_thresh: 0.5,
+            ..PairingConfig::default()
+        };
         let j2 = join_reads_and_filter(left, right, &cfg);
         assert_eq!(j2.len(), 1);
         assert_eq!(j2[0].tid, 0);
@@ -380,7 +390,10 @@ mod tests {
         };
         // sanity: this configuration is inward and dovetailed
         let (l, r) = make();
-        assert_eq!(observed_format(&l[0], &r[0]).orientation, ReadOrientation::Toward);
+        assert_eq!(
+            observed_format(&l[0], &r[0]).orientation,
+            ReadOrientation::Toward
+        );
         assert!(is_dovetailed(&l[0], &r[0], ReadOrientation::Toward));
 
         // default: dovetail rejected -> falls back to orphans

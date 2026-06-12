@@ -79,7 +79,11 @@ pub fn corrected_effective_length_full(
     if !bias.any() {
         return elen;
     }
-    let k = if bias.seq.is_some() { CONTEXT_LENGTH } else { 1 };
+    let k = if bias.seq.is_some() {
+        CONTEXT_LENGTH
+    } else {
+        1
+    };
     let ref_len = seq.len();
     let unprocessed = (ref_len as i32 - elen as i32).max(0);
     let cdf_max_arg = (cdf.len() - 1).min(ref_len);
@@ -104,9 +108,13 @@ pub fn corrected_effective_length_full(
         for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
             let read_start = frag_start + cu;
             if read_start < ref_len {
-                fw[read_start] =
-                    log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + CONTEXT_LENGTH], false)
-                        .exp();
+                fw[read_start] = log_bias(
+                    obs_fw,
+                    exp_fw,
+                    &seq[frag_start..frag_start + CONTEXT_LENGTH],
+                    false,
+                )
+                .exp();
                 rc[read_start] = log_bias(
                     obs_rc,
                     exp_rc,
@@ -214,7 +222,7 @@ pub fn corrected_effective_length_full(
 /// to the length-class bin (forward density = fragments that can start here,
 /// reverse density = fragments that can end here). Models are finalized.
 #[allow(clippy::too_many_arguments)]
-pub fn build_expected_pos<'a, FL>(
+pub fn build_expected_pos<FL>(
     num_refs: usize,
     ref_len_of: FL,
     alphas: &[f64],
@@ -226,8 +234,12 @@ pub fn build_expected_pos<'a, FL>(
 where
     FL: Fn(usize) -> usize,
 {
-    let mut pos5: Vec<SimplePosBias> = (0..NUM_LENGTH_CLASSES).map(|_| SimplePosBias::default()).collect();
-    let mut pos3: Vec<SimplePosBias> = (0..NUM_LENGTH_CLASSES).map(|_| SimplePosBias::default()).collect();
+    let mut pos5: Vec<SimplePosBias> = (0..NUM_LENGTH_CLASSES)
+        .map(|_| SimplePosBias::default())
+        .collect();
+    let mut pos3: Vec<SimplePosBias> = (0..NUM_LENGTH_CLASSES)
+        .map(|_| SimplePosBias::default())
+        .collect();
     for tid in 0..num_refs {
         if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
             continue;

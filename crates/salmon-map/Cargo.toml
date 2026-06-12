@@ -9,7 +9,7 @@ authors.workspace = true
 description = "Selective-alignment mapping for the salmon Rust port: MEM collection, chaining, and alignment validation."
 
 [dependencies]
-salmon-core = { path = "../salmon-core" }
+salmon-core = { workspace = true }
 piscem-rs = { workspace = true }
 sshash-lib = "0.6"
 ahash = { workspace = true }
@@ -19,9 +19,9 @@ ahash = { workspace = true }
 ksw2rs = { path = "../../../ksw2rs" }
 
 [dev-dependencies]
-salmon-index = { path = "../salmon-index" }
+salmon-index = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 
-[lints.rust]
-unsafe_code = "warn"
+[lints]
+workspace = true

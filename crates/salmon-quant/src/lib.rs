@@ -261,8 +261,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let num_frags_filtered_vm = AtomicU64::new(0);
     let num_below_threshold_vm = AtomicU64::new(0);
     // collector for `--writeUnmappedNames` (names of unmapped fragments)
-    let unmapped_collector: Option<std::sync::Mutex<Vec<String>>> =
-        opts.write_unmapped_names.then(|| std::sync::Mutex::new(Vec::new()));
+    let unmapped_collector: Option<std::sync::Mutex<Vec<String>>> = opts
+        .write_unmapped_names
+        .then(|| std::sync::Mutex::new(Vec::new()));
     // SAM sink for `--writeMappings` (header written here).
     let sam_writer: Option<sam::SamWriter> = match &opts.write_mappings {
         Some(path) => {
@@ -272,7 +273,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         None => None,
     };
     let nthreads = if opts.num_threads == 0 {
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
     } else {
         opts.num_threads
     };
@@ -309,13 +312,19 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // `Vec<Vec<u32>>` (4 bytes/base) with effectively identical results, so it
     // is now the default; `--reduceGCMemory` is accepted as a no-op. `gc_store`
     // presents per-transcript [`GcView`]s.
-    let gc_rank: Option<salmon_model::GcRank> =
-        opts.gc_bias.then(|| salmon_model::GcRank::new(salmon.refseq_concat()));
-    let gc_store: Option<salmon_model::GcStore> = gc_rank
-        .as_ref()
-        .map(|r| salmon_model::GcStore::Rank { rank: r, offsets: salmon.ref_offsets() });
+    let gc_rank: Option<salmon_model::GcRank> = opts
+        .gc_bias
+        .then(|| salmon_model::GcRank::new(salmon.refseq_concat()));
+    let gc_store: Option<salmon_model::GcStore> =
+        gc_rank.as_ref().map(|r| salmon_model::GcStore::Rank {
+            rank: r,
+            offsets: salmon.ref_offsets(),
+        });
     let gcbias_obs = opts.gc_bias.then(|| {
-        std::sync::Mutex::new(salmon_model::GcFragModel::new(opts.cond_gc_bins, opts.gc_bins))
+        std::sync::Mutex::new(salmon_model::GcFragModel::new(
+            opts.cond_gc_bins,
+            opts.gc_bins,
+        ))
     });
 
     // For `--posBias`: transcript length-class quantiles + per-transcript class,
@@ -345,7 +354,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // point estimate.
     let online = (opts.seq_bias || opts.gc_bias || opts.pos_bias).then(|| {
         let ref_lens: Vec<u64> = (0..num_refs).map(|t| salmon.ref_len(t)).collect();
-        salmon_infer::OnlineInference::new(&ref_lens, 0.05, opts.forgetting_factor, opts.num_aux_model_samples)
+        salmon_infer::OnlineInference::new(
+            &ref_lens,
+            0.05,
+            opts.forgetting_factor,
+            opts.num_aux_model_samples,
+        )
     });
 
     // ---- parallel mapping pass (borrows the accumulators) -------------------
@@ -421,9 +435,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let library_type = if let Some(det) = &detector {
         det.most_likely_type()
             .map(|f| f.canonical().to_string())
-            .unwrap_or_else(|| {
-                if opts.is_paired() { "IU" } else { "U" }.to_string()
-            })
+            .unwrap_or_else(|| if opts.is_paired() { "IU" } else { "U" }.to_string())
     } else {
         opts.lib_type.clone()
     };
@@ -454,8 +466,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         dump_eq_classes(&opts.output_dir, &salmon, &collapsed, opts.dump_eq_weights)
             .context("writing eq_classes.txt.gz")?;
     }
-    let bias_on =
-        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
+    let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
     // salmon runs a *single* offline EM: after a short burn-in (`targetIt = 10`
     // iterations) it corrects effective lengths in place using that early
     // abundance estimate to weight the expected bias models, then continues the
@@ -468,7 +479,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // `--skipQuant`: emit equivalence classes + library type + metadata but
         // skip the optimizer (and Gibbs/bootstrap below, and quant.sf). Leave
         // abundances at zero.
-        salmon_infer::EmResult { alphas: vec![0.0; num_refs], iters: 0, converged: true }
+        salmon_infer::EmResult {
+            alphas: vec![0.0; num_refs],
+            iters: 0,
+            converged: true,
+        }
     } else if bias_on {
         let mut pre = opts.em.clone();
         pre.min_iter = BIAS_PRELIM_ITERS;
@@ -544,7 +559,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             exp.normalize();
             bias_dump.obs_gc = obs.dump().to_vec();
             bias_dump.exp_gc = exp.dump().to_vec();
-            Some(salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO))
+            Some(salmon_model::gc_ratio(
+                &mut obs,
+                &mut exp,
+                salmon_model::gcbias::GC_MAX_RATIO,
+            ))
         } else {
             None
         };
@@ -567,10 +586,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             // Debug: dump finalized pos models for parity comparison with salmon.
             if std::env::var("SALMON_DEBUG_POS").is_ok() {
                 use std::io::Write;
-                let mut f = std::fs::File::create(
-                    opts.output_dir.join("rust_pos_models.txt"),
-                )
-                .unwrap();
+                let mut f =
+                    std::fs::File::create(opts.output_dir.join("rust_pos_models.txt")).unwrap();
                 for (name, models) in [
                     ("obs5", &obs_fw),
                     ("obs3", &obs_rc),
@@ -589,7 +606,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             (obs_fw, obs_rc, exp_fw, exp_rc)
         });
         if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
-            let masses = |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
+            let masses =
+                |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
             bias_dump.obs5_pos = masses(ofw);
             bias_dump.obs3_pos = masses(orc);
             bias_dump.exp5_pos = masses(efw);
@@ -621,8 +639,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     });
                 let bias = salmon_model::BiasInputs {
                     seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
-                    gc: gc_ratio_model.as_ref().map(|g| (g, store.unwrap().view(tid))),
-                    pos: pos_vecs.as_ref().map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
+                    gc: gc_ratio_model
+                        .as_ref()
+                        .map(|g| (g, store.unwrap().view(tid))),
+                    pos: pos_vecs
+                        .as_ref()
+                        .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
                 };
                 salmon_model::corrected_effective_length_full(
                     s,
@@ -641,7 +663,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // Warm-start the single full convergence from the burn-in alphas, as
         // salmon continues the same vector after its in-loop correction.
         let warm = std::mem::take(&mut em.alphas);
-        em = optimize_with_init(&collapsed, num_refs, &opts.em, Some(&warm), Some(&eff_lengths));
+        em = optimize_with_init(
+            &collapsed,
+            num_refs,
+            &opts.em,
+            Some(&warm),
+            Some(&eff_lengths),
+        );
     }
     let counts = em.alphas;
 
@@ -676,23 +704,44 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             prior,
             per_transcript_prior: true,
         };
-        salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, num_mapped_frags, 0x6217_0000)
+        salmon_infer::gibbs_sample(
+            &packed,
+            &eff_lengths,
+            &counts,
+            &gopts,
+            num_mapped_frags,
+            0x6217_0000,
+        )
     } else {
         Vec::new()
     };
 
     // ---- TPM ----------------------------------------------------------------
     let rates: Vec<f64> = (0..num_refs)
-        .map(|i| if eff_lengths[i] > 0.0 { counts[i] / eff_lengths[i] } else { 0.0 })
+        .map(|i| {
+            if eff_lengths[i] > 0.0 {
+                counts[i] / eff_lengths[i]
+            } else {
+                0.0
+            }
+        })
         .collect();
     let rate_sum: f64 = rates.iter().sum();
     let tpm: Vec<f64> = rates
         .iter()
-        .map(|r| if rate_sum > 0.0 { r / rate_sum * 1e6 } else { 0.0 })
+        .map(|r| {
+            if rate_sum > 0.0 {
+                r / rate_sum * 1e6
+            } else {
+                0.0
+            }
+        })
         .collect();
 
     let result = QuantResult {
-        names: (0..num_refs).map(|i| salmon.ref_name(i).to_string()).collect(),
+        names: (0..num_refs)
+            .map(|i| salmon.ref_name(i).to_string())
+            .collect(),
         lengths: (0..num_refs).map(|i| salmon.ref_len(i) as u32).collect(),
         eff_lengths,
         tpm,
@@ -711,7 +760,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
         length_classes: salmon_model::compute_length_quantiles(
-            &(0..num_refs).map(|i| salmon.ref_len(i) as u32).collect::<Vec<_>>(),
+            &(0..num_refs)
+                .map(|i| salmon.ref_len(i) as u32)
+                .collect::<Vec<_>>(),
             salmon_model::NUM_LENGTH_CLASSES,
         ),
         frag_len_dist: fld.log_pmf().iter().map(|lp| lp.exp()).collect(),
@@ -735,7 +786,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 /// Current local time as an asctime-style string (`Wed Jun 10 20:34:58 2026`),
 /// matching salmon's `start_time`/`end_time` format.
 pub(crate) fn asctime_now() -> String {
-    jiff::Zoned::now().strftime("%a %b %e %H:%M:%S %Y").to_string()
+    jiff::Zoned::now()
+        .strftime("%a %b %e %H:%M:%S %Y")
+        .to_string()
 }
 
 /// Write the naive equivalence classes (collapsing any range-factorized

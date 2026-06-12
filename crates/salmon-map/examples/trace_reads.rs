@@ -42,7 +42,13 @@ fn trace_mate(
     let ridx = idx.inner();
     let k = ridx.k();
     if read.len() < k {
-        return MateTrace { tids: BTreeSet::new(), has_kmers: false, raw_hits: 0, cand: 0, best_support: 0 };
+        return MateTrace {
+            tids: BTreeSet::new(),
+            has_kmers: false,
+            raw_hits: 0,
+            cand: 0,
+            best_support: 0,
+        };
     }
     dispatch_on_k!(k, K => {
         let mut q = PiscemStreamingQuery::<K>::new(ridx.dict());
@@ -117,7 +123,10 @@ fn main() {
         let (km1, km2) = (m1.has_kmers, m2.has_kmers);
         let inter: Vec<u32> = t1.intersection(t2).copied().collect();
         let name = |s: &BTreeSet<u32>| -> Vec<String> {
-            s.iter().take(6).map(|&t| idx.ref_name(t as usize).to_string()).collect()
+            s.iter()
+                .take(6)
+                .map(|&t| idx.ref_name(t as usize).to_string())
+                .collect()
         };
         // category: which divergence class this read falls into
         let cat = if !inter.is_empty() {
@@ -152,13 +161,23 @@ fn main() {
                 t2.len(), m2.raw_hits, m2.cand, m2.best_support,
             );
         } else {
-            println!("--- ord {ord} (ERR188044.{}) [{cat}] ---", ord.parse::<u64>().unwrap() + 1);
+            println!(
+                "--- ord {ord} (ERR188044.{}) [{cat}] ---",
+                ord.parse::<u64>().unwrap() + 1
+            );
             println!("  R1: {} accepted, has_kmers={km1}, raw_hits={}, cand_targets={}, best_support={}, targets={:?}",
                 t1.len(), m1.raw_hits, m1.cand, m1.best_support, name(t1));
             println!("  R2: {} accepted, has_kmers={km2}, raw_hits={}, cand_targets={}, best_support={}, targets={:?}",
                 t2.len(), m2.raw_hits, m2.cand, m2.best_support, name(t2));
-            println!("  intersection: {} -> {:?}", inter.len(),
-                inter.iter().take(6).map(|&t| idx.ref_name(t as usize)).collect::<Vec<_>>());
+            println!(
+                "  intersection: {} -> {:?}",
+                inter.len(),
+                inter
+                    .iter()
+                    .take(6)
+                    .map(|&t| idx.ref_name(t as usize))
+                    .collect::<Vec<_>>()
+            );
             if std::env::var_os("VERBOSE_KMERS").is_some() {
                 dump_kmers(&idx, &mut hs, r1, "R1");
                 dump_kmers(&idx, &mut hs, r2, "R2");

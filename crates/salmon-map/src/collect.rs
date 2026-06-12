@@ -115,7 +115,7 @@ thread_local! {
     /// buffer handed to the chainer. Eliminates the mapper's per-read map+vec
     /// allocations.
     static PROJ_SCRATCH: std::cell::RefCell<(Vec<(u32, bool, Mem)>, Vec<Mem>)> =
-        std::cell::RefCell::new((Vec::new(), Vec::new()));
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
 }
 
 /// Project then chain raw hits into mapping candidates. Pure; testable with
@@ -144,7 +144,11 @@ pub fn candidates_from_raw_hits(
             for entry in phit.ref_range().iter() {
                 let tid = encoding.transcript_id(entry);
                 let rp = phit.decode_hit(entry, encoding);
-                let read_start = if rp.is_fw { *read_pos } else { read_len - (*read_pos + k) };
+                let read_start = if rp.is_fw {
+                    *read_pos
+                } else {
+                    read_len - (*read_pos + k)
+                };
                 flat.push((tid, rp.is_fw, Mem::new(read_start, rp.pos as i32, k)));
             }
         }
@@ -204,7 +208,11 @@ pub fn collect_read_mems<'idx>(
 pub fn best_per_target(mut candidates: Vec<MappingCandidate>) -> Vec<MappingCandidate> {
     // Highest coverage first, so the first seen per key is the best. Coverage is
     // cached on the chain, so this is a plain field read per comparison.
-    candidates.sort_by(|a, b| b.chain.covered_read_bases().cmp(&a.chain.covered_read_bases()));
+    candidates.sort_by(|a, b| {
+        b.chain
+            .covered_read_bases()
+            .cmp(&a.chain.covered_read_bases())
+    });
     let mut seen = AHashSet::new();
     candidates.retain(|c| seen.insert((c.tid, c.is_fw)));
     candidates
@@ -214,7 +222,10 @@ pub fn best_per_target(mut candidates: Vec<MappingCandidate>) -> Vec<MappingCand
 /// across `candidates` — pufferfish's consensus-fraction pruning, applied
 /// per-mate before the (expensive) SW alignment step. `fraction <= 0` keeps all.
 /// Mirrors `MemClusterer::findOptChain`'s `bestScore < maxChainScore * cf` gate.
-pub fn consensus_filter(mut candidates: Vec<MappingCandidate>, fraction: f32) -> Vec<MappingCandidate> {
+pub fn consensus_filter(
+    mut candidates: Vec<MappingCandidate>,
+    fraction: f32,
+) -> Vec<MappingCandidate> {
     if fraction <= 0.0 || candidates.len() <= 1 {
         return candidates;
     }
@@ -262,7 +273,15 @@ mod tests {
             .map(|&p| {
                 (
                     p,
-                    ProjectedHits::new(0, p as u32, true, contig_len, 0, k as u32, table.contig_entries(0)),
+                    ProjectedHits::new(
+                        0,
+                        p as u32,
+                        true,
+                        contig_len,
+                        0,
+                        k as u32,
+                        table.contig_entries(0),
+                    ),
                 )
             })
             .collect();
@@ -293,12 +312,21 @@ mod tests {
             .map(|&p| {
                 (
                     p,
-                    ProjectedHits::new(0, p as u32, true, contig_len, 0, k as u32, table.contig_entries(0)),
+                    ProjectedHits::new(
+                        0,
+                        p as u32,
+                        true,
+                        contig_len,
+                        0,
+                        k as u32,
+                        table.contig_entries(0),
+                    ),
                 )
             })
             .collect();
 
-        let cands = candidates_from_raw_hits(&raw, &enc, read_len, k, &MemCollectorConfig::default());
+        let cands =
+            candidates_from_raw_hits(&raw, &enc, read_len, k, &MemCollectorConfig::default());
         assert_eq!(cands.len(), 1);
         let c = &cands[0];
         assert_eq!(c.tid, 0);
@@ -317,7 +345,10 @@ mod tests {
         b.add_occurrence(0, 2, 300, true);
         let table = b.build();
         let enc = table.encoding();
-        let raw = vec![(0i32, ProjectedHits::new(0, 0, true, 200, 0, 31, table.contig_entries(0)))];
+        let raw = vec![(
+            0i32,
+            ProjectedHits::new(0, 0, true, 200, 0, 31, table.contig_entries(0)),
+        )];
 
         let cfg = MemCollectorConfig {
             max_hit_occ: 2,

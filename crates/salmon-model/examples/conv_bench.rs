@@ -19,7 +19,10 @@ use salmon_model::{
 struct Lcg(u64);
 impl Lcg {
     fn next_u32(&mut self) -> u32 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.0 >> 33) as u32
     }
     fn next_f64(&mut self) -> f64 {
@@ -44,7 +47,9 @@ fn main() {
         // exp of a normal-ish variate -> heavy right tail
         let len = (7.3 + 0.9 * (u - 0.5) * 4.0).exp() as usize;
         let len = len.clamp(80, 15_000);
-        let seq: Vec<u8> = (0..len).map(|_| bases[(rng.next_u32() & 3) as usize]).collect();
+        let seq: Vec<u8> = (0..len)
+            .map(|_| bases[(rng.next_u32() & 3) as usize])
+            .collect();
         prefixes.push(gc_prefix(&seq));
         seqs.push(seq);
     }
@@ -86,7 +91,14 @@ fn main() {
                 pos: None,
             };
             acc += corrected_effective_length_full(
-                seq, &cdf, fld_low, fld_high, &bias, elen, GC_SAMP_STRIDE, false,
+                seq,
+                &cdf,
+                fld_low,
+                fld_high,
+                &bias,
+                elen,
+                GC_SAMP_STRIDE,
+                false,
             );
         }
         let dt = t.elapsed().as_secs_f64();
@@ -98,5 +110,10 @@ fn main() {
             black_box(acc)
         );
     }
-    eprintln!("BEST: {:.3}s over {} transcripts ({:.2} µs/transcript)", best, n, best * 1e6 / n as f64);
+    eprintln!(
+        "BEST: {:.3}s over {} transcripts ({:.2} µs/transcript)",
+        best,
+        n,
+        best * 1e6 / n as f64
+    );
 }

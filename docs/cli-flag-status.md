@@ -5,6 +5,12 @@ This table tracks every command-line flag of C++ salmon (`salmon index`,
 Rust port handles it. It is the authoritative reference for drop-in
 compatibility.
 
+> **salmon 2.0 (Rust):** a user-facing summary of removed/ignored/new options
+> lives in [`MIGRATION.md`](../MIGRATION.md). 2.0 adds a `salmon alevin` stub
+> that redirects to alevin-fry, and any unrecognized (⛔) flag now errors with a
+> pointer to that migration guide rather than a bare clap message. New 2.0-only
+> flags: `--sketch`, `--sketchStrictOrphans`, `--allowDovetail` (in sketch).
+
 ## Legend
 
 | Status | Meaning |

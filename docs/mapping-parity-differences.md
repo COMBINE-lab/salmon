@@ -133,3 +133,74 @@ non-canonical, pre-fix salmon places the read reverse at the wrong locus
 (score 24/102) and post-fix places it forward at the correct locus (96/102).
 `salmon-cli debug-map -i <index> -r <reads>` (Rust) reports per-read placement,
 seed coverage, and alignment score for cross-checking.
+
+---
+
+# Residual SA differences vs. C++ 1.12.0 (byte-identical index)
+
+After the orientation fix above landed in both, we re-measured selective-alignment
+parity on a **byte-identical** index — both tools' indices built from the same
+`clean.fa` (deterministic non-ACGT replacement, identical 193,759-transcript set),
+so the only variable is the mapper. Reads: GEUVADIS `ERR188044` (36.35M 76bp PE);
+default selective alignment, `-l A`, no bias.
+
+## Headline
+
+| metric | value |
+| --- | --- |
+| C++ 1.12.0 mapped | 33,446,029 (92.011%) |
+| Rust mapped (defaults) | 33,508,687 (92.184%) |
+| per-read mapping agreement | **99.83%** |
+| `NumReads` Pearson | **0.99854** |
+| `TPM` Pearson | **0.99897** |
+| total assigned `NumReads` diff | **−0.19%** |
+
+The earlier ~2.8% total-count gap (on the older mismatched `cpp_human_idx` /
+`rust_human_idx` pair) was **entirely the per-index random N-replacement of the
+~100k non-ACGT bases** — on a byte-identical index it collapses to 0.19%. The
+per-read mapping difference is **near one-directional**: Rust maps 62,812 reads
+C++ leaves fully unmapped (`u`), C++ maps only 154 Rust doesn't.
+
+> Note on comparison method: salmon's `unmapped_names.txt` is **not** the
+> complement of `num_mapped` — it lists orphan-half (`m1`/`m2`) and decoy (`d`)
+> reads too. The Rust port writes only fully-unmapped reads as `u`. Compare the
+> **`u`-coded set** across tools, not the whole file.
+
+## Full accounting of the 62.8k gap
+
+**~80% (~49k): a chain-sub-optimality default difference (describable, deferred).**
+C++ prunes low-coverage chains/orphans *before* alignment using
+`orphanChainSubThresh = 0.95` and `postMergeChainSubThresh = 0.9` (a speed
+heuristic). The Rust port defaults both to **0.0 (off)** in
+`PairingConfig::default` (`crates/salmon-map/src/pair.rs`), so it aligns *every*
+candidate — slightly more sensitive on divergent gene-family/paralog reads. Both
+are CLI-exposed (`--orphanChainSubThresh` / `--postMergeChainSubThresh`).
+Re-running Rust with salmon's `0.95`/`0.9` brings mapping to **33,455,950
+(92.038%)** — essentially C++'s 92.011% — and the per-read disagreement drops
+from (62,812 / 154) to (13,603 / 3,682). This is a *deliberate, documented* Rust
+default change that was **not** backported to C++; whether to flip the Rust
+defaults to match salmon (vs. keep `0.0` as an opt-in 2.0 improvement) is
+deferred to the Rust release. `minScoreFraction` is identical in both — this is
+not a score-threshold difference.
+
+**~20% (~17k, both directions): benign symmetric tie-break/chaining residual.**
+With the thresholds matched, the remaining disagreement (13,603 Rust-only +
+3,682 C++-only) is marginal-read tie-breaking. minimap2 (full SW) on these reads
+gives near-identical quality profiles in **both** directions —
+Rust-only: 69.7% strong / 29.4% weak / 0.9% unaligned;
+C++-only: 72.0% strong / 26.4% weak / 1.6% unaligned — i.e. reads sitting right
+at the mapping boundary where the two implementations' chaining and
+MEM-extraction cut differently. The small *count* asymmetry that remains (Rust
+still ~10k net more) is most likely the `preMergeChainSubThresh = 0.75` stage,
+which the Rust port replaces with its loss-less ref-distance early-break rather
+than the 0.75 pre-alignment prune (not a 1:1 knob, not separately CLI-settable).
+These reads are ~70% genuine alignments in both directions, so this is a mild
+sensitivity difference, not spurious mapping.
+
+## Conclusion
+
+On a byte-identical index, SA quantification agrees at Pearson 0.999 and the
+entire mapping-rate delta is explained by (1) one describable orphan/post-merge
+pruning default that is off-by-default in Rust, and (2) benign symmetric
+tie-breaks. Nothing indicates a score-threshold or correctness bug in either
+implementation.

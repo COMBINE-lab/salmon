@@ -18,7 +18,9 @@ fn gen_seq(n: usize, seed: u64) -> Vec<u8> {
     let mut x = seed;
     let mut s = Vec::with_capacity(n);
     for _ in 0..n {
-        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        x = x
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         s.push(B[((x >> 33) & 3) as usize]);
     }
     s
@@ -63,7 +65,11 @@ impl FastqWriters {
 /// fasta path, the two read files, and the true fragment counts per name.
 fn simulate(dir: &Path) -> (PathBuf, PathBuf, PathBuf, HashMap<String, u64>) {
     // (name, length seed, length, true fragment count)
-    let specs = [("t0", 11u64, 600usize, 300u64), ("t1", 22, 900, 100), ("t2", 33, 1200, 600)];
+    let specs = [
+        ("t0", 11u64, 600usize, 300u64),
+        ("t1", 22, 900, 100),
+        ("t2", 33, 1200, 600),
+    ];
 
     let fasta = dir.join("txome.fa");
     let mut fa = std::fs::File::create(&fasta).unwrap();
@@ -87,7 +93,9 @@ fn simulate(dir: &Path) -> (PathBuf, PathBuf, PathBuf, HashMap<String, u64>) {
     let mut truth = HashMap::new();
     let mut rng = 0x1234_5678u64;
     let mut next = || {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         rng >> 33
     };
     let mut id = 0usize;
@@ -156,7 +164,10 @@ fn selective_alignment_quantification_tracks_truth() {
         );
     }
     // Ordering: t2 > t0 > t1.
-    assert!(counts["t2"] > counts["t0"] && counts["t0"] > counts["t1"], "{counts:?}");
+    assert!(
+        counts["t2"] > counts["t0"] && counts["t0"] > counts["t1"],
+        "{counts:?}"
+    );
 
     // Output files exist.
     assert!(out.join("quant.sf").exists());
@@ -188,7 +199,11 @@ fn pseudoalignment_quantification_tracks_truth() {
 
     let res = quantify(&opts).expect("quantify (sketch)");
     let total_truth: u64 = truth.values().sum();
-    assert!(res.num_mapped as f64 >= 0.9 * total_truth as f64, "mapped {}", res.num_mapped);
+    assert!(
+        res.num_mapped as f64 >= 0.9 * total_truth as f64,
+        "mapped {}",
+        res.num_mapped
+    );
 
     let counts = counts_by_name(&res);
     let total_counts: f64 = res.counts.iter().sum();

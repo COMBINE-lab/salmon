@@ -181,8 +181,14 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
     let cf = cfg.collect.consensus_fraction;
-    let left = consensus_filter(best_per_target(collect_candidates(index, hs, refs, r1, true, cfg)), cf);
-    let right = consensus_filter(best_per_target(collect_candidates(index, hs, refs, r2, true, cfg)), cf);
+    let left = consensus_filter(
+        best_per_target(collect_candidates(index, hs, refs, r1, true, cfg)),
+        cf,
+    );
+    let right = consensus_filter(
+        best_per_target(collect_candidates(index, hs, refs, r2, true, cfg)),
+        cf,
+    );
     let joints = join_reads_and_filter(left, right, &cfg.pair);
 
     let had_candidates = !joints.is_empty();
@@ -259,11 +265,31 @@ pub fn map_read_pair<'idx, R: RefProvider>(
             }
             MateStatus::PairedEndLeft => {
                 let anchor = j.left.as_ref().unwrap();
-                push_orphan_or_recovered(&mut raw, index_seq(refs, j.tid), r1, r2, anchor, true, refs, cfg, j.tid);
+                push_orphan_or_recovered(
+                    &mut raw,
+                    index_seq(refs, j.tid),
+                    r1,
+                    r2,
+                    anchor,
+                    true,
+                    refs,
+                    cfg,
+                    j.tid,
+                );
             }
             MateStatus::PairedEndRight => {
                 let anchor = j.right.as_ref().unwrap();
-                push_orphan_or_recovered(&mut raw, index_seq(refs, j.tid), r2, r1, anchor, false, refs, cfg, j.tid);
+                push_orphan_or_recovered(
+                    &mut raw,
+                    index_seq(refs, j.tid),
+                    r2,
+                    r1,
+                    anchor,
+                    false,
+                    refs,
+                    cfg,
+                    j.tid,
+                );
             }
             MateStatus::SingleEnd => {}
         }
@@ -273,7 +299,10 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     // evidence and would spuriously enlarge the equivalence class / leak count mass
     // to the wrong transcript; the concordant mappings are the trustworthy signal.
     // Orphans are kept only when the fragment has *no* concordant mapping at all.
-    if raw.iter().any(|m| matches!(m.status, MateStatus::PairedEndPaired)) {
+    if raw
+        .iter()
+        .any(|m| matches!(m.status, MateStatus::PairedEndPaired))
+    {
         raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
     }
     let (maps, decoy_dominated, below_final) = finalize_mappings_counted(raw, &cfg.score);
@@ -355,9 +384,7 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
         best_per_target(collect_candidates(index, hs, refs, read, true, cfg)),
         cfg.collect.consensus_fraction,
     );
-    let best = cands
-        .iter()
-        .max_by_key(|c| c.chain.covered_read_bases())?;
+    let best = cands.iter().max_by_key(|c| c.chain.covered_read_bases())?;
     let aln = align_chain(read, refs.ref_seq(best.tid), &best.chain, &cfg.align)?;
     Some(DebugMapping {
         tid: best.tid,
@@ -409,8 +436,16 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 ref_pos: anchor.chain.ref_start(),
                 // orientation not re-derived for recovered pairs; attribute the
                 // anchor's position to its own strand for positional bias.
-                fw_pos: if anchor.is_fw { anchor.chain.ref_start() } else { -1 },
-                rc_pos: if anchor.is_fw { -1 } else { anchor.chain.ref_start() },
+                fw_pos: if anchor.is_fw {
+                    anchor.chain.ref_start()
+                } else {
+                    -1
+                },
+                rc_pos: if anchor.is_fw {
+                    -1
+                } else {
+                    anchor.chain.ref_start()
+                },
                 format: None, // recovered pair: orientation not re-derived
                 // SAM: the partner's leftmost is estimated from the fragment length.
                 r1_pos: if anchor_is_left {
@@ -424,7 +459,11 @@ fn push_orphan_or_recovered<R: RefProvider>(
                     anchor.chain.ref_start()
                 },
                 r2_fw: !anchor.is_fw,
-                r1_score: if anchor_is_left { anchor_aln.score } else { partner_score },
+                r1_score: if anchor_is_left {
+                    anchor_aln.score
+                } else {
+                    partner_score
+                },
             });
             return;
         }
@@ -444,11 +483,27 @@ fn push_orphan_or_recovered<R: RefProvider>(
         is_decoy,
         ref_pos: anchor.chain.ref_start(),
         // orphan: leftmost coordinate attributed to its own strand.
-        fw_pos: if anchor.is_fw { anchor.chain.ref_start() } else { -1 },
-        rc_pos: if anchor.is_fw { -1 } else { anchor.chain.ref_start() },
+        fw_pos: if anchor.is_fw {
+            anchor.chain.ref_start()
+        } else {
+            -1
+        },
+        rc_pos: if anchor.is_fw {
+            -1
+        } else {
+            anchor.chain.ref_start()
+        },
         format: None, // orphans are not sampled for library-type detection
-        r1_pos: if anchor_is_left { anchor.chain.ref_start() } else { -1 },
-        r2_pos: if anchor_is_left { -1 } else { anchor.chain.ref_start() },
+        r1_pos: if anchor_is_left {
+            anchor.chain.ref_start()
+        } else {
+            -1
+        },
+        r2_pos: if anchor_is_left {
+            -1
+        } else {
+            anchor.chain.ref_start()
+        },
         r2_fw: false,
         r1_score: anchor_aln.score,
     });
@@ -475,7 +530,11 @@ fn recover_mate(
             return None;
         }
         let q = revcomp(partner_read);
-        let aln = align_in_window(&q, &refseq[win_start as usize..win_end as usize], &cfg.align)?;
+        let aln = align_in_window(
+            &q,
+            &refseq[win_start as usize..win_end as usize],
+            &cfg.align,
+        )?;
         if !aln.valid {
             return None;
         }
@@ -488,7 +547,11 @@ fn recover_mate(
         if win_end <= win_start {
             return None;
         }
-        let aln = align_in_window(partner_read, &refseq[win_start as usize..win_end as usize], &cfg.align)?;
+        let aln = align_in_window(
+            partner_read,
+            &refseq[win_start as usize..win_end as usize],
+            &cfg.align,
+        )?;
         if !aln.valid {
             return None;
         }

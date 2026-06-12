@@ -207,7 +207,11 @@ mod tests {
         let mean = out.iter().sum::<f64>() / out.len() as f64;
         assert!(out.iter().all(|&w| w >= 0.001 && w.is_finite()));
         let maxdev = out.iter().map(|w| (w - mean).abs()).fold(0.0, f64::max);
-        assert!(maxdev / mean < 0.5, "uniform input not near-flat: maxdev/mean={}", maxdev / mean);
+        assert!(
+            maxdev / mean < 0.5,
+            "uniform input not near-flat: maxdev/mean={}",
+            maxdev / mean
+        );
     }
 
     #[test]
@@ -224,7 +228,12 @@ mod tests {
         let mut out = vec![0.0; 1000];
         m.project_weights(&mut out);
         // early-position weight should exceed late-position weight
-        assert!(out[10] > out[900], "5'-enriched: {} !> {}", out[10], out[900]);
+        assert!(
+            out[10] > out[900],
+            "5'-enriched: {} !> {}",
+            out[10],
+            out[900]
+        );
     }
 
     #[test]

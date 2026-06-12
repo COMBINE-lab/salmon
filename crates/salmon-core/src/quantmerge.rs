@@ -60,9 +60,10 @@ pub fn merge_quants(
     let mut values: HashMap<String, Vec<Option<String>>> = HashMap::new();
 
     for (s, qf) in quant_files.iter().enumerate() {
-        let reader = io::BufReader::new(std::fs::File::open(qf).map_err(|e| {
-            io::Error::new(e.kind(), format!("opening {}: {e}", qf.display()))
-        })?);
+        let reader = io::BufReader::new(
+            std::fs::File::open(qf)
+                .map_err(|e| io::Error::new(e.kind(), format!("opening {}: {e}", qf.display())))?,
+        );
         for (lineno, line) in reader.lines().enumerate() {
             let line = line?;
             if lineno == 0 {
@@ -122,7 +123,10 @@ mod tests {
     fn column_aliases() {
         assert_eq!(MergeColumn::parse("tpm"), Some(MergeColumn::Tpm));
         assert_eq!(MergeColumn::parse("NumReads"), Some(MergeColumn::NumReads));
-        assert_eq!(MergeColumn::parse("effectiveLength"), Some(MergeColumn::Elen));
+        assert_eq!(
+            MergeColumn::parse("effectiveLength"),
+            Some(MergeColumn::Elen)
+        );
         assert_eq!(MergeColumn::parse("len"), Some(MergeColumn::Len));
         assert_eq!(MergeColumn::parse("bogus"), None);
     }

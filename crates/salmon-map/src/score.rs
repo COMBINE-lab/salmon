@@ -218,7 +218,10 @@ mod tests {
 
     #[test]
     fn equal_scores_both_weight_one() {
-        let m = finalize_mappings(vec![raw(0, 100, false), raw(1, 100, false)], &ScoreConfig::default());
+        let m = finalize_mappings(
+            vec![raw(0, 100, false), raw(1, 100, false)],
+            &ScoreConfig::default(),
+        );
         assert_eq!(m.len(), 2);
         assert!(m.iter().all(|x| (x.weight - 1.0).abs() < 1e-12));
     }
@@ -254,13 +257,19 @@ mod tests {
     #[test]
     fn decoy_domination_drops_read() {
         // decoy scores higher than the best transcript -> read dropped
-        let m = finalize_mappings(vec![raw(0, 90, false), raw(1, 95, true)], &ScoreConfig::default());
+        let m = finalize_mappings(
+            vec![raw(0, 90, false), raw(1, 95, true)],
+            &ScoreConfig::default(),
+        );
         assert!(m.is_empty());
     }
 
     #[test]
     fn decoy_below_threshold_is_ignored() {
-        let m = finalize_mappings(vec![raw(0, 100, false), raw(1, 80, true)], &ScoreConfig::default());
+        let m = finalize_mappings(
+            vec![raw(0, 100, false), raw(1, 80, true)],
+            &ScoreConfig::default(),
+        );
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].tid, 0);
     }

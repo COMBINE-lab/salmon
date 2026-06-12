@@ -78,7 +78,11 @@ impl LibraryFormat {
 
     /// Default single-end format used by salmon (`U`).
     pub const fn single_default() -> Self {
-        Self::new(ReadType::SingleEnd, ReadOrientation::None, ReadStrandedness::U)
+        Self::new(
+            ReadType::SingleEnd,
+            ReadOrientation::None,
+            ReadStrandedness::U,
+        )
     }
 
     /// Parse a library-type string (case-insensitive), e.g. `"IU"`, `"ISR"`,

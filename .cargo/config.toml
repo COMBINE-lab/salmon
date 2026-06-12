@@ -1,0 +1,25 @@
+# Portable release build config for salmon.
+#
+# Activate by copying to `.cargo/config.toml` before a release build, or pass the
+# same rustflags via cargo-dist's per-target rustflags / CARGO_BUILD_RUSTFLAGS.
+#
+# Floor choice: x86-64-v2 (SSE4.2-era, ~2009+) rather than v3, so the binary runs
+# on non-AVX2 x86 hosts. The performance-critical SIMD (Smith-Waterman alignment
+# via ksw2rs) selects AVX2/SSE4.1/NEON at RUNTIME (resolve-once dispatch), so an
+# AVX2-capable host still gets AVX2 alignment regardless of this compile floor;
+# this floor only affects autovectorization of scalar loops and any
+# non-runtime-dispatched SIMD. The index builder relies on `ensure_simd`'s
+# `scalar` feature (set in salmon-index) to avoid a hard compile-time AVX2/NEON
+# requirement. See docs (R1 benchmark) for the measured v2-vs-v3 delta.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v2"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=neoverse-n1"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-cpu=apple-a14"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-cpu=x86-64-v2"]

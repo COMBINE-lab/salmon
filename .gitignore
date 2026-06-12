@@ -36,3 +36,9 @@ Cargo.lock
 
 # Unpacked sample data (the tarball sample_data.tgz is tracked instead)
 /sample_data/
+
+# Local CMake build dirs and real-data scratch (not part of the repo)
+/build-*/
+/realdata/
+# Compiled C++ unit-test binary (sources under tests/ are tracked)
+/tests/unitTests
