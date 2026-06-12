@@ -57,6 +57,9 @@ pub(crate) struct Shared<'a> {
     pub seqbias_obs: Option<&'a Mutex<(SBModel, SBModel)>>,
     /// collect observed fragment-GC contexts (`--gcBias`)
     pub collect_gcbias: bool,
+    /// GC bias model bin counts (`--conditionalGCBins` × `--numGCBins`)
+    pub cond_gc_bins: usize,
+    pub gc_bins: usize,
     /// per-transcript cumulative G+C prefix sums (for `gcDesc`), when GC-correcting
     pub gc_prefix: Option<&'a [Vec<u32>]>,
     /// shared observed fragment-GC model to merge per-thread results into
@@ -109,7 +112,9 @@ impl<'a> QuantProcessor<'a> {
         let seqbias = shared
             .collect_seqbias
             .then(|| (SBModel::new(), SBModel::new()));
-        let gcbias = shared.collect_gcbias.then(GcFragModel::default_model);
+        let gcbias = shared
+            .collect_gcbias
+            .then(|| GcFragModel::new(shared.cond_gc_bins, shared.gc_bins));
         let posbias = shared.collect_posbias.then(|| {
             (
                 (0..NUM_LENGTH_CLASSES).map(|_| SimplePosBias::default()).collect(),

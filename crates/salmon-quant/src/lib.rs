@@ -114,6 +114,12 @@ pub struct QuantOptions {
     /// disable the lower barrier on how short bias correction may make an
     /// effective length (salmon's `--noBiasLengthThreshold`)
     pub no_bias_length_threshold: bool,
+    /// number of fragment-GC bins in the GC bias model (salmon's `--numGCBins`,
+    /// default 25)
+    pub gc_bins: usize,
+    /// number of conditioning (context) bins in the GC bias model (salmon's
+    /// `--conditionalGCBins`, default 3)
+    pub cond_gc_bins: usize,
 }
 
 impl QuantOptions {
@@ -152,6 +158,8 @@ impl QuantOptions {
             bias_speed_samp: 5,
             num_aux_model_samples: 5_000_000,
             no_bias_length_threshold: false,
+            gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
+            cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
         }
     }
 
@@ -284,9 +292,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .map(|tid| salmon_model::gc_prefix(salmon.ref_seq(tid as u32)))
             .collect()
     });
-    let gcbias_obs = opts
-        .gc_bias
-        .then(|| std::sync::Mutex::new(salmon_model::GcFragModel::default_model()));
+    let gcbias_obs = opts.gc_bias.then(|| {
+        std::sync::Mutex::new(salmon_model::GcFragModel::new(opts.cond_gc_bins, opts.gc_bins))
+    });
 
     // For `--posBias`: transcript length-class quantiles + per-transcript class,
     // and the shared observed (5', 3') positional-bias models per length class.
@@ -336,6 +344,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             collect_seqbias: opts.seq_bias,
             seqbias_obs: seqbias_obs.as_ref(),
             collect_gcbias: opts.gc_bias,
+            cond_gc_bins: opts.cond_gc_bins,
+            gc_bins: opts.gc_bins,
             gc_prefix: gc_prefix.as_deref(),
             gcbias_obs: gcbias_obs.as_ref(),
             collect_posbias: opts.pos_bias,
@@ -493,8 +503,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 &fld_cdf,
                 fld_low,
                 fld_high,
-                salmon_model::gcbias::DEFAULT_COND_BINS,
-                salmon_model::gcbias::DEFAULT_GC_BINS,
+                opts.cond_gc_bins,
+                opts.gc_bins,
                 k,
                 opts.bias_speed_samp,
             );

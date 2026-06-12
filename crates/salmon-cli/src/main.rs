@@ -345,6 +345,13 @@ struct QuantArgs {
     /// (alignment mode only). (salmon's --numErrorBins)
     #[arg(long = "numErrorBins", default_value_t = 4)]
     num_error_bins: usize,
+    /// Number of fragment-GC bins for the GC bias model. (salmon's --numGCBins)
+    #[arg(long = "numGCBins", default_value_t = 25)]
+    num_gc_bins: usize,
+    /// Number of conditioning (context) bins for the GC bias model.
+    /// (salmon's --conditionalGCBins)
+    #[arg(long = "conditionalGCBins", default_value_t = 3)]
+    conditional_gc_bins: usize,
     /// Discard orphan (single-mate) alignments in a paired library
     /// (alignment mode). Reads mode uses --discardOrphansQuasi.
     #[arg(long = "discardOrphans")]
@@ -497,6 +504,8 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.num_error_bins = args.num_error_bins;
         opts.discard_orphans = args.discard_orphans;
+        opts.gc_bins = args.num_gc_bins;
+        opts.cond_gc_bins = args.conditional_gc_bins;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
@@ -570,6 +579,8 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.bias_speed_samp = args.bias_speed_samp;
     opts.num_aux_model_samples = args.num_aux_model_samples;
     opts.no_bias_length_threshold = args.no_bias_length_threshold;
+    opts.gc_bins = args.num_gc_bins;
+    opts.cond_gc_bins = args.conditional_gc_bins;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;

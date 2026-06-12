@@ -93,6 +93,9 @@ pub struct AlignQuantOptions {
     /// disable the lower barrier on bias-corrected effective lengths
     /// (`--noBiasLengthThreshold`)
     pub no_bias_length_threshold: bool,
+    /// GC bias model bin counts (`--numGCBins` × `--conditionalGCBins`, 25×3)
+    pub gc_bins: usize,
+    pub cond_gc_bins: usize,
 }
 
 impl AlignQuantOptions {
@@ -121,6 +124,8 @@ impl AlignQuantOptions {
             bias_speed_samp: 5,
             num_aux_model_samples: 5_000_000,
             no_bias_length_threshold: false,
+            gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
+            cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
         }
     }
 }
@@ -545,6 +550,9 @@ struct PassCfg<'a> {
     error_bins: usize,
     seq_bias: bool,
     gc_bias: bool,
+    /// GC bias model bin counts (`--conditionalGCBins` × `--numGCBins`)
+    cond_gc_bins: usize,
+    gc_bins: usize,
     pos_bias: bool,
     need_seq: bool,
     minibatch: usize,
@@ -653,7 +661,7 @@ where
             let rx = rx.clone();
             workers.push(scope.spawn(move || -> (Local, u64) {
                 let mut local =
-                    Local::new(cfg.use_error_model, cfg.error_bins, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
+                    Local::new(cfg.use_error_model, cfg.error_bins, cfg.seq_bias, cfg.gc_bias, cfg.cond_gc_bins, cfg.gc_bins, cfg.pos_bias);
                 let mut count = 0u64;
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
@@ -716,7 +724,7 @@ where
             .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))??;
 
         // Merge the per-worker bias accumulators + counts.
-        let mut merged = Local::new(cfg.use_error_model, cfg.error_bins, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
+        let mut merged = Local::new(cfg.use_error_model, cfg.error_bins, cfg.seq_bias, cfg.gc_bias, cfg.cond_gc_bins, cfg.gc_bins, cfg.pos_bias);
         let mut total = 0u64;
         for w in workers {
             let (local, count) = w
@@ -794,7 +802,16 @@ struct Local {
 }
 
 impl Local {
-    fn new(error_model: bool, error_bins: usize, seq_bias: bool, gc_bias: bool, pos_bias: bool) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        error_model: bool,
+        error_bins: usize,
+        seq_bias: bool,
+        gc_bias: bool,
+        cond_gc_bins: usize,
+        gc_bins: usize,
+        pos_bias: bool,
+    ) -> Self {
         let mk = || {
             (0..salmon_model::NUM_LENGTH_CLASSES)
                 .map(|_| salmon_model::SimplePosBias::default())
@@ -803,7 +820,7 @@ impl Local {
         Self {
             model: error_model.then(|| AlignmentModel::empty(error_bins)),
             seq_obs: seq_bias.then(|| (salmon_model::SBModel::new(), salmon_model::SBModel::new())),
-            gc_obs: gc_bias.then(salmon_model::GcFragModel::default_model),
+            gc_obs: gc_bias.then(|| salmon_model::GcFragModel::new(cond_gc_bins, gc_bins)),
             pos_obs: pos_bias.then(|| (mk(), mk())),
         }
     }
@@ -1188,6 +1205,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             error_bins: opts.num_error_bins,
             seq_bias: opts.seq_bias,
             gc_bias: opts.gc_bias,
+            cond_gc_bins: opts.cond_gc_bins,
+            gc_bins: opts.gc_bins,
             pos_bias: opts.pos_bias,
             need_seq: use_error_model || bias_on,
             minibatch: MINIBATCH,
@@ -1280,8 +1299,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 &fld_cdf,
                 fld_low,
                 fld_high,
-                salmon_model::gcbias::DEFAULT_COND_BINS,
-                salmon_model::gcbias::DEFAULT_GC_BINS,
+                opts.cond_gc_bins,
+                opts.gc_bins,
                 k,
                 opts.bias_speed_samp,
             );
