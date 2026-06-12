@@ -324,6 +324,10 @@ struct QuantArgs {
     /// (alignment mode only). (salmon's --numErrorBins)
     #[arg(long = "numErrorBins", default_value_t = 4)]
     num_error_bins: usize,
+    /// Discard orphan (single-mate) alignments in a paired library
+    /// (alignment mode). Reads mode uses --discardOrphansQuasi.
+    #[arg(long = "discardOrphans")]
+    discard_orphans: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -437,6 +441,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.num_aux_model_samples = args.num_aux_model_samples;
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.num_error_bins = args.num_error_bins;
+        opts.discard_orphans = args.discard_orphans;
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64

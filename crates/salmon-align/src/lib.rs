@@ -81,6 +81,9 @@ pub struct AlignQuantOptions {
     /// number of read-position bins in the alignment error model
     /// (`--numErrorBins`, salmon default 4)
     pub num_error_bins: usize,
+    /// drop orphan (single-mate) placements in a paired library instead of
+    /// fragment-length-penalizing them (`--discardOrphans`, alignment mode)
+    pub discard_orphans: bool,
     /// fragment-length sampling stride for the GC bias convolution
     /// (`--biasSpeedSamp`, default 5)
     pub bias_speed_samp: usize,
@@ -114,6 +117,7 @@ impl AlignQuantOptions {
             init_uniform: false,
             sig_digits: 3,
             num_error_bins: 4,
+            discard_orphans: false,
             bias_speed_samp: 5,
             num_aux_model_samples: 5_000_000,
             no_bias_length_threshold: false,
@@ -532,6 +536,8 @@ struct PassCfg<'a> {
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
+    /// drop single-mate (orphan) placements in a paired library (`--discardOrphans`)
+    discard_orphans: bool,
     range_factorization_bins: u32,
     use_error_model: bool,
     /// number of read-position bins in the alignment error model
@@ -664,6 +670,7 @@ where
                         ignore_incompat: cfg.ignore_incompat,
                         incompat_prior: cfg.incompat_prior,
                         paired_lib: cfg.paired_lib,
+                        discard_orphans: cfg.discard_orphans,
                         range_factorization_bins: cfg.range_factorization_bins,
                         log_fm,
                     };
@@ -768,6 +775,8 @@ struct FragCtx<'a> {
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
+    /// drop single-mate (orphan) placements in a paired library (`--discardOrphans`)
+    discard_orphans: bool,
     range_factorization_bins: u32,
     /// this batch's forgetting mass (online phase)
     log_fm: f64,
@@ -852,6 +861,11 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
     for (pi, pl) in placements.iter().enumerate() {
         let tid = pl.tid;
         let idxs = &pl.idxs;
+        // --discardOrphans: in a paired library, drop single-mate placements
+        // entirely instead of fragment-length-penalizing them below.
+        if ctx.discard_orphans && ctx.paired_lib && idxs.len() < 2 {
+            continue;
+        }
         let refseq = ctx.ref_bytes.get(tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
         // Conditional log-weight basis = salmon's `errLike` (Σ(fg−bg) over the
         // mate(s) under the error model; uniform 0.0 when it is disabled).
@@ -1168,6 +1182,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             ignore_incompat,
             incompat_prior: opts.incompat_prior,
             paired_lib,
+            discard_orphans: opts.discard_orphans,
             range_factorization_bins: opts.range_factorization_bins,
             use_error_model,
             error_bins: opts.num_error_bins,
