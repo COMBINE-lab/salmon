@@ -96,9 +96,6 @@ pub struct AlignQuantOptions {
     /// GC bias model bin counts (`--numGCBins` × `--conditionalGCBins`, 25×3)
     pub gc_bins: usize,
     pub cond_gc_bins: usize,
-    /// use the reduced-memory GC rank bitvector instead of dense prefixes
-    /// (`--reduceGCMemory`; identical results)
-    pub reduce_gc_memory: bool,
 }
 
 impl AlignQuantOptions {
@@ -129,7 +126,6 @@ impl AlignQuantOptions {
             no_bias_length_threshold: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
-            reduce_gc_memory: false,
         }
     }
 }
@@ -1153,16 +1149,11 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // Per-transcript inputs the bias collection needs (the observed bias models
     // themselves are accumulated per-worker inside the pass).
     use salmon_model::seqbias::CONTEXT_LENGTH;
-    // GC cumulative-count backing: dense per-transcript prefixes by default, or a
-    // single rank bitvector over the concatenated references (`--reduceGCMemory`,
-    // identical results). `gc_store` presents either uniformly as `GcView`s.
-    let use_rank_gc = opts.gc_bias && opts.reduce_gc_memory;
-    let gc_dense: Vec<Vec<u32>> = if opts.gc_bias && !use_rank_gc {
-        ref_bytes.iter().map(|s| salmon_model::gc_prefix(s)).collect()
-    } else {
-        Vec::new()
-    };
-    let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if use_rank_gc {
+    // GC cumulative-count backing: one rank bitvector over the concatenated
+    // references (salmon's `--reduceGCMemory`, now the default — faster and ~2x
+    // leaner than dense per-transcript prefixes, identical results). `gc_store`
+    // presents per-transcript `GcView`s.
+    let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if opts.gc_bias {
         let mut concat: Vec<u8> = Vec::new();
         let mut offs: Vec<u64> = Vec::with_capacity(ref_bytes.len() + 1);
         offs.push(0);
@@ -1176,7 +1167,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     };
     let gc_store = match &gc_rank {
         Some(r) => salmon_model::GcStore::Rank { rank: r, offsets: &gc_offsets },
-        None => salmon_model::GcStore::Dense(&gc_dense),
+        None => salmon_model::GcStore::Dense(&[]),
     };
     let length_quantiles: Option<Vec<u32>> = opts.pos_bias.then(|| {
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES)
