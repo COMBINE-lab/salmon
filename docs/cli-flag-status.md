@@ -67,7 +67,7 @@ misbehaves.
 | `--reduceGCMemory` | 🟰 | The rank-bitvector GC representation it selects is now the default (faster + ~2× leaner, identical results). |
 | `--numBiasSamples` | ⛔ | No separate seq-bias sample cap (collected within the aux window). |
 | `--numPreAuxModelSamples` | ⛔ | No separate pre-aux burn-in window. |
-| `--noFragLengthDist`, `--noSingleFragProb` | ⛔ | FLD-in-fragment-probability toggles (experimental upstream). |
+| `--noFragLengthDist`, `--noSingleFragProb` | ⚠️ | FLD-in-fragment-probability toggles (experimental upstream); accepted, not yet implemented. |
 
 ## `salmon quant` — mapping / selective alignment (reads mode)
 
@@ -99,7 +99,7 @@ misbehaves.
 | `--discardOrphans` | ✅ | Alignment-mode orphan discard. |
 | `--ont` | ✅ | Redirect (long-read mode is out of scope, as upstream). |
 | `--mappingCacheMemoryLimit` | ⚠️ | Rust streams with bounded buffers; no mass-banking cache. |
-| `--sampleOut`/`-s`, `--sampleUnaligned`/`-u`, `--writeQualities` | ⛔ | Posterior-sampled BAM output; not yet implemented. |
+| `--sampleOut`/`-s`, `--sampleUnaligned`/`-u`, `--writeQualities` | ⚠️ | Posterior-sampled BAM output; accepted, not yet implemented. |
 | `--auxTargetFile`, `--writeOrphanLinks` | ⛔ | |
 
 ## `salmon quantmerge`

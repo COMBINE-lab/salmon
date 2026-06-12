@@ -382,6 +382,26 @@ struct QuantArgs {
     /// file instead of mapping/alignments (an input mode, not the --dumpEq output).
     #[arg(long = "eqclasses")]
     eqclasses: Option<PathBuf>,
+    /// [accepted; not yet implemented] disable fragment-length-distribution
+    /// concordance in the per-fragment probability.
+    #[arg(long = "noFragLengthDist")]
+    no_frag_length_dist: bool,
+    /// [accepted; not yet implemented] disable the single-end/orphan
+    /// fragment-length probability estimate.
+    #[arg(long = "noSingleFragProb")]
+    no_single_frag_prob: bool,
+    /// [accepted; not yet implemented] write a BAM of posterior-sampled
+    /// alignments (alignment mode).
+    #[arg(short = 's', long = "sampleOut")]
+    sample_out: bool,
+    /// [accepted; not yet implemented] also include unaligned reads in the
+    /// sampled BAM (requires --sampleOut).
+    #[arg(short = 'u', long = "sampleUnaligned")]
+    sample_unaligned: bool,
+    /// [accepted; not yet implemented] write qualities into the sampled BAM
+    /// (only meaningful with --sampleOut / --writeMappings).
+    #[arg(long = "writeQualities")]
+    write_qualities: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -480,6 +500,15 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     }
     if args.eqclasses.is_some() {
         tracing::warn!("--eqclasses (quantify from a precomputed equivalence-class file) is not yet implemented and is ignored; mapping/alignment input is used instead.");
+    }
+    if args.no_frag_length_dist {
+        tracing::warn!("--noFragLengthDist is accepted but not yet implemented and has no effect: the fragment-length distribution is still used in the per-fragment probability.");
+    }
+    if args.no_single_frag_prob {
+        tracing::warn!("--noSingleFragProb is accepted but not yet implemented and has no effect.");
+    }
+    if args.sample_out || args.sample_unaligned || args.write_qualities {
+        tracing::warn!("--sampleOut/--sampleUnaligned/--writeQualities (posterior-sampled BAM output) are accepted but not yet implemented and have no effect.");
     }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
