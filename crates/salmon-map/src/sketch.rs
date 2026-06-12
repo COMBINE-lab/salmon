@@ -7,13 +7,13 @@
 //! weight. For read pairs it uses the intersection rule (a transcript must be
 //! hit by both mates), falling back to orphans when only one mate maps.
 
-use std::collections::HashMap;
-
 use piscem_rs::index::reference_index::ReferenceIndex;
 use piscem_rs::mapping::cache::MappingCache;
 use piscem_rs::mapping::engine::map_read;
 use piscem_rs::mapping::filters::PoisonState;
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
+use piscem_rs::mapping::hits::MappingType;
+use piscem_rs::mapping::merge_pairs::merge_se_mappings;
 use piscem_rs::mapping::sketch_hit_simple::SketchHitInfoSimple;
 use piscem_rs::mapping::streaming_query::PiscemStreamingQuery;
 use salmon_core::MateStatus;
@@ -71,9 +71,17 @@ pub fn map_single_read_sketch<'idx>(
 
 /// Pseudoalign a read pair using the intersection rule.
 ///
-/// If both mates map, transcripts hit by both are emitted as pairs. If only one
-/// mate maps, its hits are emitted as orphans. An empty intersection (both map,
-/// but to disjoint transcripts) yields no mapping.
+/// Uses piscem's bulk pair-merge ([`merge_se_mappings`]) rather than a plain
+/// per-transcript intersection, so the pairing matches piscem/salmon (and
+/// kallisto) semantics:
+/// - both mates accepted → concordant pairs only (opposite orientation +
+///   in-range fragment length), via `merge_lists`; an empty merge is *unmapped*,
+///   not orphaned;
+/// - exactly one mate accepted **and the other had no matching k-mers** → that
+///   mate is emitted as an orphan (C++/kallisto `check_kmers_orphans` rule —
+///   `MappingCache::has_matching_kmers`);
+/// - one mate accepted but the other *did* have matching k-mers (just no
+///   accepted target) → unmapped (the mates conflict).
 pub fn map_read_pair_sketch<'idx>(
     index: &'idx ReferenceIndex,
     hs: &mut HitSearcher<'idx>,
@@ -83,42 +91,57 @@ pub fn map_read_pair_sketch<'idx>(
     max_hit_occ: usize,
     max_read_occ: usize,
 ) -> Vec<ScoredMapping> {
-    let left = map_single_read_sketch(index, hs, r1, strat, max_hit_occ, max_read_occ);
-    let right = map_single_read_sketch(index, hs, r2, strat, max_hit_occ, max_read_occ);
-
-    match (left.is_empty(), right.is_empty()) {
-        (true, true) => Vec::new(),
-        (true, false) => orphans(right, MateStatus::PairedEndRight),
-        (false, true) => orphans(left, MateStatus::PairedEndLeft),
-        (false, false) => {
-            let right_score: HashMap<u32, i32> = right.iter().map(|m| (m.tid, m.score)).collect();
-            left.into_iter()
-                .filter_map(|m| {
-                    right_score.get(&m.tid).map(|rs| ScoredMapping {
-                        tid: m.tid,
-                        is_fw: m.is_fw,
-                        status: MateStatus::PairedEndPaired,
-                        score: m.score + rs,
-                        fragment_len: 0,
-                        weight: 1.0,
-                        ref_pos: 0,
-                        fw_pos: -1,
-                        rc_pos: -1,
-                        format: None,
-                        r1_pos: -1,
-                        r2_pos: -1,
-                        r2_fw: false,
-                        r1_score: m.score,
-                    })
-                })
-                .collect()
+    let k = index.k();
+    if r1.len() < k && r2.len() < k {
+        return Vec::new();
+    }
+    dispatch_on_k!(k, K => {
+        let mut left = MappingCache::<SketchHitInfoSimple>::new(k);
+        let mut right = MappingCache::<SketchHitInfoSimple>::new(k);
+        let mut out = MappingCache::<SketchHitInfoSimple>::new(k);
+        for c in [&mut left, &mut right, &mut out] {
+            c.max_hit_occ = max_hit_occ;
+            c.max_read_occ = max_read_occ;
         }
-    }
-}
+        let mut poison = PoisonState::new(index.poison_table());
+        if r1.len() >= k {
+            let mut q = PiscemStreamingQuery::<K>::new(index.dict());
+            map_read::<K, SketchHitInfoSimple, _, _>(r1, &mut left, hs, &mut q, index, &mut poison, strat);
+        }
+        if r2.len() >= k {
+            let mut q = PiscemStreamingQuery::<K>::new(index.dict());
+            map_read::<K, SketchHitInfoSimple, _, _>(r2, &mut right, hs, &mut q, index, &mut poison, strat);
+        }
+        merge_se_mappings(&mut left, &mut right, r1.len() as i32, r2.len() as i32, &mut out);
 
-fn orphans(mut m: Vec<ScoredMapping>, status: MateStatus) -> Vec<ScoredMapping> {
-    for x in &mut m {
-        x.status = status;
-    }
-    m
+        let status = match out.map_type {
+            MappingType::MappedPair => Some(MateStatus::PairedEndPaired),
+            MappingType::MappedFirstOrphan => Some(MateStatus::PairedEndLeft),
+            MappingType::MappedSecondOrphan => Some(MateStatus::PairedEndRight),
+            _ => None,
+        };
+        match status {
+            None => Vec::new(),
+            Some(status) => out
+                .accepted_hits
+                .iter()
+                .map(|h| ScoredMapping {
+                    tid: h.tid,
+                    is_fw: h.is_fw,
+                    status,
+                    score: h.score as i32,
+                    fragment_len: 0,
+                    weight: 1.0,
+                    ref_pos: 0,
+                    fw_pos: -1,
+                    rc_pos: -1,
+                    format: None,
+                    r1_pos: -1,
+                    r2_pos: -1,
+                    r2_fw: false,
+                    r1_score: h.score as i32,
+                })
+                .collect::<Vec<_>>(),
+        }
+    })
 }
