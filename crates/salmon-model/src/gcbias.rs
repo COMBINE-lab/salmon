@@ -46,15 +46,27 @@ pub struct GcFragModel {
     /// row-major `counts[ctx * gc_bins + gc]`
     counts: Vec<f64>,
     normalized: bool,
+    /// Precomputed `[0..=100] -> bin` maps for the context and GC fractions
+    /// (both always lie in `[0, 100]`). [`bin_frac`] is ~44% of the eff-length
+    /// convolution self-time (two `100.0/n` + `frac/w` divides per [`get`]/[`inc`]
+    /// call, called per fragment); these LUTs replace both divides with a byte
+    /// load. Each entry is exactly `bin_frac(frac, n)`, so the result is
+    /// bit-identical to the divide path (verified in tests).
+    ctx_lut: Vec<u8>,
+    gc_lut: Vec<u8>,
 }
 
 impl GcFragModel {
     pub fn new(cond_bins: usize, gc_bins: usize) -> Self {
+        let ctx_lut = (0..=100).map(|f| bin_frac(f, cond_bins) as u8).collect();
+        let gc_lut = (0..=100).map(|f| bin_frac(f, gc_bins) as u8).collect();
         Self {
             cond_bins,
             gc_bins,
             counts: vec![0.0; cond_bins * gc_bins],
             normalized: false,
+            ctx_lut,
+            gc_lut,
         }
     }
 
@@ -65,12 +77,16 @@ impl GcFragModel {
 
     #[inline]
     fn idx(&self, ctx_frac: i32, gc_frac: i32) -> usize {
+        // Clamp-then-LUT is bit-identical to `bin_frac` for every i32 input:
+        // for frac in [0,100] the LUT entry *is* `bin_frac(frac, n)`, and a frac
+        // outside [0,100] clamps to the same boundary bin `bin_frac` would
+        // produce (0 or n-1). Inputs are always lrint(100·ratio) in [0,100].
         let ctx = if self.cond_bins > 1 {
-            bin_frac(ctx_frac, self.cond_bins)
+            self.ctx_lut[ctx_frac.clamp(0, 100) as usize] as usize
         } else {
             0
         };
-        let gc = bin_frac(gc_frac, self.gc_bins);
+        let gc = self.gc_lut[gc_frac.clamp(0, 100) as usize] as usize;
         ctx * self.gc_bins + gc
     }
 
@@ -598,6 +614,22 @@ mod tests {
         assert!((0..=100).contains(&cf), "contextFrac in range: {cf}");
         // fragFrac must equal gc_frac over the same interval
         assert_eq!(ff, gc_frac(&p, 10, 29));
+    }
+
+    #[test]
+    fn idx_lut_matches_bin_frac() {
+        // The LUT-based idx must equal the original divide-based formula for
+        // every (ctx, gc) fraction the model can see, including out-of-[0,100].
+        for &(cb, gb) in &[(3usize, 25usize), (1, 101), (3, 101), (4, 50)] {
+            let m = GcFragModel::new(cb, gb);
+            for cf in -5i32..=105 {
+                for ff in -5i32..=105 {
+                    let want_ctx = if cb > 1 { bin_frac(cf, cb) } else { 0 };
+                    let want = want_ctx * gb + bin_frac(ff, gb);
+                    assert_eq!(m.idx(cf, ff), want, "cb={cb} gb={gb} cf={cf} ff={ff}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -148,25 +148,44 @@ pub fn corrected_effective_length_full(
         // `ref_len` live in the inner loop, forcing a spill/reload — the single
         // hottest source line in `perf annotate`).
         let kmax = ref_len as i32 - fl;
-        let mut kstart = 0i32;
-        while kstart < kmax {
-            let frag_start = kstart;
-            let frag_end = kstart + fl - 1;
-            let mut frag_factor = if have_seq {
-                fw[frag_start as usize] * rc[frag_end as usize]
-            } else {
-                1.0
-            };
-            if let (Some(gc), Some(ctx)) = (gc_model, gc_ctx.as_ref()) {
-                if let Some((ff, cf)) = ctx.desc(gc_prefix, frag_start, frag_end) {
-                    frag_factor *= gc.get(ff, cf);
+        // Dispatch the bias combination ONCE per fragment length rather than
+        // re-testing every bias model's presence per fragment: the common
+        // `--gcBias`-only case gets a tight loop with no per-fragment branches.
+        match (have_seq, gc_model.zip(gc_ctx.as_ref()), pos_fw.zip(pos_rc)) {
+            (false, Some((gc, ctx)), None) => {
+                let mut kstart = 0i32;
+                while kstart < kmax {
+                    let frag_end = kstart + fl - 1;
+                    if let Some((ff, cf)) = ctx.desc(gc_prefix, kstart, frag_end) {
+                        mass += gc.get(ff, cf);
+                    } else {
+                        mass += 1.0;
+                    }
+                    kstart += 1;
                 }
             }
-            if let (Some(pf), Some(pr)) = (pos_fw, pos_rc) {
-                frag_factor *= pf[frag_start as usize] * pr[frag_end as usize];
+            _ => {
+                let mut kstart = 0i32;
+                while kstart < kmax {
+                    let frag_start = kstart;
+                    let frag_end = kstart + fl - 1;
+                    let mut frag_factor = if have_seq {
+                        fw[frag_start as usize] * rc[frag_end as usize]
+                    } else {
+                        1.0
+                    };
+                    if let (Some(gc), Some(ctx)) = (gc_model, gc_ctx.as_ref()) {
+                        if let Some((ff, cf)) = ctx.desc(gc_prefix, frag_start, frag_end) {
+                            frag_factor *= gc.get(ff, cf);
+                        }
+                    }
+                    if let (Some(pf), Some(pr)) = (pos_fw, pos_rc) {
+                        frag_factor *= pf[frag_start as usize] * pr[frag_end as usize];
+                    }
+                    mass += frag_factor;
+                    kstart += 1;
+                }
             }
-            mass += frag_factor;
-            kstart += 1;
         }
         eff += fl_weight * mass;
         fl += stride;
