@@ -84,8 +84,8 @@ misbehaves.
 | `--softclip`, `--softclipOverhangs` | ✅ | |
 | `--mismatchSeedSkip` | ⚠️ | Post-miss seed skip lives in the piscem-rs seed walk; not yet tunable. |
 | `--disableChainingHeuristic` | ⚠️ | Rust uses a loss-less ref-distance early-break, not salmon's numRounds heuristic. |
-| `--hitFilterPolicy` | ⛔ | |
-| `--maxRecoverReadOcc` | ⛔ | |
+| `--hitFilterPolicy` | ⚠️ | Rust filters hits after chaining (salmon's AFTER default); accepted, not yet tunable. |
+| `--maxRecoverReadOcc` | ⚠️ | Orphan-recovery candidate cap; accepted, not yet implemented. |
 | `--validateMappings`, `--noSA` | 🔁 | Selective alignment is always on. |
 | `--mimicBT2`, `--mimicStrictBT2` | ⛔ | Bowtie2-mimicking presets. |
 | `--puff`, `--type` | 🔁 | Single index type; obsolete. |

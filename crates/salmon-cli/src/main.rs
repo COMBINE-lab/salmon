@@ -402,6 +402,14 @@ struct QuantArgs {
     /// (only meaningful with --sampleOut / --writeMappings).
     #[arg(long = "writeQualities")]
     write_qualities: bool,
+    /// [accepted; not yet implemented] hit-filtering policy (BEFORE/AFTER/BOTH/
+    /// NONE) for selective alignment; the Rust port filters after chaining.
+    #[arg(long = "hitFilterPolicy")]
+    hit_filter_policy: Option<String>,
+    /// [accepted; not yet implemented] cap on candidate mappings during orphan
+    /// recovery (salmon's --maxRecoverReadOcc).
+    #[arg(long = "maxRecoverReadOcc")]
+    max_recover_read_occ: Option<u32>,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -509,6 +517,12 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     }
     if args.sample_out || args.sample_unaligned || args.write_qualities {
         tracing::warn!("--sampleOut/--sampleUnaligned/--writeQualities (posterior-sampled BAM output) are accepted but not yet implemented and have no effect.");
+    }
+    if args.hit_filter_policy.is_some() {
+        tracing::warn!("--hitFilterPolicy is accepted but not yet implemented and has no effect: the Rust port filters hits after chaining (salmon's AFTER default).");
+    }
+    if args.max_recover_read_occ.is_some() {
+        tracing::warn!("--maxRecoverReadOcc is accepted but not yet implemented and has no effect.");
     }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
