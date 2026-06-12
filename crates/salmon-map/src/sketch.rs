@@ -27,6 +27,8 @@ pub fn map_single_read_sketch<'idx>(
     hs: &mut HitSearcher<'idx>,
     read: &[u8],
     strat: SkippingStrategy,
+    max_hit_occ: usize,
+    max_read_occ: usize,
 ) -> Vec<ScoredMapping> {
     let k = index.k();
     if read.len() < k {
@@ -35,6 +37,11 @@ pub fn map_single_read_sketch<'idx>(
     dispatch_on_k!(k, K => {
         let mut query = PiscemStreamingQuery::<K>::new(index.dict());
         let mut cache = MappingCache::<SketchHitInfoSimple>::new(k);
+        // Honor the same repetitive-hit and multimapping caps as selective
+        // alignment (--maxOccsPerHit / --maxReadOcc) rather than piscem's
+        // built-in defaults (256 / 2500), so both modes filter consistently.
+        cache.max_hit_occ = max_hit_occ;
+        cache.max_read_occ = max_read_occ;
         let mut poison = PoisonState::new(index.poison_table());
         map_read::<K, SketchHitInfoSimple, _, _>(
             read, &mut cache, hs, &mut query, index, &mut poison, strat,
@@ -73,9 +80,11 @@ pub fn map_read_pair_sketch<'idx>(
     r1: &[u8],
     r2: &[u8],
     strat: SkippingStrategy,
+    max_hit_occ: usize,
+    max_read_occ: usize,
 ) -> Vec<ScoredMapping> {
-    let left = map_single_read_sketch(index, hs, r1, strat);
-    let right = map_single_read_sketch(index, hs, r2, strat);
+    let left = map_single_read_sketch(index, hs, r1, strat, max_hit_occ, max_read_occ);
+    let right = map_single_read_sketch(index, hs, r2, strat, max_hit_occ, max_read_occ);
 
     match (left.is_empty(), right.is_empty()) {
         (true, true) => Vec::new(),
