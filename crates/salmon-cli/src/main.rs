@@ -293,6 +293,17 @@ struct QuantArgs {
     /// only the best-scoring mapping(s), each with equal weight.
     #[arg(long = "hardFilter")]
     hard_filter: bool,
+    /// Per-target pre-merge chain sub-optimality threshold: keep chains scoring
+    /// `>= best_chain_score * thresh` (selective-alignment mode). Range [0,1].
+    /// Rust default 0.8 (salmon's default is 0.75).
+    #[arg(long = "preMergeChainSubThresh", default_value_t = 0.8)]
+    pre_merge_chain_sub_thresh: f32,
+    /// Post-merge concordant chain-pair sub-optimality threshold: after pairing,
+    /// keep pairs whose read-coverage is `>= best_pair_coverage * thresh`
+    /// (paired-end, selective-alignment mode). Range [0,1]. Default 0.0 (off);
+    /// salmon's default is 0.9, thresholded on chain score rather than coverage.
+    #[arg(long = "postMergeChainSubThresh", default_value_t = 0.0)]
+    post_merge_chain_sub_thresh: f32,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -462,6 +473,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.map_config.score.decoy_thresh = args.decoy_threshold;
     opts.map_config.score.min_aln_prob = args.min_aln_prob;
     opts.map_config.score.hard_filter = args.hard_filter;
+    // chaining sub-optimality thresholds (Tier 2)
+    opts.map_config.collect.chain.chain_subopt_thresh = args.pre_merge_chain_sub_thresh;
+    opts.map_config.pair.post_merge_chain_sub_thresh = args.post_merge_chain_sub_thresh;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;

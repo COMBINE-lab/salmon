@@ -33,6 +33,15 @@ pub struct PairingConfig {
     /// every orphan candidate is aligned — slightly more sensitive than salmon on
     /// divergent gene-family reads. Raise toward 0.95 to mirror salmon exactly.
     pub orphan_chain_sub_thresh: f32,
+    /// Post-merge concordant chain-pair sub-optimality threshold (salmon's
+    /// `postMergeChainSubThresh`, default there 0.9): when `> 0`, after forming
+    /// concordant pairs keep only those whose read-coverage is
+    /// `>= post_merge_chain_sub_thresh * (best concordant-pair coverage)`,
+    /// pruning weaker pairs before alignment. salmon thresholds on chain-pair
+    /// *score*; we use read-coverage — consistent with the per-mate consensus
+    /// filter and `orphan_chain_sub_thresh`. Default **0.0 (off)**: every
+    /// concordant pair is aligned (current Rust behavior).
+    pub post_merge_chain_sub_thresh: f32,
 }
 
 impl Default for PairingConfig {
@@ -42,6 +51,7 @@ impl Default for PairingConfig {
             allow_orphans: true,
             allow_dovetail: false,
             orphan_chain_sub_thresh: 0.0,
+            post_merge_chain_sub_thresh: 0.0,
         }
     }
 }
@@ -182,6 +192,17 @@ pub fn join_reads_and_filter(
             paired_tids.insert(tid);
             joints.push(j);
         }
+    }
+
+    // Post-merge concordant chain-pair sub-optimality prune (salmon's
+    // postMergeChainSubThresh; off by default). Drop concordant pairs whose
+    // read-coverage is below `thresh * (best concordant coverage)`, before
+    // alignment. Applied only to the concordant set (pruned tids stay in
+    // `paired_tids`, so they do not fall back to orphans).
+    if cfg.post_merge_chain_sub_thresh > 0.0 && !joints.is_empty() {
+        let best_cov = joints.iter().map(JointMapping::coverage).max().unwrap_or(0);
+        let cutoff = (cfg.post_merge_chain_sub_thresh * best_cov as f32).ceil() as i32;
+        joints.retain(|j| j.coverage() >= cutoff);
     }
 
     // Orphans for references that did not yield a concordant pair.
@@ -325,6 +346,26 @@ mod tests {
         let j = join_reads_and_filter(left, right, &PairingConfig::default());
         assert_eq!(j.len(), 1);
         assert_eq!(j[0].status, MateStatus::PairedEndPaired);
+    }
+
+    #[test]
+    fn post_merge_prunes_low_coverage_concordant_pair() {
+        // tid 0: high-coverage concordant pair (cov 50+50=100); tid 1: low (10+10=20).
+        let left = vec![cand(0, true, 100, 50), cand(1, true, 100, 10)];
+        let right = vec![cand(0, false, 300, 50), cand(1, false, 300, 10)];
+        let paired = |js: &[JointMapping]| {
+            js.iter().filter(|m| m.status == MateStatus::PairedEndPaired).count()
+        };
+        // Off by default: both concordant pairs survive.
+        let j = join_reads_and_filter(left.clone(), right.clone(), &PairingConfig::default());
+        assert_eq!(paired(&j), 2);
+        // thresh 0.5 -> cutoff ceil(0.5*100)=50; tid 1 (cov 20) is pruned and,
+        // being already paired, does not fall back to an orphan.
+        let cfg = PairingConfig { post_merge_chain_sub_thresh: 0.5, ..PairingConfig::default() };
+        let j2 = join_reads_and_filter(left, right, &cfg);
+        assert_eq!(j2.len(), 1);
+        assert_eq!(j2[0].tid, 0);
+        assert_eq!(paired(&j2), 1);
     }
 
     #[test]
