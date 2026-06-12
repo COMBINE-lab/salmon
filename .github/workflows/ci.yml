@@ -49,9 +49,12 @@ jobs:
               git clone --depth 1 --branch "$2" "https://github.com/COMBINE-lab/$1.git" "$3"
             fi
           }
+          # cf1-rs/piscem-rs are `path = "../<dep>"` in the workspace root manifest;
+          # ksw2rs is `path = "../../../ksw2rs"` in crates/salmon-map/Cargo.toml, which
+          # resolves relative to that crate → repo-parent/ksw2rs (same dir as the others).
           clone cf1-rs    main                  "$GITHUB_WORKSPACE/../cf1-rs"
           clone piscem-rs main                  "$GITHUB_WORKSPACE/../piscem-rs"
-          clone ksw2rs    simd-runtime-dispatch "$GITHUB_WORKSPACE/../../../ksw2rs"
+          clone ksw2rs    simd-runtime-dispatch "$GITHUB_WORKSPACE/../ksw2rs"
 
       - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
         uses: dtolnay/rust-toolchain@master

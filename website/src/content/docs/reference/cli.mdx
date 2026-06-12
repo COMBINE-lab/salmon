@@ -33,6 +33,7 @@ Build a reusable index from one or more transcriptome FASTA files.
 | `-p, --threads <N>` | Worker threads (`0` = all cores). Default `0`. |
 | `-d, --decoys <FILE>` | File of decoy sequence names (one per line; decoy records must come last in the FASTA). |
 | `--keepDuplicates` | Retain exact-duplicate transcript sequences instead of collapsing them. |
+| `-n, --no-clip` | Don't clip poly-A tails. By default a reference ending in ≥10 `A`s has its trailing `A`s trimmed (all-`A` references are dropped), matching pufferfish. |
 | `--gencode` | GENCODE references: truncate each name at the first `\|`. |
 | `--keepFixedFasta` | Keep the cleaned (non-ACGT-replaced) reference FASTA. |
 | `--keepIntermediate` | Keep intermediate compacted-dBG files. |
@@ -88,6 +89,7 @@ Quantify from FASTQ reads (reads mode, `-i`) or from a transcriptome BAM
 | Option | Description |
 | --- | --- |
 | `--useEM` | Standard EM instead of VBEM. |
+| `--meta` | Metagenomic preset: plain EM, no range-factorized eq-classes, uniform init. Overrides `--useEM`/`--rangeFactorizationBins`. |
 | `--rangeFactorizationBins <N>` | Range-factorization bins (`0` disables). Default `4`. |
 | `--numBootstraps <N>` | Bootstrap replicates for posterior uncertainty. |
 | `--numGibbsSamples <N>` | Gibbs posterior samples (mutually exclusive with bootstraps). |

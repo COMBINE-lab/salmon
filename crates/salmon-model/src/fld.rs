@@ -59,7 +59,10 @@ impl FragmentLengthDistribution {
         assert!(bin_size >= 1, "bin_size must be >= 1");
         let max_val = max_val / bin_size;
         let kernel_n = kernel_n / bin_size;
-        assert!(kernel_n % 2 == 0, "kernel_n must be even after binning");
+        assert!(
+            kernel_n.is_multiple_of(2),
+            "kernel_n must be even after binning"
+        );
 
         let tot = alpha.ln();
         let hist: Vec<AtomicF64>;

@@ -76,6 +76,8 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
 ## Unchanged
 
 Index/quant basics, `quant.sf`, `cmd_info.json`, `lib_format_counts.json`,
-`aux_info/meta_info.json`, `--libType/-l`, `--threads/-p`, `--seqBias`,
-`--gcBias`, `--posBias`, `--numBootstraps`, `--numGibbsSamples`, `--useEM`,
-`--dumpEq`, `-g/--geneMap`, decoys, and `salmon quantmerge`.
+`aux_info/meta_info.json`, `--libType/-l`, `--threads/-p`, `-k/--kmerLen`,
+`-m/--minimizerLen`, `-n/--no-clip` (poly-A clipping, on by default),
+`--seqBias`, `--gcBias`, `--posBias`, `--numBootstraps`, `--numGibbsSamples`,
+`--useEM`, `--meta` (metagenomic preset), `--dumpEq`, `-g/--geneMap`, decoys, and
+`salmon quantmerge`.

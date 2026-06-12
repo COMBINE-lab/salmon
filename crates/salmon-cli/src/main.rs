@@ -144,6 +144,12 @@ struct IndexArgs {
     /// appear last in the FASTA) are indexed but flagged as decoys.
     #[arg(short = 'd', long = "decoys")]
     decoys: Option<PathBuf>,
+    /// Don't clip poly-A tails from the ends of target sequences. By default
+    /// (matching salmon/pufferfish `FixFasta`), a reference ending in a run of
+    /// at least 10 `A`s has its trailing `A`s trimmed before indexing (an
+    /// all-`A` reference is dropped).
+    #[arg(short = 'n', long = "no-clip")]
+    no_clip: bool,
 }
 
 #[derive(Args)]
@@ -193,6 +199,12 @@ struct QuantArgs {
     /// Use the standard EM optimizer instead of VBEM.
     #[arg(long = "useEM")]
     use_em: bool,
+    /// Metagenomic preset (salmon's `--meta`): use plain EM (not VBEM), disable
+    /// range-factorized/rich equivalence classes, and initialize abundances
+    /// uniformly — settings better suited to metagenomic references. Overrides
+    /// `--useEM`/`--rangeFactorizationBins`.
+    #[arg(long = "meta")]
+    meta: bool,
     /// Range-factorization bins for equivalence classes (0 disables).
     #[arg(long = "rangeFactorizationBins", default_value_t = 4)]
     range_factorization_bins: u32,
@@ -472,6 +484,7 @@ fn run_index(args: IndexArgs) -> Result<()> {
     opts.keep_duplicates = args.keep_duplicates;
     opts.decoys = args.decoys;
     opts.gencode = args.gencode;
+    opts.clip_polya = !args.no_clip;
     let info = build_index(&opts).context("index build failed")?;
     println!(
         "indexed {} references (k={}, m={})",
@@ -580,12 +593,27 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         .build_global();
     let out_dir = args.output.clone();
     let gene_map = args.gene_map.clone();
+    // `--meta` (metagenomic preset) forces plain EM (no VBEM) and disables rich /
+    // range-factorized equivalence classes, matching salmon's --meta. salmon's
+    // preset also sets initUniform; the Rust offline EM already initializes
+    // uniformly, so that part is inherent. --meta overrides --useEM/--rangeFactorizationBins.
+    let use_vbem = !args.use_em && !args.meta;
+    let range_factorization_bins = if args.meta {
+        0
+    } else {
+        args.range_factorization_bins
+    };
+    if args.meta {
+        tracing::info!(
+            "--meta: metagenomic preset (plain EM, no range-factorized equivalence classes, uniform init)"
+        );
+    }
     // Alignment-based mode: quantify directly from a BAM.
     if let Some(bam) = args.alignments {
         let mut opts = AlignQuantOptions::new(bam, args.output);
         opts.lib_type = args.lib_type;
-        opts.em.use_vbem = !args.use_em;
-        opts.range_factorization_bins = args.range_factorization_bins;
+        opts.em.use_vbem = use_vbem;
+        opts.range_factorization_bins = range_factorization_bins;
         opts.transcripts = args.targets;
         opts.no_error_model = args.no_error_model;
         opts.seq_bias = args.seq_bias;
@@ -654,8 +682,8 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.num_threads = args.threads;
     opts.sketch = args.sketch;
     opts.sketch_strict_orphan = args.sketch_strict_orphans;
-    opts.em.use_vbem = !args.use_em;
-    opts.range_factorization_bins = args.range_factorization_bins;
+    opts.em.use_vbem = use_vbem;
+    opts.range_factorization_bins = range_factorization_bins;
     opts.incompat_prior = args.incompat_prior;
     opts.dump_eq = args.dump_eq;
     opts.dump_eq_weights = args.dump_eq_weights;

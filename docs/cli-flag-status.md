@@ -36,6 +36,7 @@ misbehaves.
 | `-d/--decoys` | ✅ | |
 | `--tmpdir` | ✅ | Redirects build intermediates; final index still in `-i`. |
 | `-m/--minimizerLen` | ✅ | `--keepIntermediate` also supported (keeps cDBG files). |
+| `-n/--no-clip` | ✅ | Default clips poly-A tails (≥10 trailing `A`s → trimmed; all-`A` dropped), matching pufferfish `FixFasta`; `--no-clip` disables. Hashes are pre-clip. |
 | `--filterSize` | ⚠️ | cf1-rs cDBG builder does not expose the bloom-filter size. |
 | `--features` | ⛔ | |
 
@@ -45,6 +46,7 @@ misbehaves.
 |------|--------|-------|
 | `-l/--libType`, `-o/--output`, `-p/--threads`, `-z/--writeMappings` | ✅ | |
 | `--useEM` | ✅ | VBEM is the default; `--useEM` selects plain EM. |
+| `--meta` | ✅ | Metagenomic preset: plain EM, no range-factorized eq-classes, uniform init (the Rust EM already inits uniformly). Overrides `--useEM`/`--rangeFactorizationBins`. |
 | `--useVBOpt` | 🔁 | VBEM is already the default. |
 | `--numBootstraps`, `--numGibbsSamples`, `--thinningFactor` | ✅ | |
 | `--vbPrior`, `--perTranscriptPrior`, `--perNucleotidePrior` | ✅ | |

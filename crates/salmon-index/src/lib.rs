@@ -21,7 +21,7 @@ use cf1_rs::{cf_build, CfInput};
 use piscem_rs::index::build::{build_index, BuildConfig};
 use piscem_rs::index::reference_index::ReferenceIndex;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Basename (within the index directory) of the cDBG tiling files.
 const CDBG_PREFIX: &str = "cdbg";
@@ -88,6 +88,12 @@ pub struct IndexBuildOptions {
     /// first `|` (salmon's `--gencode`), so e.g. `ENST...|ENSG...|...` becomes
     /// `ENST...`. Applied consistently to the index names and the seq/name hashes.
     pub gencode: bool,
+    /// Clip poly-A tails from reference ends before indexing, matching salmon/
+    /// pufferfish `FixFasta` (default `true`; salmon's `--no-clip`/`-n` disables).
+    /// A reference whose (cleaned) sequence ends in a run of >= 10 `A`s has all
+    /// its trailing `A`s trimmed; an all-`A` reference is dropped from the index.
+    /// Reference hashes are computed pre-clip, so this does not change provenance.
+    pub clip_polya: bool,
 }
 
 impl IndexBuildOptions {
@@ -108,6 +114,7 @@ impl IndexBuildOptions {
             keep_duplicates: false,
             decoys: None,
             gencode: false,
+            clip_polya: true,
         }
     }
 }
@@ -247,7 +254,16 @@ struct PreprocessResult {
     duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)>,
     /// retained-reference index of the first decoy, or `None` if no decoys.
     first_decoy_index: Option<usize>,
+    /// number of references whose trailing poly-A run was clipped.
+    polya_clipped: u64,
+    /// names of references dropped because clipping left them empty (all-`A`).
+    polya_dropped: Vec<Vec<u8>>,
 }
+
+/// salmon/pufferfish `FixFasta` clips a reference iff its (cleaned) sequence ends
+/// in a run of at least this many `A`s; the entire trailing `A` run is then
+/// removed (an all-`A` reference is dropped).
+const POLYA_CLIP_LEN: usize = 10;
 
 fn preprocess_fasta(
     inputs: &[PathBuf],
@@ -255,6 +271,7 @@ fn preprocess_fasta(
     keep_duplicates: bool,
     decoy_names: &ahash::AHashSet<Vec<u8>>,
     gencode: bool,
+    clip_polya: bool,
 ) -> Result<PreprocessResult> {
     use std::io::Write as _;
     const B: [u8; 4] = *b"ACGT";
@@ -264,6 +281,8 @@ fn preprocess_fasta(
             .with_context(|| format!("creating {}", out_path.display()))?,
     );
     let mut replaced = 0u64;
+    let mut polya_clipped = 0u64;
+    let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
     let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     // Number of references actually written so far (= next retained ref id).
     let mut retained = 0usize;
@@ -315,13 +334,6 @@ fn preprocess_fasta(
                 }
             }
 
-            if is_decoy && first_decoy_index.is_none() {
-                first_decoy_index = Some(retained);
-            }
-
-            out.write_all(b">")?;
-            out.write_all(name)?;
-            out.write_all(b"\n")?;
             let mut seq = orig.into_owned();
             for b in seq.iter_mut() {
                 if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
@@ -332,6 +344,39 @@ fn preprocess_fasta(
                     replaced += 1;
                 }
             }
+            // Kallisto-esque poly-A clipping (salmon/pufferfish FixFasta): if the
+            // (cleaned) sequence ends in a run of >= POLYA_CLIP_LEN `A`s, trim all
+            // trailing `A`s. This runs after non-ACGT replacement (matching salmon's
+            // order); the reference hashes are computed pre-clip, so provenance is
+            // unaffected.
+            if clip_polya
+                && seq.len() > POLYA_CLIP_LEN
+                && seq[seq.len() - POLYA_CLIP_LEN..]
+                    .iter()
+                    .all(|&b| matches!(b, b'A' | b'a'))
+            {
+                match seq.iter().rposition(|&b| !matches!(b, b'A' | b'a')) {
+                    Some(last) => {
+                        seq.truncate(last + 1);
+                        polya_clipped += 1;
+                    }
+                    None => {
+                        // All `A`s: drop the reference entirely (not written, not
+                        // counted as retained), matching salmon.
+                        polya_clipped += 1;
+                        polya_dropped.push(name.to_vec());
+                        continue;
+                    }
+                }
+            }
+
+            if is_decoy && first_decoy_index.is_none() {
+                first_decoy_index = Some(retained);
+            }
+
+            out.write_all(b">")?;
+            out.write_all(name)?;
+            out.write_all(b"\n")?;
             out.write_all(&seq)?;
             out.write_all(b"\n")?;
             retained += 1;
@@ -342,6 +387,8 @@ fn preprocess_fasta(
         replaced,
         duplicate_clusters,
         first_decoy_index,
+        polya_clipped,
+        polya_dropped,
     })
 }
 
@@ -444,12 +491,25 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         opts.keep_duplicates,
         &decoy_names,
         opts.gencode,
+        opts.clip_polya,
     )
     .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
     if pre.replaced > 0 {
         info!(
             "replaced {} non-ACGT base(s) with random bases",
             pre.replaced
+        );
+    }
+    if pre.polya_clipped > 0 {
+        info!(
+            "clipped poly-A tails from {} transcripts",
+            pre.polya_clipped
+        );
+    }
+    for dropped in &pre.polya_dropped {
+        warn!(
+            "transcript {:?} was all A's after cleaning; dropped from the index",
+            String::from_utf8_lossy(dropped)
         );
     }
     if !opts.keep_duplicates {
