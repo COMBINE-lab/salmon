@@ -61,7 +61,11 @@ impl BiasInputs<'_> {
 
 /// Bias-corrected effective length composing every enabled bias term, matching
 /// salmon's combined `updateEffectiveLengths` convolution. Floors at the lower
-/// barrier `min(elen, max(1, unprocessedLen))` (no upper cap).
+/// barrier `min(elen, max(1, unprocessedLen))` (no upper cap), unless
+/// `no_length_threshold` is set (salmon's `--noBiasLengthThreshold`), in which
+/// case the corrected length is accepted outright (floored only at 1.0) or the
+/// uncorrected length is kept.
+#[allow(clippy::too_many_arguments)]
 pub fn corrected_effective_length_full(
     seq: &[u8],
     cdf: &[f64],
@@ -70,6 +74,7 @@ pub fn corrected_effective_length_full(
     bias: &BiasInputs,
     elen: f64,
     stride: usize,
+    no_length_threshold: bool,
 ) -> f64 {
     if !bias.any() {
         return elen;
@@ -191,8 +196,19 @@ pub fn corrected_effective_length_full(
         fl += stride;
     }
 
-    let offset = (unprocessed as f64).max(1.0);
-    eff.max(elen.min(offset))
+    if no_length_threshold {
+        // salmon's `noThreshold` path: accept the bias-corrected length outright
+        // (floored only at 1.0), else keep the uncorrected length. `unprocessed`
+        // is already > 0 here (the early return handled `unprocessed <= 0`).
+        if eff > 1.0 {
+            eff
+        } else {
+            elen
+        }
+    } else {
+        let offset = (unprocessed as f64).max(1.0);
+        eff.max(elen.min(offset))
+    }
 }
 
 /// Build the *expected* positional-bias models (5'/3', one per length class),

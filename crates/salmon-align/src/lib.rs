@@ -78,6 +78,15 @@ pub struct AlignQuantOptions {
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
+    /// fragment-length sampling stride for the GC bias convolution
+    /// (`--biasSpeedSamp`, default 5)
+    pub bias_speed_samp: usize,
+    /// online-phase auxiliary-model training window (`--numAuxModelSamples`,
+    /// default 5,000,000)
+    pub num_aux_model_samples: u64,
+    /// disable the lower barrier on bias-corrected effective lengths
+    /// (`--noBiasLengthThreshold`)
+    pub no_bias_length_threshold: bool,
 }
 
 impl AlignQuantOptions {
@@ -101,6 +110,9 @@ impl AlignQuantOptions {
             forgetting_factor: 0.65,
             init_uniform: false,
             sig_digits: 3,
+            bias_speed_samp: 5,
+            num_aux_model_samples: 5_000_000,
+            no_bias_length_threshold: false,
         }
     }
 }
@@ -1095,7 +1107,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // in a single streaming pass (salmon's online phase), rather than two passes.
     let ref_lens_u64: Vec<u64> = lengths.iter().map(|&l| l as u64).collect();
     let online = (use_error_model || bias_on)
-        .then(|| salmon_infer::OnlineInference::new(&ref_lens_u64, 0.05, opts.forgetting_factor, 5_000_000));
+        .then(|| salmon_infer::OnlineInference::new(&ref_lens_u64, 0.05, opts.forgetting_factor, opts.num_aux_model_samples));
 
     // Per-transcript inputs the bias collection needs (the observed bias models
     // themselves are accumulated per-worker inside the pass).
@@ -1248,7 +1260,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 salmon_model::gcbias::DEFAULT_COND_BINS,
                 salmon_model::gcbias::DEFAULT_GC_BINS,
                 k,
-                salmon_model::GC_SAMP_STRIDE,
+                opts.bias_speed_samp,
             );
             obs.normalize();
             exp.normalize();
@@ -1312,7 +1324,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 fld_high,
                 &bias,
                 eff_lengths[tid],
-                salmon_model::GC_SAMP_STRIDE,
+                opts.bias_speed_samp,
+                opts.no_bias_length_threshold,
             );
         }
         collapsed.update_eff_lengths(&eff_lengths);

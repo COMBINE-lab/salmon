@@ -304,6 +304,18 @@ struct QuantArgs {
     /// salmon's default is 0.9, thresholded on chain score rather than coverage.
     #[arg(long = "postMergeChainSubThresh", default_value_t = 0.0)]
     post_merge_chain_sub_thresh: f32,
+    /// Fragment-length sampling stride for the GC bias eff-length convolution.
+    /// Larger = faster bias correction, coarser. (salmon's --biasSpeedSamp)
+    #[arg(long = "biasSpeedSamp", default_value_t = 5)]
+    bias_speed_samp: usize,
+    /// Number of leading fragments used to train the auxiliary models
+    /// (fragment-length / bias / error); they are fixed afterward.
+    #[arg(long = "numAuxModelSamples", default_value_t = 5_000_000)]
+    num_aux_model_samples: u64,
+    /// Disable the lower threshold on how short bias correction may make an
+    /// effective length (increases precision, reduces robustness). Experimental.
+    #[arg(long = "noBiasLengthThreshold")]
+    no_bias_length_threshold: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -412,6 +424,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.fld_max = args.fld_max;
         opts.forgetting_factor = args.forgetting_factor;
         opts.init_uniform = args.init_uniform;
+        opts.bias_speed_samp = args.bias_speed_samp;
+        opts.num_aux_model_samples = args.num_aux_model_samples;
+        opts.no_bias_length_threshold = args.no_bias_length_threshold;
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64
@@ -476,6 +491,10 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     // chaining sub-optimality thresholds (Tier 2)
     opts.map_config.collect.chain.chain_subopt_thresh = args.pre_merge_chain_sub_thresh;
     opts.map_config.pair.post_merge_chain_sub_thresh = args.post_merge_chain_sub_thresh;
+    // model toggles (Tier 2)
+    opts.bias_speed_samp = args.bias_speed_samp;
+    opts.num_aux_model_samples = args.num_aux_model_samples;
+    opts.no_bias_length_threshold = args.no_bias_length_threshold;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;

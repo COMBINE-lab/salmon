@@ -104,6 +104,16 @@ pub struct QuantOptions {
     /// discard a fragment that maps to more than this many places (salmon's
     /// `--maxReadOcc`, default 200)
     pub max_read_occ: usize,
+    /// fragment-length sampling stride for the GC bias convolution (salmon's
+    /// `--biasSpeedSamp`, default 5)
+    pub bias_speed_samp: usize,
+    /// online-phase model-training window: the first N fragments train the
+    /// auxiliary models (FLD/bias/error), after which they are fixed (salmon's
+    /// `--numAuxModelSamples`, default 5,000,000)
+    pub num_aux_model_samples: u64,
+    /// disable the lower barrier on how short bias correction may make an
+    /// effective length (salmon's `--noBiasLengthThreshold`)
+    pub no_bias_length_threshold: bool,
 }
 
 impl QuantOptions {
@@ -139,6 +149,9 @@ impl QuantOptions {
             forgetting_factor: 0.65,
             sig_digits: 3,
             max_read_occ: 200,
+            bias_speed_samp: 5,
+            num_aux_model_samples: 5_000_000,
+            no_bias_length_threshold: false,
         }
     }
 
@@ -302,7 +315,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // point estimate.
     let online = (opts.seq_bias || opts.gc_bias || opts.pos_bias).then(|| {
         let ref_lens: Vec<u64> = (0..num_refs).map(|t| salmon.ref_len(t)).collect();
-        salmon_infer::OnlineInference::new(&ref_lens, 0.05, opts.forgetting_factor, 5_000_000)
+        salmon_infer::OnlineInference::new(&ref_lens, 0.05, opts.forgetting_factor, opts.num_aux_model_samples)
     });
 
     // ---- parallel mapping pass (borrows the accumulators) -------------------
@@ -483,7 +496,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 salmon_model::gcbias::DEFAULT_COND_BINS,
                 salmon_model::gcbias::DEFAULT_GC_BINS,
                 k,
-                salmon_model::GC_SAMP_STRIDE,
+                opts.bias_speed_samp,
             );
             // Capture the (normalized) observed/expected GC tables for the dumps
             // before gc_ratio consumes them (normalize is idempotent).
@@ -580,7 +593,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     fld_high,
                     &bias,
                     eff_lengths[tid],
-                    salmon_model::GC_SAMP_STRIDE,
+                    opts.bias_speed_samp,
+                    opts.no_bias_length_threshold,
                 )
             })
             .collect();

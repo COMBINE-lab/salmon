@@ -86,7 +86,7 @@ fn main() {
                 pos: None,
             };
             acc += corrected_effective_length_full(
-                seq, &cdf, fld_low, fld_high, &bias, elen, GC_SAMP_STRIDE,
+                seq, &cdf, fld_low, fld_high, &bias, elen, GC_SAMP_STRIDE, false,
             );
         }
         let dt = t.elapsed().as_secs_f64();
