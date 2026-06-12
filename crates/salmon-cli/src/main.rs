@@ -301,6 +301,11 @@ struct QuantArgs {
     /// `exp(-scoreExp * (best - score))` is below this (selective-alignment mode).
     #[arg(long = "minAlnProb", default_value_t = 1e-5)]
     min_aln_prob: f64,
+    /// Soft-weight decay: a mapping's probability is proportional to
+    /// `exp(-scoreExp * (bestScore - score))`. Larger downweights sub-optimal
+    /// mappings more steeply. (salmon's --scoreExp; default 1.0)
+    #[arg(long = "scoreExp", default_value_t = 1.0)]
+    score_exp: f64,
     /// Instead of soft-weighting multimapping locations by alignment score, keep
     /// only the best-scoring mapping(s), each with equal weight.
     #[arg(long = "hardFilter")]
@@ -356,6 +361,11 @@ struct QuantArgs {
     /// k-mer miss during seeding — lives in the piscem-rs seed-walk; not yet tunable.
     #[arg(long = "mismatchSeedSkip")]
     mismatch_seed_skip: Option<u32>,
+    /// [accepted for salmon compatibility; no effect] selects a lower-memory GC
+    /// representation; the Rust port always uses the dense cumulative-GC array,
+    /// which yields identical results.
+    #[arg(long = "reduceGCMemory")]
+    reduce_gc_memory: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -449,6 +459,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     if args.mismatch_seed_skip.is_some() {
         tracing::warn!("--mismatchSeedSkip is accepted for salmon compatibility but is not yet implemented: the post-miss seed skip lives in the piscem-rs k-mer seed walk, which does not yet expose it.");
     }
+    if args.reduce_gc_memory {
+        tracing::warn!("--reduceGCMemory is accepted for salmon compatibility but has no effect: the Rust port always uses the dense cumulative-GC representation, which yields identical results.");
+    }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
     let nthreads = if args.threads == 0 {
@@ -484,6 +497,8 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.num_error_bins = args.num_error_bins;
         opts.discard_orphans = args.discard_orphans;
+        // --scoreExp is selective-alignment-mode only (it scales the
+        // best-minus-score soft weight); alignment mode has no such term.
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64
@@ -539,6 +554,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
     opts.map_config.align.softclip = args.softclip;
     opts.map_config.align.softclip_overhangs = args.softclip_overhangs;
+    opts.map_config.score.score_exp = args.score_exp;
     // mapping policy (Tier 2): all default to the prior hardcoded behavior
     opts.map_config.recover_orphans = args.recover_orphans;
     if args.discard_orphans_quasi {
