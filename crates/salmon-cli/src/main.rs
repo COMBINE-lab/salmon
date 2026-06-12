@@ -410,6 +410,10 @@ struct QuantArgs {
     /// recovery (salmon's --maxRecoverReadOcc).
     #[arg(long = "maxRecoverReadOcc")]
     max_recover_read_occ: Option<u32>,
+    /// [accepted; no effect] deprecated in salmon too — selective alignment is
+    /// the default mapping mode (use --sketch for pseudoalignment).
+    #[arg(long = "validateMappings")]
+    validate_mappings: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -523,6 +527,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     }
     if args.max_recover_read_occ.is_some() {
         tracing::warn!("--maxRecoverReadOcc is accepted but not yet implemented and has no effect.");
+    }
+    if args.validate_mappings {
+        tracing::warn!("--validateMappings has no effect (deprecated in salmon too): selective alignment is the default mapping mode; pass --sketch for pseudoalignment.");
     }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.

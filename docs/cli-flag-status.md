@@ -73,7 +73,8 @@ misbehaves.
 
 | Flag | Status | Notes |
 |------|--------|-------|
-| `--sketch` (alignment-free), `--uniMEMs`, `--refMEMs` | ✅ | |
+| `--sketch` | ✅ | Pseudoalignment-only mapping (piscem-rs permissive sketch). Rust-port feature; not in this salmon build. |
+| `--uniMEMs`, `--refMEMs` | ✅ | |
 | `--ma`, `--mp`, `--go`, `--ge` | ✅ | Alignment scoring. |
 | `--minScoreFraction`, `--bandwidth`, `--fullLengthAlignment` | ✅ | |
 | `--consensusSlack`, `--maxOccsPerHit`, `--maxReadOcc` | ✅ | |
@@ -86,7 +87,8 @@ misbehaves.
 | `--disableChainingHeuristic` | ⚠️ | Rust uses a loss-less ref-distance early-break, not salmon's numRounds heuristic. |
 | `--hitFilterPolicy` | ⚠️ | Rust filters hits after chaining (salmon's AFTER default); accepted, not yet tunable. |
 | `--maxRecoverReadOcc` | ⚠️ | Orphan-recovery candidate cap; accepted, not yet implemented. |
-| `--validateMappings`, `--noSA` | 🔁 | Selective alignment is always on. |
+| `--validateMappings` | ⚠️ | Deprecated in salmon too (no effect); selective alignment is the default. |
+| `--noSA` | 🔁 | Selective alignment is always on. |
 | `--mimicBT2`, `--mimicStrictBT2` | ⛔ | Bowtie2-mimicking presets. |
 | `--puff`, `--type` | 🔁 | Single index type; obsolete. |
 
