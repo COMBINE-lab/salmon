@@ -146,8 +146,12 @@ pub fn map_read_pair_sketch<'idx>(
         for c in [&mut *left, &mut *right, &mut *out] {
             c.max_hit_occ = max_hit_occ;
             c.max_read_occ = max_read_occ;
-            // merge_se_mappings reads the dovetail floor from cache_left.min_frag_len
+            // merge_se_mappings reads the pairing policy from cache_left:
+            // the dovetail floor (`--allowDovetail`) and the orphan rule
+            // (relaxed by default; `--sketchStrictOrphans` restores piscem's
+            // strict no-matching-k-mers gate).
             c.min_frag_len = min_frag_len;
+            c.relaxed_orphans = !strict_orphan;
         }
         let mut poison = PoisonState::new(index.poison_table());
         if r1.len() >= k {
@@ -158,37 +162,13 @@ pub fn map_read_pair_sketch<'idx>(
             let mut q = PiscemStreamingQuery::<K>::new(index.dict());
             map_read::<K, SketchHitInfoSimple, _, _>(r2, right, hs, &mut q, index, &mut poison, strat);
         }
-        // Accepted-target counts captured before the merge consumes the caches,
-        // for the relaxed (empty-eq-class) orphan rule below.
-        let nl = left.accepted_hits.len();
-        let nr = right.accepted_hits.len();
         merge_se_mappings(left, right, r1.len() as i32, r2.len() as i32, out);
 
-        // Relaxed orphan rule (default): the merge left the pair unmapped but
-        // exactly one mate has an accepted target → emit it as an orphan even
-        // though the other mate had matching k-mers. `--sketchStrictOrphans`
-        // disables this, restoring piscem's no-matching-k-mers gate.
-        let orphan_ec = !strict_orphan
-            && out.map_type == MappingType::Unmapped
-            && (nl == 0) != (nr == 0);
-
-        let status = if orphan_ec {
-            // exactly one mate has accepted hits -> emit it as an orphan,
-            // overriding the `had_matching_kmers` gate.
-            if nl > 0 {
-                std::mem::swap(&mut left.accepted_hits, &mut out.accepted_hits);
-                Some(MateStatus::PairedEndLeft)
-            } else {
-                std::mem::swap(&mut right.accepted_hits, &mut out.accepted_hits);
-                Some(MateStatus::PairedEndRight)
-            }
-        } else {
-            match out.map_type {
-                MappingType::MappedPair => Some(MateStatus::PairedEndPaired),
-                MappingType::MappedFirstOrphan => Some(MateStatus::PairedEndLeft),
-                MappingType::MappedSecondOrphan => Some(MateStatus::PairedEndRight),
-                _ => None,
-            }
+        let status = match out.map_type {
+            MappingType::MappedPair => Some(MateStatus::PairedEndPaired),
+            MappingType::MappedFirstOrphan => Some(MateStatus::PairedEndLeft),
+            MappingType::MappedSecondOrphan => Some(MateStatus::PairedEndRight),
+            _ => None,
         };
         match status {
             None => Vec::new(),
