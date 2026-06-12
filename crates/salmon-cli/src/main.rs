@@ -108,6 +108,10 @@ struct IndexArgs {
     /// the Rust index builder (cf1-rs) does not expose this knob.
     #[arg(long = "filterSize")]
     filter_size: Option<usize>,
+    /// Directory for build intermediates (cleaned FASTA + cDBG files); the final
+    /// index still lands in --index. Defaults to the index dir. (salmon's --tmpdir)
+    #[arg(long = "tmpdir")]
+    tmpdir: Option<PathBuf>,
     /// Retain exact-duplicate transcript sequences instead of collapsing them
     /// (salmon collapses duplicates by default).
     #[arg(long = "keepDuplicates")]
@@ -348,6 +352,10 @@ struct QuantArgs {
     /// loss-less ref-distance early-break, not salmon's numRounds heuristic.
     #[arg(long = "disableChainingHeuristic")]
     disable_chaining_heuristic: bool,
+    /// [accepted for salmon compatibility; no effect yet] bases to skip after a
+    /// k-mer miss during seeding — lives in the piscem-rs seed-walk; not yet tunable.
+    #[arg(long = "mismatchSeedSkip")]
+    mismatch_seed_skip: Option<u32>,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -372,6 +380,7 @@ fn run_index(args: IndexArgs) -> Result<()> {
     opts.threads = args.threads;
     opts.keep_intermediate = args.keep_intermediate;
     opts.keep_fixed_fasta = args.keep_fixed_fasta;
+    opts.tmpdir = args.tmpdir;
     opts.keep_duplicates = args.keep_duplicates;
     opts.decoys = args.decoys;
     opts.gencode = args.gencode;
@@ -436,6 +445,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     }
     if args.disable_chaining_heuristic {
         tracing::warn!("--disableChainingHeuristic is accepted for salmon compatibility but has no effect: the Rust chainer uses a loss-less ref-distance early-break, not salmon's numRounds heuristic.");
+    }
+    if args.mismatch_seed_skip.is_some() {
+        tracing::warn!("--mismatchSeedSkip is accepted for salmon compatibility but is not yet implemented: the post-miss seed skip lives in the piscem-rs k-mer seed walk, which does not yet expose it.");
     }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.

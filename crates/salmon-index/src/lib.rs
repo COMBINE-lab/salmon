@@ -73,6 +73,10 @@ pub struct IndexBuildOptions {
     /// bases replaced — instead of deleting it (salmon's `--keepFixedFasta`).
     /// Implied by `keep_intermediate`.
     pub keep_fixed_fasta: bool,
+    /// directory for build intermediates (the cleaned FASTA + cDBG `.cf_*`
+    /// files) instead of the output dir (salmon's `--tmpdir`); the final index
+    /// still lands in `output_dir`. Created if absent.
+    pub tmpdir: Option<PathBuf>,
     /// retain exact-duplicate transcript sequences instead of collapsing them
     /// (salmon's `--keepDuplicates`; default `false` = remove duplicates).
     pub keep_duplicates: bool,
@@ -100,6 +104,7 @@ impl IndexBuildOptions {
             build_ec_table: true,
             keep_intermediate: false,
             keep_fixed_fasta: false,
+            tmpdir: None,
             keep_duplicates: false,
             decoys: None,
             gencode: false,
@@ -391,7 +396,17 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
 
     let threads = effective_threads(opts.threads);
     let m = if opts.m == 0 { default_minimizer_len(opts.k) } else { opts.m };
-    let cdbg_prefix = opts.output_dir.join(CDBG_PREFIX);
+    // Build intermediates (cleaned FASTA + cDBG files) go to `tmpdir` when set,
+    // else the output dir; the final index always lands in the output dir.
+    let intermediate_dir = match &opts.tmpdir {
+        Some(d) => {
+            std::fs::create_dir_all(d)
+                .with_context(|| format!("creating index tmpdir {}", d.display()))?;
+            d.clone()
+        }
+        None => opts.output_dir.clone(),
+    };
+    let cdbg_prefix = intermediate_dir.join(CDBG_PREFIX);
     let index_prefix = opts.output_dir.join(INDEX_PREFIX);
 
     // Decoy names (genome/contamination sequences indexed but never quantified).
@@ -403,7 +418,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // Replace non-ACGT bases up front (cf1-rs/packed-seq can't index N); the
     // cleaned FASTA feeds the cDBG build and the refseq store, while the hashes
     // below use the original input.
-    let cleaned = opts.output_dir.join("cleaned_refs.fa");
+    let cleaned = intermediate_dir.join("cleaned_refs.fa");
     let pre = preprocess_fasta(&opts.transcripts, &cleaned, opts.keep_duplicates, &decoy_names, opts.gencode)
         .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
     if pre.replaced > 0 {
