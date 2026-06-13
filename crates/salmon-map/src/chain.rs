@@ -135,14 +135,29 @@ fn merged_read_coverage(mems: &[Mem]) -> i32 {
     covered
 }
 
+/// Precomputed `f32` `log2` of small non-negative integers. The chaining gap
+/// cost evaluates `(gap as f32).log2()` in the innermost DP loop, where `gap`
+/// is a positive integer bounded by `max_gap` (default 5000). Looking the value
+/// up is far cheaper than a `log2` call and is **bit-identical** to computing
+/// `(gap as f32).log2()` directly (same input, same operation), so it does not
+/// change chaining scores. Gaps `>= LOG2_LUT_LEN` fall back to a direct call.
+const LOG2_LUT_LEN: usize = 8192;
+static LOG2_LUT: std::sync::LazyLock<Box<[f32]>> =
+    std::sync::LazyLock::new(|| (0..LOG2_LUT_LEN).map(|i| (i as f32).log2()).collect());
+
 /// minimap2-style gap cost: 0 when the read and reference gaps match, otherwise
 /// an affine term proportional to the gap plus a logarithmic term.
 #[inline]
-fn gap_cost(gap: i32, seed_len: i32) -> f32 {
+fn gap_cost(gap: i32, seed_len: i32, log2_lut: &[f32]) -> f32 {
     if gap == 0 {
         0.0
     } else {
-        0.01 * seed_len as f32 * gap as f32 + 0.5 * (gap as f32).log2()
+        let g = gap as f32;
+        let log2g = match log2_lut.get(gap as usize) {
+            Some(&v) => v,
+            None => g.log2(),
+        };
+        0.01 * seed_len as f32 * g + 0.5 * log2g
     }
 }
 
@@ -153,7 +168,6 @@ fn gap_cost(gap: i32, seed_len: i32) -> f32 {
 /// `Mem` vectors — which escape — are freshly allocated).
 #[derive(Default)]
 struct ChainScratch {
-    order: Vec<usize>,
     sorted: Vec<Mem>,
     f: Vec<f32>,
     p: Vec<usize>,
@@ -180,7 +194,6 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
     CHAIN_SCRATCH.with(|cell| {
         // Split-borrow each scratch field independently.
         let ChainScratch {
-            order,
             sorted,
             f,
             p,
@@ -190,21 +203,21 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
         } = &mut *cell.borrow_mut();
 
         let n = mems.len();
-        // Sort anchors colinearly; keep an index permutation so we can report the
-        // original Mem values.
-        order.clear();
-        order.extend(0..n);
-        order.sort_by(|&a, &b| {
-            (mems[a].ref_start, mems[a].read_start).cmp(&(mems[b].ref_start, mems[b].read_start))
-        });
+        // Sort anchors colinearly. We sort the (Copy) `Mem` values directly with
+        // an in-place unstable sort, rather than an index permutation + a stable
+        // sort that allocates O(n) scratch per call. Ties (equal ref_start AND
+        // read_start, i.e. duplicate anchors) only affect colinear tie-breaks.
         sorted.clear();
-        sorted.extend(order.iter().map(|&i| mems[i]));
+        sorted.extend_from_slice(mems);
+        sorted
+            .sort_unstable_by(|a, b| (a.ref_start, a.read_start).cmp(&(b.ref_start, b.read_start)));
 
         f.clear();
         f.resize(n, 0.0); // best score ending at i
         p.clear();
         p.resize(n, usize::MAX); // predecessor (MAX = none)
 
+        let log2_lut: &[f32] = &LOG2_LUT;
         for i in 0..n {
             f[i] = sorted[i].len as f32;
             let lb = if cfg.max_lookback == 0 {
@@ -233,7 +246,7 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
                 let gap = (dr - dq).abs();
                 // newly matched bases contributed by anchor i
                 let gain = dq.min(dr).min(sorted[i].len) as f32;
-                let sc = f[j] + gain - gap_cost(gap, cfg.seed_len);
+                let sc = f[j] + gain - gap_cost(gap, cfg.seed_len, log2_lut);
                 if sc > f[i] {
                     f[i] = sc;
                     p[i] = j;
@@ -245,7 +258,7 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
         // backtrack until reaching an unused-chain boundary.
         peaks.clear();
         peaks.extend(0..n);
-        peaks.sort_by(|&a, &b| f[b].total_cmp(&f[a]));
+        peaks.sort_unstable_by(|&a, &b| f[b].total_cmp(&f[a]));
         used.clear();
         used.resize(n, false);
         let mut chains: Vec<MemChain> = Vec::new();
@@ -277,7 +290,7 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
         let best = chains.iter().map(|c| c.score).fold(f32::MIN, f32::max);
         let cutoff = best * cfg.chain_subopt_thresh;
         chains.retain(|c| c.score >= cutoff);
-        chains.sort_by(|a, b| b.score.total_cmp(&a.score));
+        chains.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
         chains
     })
 }
