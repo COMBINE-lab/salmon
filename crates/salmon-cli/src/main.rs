@@ -84,7 +84,8 @@ impl ProgressGuard {
                 "      ><(((°>",
             ]),
         );
-        bar.enable_steady_tick(std::time::Duration::from_millis(140));
+        // ~4 Hz repaint — lively but light over SSH/tmux.
+        bar.enable_steady_tick(std::time::Duration::from_millis(250));
         *ACTIVE_PROGRESS.lock().unwrap() = Some(bar.clone());
         let stop = Arc::new(AtomicBool::new(false));
         let (bc, sc) = (bar.clone(), stop.clone());
@@ -106,7 +107,7 @@ impl ProgressGuard {
                     indicatif::HumanCount(rate),
                     indicatif::HumanCount(m),
                 ));
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                std::thread::sleep(std::time::Duration::from_millis(500));
             }
         });
         ProgressGuard {
