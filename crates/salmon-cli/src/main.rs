@@ -19,7 +19,93 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use salmon_align::{quantify_alignments, AlignQuantOptions};
 use salmon_index::{build as build_index, IndexBuildOptions};
-use salmon_quant::{quantify, QuantOptions};
+use salmon_quant::{quantify, ProgressCounters, QuantOptions};
+
+use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// The active mapping progress bar, if one is being shown. Tracing log writes
+/// route through its `suspend` so status lines print cleanly above the live
+/// spinner instead of garbling it.
+static ACTIVE_PROGRESS: Mutex<Option<indicatif::ProgressBar>> = Mutex::new(None);
+
+/// `tracing` writer that prints through the active progress bar (if any), so
+/// log output and the spinner coexist; otherwise writes straight to stderr.
+/// Keeps all status/progress on the same handle (stderr), matching C++ salmon.
+#[derive(Clone, Copy)]
+struct ProgressAwareWriter;
+impl std::io::Write for ProgressAwareWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match ACTIVE_PROGRESS.lock().unwrap().as_ref() {
+            Some(pb) => pb.suspend(|| std::io::stderr().write_all(buf))?,
+            None => std::io::stderr().write_all(buf)?,
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()
+    }
+}
+impl tracing_subscriber::fmt::MakeWriter<'_> for ProgressAwareWriter {
+    type Writer = ProgressAwareWriter;
+    fn make_writer(&self) -> Self::Writer {
+        *self
+    }
+}
+
+/// RAII handle for the live mapping spinner: spawns a thread that polls the
+/// shared [`ProgressCounters`] and updates the spinner; on drop it stops the
+/// thread, clears the bar, and unregisters it.
+struct ProgressGuard {
+    bar: indicatif::ProgressBar,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ProgressGuard {
+    /// Start a mapping spinner driven by `counters`.
+    fn start(counters: Arc<ProgressCounters>) -> Self {
+        let bar = indicatif::ProgressBar::new_spinner();
+        bar.set_style(
+            indicatif::ProgressStyle::with_template("{spinner:.green} {msg}")
+                .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner()),
+        );
+        bar.enable_steady_tick(std::time::Duration::from_millis(120));
+        *ACTIVE_PROGRESS.lock().unwrap() = Some(bar.clone());
+        let stop = Arc::new(AtomicBool::new(false));
+        let (bc, sc) = (bar.clone(), stop.clone());
+        let handle = std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while !sc.load(Ordering::Relaxed) {
+                let p = counters.processed.load(Ordering::Relaxed);
+                let m = counters.mapped.load(Ordering::Relaxed);
+                let secs = start.elapsed().as_secs_f64().max(1e-3);
+                bc.set_message(format!(
+                    "processed {p} fragments ({:.0}/s), {m} mapped",
+                    p as f64 / secs
+                ));
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        });
+        ProgressGuard {
+            bar,
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for ProgressGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        self.bar.finish_and_clear();
+        *ACTIVE_PROGRESS.lock().unwrap() = None;
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -207,6 +293,10 @@ struct QuantArgs {
     /// Use the standard EM optimizer instead of VBEM.
     #[arg(long = "useEM")]
     use_em: bool,
+    /// Disable the live mapping progress spinner (it is shown only on an
+    /// interactive terminal and never when `--quiet`).
+    #[arg(long = "no-progress")]
+    no_progress: bool,
     /// Metagenomic preset (salmon's `--meta`): use plain EM (not VBEM), disable
     /// range-factorized/rich equivalence classes, and initialize abundances
     /// uniformly — settings better suited to metagenomic references. Overrides
@@ -547,7 +637,7 @@ fn write_gene_level(
     Ok(())
 }
 
-fn run_quant(args: QuantArgs) -> Result<()> {
+fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.ont {
         long_read_redirect();
     }
@@ -653,9 +743,12 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         } else {
             0.0
         };
-        println!(
+        tracing::info!(
             "processed {} fragments, mapped {} ({:.2}%), {} equivalence classes",
-            res.num_processed, res.num_mapped, pct, res.num_eq_classes
+            res.num_processed,
+            res.num_mapped,
+            pct,
+            res.num_eq_classes
         );
         if let Some(gm) = &gene_map {
             write_gene_level(
@@ -750,15 +843,28 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.fld_max = args.fld_max;
     opts.forgetting_factor = args.forgetting_factor;
 
+    // Live mapping spinner on an interactive terminal (unless --quiet/--no-progress).
+    let progress = Arc::new(ProgressCounters::default());
+    let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
+        opts.progress = Some(progress.clone());
+        Some(ProgressGuard::start(progress.clone()))
+    } else {
+        None
+    };
     let res = quantify(&opts).context("quantification failed")?;
+    drop(guard); // stop + clear the spinner before the summary
     let pct = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64
     } else {
         0.0
     };
-    println!(
+    // Status to stderr (same handle as the rest of salmon's logging, matching C++).
+    tracing::info!(
         "processed {} fragments, mapped {} ({:.2}%), {} equivalence classes",
-        res.num_processed, res.num_mapped, pct, res.num_eq_classes
+        res.num_processed,
+        res.num_mapped,
+        pct,
+        res.num_eq_classes
     );
     if let Some(gm) = &gene_map {
         write_gene_level(
@@ -819,7 +925,7 @@ fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
         )
-        .with_writer(std::io::stderr)
+        .with_writer(ProgressAwareWriter)
         .init();
 
     if cli.no_version_check {
@@ -830,7 +936,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Index(args) => run_index(args),
-        Command::Quant(args) => run_quant(args),
+        Command::Quant(args) => run_quant(args, cli.quiet),
         Command::Quantmerge(args) => run_quantmerge(args),
         Command::DebugMap(args) => run_debug_map(args),
         Command::Alevin(_) => unreachable!("alevin handled before logging init"),

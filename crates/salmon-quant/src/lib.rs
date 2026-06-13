@@ -40,6 +40,17 @@ pub use output::write_outputs;
 /// the expected bias models; see the bias-correction block in [`run`]).
 const BIAS_PRELIM_ITERS: u32 = 11;
 
+/// Live progress counters, shared with the caller so a UI (e.g. a CLI progress
+/// bar) can poll mapping progress while [`quantify`] runs. Updated lock-free
+/// from the worker threads.
+#[derive(Debug, Default)]
+pub struct ProgressCounters {
+    /// fragments observed so far
+    pub processed: AtomicU64,
+    /// fragments mapped so far
+    pub mapped: AtomicU64,
+}
+
 /// Options for a reads-mode quantification run.
 #[derive(Debug, Clone)]
 pub struct QuantOptions {
@@ -132,6 +143,10 @@ pub struct QuantOptions {
     /// online posterior (salmon's `--numPreAuxModelSamples`; salmon's default is
     /// 1,000,000, this port's prior hardcoded value is 5,000)
     pub num_pre_aux_model_samples: u64,
+    /// Optional shared progress counters. When `Some`, [`quantify`] reports
+    /// processed/mapped fragment counts here as it runs so the caller can drive
+    /// a live progress display. `None` (the default) disables sharing.
+    pub progress: Option<std::sync::Arc<ProgressCounters>>,
 }
 
 impl QuantOptions {
@@ -175,6 +190,7 @@ impl QuantOptions {
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
             num_pre_aux_model_samples: processor::NUM_PRE_BURNIN,
+            progress: None,
         }
     }
 
@@ -253,8 +269,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // observations from concordant pairs refine it.
     let mut fld =
         FragmentLengthDistribution::new(1.0, opts.fld_max, opts.fld_mean, opts.fld_sd, 4, 0.5, 1);
-    let num_processed = AtomicU64::new(0);
-    let num_mapped = AtomicU64::new(0);
+    // `processed`/`mapped` live in a (possibly caller-shared) `ProgressCounters`
+    // so a CLI progress bar can poll them live; the rest are local.
+    let progress = opts.progress.clone().unwrap_or_default();
+    let num_processed = &progress.processed;
+    let num_mapped = &progress.mapped;
     let num_orphan = AtomicU64::new(0);
     let num_decoy = AtomicU64::new(0);
     let num_dovetail = AtomicU64::new(0);
@@ -391,8 +410,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             posbias_obs: posbias_obs.as_ref(),
             online: online.as_ref(),
             paired_lib: opts.is_paired(),
-            num_processed: &num_processed,
-            num_mapped: &num_mapped,
+            num_processed,
+            num_mapped,
             num_orphan: &num_orphan,
             num_decoy: &num_decoy,
             num_dovetail: &num_dovetail,
@@ -402,11 +421,29 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             sam: sam_writer.as_ref(),
         };
         let mut proc = QuantProcessor::new(shared);
+        tracing::info!(
+            "mapping reads ({} mode, {nthreads} threads)",
+            if opts.sketch {
+                "sketch"
+            } else {
+                "selective-alignment"
+            }
+        );
         if opts.is_paired() {
             run_paired(&opts.mates1, &opts.mates2, &mut proc, nthreads)?;
         } else {
             run_single(&opts.unmated, &mut proc, nthreads)?;
         }
+    }
+    {
+        let p = num_processed.load(Ordering::Relaxed);
+        let m = num_mapped.load(Ordering::Relaxed);
+        let pct = if p > 0 {
+            100.0 * m as f64 / p as f64
+        } else {
+            0.0
+        };
+        tracing::info!("mapped {m} / {p} fragments ({pct:.2}%)");
     }
     if let Some(sw) = &sam_writer {
         sw.flush().context("flushing SAM output")?;
@@ -475,6 +512,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // models, then warm-start the single full convergence after correction
     // (below). Without bias, this is the final EM and runs to convergence.
     // Avoids a wasteful second full convergence (~20s on the 36M PE set).
+    if !opts.skip_quant {
+        tracing::info!(
+            "estimating abundances ({})",
+            if opts.em.use_vbem { "VBEM" } else { "EM" }
+        );
+    }
     let mut em = if opts.skip_quant {
         // `--skipQuant`: emit equivalence classes + library type + metadata but
         // skip the optimizer (and Gibbs/bootstrap below, and quant.sf). Leave
@@ -779,6 +822,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         bias_dump,
     };
 
+    tracing::info!("writing results to {}", opts.output_dir.display());
     write_outputs(opts, &result)?;
     Ok(result)
 }
