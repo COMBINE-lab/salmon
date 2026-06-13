@@ -28,7 +28,7 @@ FROM debian:bookworm-slim AS runtime
 LABEL org.opencontainers.image.title="salmon" \
       org.opencontainers.image.description="salmon 2.0 — fast transcript quantification (Rust)" \
       org.opencontainers.image.source="https://github.com/COMBINE-lab/salmon" \
-      org.opencontainers.image.licenses="GPL-3.0-or-later"
+      org.opencontainers.image.licenses="BSD-3-Clause"
 
 # The Rust binary links libc/libgcc only; ca-certificates is handy for users.
 RUN apt-get update \

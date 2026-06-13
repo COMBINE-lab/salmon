@@ -87,4 +87,4 @@ If you use salmon, please cite:
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+BSD-3-Clause. See [LICENSE](LICENSE).
