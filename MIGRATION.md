@@ -24,7 +24,6 @@ standard downstream R packages.
 | C++ | 2.0 |
 | --- | --- |
 | `salmon alevin` | Removed. Use the [alevin-fry](https://github.com/COMBINE-lab/alevin-fry) ecosystem for single-cell. `salmon alevin …` prints this redirect and exits. |
-| `salmon swim` | Removed (easter egg). |
 
 ## Removed options (produce an error + this note)
 

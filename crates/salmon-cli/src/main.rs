@@ -56,6 +56,9 @@ enum Command {
     /// Single-cell quantification (removed; redirects to alevin-fry).
     #[command(disable_help_flag = true)]
     Alevin(AlevinArgs),
+    /// Perform super-secret operation.
+    #[command(hide = true)]
+    Swim,
 }
 
 /// `salmon alevin` is not part of the Rust release — single-cell quantification
@@ -831,7 +834,28 @@ fn main() -> Result<()> {
         Command::Quantmerge(args) => run_quantmerge(args),
         Command::DebugMap(args) => run_debug_map(args),
         Command::Alevin(_) => unreachable!("alevin handled before logging init"),
+        Command::Swim => {
+            run_swim();
+            Ok(())
+        }
     }
+}
+
+/// `salmon swim` — the super-secret operation. (An easter egg carried over from
+/// C++ salmon: it prints the ASCII banner and swims away.)
+fn run_swim() {
+    print!(
+        r#"
+    _____       __
+   / ___/____ _/ /___ ___  ____  ____
+   \__ \/ __ `/ / __ `__ \/ __ \/ __ \
+  ___/ / /_/ / / / / / / / /_/ / / / /
+ /____/\__,_/_/_/ /_/ /_/\____/_/ /_/
+
+         ><(((°>   ><(((°>   ><(((°>
+
+"#
+    );
 }
 
 fn run_quantmerge(args: QuantMergeArgs) -> Result<()> {
