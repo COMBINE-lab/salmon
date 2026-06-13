@@ -45,6 +45,10 @@ because the underlying feature was removed or has no equivalent in 2.0.
 These still parse so existing scripts run; 2.0 logs a warning and ignores them
 (the behavior is either the default now or handled differently).
 
+- global: `--no-version-check` (and the `SALMON_NO_VERSION_CHECK` environment
+  variable) — accepted **before or after** the command (e.g.
+  `salmon --no-version-check quant …`), matching C++. It is a silent no-op: 2.0
+  never contacts the network to check for a newer release.
 - index: `--filterSize`
 - quant: `--eqclasses`, `--noFragLengthDist`, `--noSingleFragProb`,
   `--mismatchSeedSkip`, `--disableChainingHeuristic`, `--hitFilterPolicy`,

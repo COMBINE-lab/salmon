@@ -25,6 +25,13 @@ Anything not ✅/🟰/🔁 does **not** change results; ⚠️ flags let existin
 command lines run unchanged, while ⛔ flags fail loudly so nothing silently
 misbehaves.
 
+## Global (top-level) flags
+
+| Flag | Status | Notes |
+|------|--------|-------|
+| `-q/--quiet`, `-h/--help`, `-V/--version` | ✅ | |
+| `--no-version-check` | 🔁 | Accepted before or after the command (C++ puts it before: `salmon --no-version-check <cmd>`); silent no-op — 2.0 never checks for updates. `SALMON_NO_VERSION_CHECK` env is likewise irrelevant. |
+
 ## `salmon index`
 
 | Flag | Status | Notes |

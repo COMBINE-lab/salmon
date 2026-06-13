@@ -33,6 +33,11 @@ struct Cli {
     /// Reduce logging to warnings and errors only.
     #[arg(short = 'q', long = "quiet", global = true)]
     quiet: bool,
+    /// Accepted for compatibility with C++ salmon. salmon 2.0 never contacts the
+    /// network to check for a newer release, so this flag (and the
+    /// `SALMON_NO_VERSION_CHECK` environment variable) is a no-op.
+    #[arg(long = "no-version-check", global = true)]
+    no_version_check: bool,
 }
 
 // clap subcommand args structs differ in size (IndexArgs vs the larger QuantArgs);
@@ -813,6 +818,12 @@ fn main() -> Result<()> {
         )
         .with_writer(std::io::stderr)
         .init();
+
+    if cli.no_version_check {
+        tracing::debug!(
+            "--no-version-check accepted; salmon 2.0 performs no startup version check."
+        );
+    }
 
     match cli.command {
         Command::Index(args) => run_index(args),
