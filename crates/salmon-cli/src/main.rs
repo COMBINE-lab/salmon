@@ -67,11 +67,24 @@ impl ProgressGuard {
     /// Start a mapping spinner driven by `counters`.
     fn start(counters: Arc<ProgressCounters>) -> Self {
         let bar = indicatif::ProgressBar::new_spinner();
+        // A swimming-salmon spinner, a dimmed elapsed clock, and humanized live
+        // counts: "<fish>  [elapsed]  N fragments · R/s · M mapped (P%)".
         bar.set_style(
-            indicatif::ProgressStyle::with_template("{spinner:.green} {msg}")
-                .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner()),
+            indicatif::ProgressStyle::with_template(
+                "{spinner:.green.bold} {elapsed_precise:.dim}  {msg}",
+            )
+            .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner())
+            .tick_strings(&[
+                "><(((°>      ",
+                " ><(((°>     ",
+                "  ><(((°>    ",
+                "   ><(((°>   ",
+                "    ><(((°>  ",
+                "     ><(((°> ",
+                "      ><(((°>",
+            ]),
         );
-        bar.enable_steady_tick(std::time::Duration::from_millis(120));
+        bar.enable_steady_tick(std::time::Duration::from_millis(140));
         *ACTIVE_PROGRESS.lock().unwrap() = Some(bar.clone());
         let stop = Arc::new(AtomicBool::new(false));
         let (bc, sc) = (bar.clone(), stop.clone());
@@ -81,11 +94,19 @@ impl ProgressGuard {
                 let p = counters.processed.load(Ordering::Relaxed);
                 let m = counters.mapped.load(Ordering::Relaxed);
                 let secs = start.elapsed().as_secs_f64().max(1e-3);
+                let rate = (p as f64 / secs) as u64;
+                let pct = if p > 0 {
+                    100.0 * m as f64 / p as f64
+                } else {
+                    0.0
+                };
                 bc.set_message(format!(
-                    "processed {p} fragments ({:.0}/s), {m} mapped",
-                    p as f64 / secs
+                    "{} fragments · {}/s · {} mapped ({pct:.1}%)",
+                    indicatif::HumanCount(p),
+                    indicatif::HumanCount(rate),
+                    indicatif::HumanCount(m),
                 ));
-                std::thread::sleep(std::time::Duration::from_millis(250));
+                std::thread::sleep(std::time::Duration::from_millis(200));
             }
         });
         ProgressGuard {
