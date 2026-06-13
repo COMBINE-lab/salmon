@@ -14,3 +14,12 @@ installers = ["shell"]
 # The portable SIMD floor (x86-64-v2 / NEON) comes from .cargo/config.toml; the
 # alignment kernel (ksw2rs) selects AVX2/SSE4.1/NEON at runtime regardless.
 targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"]
+
+# GitHub retired the ubuntu-20.04 hosted runner (cargo-dist 0.25.1's default),
+# which left the release jobs stuck "queued" forever. Pin current runners.
+[dist.github-custom-runners]
+global = "ubuntu-22.04"
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
+aarch64-unknown-linux-gnu = "ubuntu-22.04"
+x86_64-apple-darwin = "macos-13"
+aarch64-apple-darwin = "macos-14"
