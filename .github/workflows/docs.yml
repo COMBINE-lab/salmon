@@ -2,9 +2,7 @@ name: Deploy website
 
 on:
   push:
-    # `rust-rewrite` is included for the pre-cutover docs preview; drop it (leaving
-    # main/master) once rust-rewrite is merged to the default branch (R7).
-    branches: [main, master, rust-rewrite]
+    branches: [main, master]
     paths:
       - 'website/**'
       - '.github/workflows/docs.yml'
