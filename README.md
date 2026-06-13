@@ -1,82 +1,90 @@
-> [!IMPORTANT]
-> `salmon alevin` has been removed from this modernization branch.
-> For single-cell analysis, use [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/).
-> If you need the legacy `alevin` workflow, use Salmon `v1.10.2` (the last pre-removal release in this line):
-> - release tag: [v1.10.2](https://github.com/COMBINE-lab/salmon/releases/tag/v1.10.2)
-> - legacy docs: [salmon docs v1.10.2](https://salmon.readthedocs.io/en/v1.10.2/)
-> - source checkout: `git checkout v1.10.2`
+# salmon
 
-> [!IMPORTANT]
-> `salmon` v1.11.0 is a substantial refactor, and also changes the backend underlying index to 
-> use the excellent [SSHash](https://github.com/jermp/sshash) index. The functionality and output
-> of `salmon` should remain backward compatible, but any indexes built with versions < `1.11.0` 
-> must be rebuilt.
-
-
-<img alt="salmon logo" src="https://github.com/COMBINE-lab/salmon/raw/master/doc/salmon_logo.png" width="600">
-
-[![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)
+[![CI](https://github.com/COMBINE-lab/salmon/actions/workflows/ci.yml/badge.svg?branch=rust-rewrite)](https://github.com/COMBINE-lab/salmon/actions/workflows/ci.yml)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat-square)](http://bioconda.github.io/recipes/salmon/README.html)
-![GitHub tag (latest SemVer)](https://img.shields.io/github/v/tag/combine-lab/salmon?style=flat-square)
 
+> [!IMPORTANT]
+> **This is salmon 2.0 — a from-scratch Rust rewrite of salmon.** It keeps the
+> same workflow (`salmon index` → `salmon quant` → `quant.sf`) and the same
+> output formats downstream tools read, but it is a new major version with some
+> breaking changes. The most important one: **the index format changed, so you
+> must rebuild your index.** See **[MIGRATION.md](MIGRATION.md)** for the full
+> list of changed/removed/new options.
+>
+> The final **C++** release (salmon `1.12.0`) lives on the [`cpp`](https://github.com/COMBINE-lab/salmon/tree/cpp)
+> branch and remains installable as the `salmon-cpp` conda package.
+>
+> Single-cell quantification moved to the [alevin-fry](https://github.com/COMBINE-lab/alevin-fry)
+> ecosystem (`salmon alevin` is removed).
 
-**Try out the new [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/) framework for single-cell analysis; tutorials can be found [here](https://combine-lab.github.io/alevin-fry-tutorials/)!**
+## What is salmon?
 
-Legacy single-cell breadcrumb
-=============================
+`salmon` is a **wicked**-fast program for highly-accurate, transcript-level
+quantification from RNA-seq data. It pairs a fast mapping stage — *selective
+alignment*, or alignment-free *sketch* mode (`--sketch`) — with a
+massively-parallel statistical model (EM/VBEM over equivalence classes) to
+estimate transcript abundances. You can give salmon raw sequencing reads, or
+regular alignments to the transcriptome (an **unsorted** BAM), and it uses the
+same inference engine either way.
 
-The historical `salmon alevin` implementation is intentionally removed from this
-bulk-only refactor line. Users who require that historical workflow should use
-Salmon `v1.10.2` and its corresponding documentation:
+salmon 2.0 ships as a single portable binary: no compiler, Boost, or system
+libraries to install.
 
-* [Salmon v1.10.2 release](https://github.com/COMBINE-lab/salmon/releases/tag/v1.10.2)
-* [Salmon v1.10.2 docs](https://salmon.readthedocs.io/en/v1.10.2/)
-* [alevin-fry docs](https://alevin-fry.readthedocs.io/en/latest/) for current single-cell workflows
+## Installation
 
-**Help guide the development of Salmon, [take our survey](https://docs.google.com/forms/d/e/1FAIpQLSeWhBNE_fA_0uVHvbAlAulDmfmowv7rAYla879DZpqCARyRTQ/viewform)**
+```sh
+# install script (prebuilt binaries: Linux & macOS, x86-64 & aarch64)
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/COMBINE-lab/salmon/releases/latest/download/salmon-cli-installer.sh | sh
 
+# or via cargo (Rust ≥ 1.91)
+cargo install salmon-cli
 
-What is Salmon?
-===============
+# or via conda
+conda install -c bioconda -c conda-forge salmon
 
-`Salmon` is a **wicked**-fast program to produce a highly-accurate, transcript-level quantification estimates from 
-RNA-seq data.  `Salmon` achieves its accuracy and speed via a number of different innovations, including the 
-use of *selective-alignment* (accurate but fast-to-compute proxies for traditional read alignments), and 
-massively-parallel stochastic collapsed variational inference.  The result is a versatile tool that fits nicely
-into many different pipelines.  For example, you can choose to make use of our *selective-alignment* algorithm by providing Salmon with raw sequencing reads, or, if it is more convenient, you can provide Salmon with regular alignments (e.g. an **unsorted** BAM file with alignments to the transcriptome produced with your favorite aligner), and it will use the same **wicked**-fast, state-of-the-art inference algorithm to estimate transcript-level abundances for your experiment.
+# or Docker
+docker run --rm combinelab/salmon:latest salmon --version
+```
 
-Give `salmon` a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
+## Quick start
 
-The current version number of the master branch of `salmon` can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
+```sh
+# 1) build a reusable index from a transcriptome
+salmon index -t transcripts.fa -i salmon_index -p 16
 
-Documentation
-==============
+# 2) quantify (-l A auto-detects the library type)
+salmon quant -i salmon_index -l A \
+  -1 reads_1.fastq.gz -2 reads_2.fastq.gz -p 16 -o sample_quant
+```
 
-The documentation for `salmon` is available on [ReadTheDocs](http://readthedocs.org), check it out [here](http://salmon.readthedocs.org).
+Results land in `sample_quant/quant.sf` (drop-in for tximport / tximeta /
+fishpond / swish).
 
-Salmon is, and will continue to be, [freely and actively supported on a best-effort basis](https://oceangenomics.com/about/#open).
-If you need industrial-grade technical support, please consider the options at [oceangenomics.com/contact](http://oceangenomics.com/contact).
+## Documentation
 
-Decoy sequences in transcriptomes
-=================================
+Full docs are at **<https://combine-lab.github.io/salmon>** — installation,
+library types, selective-alignment vs. sketch mode, inferential replicates, the
+migration guide, the CLI reference, and a precise specification of every output
+file.
 
-tl;dr: fast is good but fast and accurate is better!
-[Alignment and mapping methodology influence transcript abundance estimation](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-020-02151-8), and accounting for the [accounting for fragments of unexpected origin can improve transcript quantification](https://www.biorxiv.org/content/10.1101/2021.01.17.426996v1).  To this end, salmon provides the ability to index both the transcriptome as well as decoy seuqence that can be considered during mapping and quantification.  The decoy sequence accounts for reads that might otherwise be (spuriously) attributed to some annotated transcript. This [tutorial](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/) provides a step-by-step guide on how to efficiently index the reference transcriptome and genome to produce a decoy-aware index.  Specifically, there are 3 possible ways in which the salmon index can be created:
+## Decoy-aware indexing
 
-* cDNA-only index : salmon_index - https://combine-lab.github.io/salmon/getting_started/. This method will result in the smallest index and require the least resources to build, but will be the most prone to possible spurious alignments.
+Accounting for [fragments of unexpected origin](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-020-02151-8)
+improves quantification. salmon can index decoy sequence (e.g. the genome)
+alongside the transcriptome so reads that would otherwise be spuriously assigned
+to a transcript are absorbed by the decoy. Pass a decoy-name file with
+`-d/--decoys` (the decoy records must appear last in the FASTA). See the docs for
+building a decoy-aware index.
 
-* SA mashmap index: salmon_partial_sa_index - (regions of genome that have high sequence similarity to the transcriptome) - Details can be found in [this README](https://github.com/COMBINE-lab/SalmonTools/blob/master/README.md) and using [this script](https://raw.githubusercontent.com/COMBINE-lab/SalmonTools/master/scripts/generateDecoyTranscriptome.sh). While running mashmap can require considerable resources, the resulting decoy files are fairly small.  This will result in an index bigger than the cDNA-only index, but still mucch smaller than the full genome index below.  It will confer many, though not all, of the benefits of using the entire genome as a decoy sequence.
+## Citation
 
-* SAF genome index: salmon_sa_index - (the full genome is used as decoy) - The tutorial for creating such an index can be found [here](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/).  This will result in the largest index, but likely does the best job in avoiding spurious alignments to annotated transcripts. 
+If you use salmon, please cite:
 
-**Facing problems with Indexing?**, Check if anyone else already had this problem in the issues section or fill the index generation [request form](https://forms.gle/3baJc5SYrkSWb1z48)
+> Patro, R., Duggal, G., Love, M. I., Irizarry, R. A., & Kingsford, C. (2017).
+> Salmon provides fast and bias-aware quantification of transcript expression.
+> *Nature Methods*. https://doi.org/10.1038/nmeth.4197
 
-### **NOTE**:
-If you are generating an index to be used for single-cell or single-nucleus quantification with [alevin-fry](https://github.com/COMBINE-lab/alevin-fry), then we recommend you consider building a spliced+intron (_splici_) reference.  This serves much of the purpose of a decoy-aware index when quantifying with alevin-fry, while also providing the capability to attribute splicing status to mapped fragments.  More details about the _splici_ reference and the Unspliced/Spliced/Ambiguous quantification mode it enables can be found [here](https://combine-lab.github.io/alevin-fry-tutorials/2021/improving-txome-specificity/).
+## License
 
-Chat live about Salmon
-======================
-
-You can chat with the Salmon developers and other users via Gitter (**Note**: Gitter is much less frequently monitored than GitHub, so if you have an important problem or question, please consider opening an issue here on GitHub)!
-
-[![Join the chat at https://gitter.im/COMBINE-lab/salmon](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/COMBINE-lab/salmon?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+GPL-3.0-or-later. See [LICENSE](LICENSE).
