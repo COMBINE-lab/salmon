@@ -162,7 +162,12 @@ pub fn join_reads_and_filter(
         let Some(ridx) = right_by_tid.get(&tid) else {
             continue;
         };
-        let mut best: Option<JointMapping> = None;
+        // Track the best (left, right) index pair by combined coverage and only
+        // clone the winning candidates once at the end — cloning every pair we
+        // consider (each clone heap-allocates the chain's `Mem` vec) just to
+        // compare coverage was a per-fragment allocator hot spot.
+        let mut best: Option<(usize, usize, i32, LibraryFormat)> = None;
+        let mut best_cov = i32::MIN;
         for &li in lidx {
             for &ri in ridx {
                 let l = &left[li];
@@ -177,25 +182,23 @@ pub fn join_reads_and_filter(
                 if !cfg.allow_dovetail && is_dovetailed(l, r, format.orientation) {
                     continue;
                 }
-                let candidate = JointMapping {
-                    tid,
-                    status: MateStatus::PairedEndPaired,
-                    fragment_len: frag_len,
-                    format,
-                    left: Some(l.clone()),
-                    right: Some(r.clone()),
-                };
-                if best
-                    .as_ref()
-                    .is_none_or(|b| candidate.coverage() > b.coverage())
-                {
-                    best = Some(candidate);
+                let cov = l.chain.covered_read_bases() + r.chain.covered_read_bases();
+                if best.is_none() || cov > best_cov {
+                    best_cov = cov;
+                    best = Some((li, ri, frag_len, format));
                 }
             }
         }
-        if let Some(j) = best {
+        if let Some((li, ri, frag_len, format)) = best {
             paired_tids.insert(tid);
-            joints.push(j);
+            joints.push(JointMapping {
+                tid,
+                status: MateStatus::PairedEndPaired,
+                fragment_len: frag_len,
+                format,
+                left: Some(left[li].clone()),
+                right: Some(right[ri].clone()),
+            });
         }
     }
 
