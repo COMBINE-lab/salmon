@@ -12,12 +12,14 @@ pub mod genemap;
 pub mod libtype;
 pub mod mate;
 pub mod math;
+pub mod progress;
 pub mod quantmerge;
 pub mod refprovider;
 pub mod transcript;
 
 pub use atomic::AtomicF64;
 pub use libtype::{compatible_paired, compatible_single, is_compatible};
+pub use progress::ProgressCounters;
 pub use refprovider::RefProvider;
 
 pub use error::{Result, SalmonError};

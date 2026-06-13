@@ -737,7 +737,16 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
+        // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
+        let progress = Arc::new(ProgressCounters::default());
+        let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
+            opts.progress = Some(progress.clone());
+            Some(ProgressGuard::start(progress.clone()))
+        } else {
+            None
+        };
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
+        drop(guard); // stop + clear the spinner before the summary
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64
         } else {

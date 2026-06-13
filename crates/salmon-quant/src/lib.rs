@@ -40,16 +40,7 @@ pub use output::write_outputs;
 /// the expected bias models; see the bias-correction block in [`run`]).
 const BIAS_PRELIM_ITERS: u32 = 11;
 
-/// Live progress counters, shared with the caller so a UI (e.g. a CLI progress
-/// bar) can poll mapping progress while [`quantify`] runs. Updated lock-free
-/// from the worker threads.
-#[derive(Debug, Default)]
-pub struct ProgressCounters {
-    /// fragments observed so far
-    pub processed: AtomicU64,
-    /// fragments mapped so far
-    pub mapped: AtomicU64,
-}
+pub use salmon_core::ProgressCounters;
 
 /// Options for a reads-mode quantification run.
 #[derive(Debug, Clone)]

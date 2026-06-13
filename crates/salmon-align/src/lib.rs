@@ -102,6 +102,10 @@ pub struct AlignQuantOptions {
     /// fragments processed before the FLD aux model is applied
     /// (salmon's `--numPreAuxModelSamples`; prior hardcoded value 5,000)
     pub num_pre_aux_model_samples: u64,
+    /// Optional shared progress counters. When `Some`, the BAM pass reports
+    /// processed/mapped fragment counts here as it runs so the caller can drive
+    /// a live progress display. `None` (the default) disables sharing.
+    pub progress: Option<std::sync::Arc<salmon_core::ProgressCounters>>,
 }
 
 impl AlignQuantOptions {
@@ -134,6 +138,7 @@ impl AlignQuantOptions {
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
             num_pre_aux_model_samples: 5_000,
+            progress: None,
         }
     }
 }
@@ -623,6 +628,8 @@ struct PassCfg<'a> {
     need_seq: bool,
     minibatch: usize,
     nthreads: usize,
+    /// optional shared live-progress counters (updated per batch)
+    progress: Option<&'a salmon_core::ProgressCounters>,
 }
 
 /// Outputs of the online pass: the observed bias models (merged from the
@@ -792,6 +799,14 @@ where
                         }
                     }
                     count += raw_batch.len() as u64;
+                    // Live progress: alignment mode treats every fragment in the
+                    // BAM as processed+mapped (see the totals below), so bump both.
+                    if let Some(p) = cfg.progress {
+                        let n = raw_batch.len() as u64;
+                        p.processed
+                            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                        p.mapped.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 (local, count)
             }));
@@ -1358,6 +1373,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             need_seq: use_error_model || bias_on,
             minibatch: MINIBATCH,
             nthreads,
+            progress: opts.progress.as_deref(),
         };
         let mut acc = PassAccum {
             seq_obs: None,
