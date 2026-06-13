@@ -1,13 +1,9 @@
 # salmon 2.0 (Rust) — multi-stage cargo build.
 #
-# This replaces the CMake/C++ Docker build (docker/Dockerfile, retained on the
-# `cpp` branch for the C++ 1.x line). It builds the single `salmon` binary with
-# cargo and copies it into a slim runtime image.
-#
-# NOTE: this builds once the salmon workspace depends on the *published*
-# crates.io versions of cf1-rs / piscem-rs / ksw2rs (release plan R3). Before
-# that, those are local path deps (../cf1-rs, ../piscem-rs, ../../../ksw2rs) and
-# a build from this context alone cannot resolve them.
+# This replaces the CMake/C++ Docker build (retained on the `cpp` branch for the
+# C++ 1.x line). It builds the single `salmon` binary with cargo and copies it
+# into a slim runtime image. All dependencies (incl. cf1-rs / piscem-rs / ksw2rs)
+# resolve from crates.io, so the build needs only this repo as context.
 
 # ---- builder ----------------------------------------------------------------
 FROM rust:1.91-bookworm AS builder

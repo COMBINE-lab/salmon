@@ -67,10 +67,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 # hashing of reference sequences/names for index provenance
 sha2 = "0.10"
-# local checkouts during development; swap to published crates.io versions at release.
-# (block-aligner is added directly in salmon-map with target-specific SIMD features.)
-cf1-rs = { path = "../cf1-rs" }
-piscem-rs = { path = "../piscem-rs" }
+# COMBINE-lab dependencies, from crates.io.
+cf1-rs = "0.4.1"
+piscem-rs = "0.6.0"
 
 # dev / test helpers
 tempfile = "3"
