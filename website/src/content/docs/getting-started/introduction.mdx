@@ -3,11 +3,13 @@ title: Introduction
 description: What salmon does and how the 2.0 Rust release differs from the C++ tool.
 ---
 
-salmon estimates transcript-level abundances from RNA-seq reads. Rather than
-producing a full base-to-base alignment of every read to a genome, salmon maps
-reads directly to a **transcriptome** and uses a probabilistic model to assign
-multi-mapping reads, correct for technical biases, and report abundances in TPM
-and estimated read counts.
+salmon[^salmon] estimates transcript-level abundances from RNA-seq reads. Rather
+than producing a full base-to-base alignment of every read to a genome, salmon
+maps reads directly to a **transcriptome** and uses a probabilistic model —
+streaming/online inference followed by an offline EM/VBEM, in the spirit of
+eXpress[^express] — to assign multi-mapping reads, correct for technical
+biases[^roberts][^alpine], and report abundances in TPM and estimated read
+counts.
 
 ## The pipeline
 
@@ -45,3 +47,13 @@ Single-cell quantification (the old `salmon alevin`) now lives in the
 [alevin-fry](https://github.com/COMBINE-lab/alevin-fry) ecosystem. `salmon
 alevin` in 2.0 just prints a redirect.
 :::
+
+## References
+
+[^salmon]: Patro, R., Duggal, G., Love, M. I., Irizarry, R. A., & Kingsford, C. (2017). Salmon provides fast and bias-aware quantification of transcript expression. *Nature Methods*, 14(4), 417–419. https://doi.org/10.1038/nmeth.4197
+
+[^express]: Roberts, A., & Pachter, L. (2013). Streaming fragment assignment for real-time analysis of sequencing experiments. *Nature Methods*, 10(1), 71–73. https://doi.org/10.1038/nmeth.2251
+
+[^roberts]: Roberts, A., Trapnell, C., Donaghey, J., Rinn, J. L., & Pachter, L. (2011). Improving RNA-Seq expression estimates by correcting for fragment bias. *Genome Biology*, 12(3), R22. https://doi.org/10.1186/gb-2011-12-3-r22
+
+[^alpine]: Love, M. I., Hogenesch, J. B., & Irizarry, R. A. (2016). Modeling of RNA-seq fragment sequence bias reduces systematic errors in transcript abundance estimation. *Nature Biotechnology*, 34(12), 1287–1291. https://doi.org/10.1038/nbt.3682

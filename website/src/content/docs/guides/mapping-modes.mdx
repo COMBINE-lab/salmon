@@ -9,11 +9,13 @@ equivalence classes the optimizer needs; they trade accuracy against speed.
 ## Selective alignment (default)
 
 The default mode. salmon finds maximal exact matches (MEMs) between each read and
-the index, chains them, and then computes a fast banded alignment score for each
-candidate placement, accepting a mapping only if its score clears a fraction of
-the perfect score (`--minScoreFraction`, default `0.65`). This rejects spurious
-mappings that share k-mers with a transcript but do not actually align well — the
-key accuracy advantage over plain pseudoalignment.
+the index, chains them with the chaining algorithm introduced in minimap2[^minimap2],
+and then computes a fast banded alignment score for each candidate placement using
+a native-Rust port of the ksw2[^ksw2] extension aligner, accepting a mapping only
+if its score clears a fraction of the perfect score (`--minScoreFraction`, default
+`0.65`). This rejects spurious mappings that share k-mers with a transcript but do
+not actually align well — the key accuracy advantage of selective alignment[^selalign]
+over plain pseudoalignment.
 
 Useful knobs:
 
@@ -27,9 +29,10 @@ Useful knobs:
 
 ## Sketch mode (`--sketch`)
 
-Alignment-free pseudoalignment. salmon maps reads using k-mer/equivalence-class
-hits without computing per-placement alignment scores. This is **faster** and is
-a good fit when you want throughput and your reference is high-quality.
+Alignment-free pseudoalignment[^kallisto]. salmon maps reads using
+k-mer/equivalence-class hits without computing per-placement alignment scores.
+This is **faster** and is a good fit when you want throughput and your reference
+is high-quality.
 
 ```sh
 salmon quant -i salmon_index -l A --sketch \
@@ -58,3 +61,13 @@ salmon's `0.95` / `0.9`. Quantification is essentially unaffected
 (per-transcript Pearson ≈ 0.999). To reproduce C++ mapping counts exactly, pass
 `--orphanChainSubThresh 0.95 --postMergeChainSubThresh 0.9`.
 :::
+
+## References
+
+[^kallisto]: Bray, N. L., Pimentel, H., Melsted, P., & Pachter, L. (2016). Near-optimal probabilistic RNA-seq quantification. *Nature Biotechnology*, 34(5), 525–527. https://doi.org/10.1038/nbt.3519
+
+[^selalign]: Srivastava, A., Malik, L., Sarkar, H., Zakeri, M., Almodaresi, F., Soneson, C., Love, M. I., Kingsford, C., & Patro, R. (2020). Alignment and mapping methodology influence transcript abundance estimation. *Genome Biology*, 21, 239. https://doi.org/10.1186/s13059-020-02151-8
+
+[^minimap2]: Li, H. (2018). Minimap2: pairwise alignment for nucleotide sequences. *Bioinformatics*, 34(18), 3094–3100. https://doi.org/10.1093/bioinformatics/bty191
+
+[^ksw2]: Suzuki, H., & Kasahara, M. (2018). Introducing difference recurrence relations for faster semi-global alignment of long sequences. *BMC Bioinformatics*, 19(45). https://doi.org/10.1186/s12859-018-2014-8 — salmon 2.0 uses [ksw2rs](https://github.com/COMBINE-lab/ksw2rs), a native-Rust port of [ksw2](https://github.com/lh3/ksw2).
