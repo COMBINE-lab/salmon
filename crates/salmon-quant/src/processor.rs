@@ -397,21 +397,62 @@ fn record(
         }
     }
 
-    let mut pairs: Vec<(u32, f64)> = compat.iter().map(|(m, w)| (m.tid, *w)).collect();
-
-    // Observe a fragment length from the best concordant compatible pair.
-    let best_concordant = maps
+    // Fold the fragment-length probability into the equivalence-class weight.
+    // salmon's eq-class auxProb is `logFragProb + logFragCov + logAlignCompatProb`
+    // (SalmonQuantify.cpp) -- i.e. it includes the FLD term but NOT the
+    // start-position term (that enters only the abundance/`aln.logProb`; the
+    // effective-length factor is applied separately in `update_eff_lengths`).
+    // The port previously built the eq-class weight from the bare coverage
+    // weight, flattening it for paralogs/isoforms whose implied insert size
+    // differs and coarsening the range-factorized classes. The FLD term is only
+    // applied once the auxiliary model is trained (after `pre_burnin` fragments),
+    // matching salmon's `numPreAuxModelSamples` gating.
+    let use_aux = sh.num_processed.load(Ordering::Relaxed) >= sh.pre_burnin;
+    let mut pairs: Vec<(u32, f64)> = compat
         .iter()
-        .filter(|m| {
-            m.status == MateStatus::PairedEndPaired
-                && m.fragment_len > 0
-                && sh
-                    .expected_format
-                    .is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
+        .map(|(m, w)| {
+            let log_frag_prob = if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
+                if use_aux {
+                    sh.fld.pmf(m.fragment_len as usize)
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            (m.tid, *w * log_frag_prob.exp())
         })
-        .max_by(|a, b| a.weight.total_cmp(&b.weight));
+        .collect();
+
+    // Observe a fragment length from the best concordant compatible pair,
+    // weighted by that pair's posterior confidence among the concordant pairs.
+    // salmon trains its FLD stochastically (it accepts an alignment with
+    // probability proportional to exp(aln.logProb)), so ambiguous multimappers
+    // contribute little; adding every best pair at full weight overdisperses the
+    // FLD on paralog/near-duplicate-rich inputs. Down-weighting by confidence is
+    // the deterministic analog.
+    let mut conc_sum = 0.0_f64;
+    let mut best_concordant: Option<&ScoredMapping> = None;
+    for m in maps.iter() {
+        if m.status == MateStatus::PairedEndPaired
+            && m.fragment_len > 0
+            && sh
+                .expected_format
+                .is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
+        {
+            conc_sum += m.weight;
+            if best_concordant.is_none_or(|b| m.weight > b.weight) {
+                best_concordant = Some(m);
+            }
+        }
+    }
     if let Some(best) = best_concordant {
-        sh.fld.add_val(best.fragment_len as usize, 0.0);
+        let conf = if conc_sum > 0.0 {
+            best.weight / conc_sum
+        } else {
+            1.0
+        };
+        sh.fld.add_val(best.fragment_len as usize, conf.ln());
     }
 
     // Build the equivalence class: sorted, de-duplicated transcript ids + weights.
