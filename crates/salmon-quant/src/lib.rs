@@ -362,15 +362,19 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // bias models are weighted by abundance-aware posteriors (salmon's online
     // phase), not score-only weights. The offline EM still gives the final
     // point estimate.
-    let online = (opts.seq_bias || opts.gc_bias || opts.pos_bias).then(|| {
+    // The online estimate runs unconditionally: besides weighting the observed
+    // bias models (when bias correction is on), it provides the abundance-aware
+    // posterior used to train the fragment-length distribution (salmon's
+    // `r < exp(aln.logProb)` acceptance). The offline EM does not read it.
+    let online = {
         let ref_lens: Vec<u64> = (0..num_refs).map(|t| salmon.ref_len(t)).collect();
-        salmon_infer::OnlineInference::new(
+        Some(salmon_infer::OnlineInference::new(
             &ref_lens,
             0.05,
             opts.forgetting_factor,
             opts.num_aux_model_samples,
-        )
-    });
+        ))
+    };
 
     // ---- parallel mapping pass (borrows the accumulators) -------------------
     {

@@ -165,6 +165,24 @@ const LOG_EPSILON: f64 = -23.998_158_637_57; // (0.375e-10f64).ln()
 /// posterior only after this many fragments have been assigned.
 pub(crate) const NUM_PRE_BURNIN: u64 = 5000;
 
+thread_local! {
+    /// Per-thread PRNG state for stochastic FLD-sample acceptance (mirrors
+    /// salmon's per-thread RNG used when training the fragment-length model).
+    static FLD_RNG: std::cell::Cell<u64> = const { std::cell::Cell::new(0x2545_F491_4F6C_DD1D) };
+}
+
+/// Draw a pseudo-random value in `[0, 1)` from the per-thread xorshift state.
+fn fld_rng_u01() -> f64 {
+    FLD_RNG.with(|s| {
+        let mut x = s.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s.set(x);
+        ((x >> 11) as f64) * (1.0 / ((1u64 << 53) as f64))
+    })
+}
+
 /// Collect the orientation-aware 5'/3' sequence-bias contexts for one mapping,
 /// weighted by `weight` (the fragment-transcript posterior). A forward read's 5'
 /// context feeds the forward model; a reverse read's 5' context
@@ -326,50 +344,53 @@ fn record(
     // also advances the online masses by `logForgettingMass + log(posterior)`;
     // without it they fall back to the normalized aux (score) weights.
     let collecting = seqbias.is_some() || gcbias.is_some() || posbias.is_some();
-    let bias_w: Vec<f64> = if collecting {
-        if let Some(online) = sh.online {
-            // Per-mapping log auxiliary probability (salmon's
-            // `auxProb + startPosProb`, abundance-independent):
-            //   logFragCov  = ln(score weight)
-            //   startPosProb = proper pair -> -ln(refLen - flen + 1) (flen<=refLen,
-            //                  else LOG_EPSILON); otherwise -ln(refLen)
-            //   logFragProb  = proper pair (after pre-burn-in) -> live FLD pmf(flen);
-            //                  unexpected orphan in a paired library -> LOG_EPSILON.
-            // The FLD term discriminates isoforms/paralogs whose implied insert
-            // size differs (e.g. alternative splicing), which the length norm alone
-            // cannot capture.
-            let use_aux = online.num_assigned() >= sh.pre_burnin;
-            let mm: Vec<(u32, f64)> = compat
-                .iter()
-                .map(|(m, w)| {
-                    let rl = sh.salmon.ref_len(m.tid as usize).max(1) as f64;
-                    let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
-                    let flen = m.fragment_len as f64;
-                    let start_pos_prob = if proper {
-                        if flen <= rl {
-                            -((rl - flen + 1.0).ln())
-                        } else {
-                            LOG_EPSILON
-                        }
+    // Abundance-aware online posterior, computed once per fragment within the
+    // model-training window (`o.collecting()`), advancing the online masses.
+    // Mirrors salmon's `aln.logProb = transcriptLogCount + auxProb + startPosProb`
+    // normalized over the fragment's mappings, where
+    //   logFragCov   = ln(score weight)
+    //   startPosProb = proper pair -> -ln(refLen - flen + 1) (flen<=refLen, else
+    //                  LOG_EPSILON); otherwise -ln(refLen)
+    //   logFragProb  = proper pair (after pre-burn-in) -> live FLD pmf(flen);
+    //                  unexpected orphan in a paired library -> LOG_EPSILON.
+    // Used for abundance-aware bias collection and abundance-aware FLD training.
+    let online_post: Option<Vec<f64>> = sh.online.filter(|o| o.collecting()).map(|online| {
+        let use_aux = online.num_assigned() >= sh.pre_burnin;
+        let mm: Vec<(u32, f64)> = compat
+            .iter()
+            .map(|(m, w)| {
+                let rl = sh.salmon.ref_len(m.tid as usize).max(1) as f64;
+                let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
+                let flen = m.fragment_len as f64;
+                let start_pos_prob = if proper {
+                    if flen <= rl {
+                        -((rl - flen + 1.0).ln())
                     } else {
-                        -(rl.ln())
-                    };
-                    let log_frag_prob = if proper {
-                        if use_aux {
-                            sh.fld.pmf(m.fragment_len as usize)
-                        } else {
-                            0.0
-                        }
-                    } else if sh.paired_lib {
-                        LOG_EPSILON // unexpected orphan
+                        LOG_EPSILON
+                    }
+                } else {
+                    -(rl.ln())
+                };
+                let log_frag_prob = if proper {
+                    if use_aux {
+                        sh.fld.pmf(m.fragment_len as usize)
                     } else {
                         0.0
-                    };
-                    let log_cov = if *w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
-                    (m.tid, log_cov + start_pos_prob + log_frag_prob)
-                })
-                .collect();
-            online.assign_fragment(&mm, log_fm)
+                    }
+                } else if sh.paired_lib {
+                    LOG_EPSILON // unexpected orphan
+                } else {
+                    0.0
+                };
+                let log_cov = if *w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
+                (m.tid, log_cov + start_pos_prob + log_frag_prob)
+            })
+            .collect();
+        online.assign_fragment(&mm, log_fm)
+    });
+    let bias_w: Vec<f64> = if collecting {
+        if let Some(post) = &online_post {
+            post.clone()
         } else {
             let wsum: f64 = compat.iter().map(|(_, w)| *w).sum();
             compat
@@ -424,35 +445,25 @@ fn record(
         })
         .collect();
 
-    // Observe a fragment length from the best concordant compatible pair,
-    // weighted by that pair's posterior confidence among the concordant pairs.
-    // salmon trains its FLD stochastically (it accepts an alignment with
-    // probability proportional to exp(aln.logProb)), so ambiguous multimappers
-    // contribute little; adding every best pair at full weight overdisperses the
-    // FLD on paralog/near-duplicate-rich inputs. Down-weighting by confidence is
-    // the deterministic analog.
-    let mut conc_sum = 0.0_f64;
-    let mut best_concordant: Option<&ScoredMapping> = None;
-    for m in maps.iter() {
-        if m.status == MateStatus::PairedEndPaired
-            && m.fragment_len > 0
-            && sh
-                .expected_format
-                .is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
-        {
-            conc_sum += m.weight;
-            if best_concordant.is_none_or(|b| m.weight > b.weight) {
-                best_concordant = Some(m);
+    // Abundance-aware FLD training: accept each concordant compatible pair's
+    // fragment length with probability = its abundance-aware online posterior
+    // (salmon's `if (r < exp(aln.logProb)) fragLengthDist.addVal(...)`, where
+    // aln.logProb includes transcriptLogCount). For reads shared between
+    // near-duplicates this preferentially samples the dominant transcript's
+    // implied length, concentrating the FLD as salmon does (vs adding every best
+    // pair at full weight, which overdisperses it). Frozen after the training
+    // window (`online_post` is `None`).
+    if let Some(post) = &online_post {
+        for (i, (m, _)) in compat.iter().enumerate() {
+            let conc = m.status == MateStatus::PairedEndPaired
+                && m.fragment_len > 0
+                && sh
+                    .expected_format
+                    .is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
+            if conc && fld_rng_u01() < post[i] {
+                sh.fld.add_val(m.fragment_len as usize, 0.0);
             }
         }
-    }
-    if let Some(best) = best_concordant {
-        let conf = if conc_sum > 0.0 {
-            best.weight / conc_sum
-        } else {
-            1.0
-        };
-        sh.fld.add_val(best.fragment_len as usize, conf.ln());
     }
 
     // Build the equivalence class: sorted, de-duplicated transcript ids + weights.
