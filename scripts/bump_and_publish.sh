@@ -169,16 +169,21 @@ else
     echo "Dry-run: would rewrite [workspace.package] version and salmon-* dep versions in $ROOT_CARGO"
 fi
 
-echo
-echo "Per-crate package validation (cargo publish --dry-run, in order)"
-for crate in "${CRATES[@]}"; do
-    echo "--- $crate"
-    # --allow-dirty: working tree has the version bump (uncommitted in dry-run);
-    # --no-verify skips the full compile per crate (the workspace already built).
-    run cargo publish -p "$crate" --dry-run --allow-dirty
-done
-
 if [[ "$DRY_RUN" == true ]]; then
+    # Per-crate packaging validation. Only meaningful in --dry-run mode, where the
+    # version is NOT bumped, so each crate's salmon-* dependency requirements still
+    # resolve against the already-published versions in the index. In --publish
+    # mode the version IS bumped, so a dependent crate's `salmon-x = "^<new>"`
+    # requirement cannot resolve until its dependency is actually published; the
+    # real publish loop below handles that ordering via cargo's wait-for-publish
+    # (each crate lands in the index before the next is built), so an upfront
+    # dry-run validation of dependents is impossible there (and unnecessary).
+    echo
+    echo "Per-crate package validation (cargo publish --dry-run, in order)"
+    for crate in "${CRATES[@]}"; do
+        echo "--- $crate"
+        run cargo publish -p "$crate" --dry-run --allow-dirty
+    done
     echo
     echo "Dry-run complete (no commit, tag, push, or publish performed)"
     exit 0
