@@ -161,6 +161,61 @@ fn gap_cost(gap: i32, seed_len: i32, log2_lut: &[f32]) -> f32 {
     }
 }
 
+/// Exact `chain_mems` fast path for the common two-anchor case. Returns `None`
+/// for tie cases where matching `sort_unstable_by`'s arbitrary equal-key/order
+/// behavior would be brittle; the caller then uses the general implementation.
+fn chain_two_mems(m0: Mem, m1: Mem, is_fw: bool, cfg: &ChainConfig) -> Option<Vec<MemChain>> {
+    let k0 = (m0.ref_start, m0.read_start);
+    let k1 = (m1.ref_start, m1.read_start);
+    let (a, b) = if k0 < k1 {
+        (m0, m1)
+    } else if k1 < k0 {
+        (m1, m0)
+    } else {
+        return None;
+    };
+
+    let f0 = a.len as f32;
+    let mut f1 = b.len as f32;
+    let mut p1 = usize::MAX;
+
+    let dr = b.ref_start - a.ref_start;
+    if dr <= cfg.max_gap {
+        let dq = b.read_start - a.read_start;
+        if dr > 0 && dq > 0 && dq <= cfg.max_gap {
+            let gap = (dr - dq).abs();
+            let gain = dq.min(dr).min(b.len) as f32;
+            let sc = f0 + gain - gap_cost(gap, cfg.seed_len, &LOG2_LUT);
+            if sc > f1 {
+                f1 = sc;
+                p1 = 0;
+            }
+        }
+    }
+
+    if f0 == f1 {
+        return None;
+    }
+
+    let mut chains = Vec::with_capacity(2);
+    if f1 > f0 {
+        if p1 == 0 {
+            chains.push(MemChain::new(vec![a, b], f1, is_fw));
+        } else {
+            chains.push(MemChain::new(vec![b], f1, is_fw));
+            chains.push(MemChain::new(vec![a], f0, is_fw));
+        }
+    } else {
+        chains.push(MemChain::new(vec![a], f0, is_fw));
+        chains.push(MemChain::new(vec![b], f1, is_fw));
+    }
+
+    let best = f0.max(f1);
+    let cutoff = best * cfg.chain_subopt_thresh;
+    chains.retain(|c| c.score >= cutoff);
+    Some(chains)
+}
+
 /// Reusable per-thread scratch for [`chain_mems`]. The chaining DP allocates a
 /// handful of `n`-sized buffers per (tid, orientation) group; with many groups
 /// per read this dominated the mapper's allocator traffic. We keep one set of
@@ -189,6 +244,14 @@ thread_local! {
 pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain> {
     if mems.is_empty() {
         return Vec::new();
+    }
+    if let [mem] = mems {
+        return vec![MemChain::new(vec![*mem], mem.len as f32, is_fw)];
+    }
+    if let [m0, m1] = mems {
+        if let Some(chains) = chain_two_mems(*m0, *m1, is_fw, cfg) {
+            return chains;
+        }
     }
 
     CHAIN_SCRATCH.with(|cell| {
