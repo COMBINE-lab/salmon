@@ -249,8 +249,10 @@ struct RefHashes {
 struct PreprocessResult {
     /// non-ACGT bases replaced with pseudo-random ACGT
     replaced: u64,
-    /// `(retained_name, duplicate_name)` pairs in discovery order; the duplicate
-    /// was *not* written to the cleaned FASTA (so it is absent from the index).
+    /// `(retained_name, duplicate_name)` pairs in discovery order. Without
+    /// `--keepDuplicates` the duplicate was *not* written to the cleaned FASTA (so
+    /// it is absent from the index); with `--keepDuplicates` every transcript is
+    /// written and this just records which ones are exact duplicates of each other.
     duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)>,
     /// retained-reference index of the first decoy, or `None` if no decoys.
     first_decoy_index: Option<usize>,
@@ -294,7 +296,8 @@ fn preprocess_fasta(
     // identical sequences that contain any non-ACGT base never compare equal and
     // so are never collapsed — we mirror that by only deduplicating pure-ACGT
     // sequences (keyed on the exact original bytes, matching salmon's pre-process
-    // XXH64 over the unmodified sequence). Only populated when removing dups.
+    // XXH64 over the unmodified sequence). Populated in both modes so duplicates
+    // are detected for `duplicate_clusters.tsv` even under --keepDuplicates.
     let mut seen: ahash::AHashMap<Vec<u8>, Vec<u8>> = ahash::AHashMap::new();
     for path in inputs {
         let mut reader = needletail::parse_fastx_file(path)
@@ -319,17 +322,23 @@ fn preprocess_fasta(
                 );
             }
 
-            if !keep_duplicates {
-                let pure_acgt = orig
-                    .iter()
-                    .all(|&b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'));
-                if pure_acgt {
-                    if let Some(retained_name) = seen.get(orig.as_ref()) {
-                        // Exact duplicate of an earlier reference: record the
-                        // cluster and drop it from the index entirely.
-                        duplicate_clusters.push((retained_name.clone(), name.to_vec()));
+            // Detect exact-sequence duplicates (pure-ACGT only — salmon hashes the
+            // unmodified sequence, and because it randomizes any non-ACGT base
+            // per-position, sequences containing one never compare equal). The
+            // cluster is recorded for `duplicate_clusters.tsv` in BOTH modes,
+            // matching salmon (which reports duplicates even with --keepDuplicates);
+            // without --keepDuplicates the duplicate is additionally dropped
+            // (collapsed onto the first occurrence).
+            let pure_acgt = orig
+                .iter()
+                .all(|&b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'));
+            if pure_acgt {
+                if let Some(retained_name) = seen.get(orig.as_ref()) {
+                    duplicate_clusters.push((retained_name.clone(), name.to_vec()));
+                    if !keep_duplicates {
                         continue;
                     }
+                } else {
                     seen.insert(orig.to_vec(), name.to_vec());
                 }
             }
@@ -512,17 +521,26 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             String::from_utf8_lossy(dropped)
         );
     }
-    if !opts.keep_duplicates {
-        if !pre.duplicate_clusters.is_empty() {
+    if !pre.duplicate_clusters.is_empty() {
+        if opts.keep_duplicates {
+            info!(
+                "detected {} exact-sequence-duplicate transcripts; retained them \
+                 (--keepDuplicates) and recorded them in duplicate_clusters.tsv",
+                pre.duplicate_clusters.len()
+            );
+        } else {
             info!(
                 "removed {} transcripts that were exact sequence duplicates \
                  (use --keepDuplicates to retain them)",
                 pre.duplicate_clusters.len()
             );
         }
-        write_duplicate_clusters(&opts.output_dir, &pre.duplicate_clusters)
-            .context("writing duplicate_clusters.tsv")?;
     }
+    // Always emit duplicate_clusters.tsv (header + one row per duplicate), matching
+    // salmon — downstream tooling expects it, and with --keepDuplicates it is the
+    // record of which retained transcripts are exact duplicates of each other.
+    write_duplicate_clusters(&opts.output_dir, &pre.duplicate_clusters)
+        .context("writing duplicate_clusters.tsv")?;
 
     // Stage 1: compacted de Bruijn graph / reference tiling.
     info!("building compacted dBG (k={}, threads={})", opts.k, threads);
