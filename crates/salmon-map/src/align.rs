@@ -163,6 +163,26 @@ thread_local! {
     /// — an unbounded thread-local here cost tens of GB on a 36M-read library.
     static GAP_CACHE: std::cell::RefCell<ahash::AHashMap<(Box<[u8]>, Box<[u8]>), i32>> =
         std::cell::RefCell::new(ahash::AHashMap::new());
+    /// Per-thread ksw2 scratch. This reuses both the ksw DP workspace/result and
+    /// the DNA5-encoded query/target buffers between small gap/flank DPs.
+    static KSW_SCRATCH: std::cell::RefCell<KswScratch> =
+        std::cell::RefCell::new(KswScratch::default());
+}
+
+struct KswScratch {
+    aligner: ksw2rs::Aligner,
+    query: Vec<u8>,
+    target: Vec<u8>,
+}
+
+impl Default for KswScratch {
+    fn default() -> Self {
+        Self {
+            aligner: ksw2rs::Aligner::new(),
+            query: Vec::new(),
+            target: Vec::new(),
+        }
+    }
 }
 
 /// Maximum number of cached (query, ref) DP scores per thread. The cache exists
@@ -260,38 +280,43 @@ fn dna5_mat(cfg: &AlignConfig) -> [i8; 25] {
 /// Global DP score of an inter-MEM gap (both substrings fully consumed). The
 /// band is widened to guarantee the alignment can reach the corner.
 fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
-    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
+    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qg.is_empty() {
         return -(cfg.gap_open_pen as i32 + tg.len() as i32 * cfg.gap_extend_pen as i32);
     }
     if tg.is_empty() {
         return -(cfg.gap_open_pen as i32 + qg.len() as i32 * cfg.gap_extend_pen as i32);
     }
-    let q = dna5_encode(qg);
-    let t = dna5_encode(tg);
     let mat = dna5_mat(cfg);
     let w = cfg
         .bandwidth
         .max((qg.len() as i32 - tg.len() as i32).abs() + 4);
-    let input = Extz2Input {
-        query: &q,
-        target: &t,
-        m: 5,
-        mat: &mat,
-        q: cfg.gap_open_pen,
-        e: cfg.gap_extend_pen,
-        w,
-        zdrop: -1,
-        end_bonus: 0,
-        // Mapping only needs the score, not the CIGAR — score-only mode skips the
-        // O(qlen·tlen) traceback-matrix fill and backtrack pass.
-        flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
-    };
-    let mut ez = Extz::default();
-    ez.reset();
-    extz2(&input, &mut ez);
-    if ez.score > KSW_NEG_INF {
-        ez.score
+    let score = KSW_SCRATCH.with(|cell| {
+        let KswScratch {
+            aligner,
+            query,
+            target,
+        } = &mut *cell.borrow_mut();
+        dna5_encode_into(qg, query);
+        dna5_encode_into(tg, target);
+        let input = Extz2Input {
+            query,
+            target,
+            m: 5,
+            mat: &mat,
+            q: cfg.gap_open_pen,
+            e: cfg.gap_extend_pen,
+            w,
+            zdrop: -1,
+            end_bonus: 0,
+            // Mapping only needs the score, not the CIGAR — score-only mode skips
+            // the O(qlen·tlen) traceback-matrix fill and backtrack pass.
+            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
+        };
+        aligner.align(&input).score
+    });
+    if score > KSW_NEG_INF {
+        score
     } else {
         // Corner unreachable: approximate by matching the common prefix length.
         let common = qg.len().min(tg.len()) as i32;
@@ -304,38 +329,43 @@ fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
 /// 5' flank (`anchor_right`) the sequences are reversed so the anchor is on the
 /// left, matching ksw2's left-anchored extension.
 fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool) -> i32 {
-    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
+    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qf.is_empty() {
         return 0;
     }
     if tf.is_empty() {
         return -(cfg.gap_open_pen as i32 + qf.len() as i32 * cfg.gap_extend_pen as i32);
     }
-    let (q, t): (Vec<u8>, Vec<u8>) = if anchor_right {
-        (
-            dna5_encode(&qf.iter().rev().copied().collect::<Vec<u8>>()),
-            dna5_encode(&tf.iter().rev().copied().collect::<Vec<u8>>()),
-        )
-    } else {
-        (dna5_encode(qf), dna5_encode(tf))
-    };
     let mat = dna5_mat(cfg);
-    let input = Extz2Input {
-        query: &q,
-        target: &t,
-        m: 5,
-        mat: &mat,
-        q: cfg.gap_open_pen,
-        e: cfg.gap_extend_pen,
-        w: cfg.bandwidth.max(qf.len() as i32),
-        zdrop: -1,
-        end_bonus: 0,
-        // Score-only: we read `mqe`/`max`, never the CIGAR (see ksw2_gap_global).
-        flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
-    };
-    let mut ez = Extz::default();
-    ez.reset();
-    extz2(&input, &mut ez);
+    let (mqe, mte, max_score) = KSW_SCRATCH.with(|cell| {
+        let KswScratch {
+            aligner,
+            query,
+            target,
+        } = &mut *cell.borrow_mut();
+        if anchor_right {
+            dna5_encode_rev_into(qf, query);
+            dna5_encode_rev_into(tf, target);
+        } else {
+            dna5_encode_into(qf, query);
+            dna5_encode_into(tf, target);
+        }
+        let input = Extz2Input {
+            query,
+            target,
+            m: 5,
+            mat: &mat,
+            q: cfg.gap_open_pen,
+            e: cfg.gap_extend_pen,
+            w: cfg.bandwidth.max(qf.len() as i32),
+            zdrop: -1,
+            end_bonus: 0,
+            // Score-only: we read `mqe`/`max`, never the CIGAR (see ksw2_gap_global).
+            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
+        };
+        let ez = aligner.align(&input);
+        (ez.mqe, ez.mte, ez.max as i32)
+    });
     // Soft-clip semantics mirror PuffAligner's flank `part_score` (mqe = read
     // flank fully consumed, reference free to overhang; mte = reference fully
     // consumed, read free to overhang the transcript end):
@@ -345,23 +375,23 @@ fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool
     // `--softclip` implies `--softclipOverhangs`. `ez.max` is the fallback when
     // neither extension is valid (e.g. band-clipped), matching the prior guard.
     if cfg.softclip {
-        let s = ez.mqe.max(ez.mte);
+        let s = mqe.max(mte);
         if s > KSW_NEG_INF {
             s.max(0)
         } else {
-            (ez.max as i32).max(0)
+            max_score.max(0)
         }
     } else if cfg.softclip_overhangs {
-        let s = ez.mqe.max(ez.mte);
+        let s = mqe.max(mte);
         if s > KSW_NEG_INF {
             s
         } else {
-            ez.max as i32
+            max_score
         }
-    } else if ez.mqe > KSW_NEG_INF {
-        ez.mqe
+    } else if mqe > KSW_NEG_INF {
+        mqe
     } else {
-        ez.max as i32
+        max_score
     }
 }
 
@@ -401,17 +431,28 @@ fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: boo
     })
 }
 
-/// 2-bit/DNA5 encode (A=0,C=1,G=2,T=3,N/other=4) for ksw2.
-fn dna5_encode(seq: &[u8]) -> Vec<u8> {
-    seq.iter()
-        .map(|&b| match b {
-            b'A' | b'a' => 0,
-            b'C' | b'c' => 1,
-            b'G' | b'g' => 2,
-            b'T' | b't' => 3,
-            _ => 4,
-        })
-        .collect()
+fn dna5_encode_into(seq: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(seq.len());
+    out.extend(seq.iter().map(|&b| match b {
+        b'A' | b'a' => 0,
+        b'C' | b'c' => 1,
+        b'G' | b'g' => 2,
+        b'T' | b't' => 3,
+        _ => 4,
+    }));
+}
+
+fn dna5_encode_rev_into(seq: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(seq.len());
+    out.extend(seq.iter().rev().map(|&b| match b {
+        b'A' | b'a' => 0,
+        b'C' | b'c' => 1,
+        b'G' | b'g' => 2,
+        b'T' | b't' => 3,
+        _ => 4,
+    }));
 }
 
 /// ksw2 score, matching C++ salmon's banded `ksw_extz2_sse` configuration
@@ -421,37 +462,43 @@ fn dna5_encode(seq: &[u8]) -> Vec<u8> {
 /// diagonal. This narrow band is what makes salmon reject off-diagonal /
 /// large-indel placements that a wide-band aligner would accept.
 fn ksw2_align_score(query: &[u8], rwin: &[u8], cfg: &AlignConfig) -> i32 {
-    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
-    let q_enc = dna5_encode(query);
-    let t_enc = dna5_encode(rwin);
+    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     // 5x5 DNA5 scoring matrix: match on the diagonal, mismatch off, N-N = 0.
     let mut mat = [-cfg.mismatch_pen; 25];
     for i in 0..5 {
         mat[i * 5 + i] = cfg.match_score;
     }
     mat[24] = 0;
-    let input = Extz2Input {
-        query: &q_enc,
-        target: &t_enc,
-        m: 5,
-        mat: &mat,
-        q: cfg.gap_open_pen,
-        e: cfg.gap_extend_pen,
-        w: cfg.bandwidth,
-        zdrop: -1,
-        end_bonus: 0,
-        flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
-    };
-    let mut ez = Extz::default();
-    ez.reset(); // initialize mqe/mte/score to KSW_NEG_INF as ksw2 expects
-    extz2(&input, &mut ez);
+    let (mqe, max_score) = KSW_SCRATCH.with(|cell| {
+        let KswScratch {
+            aligner,
+            query: q_enc,
+            target: t_enc,
+        } = &mut *cell.borrow_mut();
+        dna5_encode_into(query, q_enc);
+        dna5_encode_into(rwin, t_enc);
+        let input = Extz2Input {
+            query: q_enc,
+            target: t_enc,
+            m: 5,
+            mat: &mat,
+            q: cfg.gap_open_pen,
+            e: cfg.gap_extend_pen,
+            w: cfg.bandwidth,
+            zdrop: -1,
+            end_bonus: 0,
+            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
+        };
+        let ez = aligner.align(&input);
+        (ez.mqe, ez.max as i32)
+    });
     // `mqe` is the best score with the entire query consumed (the read aligned
     // fully). Fall back to the local max if the query end was never reached
     // within the band.
-    if ez.mqe > KSW_NEG_INF {
-        ez.mqe
+    if mqe > KSW_NEG_INF {
+        mqe
     } else {
-        ez.max as i32
+        max_score
     }
 }
 
