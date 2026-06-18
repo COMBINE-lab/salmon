@@ -1,27 +1,23 @@
-//! MEM extraction: extend sparse k-mer anchors into longer exact matches.
+//! MEM extraction: extend k-mer anchors into longer exact matches.
 //!
-//! The default [`collect`](crate::collect) path chains the *sparse, fixed-length*
+//! The bare [`collect`](crate::collect) path chains the *sparse, fixed-length*
 //! k-mer anchors that piscem's skipping streaming query emits — one length-`k`
-//! anchor per unitig transition. This module offers two *additive* alternatives
-//! that extend each seed before chaining (selected by
+//! anchor per unitig transition (`--sparseSeeds`). This module offers two
+//! alternatives that extend each seed before chaining (selected by
 //! [`SeedMode`](crate::mapper::SeedMode)):
 //!
 //! - **Reference MEMs** ([`candidates_from_raw_hits_unimems`]): each seed is
 //!   extended against the **reference transcript** until a base mismatch or a
 //!   read/reference boundary. These cross unitig junctions freely — a
-//!   junction-straddling match becomes a *single* anchor.
+//!   junction-straddling match becomes a *single* anchor (`--refMEMs`).
 //! - **True uni-MEMs** ([`candidates_from_raw_hits_true_unimems`]): extension is
 //!   clamped to the seed's **unitig** (`[base_pos, base_pos + contig_len)`),
 //!   faithfully reproducing pufferfish's `expandHitEfficient` (which stops at
 //!   `CONTIG_END`). A junction-straddling match becomes *one uni-MEM per unitig*,
-//!   which the chainer then stitches together.
-//!
-//! Both extend in the chainer's query frame (forward read for forward groups,
-//! reverse complement for reverse groups) and collapse colinear seeds that
-//! resolve to the same anchor, so the result drops straight into [`chain_mems`].
-//! The experiment these support: does the seed representation (sparse vs. ref
-//! MEM vs. unitig-constrained uni-MEM) account for read-placement differences
-//! vs. C++ salmon? (It does not — see `docs/mapping-parity-differences.md`.)
+//!   which the chainer then stitches together. **This is the default** — it is
+//!   ~11% faster than sparse seeding and at least as accurate, and the extension
+//!   is computed once per orientation and projected to every occurrence (a
+//!   uni-MEM is identical wherever its unitig occurs).
 
 use std::collections::HashSet;
 

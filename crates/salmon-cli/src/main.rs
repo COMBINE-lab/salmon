@@ -208,10 +208,14 @@ struct DebugMapArgs {
     /// Single-end FASTQ (plain text).
     #[arg(short = 'r', long = "reads", required = true)]
     reads: PathBuf,
+    /// Seed with sparse fixed-k k-mer anchors instead of the default
+    /// unitig-constrained uni-MEMs.
+    #[arg(long = "sparseSeeds", conflicts_with_all = ["unimems", "refmems"])]
+    sparse_seeds: bool,
     /// Seed with reference-extended MEMs (cross unitig boundaries).
     #[arg(long = "refMEMs", conflicts_with = "unimems")]
     refmems: bool,
-    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
+    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style; default).
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
 }
@@ -379,10 +383,15 @@ struct QuantArgs {
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
     full_length_alignment: bool,
+    /// Seed with sparse fixed-k k-mer anchors instead of the default
+    /// unitig-constrained uni-MEMs.
+    #[arg(long = "sparseSeeds", conflicts_with_all = ["unimems", "refmems"])]
+    sparse_seeds: bool,
     /// Seed with reference-extended MEMs (cross unitig boundaries).
     #[arg(long = "refMEMs", conflicts_with = "unimems")]
     refmems: bool,
-    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
+    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style). This is the
+    /// default; the flag is accepted for explicitness/back-compat.
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
     /// Match score for selective alignment (reads mode).
@@ -578,15 +587,20 @@ struct QuantArgs {
     validate_mappings: bool,
 }
 
-/// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
-/// enforces they are mutually exclusive).
-fn seed_mode(unimems: bool, refmems: bool) -> salmon_map::SeedMode {
-    if unimems {
-        salmon_map::SeedMode::UniMem
+/// Resolve the `--sparseSeeds` / `--uniMEMs` / `--refMEMs` flags into a seeding
+/// mode (clap enforces they are mutually exclusive). The default is uni-MEM
+/// seeding (`--uniMEMs`): it is faster than sparse k-mer seeding and at least as
+/// accurate, and faithfully reproduces pufferfish's seeding. `--sparseSeeds`
+/// selects the older sparse fixed-k anchors.
+fn seed_mode(unimems: bool, refmems: bool, sparse_seeds: bool) -> salmon_map::SeedMode {
+    if sparse_seeds {
+        salmon_map::SeedMode::Sparse
     } else if refmems {
         salmon_map::SeedMode::RefMem
     } else {
-        salmon_map::SeedMode::Sparse
+        // default (and explicit `--uniMEMs`)
+        let _ = unimems;
+        salmon_map::SeedMode::UniMem
     }
 }
 
@@ -855,7 +869,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.cond_gc_bins = args.conditional_gc_bins;
     opts.skip_quant = args.skip_quant;
     opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
-    opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
+    opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;
     opts.map_config.align.mismatch_pen = args.mp as i8;
@@ -1057,7 +1071,7 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
     let idx = SalmonIndex::load(&args.index).context("loading index")?;
     let mut hs = HitSearcher::new(idx.inner());
     let cfg = MapConfig {
-        seed_mode: seed_mode(args.unimems, args.refmems),
+        seed_mode: seed_mode(args.unimems, args.refmems, args.sparse_seeds),
         ..MapConfig::default()
     };
 

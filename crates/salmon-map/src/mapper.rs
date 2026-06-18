@@ -21,14 +21,15 @@ use crate::extend::{collect_read_true_unimems, collect_read_unimems};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SeedMode {
     /// Sparse fixed-`k` k-mer anchors straight from piscem's skipping query
-    /// (one length-`k` anchor per unitig transition). The default.
-    #[default]
+    /// (one length-`k` anchor per unitig transition). Selected by `--sparseSeeds`.
     Sparse,
     /// Reference MEMs: each seed extended against the reference transcript,
     /// crossing unitig boundaries ([`crate::extend::collect_read_unimems`]).
     RefMem,
     /// True uni-MEMs: extension clamped to each seed's unitig, reproducing
     /// pufferfish's `expandHitEfficient` ([`crate::extend::collect_read_true_unimems`]).
+    /// The default — faster than and at least as accurate as sparse seeding.
+    #[default]
     UniMem,
 }
 use crate::pair::{join_reads_and_filter, PairingConfig};
