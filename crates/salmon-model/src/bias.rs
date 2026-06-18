@@ -8,7 +8,7 @@
 //! with the conditional fragment-length distribution.
 
 use crate::gcbias::{GcContext, GcFragModel, GcView};
-use crate::posbias::{length_class_index, SimplePosBias, NUM_LENGTH_CLASSES};
+use crate::posbias::{length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS};
 use crate::seqbias::{
     conditional_cdf, log_bias, revcomp_bytes, SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
     MIN_CDF_MASS,
@@ -223,7 +223,7 @@ pub fn corrected_effective_length_full(
 /// reverse density = fragments that can end here). Models are finalized.
 #[allow(clippy::too_many_arguments)]
 pub fn build_expected_pos<FL>(
-    num_refs: usize,
+    num_targets: usize,
     ref_len_of: FL,
     alphas: &[f64],
     eff_lens: &[f64],
@@ -232,49 +232,149 @@ pub fn build_expected_pos<FL>(
     k: usize,
 ) -> (Vec<SimplePosBias>, Vec<SimplePosBias>)
 where
-    FL: Fn(usize) -> usize,
+    FL: Fn(usize) -> usize + Sync,
 {
-    let mut pos5: Vec<SimplePosBias> = (0..NUM_LENGTH_CLASSES)
-        .map(|_| SimplePosBias::default())
-        .collect();
-    let mut pos3: Vec<SimplePosBias> = (0..NUM_LENGTH_CLASSES)
-        .map(|_| SimplePosBias::default())
-        .collect();
-    for tid in 0..num_refs {
-        if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
-            continue;
-        }
-        let ref_len = ref_len_of(tid) as i32;
-        if (ref_len as usize) <= k {
-            continue;
-        }
-        let unprocessed = ref_len - eff_lens[tid] as i32;
-        if unprocessed <= 0 {
-            continue;
-        }
-        let cdf_max_arg = (cdf.len() - 1).min(ref_len as usize);
-        let cdf_max_val = cdf[cdf_max_arg];
-        if cdf_max_val < MIN_CDF_MASS {
-            continue;
-        }
-        let weight = alphas[tid] / eff_lens[tid];
-        let lc = length_class_index(quantiles, ref_len as u32);
-        let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
-        for frag_start in 0..(ref_len - k as i32) {
-            let max_fw = ref_len - frag_start + 1;
-            let max_rc = frag_start;
-            let density_fw = cond(max_fw);
-            let density_rc = cond(max_rc);
-            if weight * density_fw > EPSILON {
-                pos5[lc].add_mass(frag_start, ref_len, (weight * density_fw).ln());
-            }
-            if weight * density_rc > EPSILON {
-                pos3[lc].add_mass(frag_start, ref_len, (weight * density_rc).ln());
-            }
-        }
+    use rayon::prelude::*;
+    type Partials = (Vec<SimplePosBias>, Vec<SimplePosBias>);
+    // Per-transcript contributions are independent, each an O(refLen) sweep;
+    // salmon parallelizes this expected-pos accumulation over transcripts and so
+    // do we. Per-thread partials use `new_empty` (masses at -inf, the `log_add`
+    // identity, carrying *no* pseudocount) so the fold/reduce merge via `combine`
+    // is associative; the single `log(1)` pseudocount salmon seeds each bin with
+    // is injected once at the end (combine into a `default()` model). `ref_len_of`
+    // must be `Sync` to share across threads. `num_targets` excludes decoys (the
+    // contiguous tail), which are never expressed and never contribute.
+    fn empty() -> Partials {
+        (
+            (0..NUM_LENGTH_CLASSES)
+                .map(|_| SimplePosBias::new_empty(NUM_POS_BINS))
+                .collect(),
+            (0..NUM_LENGTH_CLASSES)
+                .map(|_| SimplePosBias::new_empty(NUM_POS_BINS))
+                .collect(),
+        )
     }
-    for m in pos5.iter_mut().chain(pos3.iter_mut()) {
-        m.finalize();
+    let (sum5, sum3) = (0..num_targets)
+        .into_par_iter()
+        .fold(empty, |mut acc, tid| {
+            if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
+                return acc;
+            }
+            let ref_len = ref_len_of(tid) as i32;
+            if (ref_len as usize) <= k {
+                return acc;
+            }
+            let unprocessed = ref_len - eff_lens[tid] as i32;
+            if unprocessed <= 0 {
+                return acc;
+            }
+            let cdf_max_arg = (cdf.len() - 1).min(ref_len as usize);
+            let cdf_max_val = cdf[cdf_max_arg];
+            if cdf_max_val < MIN_CDF_MASS {
+                return acc;
+            }
+            let weight = alphas[tid] / eff_lens[tid];
+            let lc = length_class_index(quantiles, ref_len as u32);
+            let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
+            for frag_start in 0..(ref_len - k as i32) {
+                let max_fw = ref_len - frag_start + 1;
+                let max_rc = frag_start;
+                let density_fw = cond(max_fw);
+                let density_rc = cond(max_rc);
+                if weight * density_fw > EPSILON {
+                    acc.0[lc].add_mass(frag_start, ref_len, (weight * density_fw).ln());
+                }
+                if weight * density_rc > EPSILON {
+                    acc.1[lc].add_mass(frag_start, ref_len, (weight * density_rc).ln());
+                }
+            }
+            acc
+        })
+        .reduce(empty, |mut a, b| {
+            for (x, y) in a.0.iter_mut().zip(&b.0) {
+                x.combine(y);
+            }
+            for (x, y) in a.1.iter_mut().zip(&b.1) {
+                x.combine(y);
+            }
+            a
+        });
+
+    // Inject the single per-bin `log(1)` pseudocount salmon seeds each bin with
+    // (`SimplePosBias::default`) by merging the raw observed log-sums into it,
+    // then finalize. An empty bin (sum at -inf) collapses to exactly `log(1)`,
+    // matching the serial accumulation.
+    let seed = |sums: Vec<SimplePosBias>| -> Vec<SimplePosBias> {
+        sums.into_iter()
+            .map(|s| {
+                let mut m = SimplePosBias::default();
+                m.combine(&s);
+                m.finalize();
+                m
+            })
+            .collect()
+    };
+    (seed(sum5), seed(sum3))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::posbias::compute_length_quantiles;
+    use crate::seqbias::fld_cdf_and_bounds;
+
+    type PosModels = (Vec<SimplePosBias>, Vec<SimplePosBias>);
+
+    fn mass_diff(a: &PosModels, b: &PosModels) -> f64 {
+        a.0.iter()
+            .chain(a.1.iter())
+            .zip(b.0.iter().chain(b.1.iter()))
+            .map(|(pa, pb)| {
+                pa.masses()
+                    .iter()
+                    .zip(pb.masses())
+                    .map(|(x, y)| (x - y).abs())
+                    .sum::<f64>()
+            })
+            .sum()
     }
-    (pos5, pos3)
+
+    #[test]
+    fn build_expected_pos_respects_num_targets_bound() {
+        // Five 200 nt transcripts plus a 400 nt "decoy". The decoy must change the
+        // expected positional model only when `num_targets` includes it; a zeroed
+        // alpha must skip it either way.
+        let lens = [200usize, 200, 200, 200, 200, 400];
+        let num_refs = lens.len();
+        let alphas = vec![1.0; num_refs];
+        let eff_lens = vec![150.0; num_refs];
+        let mut pmf = vec![0.0; 200];
+        pmf[100] = 1.0;
+        let (cdf, _lo, _hi) = fld_cdf_and_bounds(&pmf);
+        let qlens: Vec<u32> = lens.iter().map(|&l| l as u32).collect();
+        let quantiles = compute_length_quantiles(&qlens, NUM_LENGTH_CLASSES);
+        let k = 1usize;
+
+        let exclude = build_expected_pos(5, |t| lens[t], &alphas, &eff_lens, &cdf, &quantiles, k);
+        let include = build_expected_pos(6, |t| lens[t], &alphas, &eff_lens, &cdf, &quantiles, k);
+        assert!(exclude
+            .0
+            .iter()
+            .chain(exclude.1.iter())
+            .all(|p| p.masses().iter().all(|v| v.is_finite())));
+        let diff = mass_diff(&exclude, &include);
+        assert!(
+            diff > 1e-9,
+            "a target beyond num_targets must not contribute (diff={diff})"
+        );
+
+        let mut alphas0 = alphas.clone();
+        alphas0[5] = 0.0;
+        let include0 = build_expected_pos(6, |t| lens[t], &alphas0, &eff_lens, &cdf, &quantiles, k);
+        let diff2 = mass_diff(&exclude, &include0);
+        assert!(
+            diff2 < 1e-9,
+            "zero-alpha target must not contribute (diff={diff2})"
+        );
+    }
 }
