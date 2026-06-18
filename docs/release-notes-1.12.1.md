@@ -35,6 +35,28 @@ the like) are assigned an identical seed, so the optimizer does not split them
 arbitrarily. This pass is applied **only** under `--useOnlineSeed`; the default
 uniform seed is already symmetric and needs no equalization.
 
+### Selective-alignment mapping fixes (pufferfish)
+
+Two mapping-side correctness fixes backported from the Rust salmon port (pinned
+pufferfish commit `17e1ccf`):
+
+- **Inclusive concordant fragment-length bound.** `joinReadsAndFilter` filtered
+  concordant pairs with a strict `fragmentLen < maxFragmentLength`, which dropped
+  a fragment whose length is *exactly* `maxFragmentLength`. Such a fragment is at
+  — not beyond — the maximum, so it is a valid pair; the strict bound silently
+  lost otherwise co-optimal placements (e.g. a read pairing to a paralog whose
+  exon spacing puts the fragment right at the bound). The bound is now inclusive
+  (`<=`), matching the Rust port. Effect is small and one-directional (recovers
+  exactly-at-bound pairs); on a 1M-read human simulation it raised C++↔Rust
+  target-set concordance from 99.963% to 99.966% with no regressions.
+
+- **Orphan-rescue when one mate fails alignment.** When a concordant pair has
+  exactly one mate passing the per-mate score threshold,
+  `PuffAligner::calculateAlignments` now emits that mate as an orphan
+  (`PAIRED_END_LEFT`/`RIGHT`) instead of discarding the whole fragment, so a
+  strong mate is not lost because its partner is error-laden or mis-oriented —
+  matching the Rust port's `m1`/`m2` orphan emission.
+
 ## Known limitation: residual run-to-run variability (the FLD-feedback path)
 
 The seed change removes the *dominant, amplified* run-to-run variability, but a
