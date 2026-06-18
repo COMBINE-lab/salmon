@@ -275,7 +275,10 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
                 ));
             }
         }
-        flat.sort_unstable_by_key(|&(tid, fw, _)| (tid, fw));
+        // Order by (tid, is_fw, unitig occurrence, read offset). All raw k-mers of
+        // one unitig occurrence share `u_lo` and a single diagonal, so this groups
+        // the seeds that extend to the *same* uni-MEM adjacently.
+        flat.sort_unstable_by_key(|&(tid, fw, s)| (tid, fw, s.u_lo, s.mem.read_start));
 
         let mut candidates = Vec::new();
         let mut i = 0;
@@ -283,16 +286,45 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
             let (tid, is_fw, _) = flat[i];
             let ref_seq = refs.ref_seq(tid);
             let query: &[u8] = if is_fw { read } else { &rc };
-            // Extend each seed within its unitig, then merge same-diagonal
-            // overlapping uni-MEMs into maximal anchors (which also dedups exact
-            // duplicates, replacing the per-group HashSet).
             ext.clear();
+            // Within a (tid, is_fw) group, walk per-unitig-occurrence sub-runs
+            // (equal `u_lo`). Collapse the contiguous raw k-mers of an occurrence
+            // and extend the merged span ONCE — every k-mer in an occurrence is on
+            // the same diagonal and extends to the same maximal exact match, so
+            // extending each independently (the previous behavior) re-walked the
+            // reference once per k-mer. A read gap within an occurrence (an internal
+            // mismatch breaks the k-mer run) starts a fresh span so the mismatch is
+            // not bridged. The post-extension `merge_same_diagonal` then stitches
+            // uni-MEMs that abut across unitig junctions on a shared diagonal.
             let mut j = i;
             while j < flat.len() && flat[j].0 == tid && flat[j].1 == is_fw {
-                let s = &flat[j].2;
-                ext.push(extend_mem_within(query, ref_seq, s.mem, s.u_lo, s.u_hi));
-                j += 1;
+                let u_lo = flat[j].2.u_lo;
+                let u_hi = flat[j].2.u_hi;
+                let mut cur = flat[j].2.mem;
+                let mut jj = j + 1;
+                while jj < flat.len()
+                    && flat[jj].0 == tid
+                    && flat[jj].1 == is_fw
+                    && flat[jj].2.u_lo == u_lo
+                {
+                    let m = flat[jj].2.mem;
+                    // Same diagonal (guaranteed within an occurrence) + overlapping
+                    // or abutting in the read -> grow the current span.
+                    if (m.ref_start - m.read_start) == (cur.ref_start - cur.read_start)
+                        && m.read_start <= cur.read_end()
+                    {
+                        let new_end = cur.read_end().max(m.read_end());
+                        cur = Mem::new(cur.read_start, cur.ref_start, new_end - cur.read_start);
+                    } else {
+                        ext.push(extend_mem_within(query, ref_seq, cur, u_lo, u_hi));
+                        cur = m;
+                    }
+                    jj += 1;
+                }
+                ext.push(extend_mem_within(query, ref_seq, cur, u_lo, u_hi));
+                j = jj;
             }
+            // Stitch same-diagonal uni-MEMs across unitig junctions (and dedup).
             merge_same_diagonal(ext, merged);
             for chain in chain_mems(merged, is_fw, &chain_cfg) {
                 candidates.push(MappingCandidate { tid, is_fw, chain });
