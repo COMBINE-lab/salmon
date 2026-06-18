@@ -120,16 +120,29 @@ fn observed_format(l: &MappingCandidate, r: &MappingCandidate) -> LibraryFormat 
     LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)
 }
 
-/// Whether an inward (TOWARD) opposite-strand pair is dovetailed — the mates
-/// overhang each other rather than nesting cleanly. Only inward pairs can
-/// dovetail; outward/same configurations are left to the orientation check.
-fn is_dovetailed(l: &MappingCandidate, r: &MappingCandidate, orientation: ReadOrientation) -> bool {
-    if orientation != ReadOrientation::Toward || l.is_fw == r.is_fw {
+/// Whether an opposite-strand pair fails to nest cleanly — the "dovetail" test
+/// salmon's `joinReadsAndFilter` applies (and discards under the default
+/// no-dovetail policy). A clean inward (TOWARD) pair has the forward mate
+/// nested upstream of the reverse mate (`fw.start <= rc.start` and
+/// `fw.end <= rc.end`); anything else is flagged:
+///   * the forward mate *ends* past the reverse mate (a true inward dovetail —
+///     the mates overhang), or
+///   * the forward mate *starts* past the reverse mate's start, i.e. the
+///     forward mate lies (wholly or partly) downstream of the reverse mate — an
+///     **outward / AWAY** pair, which is incompatible with an inward library.
+///
+/// Matching salmon: C++ keys on the forward mate starting after the reverse
+/// mate (`fwd.start > rev.start`), which captures the outward case; we keep the
+/// extra `fw.end > rc.end` term so a forward mate that merely overhangs the 3′
+/// end is caught too. Same-strand pairs are not considered here. Previously this
+/// returned early for non-inward orientations, so outward pairs (a fragment
+/// mapping to a paralog whose homologous segments are in inverted arrangement)
+/// were kept where salmon drops them.
+fn is_dovetailed(l: &MappingCandidate, r: &MappingCandidate) -> bool {
+    if l.is_fw == r.is_fw {
         return false;
     }
     let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
-    // The forward mate should nest upstream of the reverse mate; an overhang on
-    // either side is a dovetail.
     fw.chain.ref_start() > rc.chain.ref_start() || fw.chain.ref_end() > rc.chain.ref_end()
 }
 
@@ -216,8 +229,7 @@ pub fn join_reads_and_filter(
                     if frag_len <= 0 || frag_len > cfg.max_fragment_len {
                         continue;
                     }
-                    let format = observed_format(l, r);
-                    if !cfg.allow_dovetail && is_dovetailed(l, r, format.orientation) {
+                    if !cfg.allow_dovetail && is_dovetailed(l, r) {
                         continue;
                     }
                     let cov = l.chain.covered_read_bases() + r.chain.covered_read_bases();
@@ -252,7 +264,7 @@ pub fn join_reads_and_filter(
                             continue;
                         }
                         let format = observed_format(l, r);
-                        if !cfg.allow_dovetail && is_dovetailed(l, r, format.orientation) {
+                        if !cfg.allow_dovetail && is_dovetailed(l, r) {
                             continue;
                         }
                         joints.push(JointMapping {
@@ -564,7 +576,7 @@ mod tests {
             observed_format(&l[0], &r[0]).orientation,
             ReadOrientation::Toward
         );
-        assert!(is_dovetailed(&l[0], &r[0], ReadOrientation::Toward));
+        assert!(is_dovetailed(&l[0], &r[0]));
 
         // default: dovetail rejected -> falls back to orphans
         let (l, r) = make();
@@ -580,6 +592,46 @@ mod tests {
         let j = join_reads_and_filter(l, r, &cfg);
         assert_eq!(j.len(), 1);
         assert_eq!(j[0].status, MateStatus::PairedEndPaired);
+    }
+
+    #[test]
+    fn outward_pair_filtered_by_default_but_kept_when_enabled() {
+        // OUTWARD (AWAY) pair: the forward mate lies entirely downstream of the
+        // reverse mate (fw 5′=714 > rc 5′=236). This is the real-data sim.617247
+        // case — a fragment that is a proper inward pair on its true transcript
+        // but maps outward to a paralog whose homologous segments are in inverted
+        // arrangement. salmon (and now Rust) treats this as a dovetail and drops
+        // it under the default no-dovetail policy, since an outward pair is
+        // incompatible with an inward library.
+        let make = || {
+            (
+                vec![cand(0, true, 714, 50)],  // fw mate [714,764]
+                vec![cand(0, false, 176, 60)], // rc mate [176,236]
+            )
+        };
+        let (l, r) = make();
+        assert_eq!(
+            observed_format(&l[0], &r[0]).orientation,
+            ReadOrientation::Away
+        );
+        assert!(is_dovetailed(&l[0], &r[0]), "outward pair must be flagged");
+
+        // default: outward pair rejected -> falls back to orphans
+        let (l, r) = make();
+        let j = join_reads_and_filter(l, r, &PairingConfig::default());
+        assert!(j.iter().all(|m| m.status.is_orphan()), "{j:?}");
+
+        // enabled: kept as a concordant pair
+        let (l, r) = make();
+        let cfg = PairingConfig {
+            allow_dovetail: true,
+            ..Default::default()
+        };
+        let j = join_reads_and_filter(l, r, &cfg);
+        assert!(
+            j.iter().any(|m| m.status == MateStatus::PairedEndPaired),
+            "{j:?}"
+        );
     }
 
     #[test]
