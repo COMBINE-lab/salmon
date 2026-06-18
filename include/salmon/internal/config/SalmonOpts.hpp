@@ -230,6 +230,13 @@ struct SalmonOpts {
                                      // extrapolate from txp-fraction
   bool initUniform{false}; // initialize offline optimization parameters
                            // uniformly, rather than with online estimates.
+  bool useOnlineSeed{false}; // seed the offline optimization with the online
+                             // (blended) abundance estimates instead of the
+                             // default uniform initialization. When set, a
+                             // signature-equalization pass is applied to the
+                             // seed so that mutually non-identifiable
+                             // transcripts (e.g. exact duplicates) receive an
+                             // identical seed and are not split arbitrarily.
   bool alnMode{false}; // true if we're in alignment based mode, false otherwise
   bool biasCorrect{false};    // Perform sequence-specific bias correction
   bool gcBiasCorrect{false};  // Perform gc-fragment bias correction

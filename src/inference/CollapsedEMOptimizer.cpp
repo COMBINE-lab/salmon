@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 #include <exception>
@@ -18,6 +20,7 @@
 
 #include "Eigen/Dense"
 #include "salmon/vendor/cuckoohash_map.hh"
+#include "salmon/vendor/unordered_dense.hpp"
 
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"
@@ -175,62 +178,149 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
  * classes to estimate the latent variables (alphaOut)
  * given the current estimates (alphaIn).
  */
+// Deterministically reduce the per-shard private accumulators into alphaOut.
+// Each transcript is summed over the shards in a fixed order and written
+// exactly once (no atomics, no contention), so the result is identical
+// regardless of thread scheduling -- this mirrors the Rust optimizer's
+// single-writer M-step reduction (reduce_shards).
+static inline void reduceShards_(oneapi::tbb::task_arena& arena,
+                                 std::vector<std::vector<double>>& shards,
+                                 CollapsedEMOptimizer::VecType& alphaOut) {
+  size_t M = alphaOut.size();
+  size_t nshards = shards.size();
+  arena.execute([&] {
+    oneapi::tbb::parallel_for(
+        BlockedIndexRange(size_t(0), M),
+        [&shards, &alphaOut, nshards](const BlockedIndexRange& range) -> void {
+          for (auto i : boost::irange(range.begin(), range.end())) {
+            double acc = 0.0;
+            for (size_t s = 0; s < nshards; ++s) {
+              acc += shards[s][i];
+            }
+            alphaOut[i].store(acc);
+          }
+        });
+  });
+}
+
+// When the offline optimizer is seeded with the online (blended) estimates,
+// mutually non-identifiable transcripts -- those appearing in exactly the same
+// equivalence classes with the same combined weights (e.g. exact-duplicate
+// transcripts) -- can end up with slightly different seeds purely from
+// hog-wild online-phase noise, which the VBEM then amplifies into an arbitrary
+// winner-take-all split. This pass groups such transcripts by an
+// order-independent signature over their (eqID, combinedWeight) memberships and
+// replaces each group's seed with the group mean, so the (deterministic)
+// offline update keeps them tied. It is applied ONLY on the --useOnlineSeed
+// path; the default uniform seed is already symmetric and needs no equalization.
+template <typename EQVecT>
+size_t equalizeNonIdentifiableSeed_(EQVecT& eqVec,
+                                    CollapsedEMOptimizer::VecType& alphas,
+                                    size_t numTxps) {
+  constexpr uint64_t kFnvOffset = 1469598103934665603ull;
+  constexpr uint64_t kFnvPrime = 1099511628211ull;
+  auto mix = [](uint64_t h, uint64_t x) -> uint64_t {
+    h ^= x;
+    h *= kFnvPrime;
+    return h;
+  };
+  std::vector<uint64_t> sig(numTxps, kFnvOffset);
+  for (size_t eqID = 0; eqID < eqVec.size(); ++eqID) {
+    auto& kv = eqVec[eqID];
+    if (!kv.first.valid) {
+      continue;
+    }
+    const std::vector<uint32_t>& txps = kv.first.txps;
+    const auto& auxs = kv.second.combinedWeights;
+    for (size_t i = 0; i < txps.size(); ++i) {
+      uint64_t wbits = 0;
+      double w = auxs[i];
+      std::memcpy(&wbits, &w, sizeof(wbits));
+      uint64_t h = sig[txps[i]];
+      h = mix(h, static_cast<uint64_t>(eqID) + 0x9e3779b97f4a7c15ull);
+      h = mix(h, wbits);
+      sig[txps[i]] = h;
+    }
+  }
+  ankerl::unordered_dense::map<uint64_t, std::vector<uint32_t>> groups;
+  groups.reserve(numTxps);
+  for (size_t t = 0; t < numTxps; ++t) {
+    groups[sig[t]].push_back(static_cast<uint32_t>(t));
+  }
+  size_t nGroups = 0;
+  for (auto& g : groups) {
+    std::vector<uint32_t>& members = g.second;
+    if (members.size() < 2) {
+      continue;
+    }
+    double s = 0.0;
+    for (auto t : members) {
+      s += alphas[t].load();
+    }
+    double avg = s / static_cast<double>(members.size());
+    for (auto t : members) {
+      alphas[t].store(avg);
+    }
+    ++nGroups;
+  }
+  return nGroups;
+}
+
 template <typename EQVecT>
 void EMUpdate_(oneapi::tbb::task_arena& arena,
                EQVecT& eqVec,
                std::vector<double>& priorAlphas,
                const CollapsedEMOptimizer::VecType& alphaIn,
-               CollapsedEMOptimizer::VecType& alphaOut) {
+               CollapsedEMOptimizer::VecType& alphaOut,
+               std::vector<std::vector<double>>& shards) {
 
   assert(alphaIn.size() == alphaOut.size());
 
-  arena.execute([&]{
-  oneapi::tbb::parallel_for(
-      BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
-        for (auto eqID : boost::irange(range.begin(), range.end())) {
-          auto& kv = eqVec[eqID];
+  size_t nshards = shards.size();
+  size_t nclasses = eqVec.size();
+  size_t chunk = (nclasses + nshards - 1) / nshards;
 
-          uint64_t count = kv.second.count;
-          // for each transcript in this class
-          const TranscriptGroup& tgroup = kv.first;
-          if (tgroup.valid) {
-            const std::vector<uint32_t>& txps = tgroup.txps;
-            const auto& auxs = kv.second.combinedWeights;
-
-            size_t groupSize = kv.second.weights.size(); // txps.size();
-            // If this is a single-transcript group,
-            // then it gets the full count.  Otherwise,
-            // update according to our VBEM rule.
-            if (BOOST_LIKELY(groupSize > 1)) {
-              double denom = 0.0;
+  // Accumulate into per-shard private buffers using plain (non-atomic) adds.
+  // Each shard owns a fixed, contiguous range of equivalence classes, so the
+  // work partition -- and the within-shard summation order -- is independent
+  // of how TBB schedules the shard tasks across threads.
+  arena.execute([&] {
+    oneapi::tbb::parallel_for(size_t(0), nshards, [&](size_t s) {
+      std::vector<double>& buf = shards[s];
+      std::fill(buf.begin(), buf.end(), 0.0);
+      size_t start = s * chunk;
+      size_t end = std::min(start + chunk, nclasses);
+      for (size_t eqID = start; eqID < end; ++eqID) {
+        auto& kv = eqVec[eqID];
+        uint64_t count = kv.second.count;
+        const TranscriptGroup& tgroup = kv.first;
+        if (tgroup.valid) {
+          const std::vector<uint32_t>& txps = tgroup.txps;
+          const auto& auxs = kv.second.combinedWeights;
+          size_t groupSize = kv.second.weights.size(); // txps.size();
+          if (BOOST_LIKELY(groupSize > 1)) {
+            double denom = 0.0;
+            for (size_t i = 0; i < groupSize; ++i) {
+              denom += (alphaIn[txps[i]]) * auxs[i];
+            }
+            if (denom > ::minEQClassWeight) {
+              double invDenom = count / denom;
               for (size_t i = 0; i < groupSize; ++i) {
-                auto tid = txps[i];
-                auto aux = auxs[i];
-                double v = (alphaIn[tid]) * aux;
-                denom += v;
-              }
-
-              if (denom <= ::minEQClassWeight) {
-                // tgroup.setValid(false);
-              } else {
-                double invDenom = count / denom;
-                for (size_t i = 0; i < groupSize; ++i) {
-                  auto tid = txps[i];
-                  auto aux = auxs[i];
-                  double v = (alphaIn[tid]) * aux;
-                  if (!std::isnan(v)) {
-                    salmon::utils::incLoop(alphaOut[tid], v * invDenom);
-                  }
+                double v = (alphaIn[txps[i]]) * auxs[i];
+                if (!std::isnan(v)) {
+                  buf[txps[i]] += v * invDenom;
                 }
               }
-            } else {
-              salmon::utils::incLoop(alphaOut[txps.front()], count);
             }
+          } else {
+            buf[txps.front()] += count;
           }
         }
-      });
+      }
+    });
   });
+
+  reduceShards_(arena, shards, alphaOut);
 }
 
 /*
@@ -241,10 +331,11 @@ void EMUpdate_(oneapi::tbb::task_arena& arena,
 template <typename EQVecT>
 void VBEMUpdate_(oneapi::tbb::task_arena& arena,
                  EQVecT& eqVec,
-                 std::vector<double>& priorAlphas, 
+                 std::vector<double>& priorAlphas,
                  const CollapsedEMOptimizer::VecType& alphaIn,
                  CollapsedEMOptimizer::VecType& alphaOut,
-                 CollapsedEMOptimizer::VecType& expTheta) {
+                 CollapsedEMOptimizer::VecType& expTheta,
+                 std::vector<std::vector<double>>& shards) {
 
   assert(alphaIn.size() == alphaOut.size());
   size_t M = alphaIn.size();
@@ -276,55 +367,49 @@ void VBEMUpdate_(oneapi::tbb::task_arena& arena,
                     });
   });
 
-  arena.execute([&]{
-  oneapi::tbb::parallel_for(
-      BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &alphaOut, &expTheta](const BlockedIndexRange& range) -> void {
-        for (auto eqID : boost::irange(range.begin(), range.end())) {
-          auto& kv = eqVec[eqID];
+  size_t nshards = shards.size();
+  size_t nclasses = eqVec.size();
+  size_t chunk = (nclasses + nshards - 1) / nshards;
 
-          uint64_t count = kv.second.count;
-          // for each transcript in this class
-          const TranscriptGroup& tgroup = kv.first;
-          if (tgroup.valid) {
-            const std::vector<uint32_t>& txps = tgroup.txps;
-            const auto& auxs = kv.second.combinedWeights;
-
-            size_t groupSize = kv.second.weights.size(); // txps.size();
-            // If this is a single-transcript group,
-            // then it gets the full count.  Otherwise,
-            // update according to our VBEM rule.
-            if (BOOST_LIKELY(groupSize > 1)) {
-              double denom = 0.0;
-              for (size_t i = 0; i < groupSize; ++i) {
-                auto tid = txps[i];
-                auto aux = auxs[i];
-                if (expTheta[tid] > 0.0) {
-                  double v = expTheta[tid] * aux;
-                  denom += v;
-                }
+  // Accumulate into per-shard private buffers (see EMUpdate_ for rationale).
+  arena.execute([&] {
+    oneapi::tbb::parallel_for(size_t(0), nshards, [&](size_t s) {
+      std::vector<double>& buf = shards[s];
+      std::fill(buf.begin(), buf.end(), 0.0);
+      size_t start = s * chunk;
+      size_t end = std::min(start + chunk, nclasses);
+      for (size_t eqID = start; eqID < end; ++eqID) {
+        auto& kv = eqVec[eqID];
+        uint64_t count = kv.second.count;
+        const TranscriptGroup& tgroup = kv.first;
+        if (tgroup.valid) {
+          const std::vector<uint32_t>& txps = tgroup.txps;
+          const auto& auxs = kv.second.combinedWeights;
+          size_t groupSize = kv.second.weights.size(); // txps.size();
+          if (BOOST_LIKELY(groupSize > 1)) {
+            double denom = 0.0;
+            for (size_t i = 0; i < groupSize; ++i) {
+              if (expTheta[txps[i]] > 0.0) {
+                denom += expTheta[txps[i]] * auxs[i];
               }
-              if (denom <= ::minEQClassWeight) {
-                // tgroup.setValid(false);
-              } else {
-                double invDenom = count / denom;
-                for (size_t i = 0; i < groupSize; ++i) {
-                  auto tid = txps[i];
-                  auto aux = auxs[i];
-                  if (expTheta[tid] > 0.0) {
-                    double v = expTheta[tid] * aux;
-                    salmon::utils::incLoop(alphaOut[tid], v * invDenom);
-                  }
-                }
-              }
-
-            } else {
-              salmon::utils::incLoop(alphaOut[txps.front()], count);
             }
+            if (denom > ::minEQClassWeight) {
+              double invDenom = count / denom;
+              for (size_t i = 0; i < groupSize; ++i) {
+                if (expTheta[txps[i]] > 0.0) {
+                  buf[txps[i]] += expTheta[txps[i]] * auxs[i] * invDenom;
+                }
+              }
+            }
+          } else {
+            buf[txps.front()] += count;
           }
         }
-      });
+      }
+    });
   });
+
+  reduceShards_(arena, shards, alphaOut);
 }
 
 template <typename VecT, typename EQVecT>
@@ -803,16 +888,22 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   double uniformPrior = totalWeight / static_cast<double>(numActive);
   double maxFrac = 0.999;
   double fracObserved = std::min(maxFrac, totalWeight / sopt.numRequiredFragments);
-  // Above, we placed the uniformative (uniform) initalization into the
-  // alphasPrime variables.  If that's what the user requested, then copy those
-  // over to the alphas
-  if (sopt.initUniform) {
+  // Seed the offline optimizer. By DEFAULT we initialize *uniformly*: the
+  // online (blended) estimates carry hog-wild, multithreaded run-to-run noise
+  // that the VBEM update can amplify into arbitrary winner-take-all splits of
+  // low-abundance / non-identifiable transcripts (issues #1008, #1011), with
+  // no measurable accuracy benefit over a uniform seed. --useOnlineSeed
+  // restores the online seed (e.g. for faster convergence); the metagenomic
+  // and alternative-init modes also supply their own informative seed.
+  // --initUniform always forces uniform.
+  bool wantBlended =
+      (sopt.useOnlineSeed or metaGenomeMode or altInitMode) and not sopt.initUniform;
+  if (not wantBlended) {
     for (size_t i = 0; i < alphas.size(); ++i) {
-      alphas[i].store(alphasPrime[i].load());
+      alphas[i].store(100.0);
       alphasPrime[i] = 1.0;
     }
-  } else { // otherwise, initialize with a linear combination of the true and
-           // uniform alphas
+  } else { // initialize with a linear combination of the online and uniform alphas
     for (size_t i = 0; i < alphas.size(); ++i) {
       auto uniAbund = (metaGenomeMode or altInitMode) ? alphasPrime[i].load()
                                                       : uniformPrior;
@@ -877,7 +968,28 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   sopt.jointLog->info("Marked {} weighted equivalence classes as degenerate",
                       numRemoved);
 
+  // On the --useOnlineSeed path, neutralize hog-wild seed asymmetry between
+  // mutually non-identifiable transcripts (exact duplicates and the like) so
+  // the offline optimizer does not split them arbitrarily. The default uniform
+  // seed is already symmetric, so this is skipped there.
+  if (sopt.useOnlineSeed and not sopt.initUniform) {
+    size_t nEqGroups =
+        equalizeNonIdentifiableSeed_(eqVec, alphas, transcripts.size());
+    sopt.jointLog->info(
+        "useOnlineSeed: equalized the online seed across {} non-identifiable "
+        "transcript group(s)",
+        nEqGroups);
+  }
+
   size_t itNum{0};
+
+  // Per-shard private accumulators for the (V)BEM M-step, allocated once and
+  // reused across iterations. The M-step sums each shard's contributions into
+  // alphaOut in a fixed order (reduceShards_), making the parallel update
+  // deterministic and contention-free instead of using atomic CAS adds.
+  size_t numShards = std::max<size_t>(1, static_cast<size_t>(sopt.numThreads));
+  std::vector<std::vector<double>> mStepShards(
+      numShards, std::vector<double>(transcripts.size(), 0.0));
 
   // EM termination criteria, adopted from Bray et al. 2016
   double minAlpha = 1e-8;
@@ -929,7 +1041,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
     if (useVBEM) {
       VBEMUpdate_(arena, eqVec, priorAlphas, alphas,
-                  alphasPrime, expTheta);
+                  alphasPrime, expTheta, mStepShards);
     } else {
       /*
       if (itNum > 0 and (itNum % 250 == 0)) {
@@ -939,7 +1051,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       }
       */
 
-      EMUpdate_(arena, eqVec, priorAlphas, alphas, alphasPrime);
+      EMUpdate_(arena, eqVec, priorAlphas, alphas, alphasPrime, mStepShards);
     }
 
     converged = true;

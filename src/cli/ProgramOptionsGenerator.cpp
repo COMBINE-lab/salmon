@@ -483,6 +483,14 @@ namespace salmon {
        po::bool_switch(&(sopt.initUniform))->default_value(salmon::defaults::initUniform),
        "initialize the offline inference with uniform parameters, rather "
        "than seeding with online parameters.")
+      ("useOnlineSeed",
+       po::bool_switch(&(sopt.useOnlineSeed))->default_value(salmon::defaults::useOnlineSeed),
+       "seed the offline inference with the online (blended) abundance "
+       "estimates instead of the default uniform initialization. The online "
+       "seed can introduce run-to-run variability (and arbitrary splitting of "
+       "non-identifiable transcripts), so a signature-equalization pass is "
+       "applied to the seed in this mode to keep mutually non-identifiable "
+       "transcripts (e.g. exact duplicates) tied.")
       ("maxOccsPerHit",
        po::value<uint32_t>(&(sopt.maxOccsPerHit))->default_value(salmon::defaults::maxOccsPerHit),
        "When collecting \"hits\" (MEMs), hits having more than maxOccsPerHit occurrences won't be considered.")

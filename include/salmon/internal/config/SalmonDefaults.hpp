@@ -61,6 +61,7 @@ namespace defaults {
   constexpr const double ffactor{0.65};
   constexpr const uint32_t maxSMEMOccs{200};
   constexpr const bool initUniform{false};
+  constexpr const bool useOnlineSeed{false};
   constexpr const uint32_t maxReadOccs{200};
   constexpr const uint32_t maxRecoverReadOccs{2500};
   constexpr const uint32_t maxOccsPerHit{1000};
