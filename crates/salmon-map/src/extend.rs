@@ -172,24 +172,13 @@ pub fn collect_read_unimems<'idx, R: RefProvider>(
     })
 }
 
-/// A projected seed that also carries the reference span of the **unitig** it
-/// came from, so extension can be clamped to the unitig (true uni-MEM).
-#[derive(Clone, Copy)]
-struct SeedWithContig {
-    mem: Mem,
-    /// reference-forward start of the unitig
-    u_lo: i32,
-    /// reference-forward end (exclusive) of the unitig
-    u_hi: i32,
-}
-
 thread_local! {
     /// Reused per-thread scratch for [`candidates_from_raw_hits_true_unimems`]:
-    /// a flat `(tid, is_fw, seed)` buffer (sorted to group by target/orientation
-    /// instead of a per-read `HashMap`), a per-group buffer of extended uni-MEMs,
-    /// and the merged-anchor output buffer. Mirrors `collect`'s `PROJ_SCRATCH`,
-    /// eliminating the per-read map + per-group `HashSet` allocations.
-    static UNIMEM_SCRATCH: std::cell::RefCell<(Vec<(u32, bool, SeedWithContig)>, Vec<Mem>, Vec<Mem>)> =
+    /// a flat `(tid, is_fw, extended-uni-MEM)` buffer (sorted to group by
+    /// target/orientation instead of a per-read `HashMap`), a per-group anchor
+    /// buffer, and the merged-anchor output buffer. Mirrors `collect`'s
+    /// `PROJ_SCRATCH`, eliminating the per-read map + per-group `HashSet`.
+    static UNIMEM_SCRATCH: std::cell::RefCell<(Vec<(u32, bool, Mem)>, Vec<Mem>, Vec<Mem>)> =
         const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
 }
 
@@ -246,86 +235,73 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
     chain_cfg.seed_len = k;
 
     UNIMEM_SCRATCH.with(|cell| {
-        let (flat, ext, merged) = &mut *cell.borrow_mut();
-        // Flatten projected seeds (carrying their unitig span) into a single
-        // buffer, grouped by (tid, is_fw) via a sort — no per-read hash map.
+        let (flat, group, merged) = &mut *cell.borrow_mut();
         flat.clear();
+        // For each queried k-mer (one `ProjectedHits` = one unitig + all its
+        // reference occurrences), extend the seed to its uni-MEM AT MOST ONCE PER
+        // ORIENTATION, then project that uni-MEM to every occurrence.
+        //
+        // Why this is exact: a uni-MEM is a match against the *unitig*, whose
+        // sequence is identical wherever it occurs, and extension is clamped to the
+        // unitig — so the matched span is occurrence-independent. `decode_hit` gives
+        // `is_fw = (contig_fw == contig_orientation)` with `contig_orientation` fixed
+        // for this hit, so `is_fw` determines `contig_fw`; hence all occurrences with
+        // the same `is_fw` share one contig-relative offset and we only differ the
+        // reference start by the occurrence's `base_pos`. This replaces the previous
+        // once-per-occurrence extension (the redundant cross-transcript re-walk).
         for (read_pos, phit) in raw_hits {
             if phit.num_hits() > cfg.max_hit_occ {
                 continue;
             }
             let contig_len = phit.contig_len() as i32;
+            // Per-orientation cache of the extended uni-MEM, as
+            // (read_start, contig_relative_start, len). Index 1 = forward.
+            let mut cache: [Option<(i32, i32, i32)>; 2] = [None, None];
             for entry in phit.ref_range().iter() {
                 let tid = encoding.transcript_id(entry);
                 let base_pos = encoding.pos(entry) as i32;
                 let rp = phit.decode_hit(entry, encoding);
-                let read_start = if rp.is_fw {
-                    *read_pos
-                } else {
-                    read_len - (*read_pos + k)
+                let slot = rp.is_fw as usize;
+                let (read_start, crel, len) = match cache[slot] {
+                    Some(v) => v,
+                    None => {
+                        let rs = if rp.is_fw {
+                            *read_pos
+                        } else {
+                            read_len - (*read_pos + k)
+                        };
+                        let query: &[u8] = if rp.is_fw { read } else { &rc };
+                        let seed = Mem::new(rs, rp.pos as i32, k);
+                        let e = extend_mem_within(
+                            query,
+                            refs.ref_seq(tid),
+                            seed,
+                            base_pos,
+                            base_pos + contig_len,
+                        );
+                        let v = (e.read_start, e.ref_start - base_pos, e.len);
+                        cache[slot] = Some(v);
+                        v
+                    }
                 };
-                flat.push((
-                    tid,
-                    rp.is_fw,
-                    SeedWithContig {
-                        mem: Mem::new(read_start, rp.pos as i32, k),
-                        u_lo: base_pos,
-                        u_hi: base_pos + contig_len,
-                    },
-                ));
+                flat.push((tid, rp.is_fw, Mem::new(read_start, base_pos + crel, len)));
             }
         }
-        // Order by (tid, is_fw, unitig occurrence, read offset). All raw k-mers of
-        // one unitig occurrence share `u_lo` and a single diagonal, so this groups
-        // the seeds that extend to the *same* uni-MEM adjacently.
-        flat.sort_unstable_by_key(|&(tid, fw, s)| (tid, fw, s.u_lo, s.mem.read_start));
+        flat.sort_unstable_by_key(|&(tid, fw, _)| (tid, fw));
 
         let mut candidates = Vec::new();
         let mut i = 0;
         while i < flat.len() {
             let (tid, is_fw, _) = flat[i];
-            let ref_seq = refs.ref_seq(tid);
-            let query: &[u8] = if is_fw { read } else { &rc };
-            ext.clear();
-            // Within a (tid, is_fw) group, walk per-unitig-occurrence sub-runs
-            // (equal `u_lo`). Collapse the contiguous raw k-mers of an occurrence
-            // and extend the merged span ONCE — every k-mer in an occurrence is on
-            // the same diagonal and extends to the same maximal exact match, so
-            // extending each independently (the previous behavior) re-walked the
-            // reference once per k-mer. A read gap within an occurrence (an internal
-            // mismatch breaks the k-mer run) starts a fresh span so the mismatch is
-            // not bridged. The post-extension `merge_same_diagonal` then stitches
-            // uni-MEMs that abut across unitig junctions on a shared diagonal.
+            group.clear();
             let mut j = i;
             while j < flat.len() && flat[j].0 == tid && flat[j].1 == is_fw {
-                let u_lo = flat[j].2.u_lo;
-                let u_hi = flat[j].2.u_hi;
-                let mut cur = flat[j].2.mem;
-                let mut jj = j + 1;
-                while jj < flat.len()
-                    && flat[jj].0 == tid
-                    && flat[jj].1 == is_fw
-                    && flat[jj].2.u_lo == u_lo
-                {
-                    let m = flat[jj].2.mem;
-                    // Same diagonal (guaranteed within an occurrence) + overlapping
-                    // or abutting in the read -> grow the current span.
-                    if (m.ref_start - m.read_start) == (cur.ref_start - cur.read_start)
-                        && m.read_start <= cur.read_end()
-                    {
-                        let new_end = cur.read_end().max(m.read_end());
-                        cur = Mem::new(cur.read_start, cur.ref_start, new_end - cur.read_start);
-                    } else {
-                        ext.push(extend_mem_within(query, ref_seq, cur, u_lo, u_hi));
-                        cur = m;
-                    }
-                    jj += 1;
-                }
-                ext.push(extend_mem_within(query, ref_seq, cur, u_lo, u_hi));
-                j = jj;
+                group.push(flat[j].2);
+                j += 1;
             }
-            // Stitch same-diagonal uni-MEMs across unitig junctions (and dedup).
-            merge_same_diagonal(ext, merged);
+            // Dedup duplicate uni-MEMs (same hit projected from several k-mers) and
+            // stitch same-diagonal uni-MEMs that abut across unitig junctions.
+            merge_same_diagonal(group, merged);
             for chain in chain_mems(merged, is_fw, &chain_cfg) {
                 candidates.push(MappingCandidate { tid, is_fw, chain });
             }
