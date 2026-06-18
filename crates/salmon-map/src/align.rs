@@ -220,17 +220,28 @@ fn anchored_align_score(
         score += mem.len * m;
         if i + 1 < mems.len() {
             let nxt = &mems[i + 1];
-            let (rg_s, rg_e) = (mem.read_end(), nxt.read_start);
-            let (tg_s, tg_e) = (mem.ref_end(), nxt.ref_start);
-            if rg_e >= rg_s && tg_e >= tg_s {
-                let qg = &query[rg_s as usize..rg_e as usize];
-                let tg = &ref_seq[tg_s as usize..tg_e as usize];
-                score += cached_gap_score(qg, tg, cfg);
-            } else {
-                // Overlapping MEMs: remove the double-counted exact bases.
-                let ov = (rg_s - rg_e).max(tg_s - tg_e).max(0);
-                score -= ov * m;
-            }
+            // Per-axis overlap of this MEM with the next (negative ⇒ a true gap).
+            let read_ov = mem.read_end() - nxt.read_start;
+            let ref_ov = mem.ref_end() - nxt.ref_start;
+            // Trim the overlapping exact bases back to a common boundary on BOTH
+            // axes, then DP-align whatever residual remains between the MEMs:
+            //  * same diagonal (read_ov == ref_ov): residual is empty on both
+            //    axes, so this degenerates to "remove the double-counted bases"
+            //    (the cached gap DP returns 0 for empty/empty);
+            //  * gap-separated (both overlaps <= 0): ov is 0 and we DP the gap;
+            //  * different diagonals (read_ov != ref_ov): trimming to the larger
+            //    overlap exposes the implied indel as a one-sided residual, which
+            //    the gap DP penalizes — instead of the indel being silently
+            //    absorbed as a plain overlap (which inflated the score).
+            let ov = read_ov.max(ref_ov).max(0);
+            score -= ov * m;
+            let q_lo = (mem.read_end() - ov)
+                .max(mem.read_start)
+                .min(nxt.read_start) as usize;
+            let t_lo = (mem.ref_end() - ov).max(mem.ref_start).min(nxt.ref_start) as usize;
+            let qg = &query[q_lo..nxt.read_start as usize];
+            let tg = &ref_seq[t_lo..nxt.ref_start as usize];
+            score += cached_gap_score(qg, tg, cfg);
         }
     }
 
@@ -609,6 +620,30 @@ mod tests {
         let f = align_chain(read, &reference, &chain, &full).unwrap();
         assert_eq!(a.score, perfect_score(read.len(), &anchored));
         assert_eq!(a.score, f.score);
+    }
+
+    #[test]
+    fn read_overlap_with_reference_gap_penalizes_deletion() {
+        // Divergent-paralog geometry (read ERR/sim mate vs a partial paralog):
+        // two exact MEMs that overlap by 1 base in the read but are separated by a
+        // 60 bp REFERENCE gap (different diagonals) — a large deletion. The pre-fix
+        // overlap branch absorbed this as a 1-base overlap (a perfect 152) and
+        // over-credited the placement past the score threshold; the residual gap DP
+        // must charge the deletion so the divergent placement is rejected.
+        let cfg = AlignConfig::default();
+        let query = gen_seq(76, 3);
+        let reference = gen_seq(400, 9);
+        let mems = vec![Mem::new(0, 198, 43), Mem::new(42, 301, 34)];
+        let score = anchored_align_score(&query, &reference, &mems, &cfg);
+        let m = cfg.match_score as i32;
+        // 43*2 + 34*2 - 1bp read overlap, minus a 61 bp deletion gap (open + 61*ext).
+        let gap = cfg.gap_open_pen as i32 + 61 * cfg.gap_extend_pen as i32;
+        let expected = (43 + 34 - 1) * m - gap; // 152 - 128 = 24
+        assert_eq!(score, expected);
+        assert!(
+            score < min_accepted_score(query.len(), &cfg),
+            "divergent placement must be rejected (score {score})"
+        );
     }
 
     #[test]
