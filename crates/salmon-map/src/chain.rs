@@ -240,6 +240,19 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
                 if dr <= 0 || dq <= 0 {
                     continue;
                 }
+                // `dr,dq > 0` only guarantees anchor `i` *starts* after `j`; it does
+                // not guarantee `i` reaches further. If `i` is fully contained in
+                // `j` on either axis (`i`'s end ≤ `j`'s end), it adds no new
+                // read/reference coverage — it's a repeat-copy / sub-anchor on a
+                // different diagonal, not a real chain extension. Chaining it would
+                // inject a spurious overlap + gap (e.g. a perfect full-length anchor
+                // dragged below threshold by a contained off-diagonal repeat hit),
+                // so it must not be a successor of `j`.
+                if sorted[i].read_end() <= sorted[j].read_end()
+                    || sorted[i].ref_end() <= sorted[j].ref_end()
+                {
+                    continue;
+                }
                 if dq > cfg.max_gap {
                     continue;
                 }
@@ -337,6 +350,27 @@ mod tests {
             chains[0].score
         );
         assert_eq!(chains[0].covered_read_bases(), 30);
+    }
+
+    #[test]
+    fn contained_anchor_not_chained_with_container() {
+        // The second anchor starts after the first on both axes (so dr,dq > 0) but
+        // is fully *contained* in the first's span (a repeat-copy / sub-anchor on a
+        // different diagonal). The DP must NOT chain it onto the container — doing
+        // so would inject a spurious overlap+gap that drags the full-length anchor
+        // below threshold. The full-length anchor stands alone.
+        let mems = [Mem::new(0, 1604, 76), Mem::new(32, 1618, 37)];
+        let chains = chain_mems(&mems, true, &cfg());
+        let best = chains
+            .iter()
+            .max_by_key(|c| c.covered_read_bases())
+            .unwrap();
+        assert_eq!(best.covered_read_bases(), 76);
+        assert_eq!(
+            best.mems.len(),
+            1,
+            "full-length anchor must not be chained with the contained hit: {chains:?}"
+        );
     }
 
     #[test]
