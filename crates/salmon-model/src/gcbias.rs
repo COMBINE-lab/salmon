@@ -496,7 +496,7 @@ impl GcContext {
 /// fragment lengths ([`GC_SAMP_STRIDE`]).
 #[allow(clippy::too_many_arguments)]
 pub fn build_expected_gc<'a, FS, FP>(
-    num_refs: usize,
+    num_targets: usize,
     seq_of: FS,
     view_of: FP,
     alphas: &[f64],
@@ -559,7 +559,7 @@ where
         }
         Some(model)
     };
-    (0..num_refs)
+    (0..num_targets)
         .into_par_iter()
         .fold(
             || GcFragModel::new(cond_bins, gc_bins),
