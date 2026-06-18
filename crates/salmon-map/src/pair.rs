@@ -142,6 +142,12 @@ thread_local! {
         std::cell::RefCell::new(AHashSet::new());
 }
 
+/// Upper bound on concordant pairs emitted per target when several repeat loci
+/// tie on combined seed coverage. Each emitted pair costs one extra pair of
+/// alignments downstream; coverage ties are rare so this is almost never hit,
+/// but it bounds fan-out on pathological tandem repeats.
+const MAX_TIED_PAIRS_PER_TARGET: usize = 16;
+
 /// End (exclusive) of the contiguous same-`tid` run starting at `i` in a
 /// tid-sorted candidate slice.
 #[inline]
@@ -156,9 +162,11 @@ fn tid_run_end(cands: &[MappingCandidate], i: usize) -> usize {
 
 /// Pair left/right mate candidates into fragment mappings.
 ///
-/// For each reference present on both mates, the best (highest combined
-/// coverage) concordant pair within `max_fragment_len` is emitted. References
-/// with no concordant pair contribute orphan mappings when `allow_orphans`.
+/// For each reference present on both mates, every concordant pair within
+/// `max_fragment_len` at the best combined seed coverage is emitted (pairing is
+/// alignment-blind, so coverage-tied repeat loci are all forwarded and `align` +
+/// `finalize` keep the highest-scoring placement per target). References with no
+/// concordant pair contribute orphan mappings when `allow_orphans`.
 ///
 /// Candidates are grouped by reference via an in-place sort + merge-join (cheap
 /// struct moves, no per-read hash map or per-tid index vectors). The grouping
@@ -195,7 +203,8 @@ pub fn join_reads_and_filter(
             }
             let le = tid_run_end(&left, i);
             let re = tid_run_end(&right, j);
-            let mut best: Option<(usize, usize, i32, LibraryFormat)> = None;
+            // Pass 1: the best combined seed coverage among concordant (li, ri)
+            // pairs for this target.
             let mut best_cov = i32::MIN;
             for li in i..le {
                 for ri in j..re {
@@ -212,22 +221,54 @@ pub fn join_reads_and_filter(
                         continue;
                     }
                     let cov = l.chain.covered_read_bases() + r.chain.covered_read_bases();
-                    if best.is_none() || cov > best_cov {
+                    if cov > best_cov {
                         best_cov = cov;
-                        best = Some((li, ri, frag_len, format));
                     }
                 }
             }
-            if let Some((li, ri, frag_len, format)) = best {
+            // Pass 2: emit EVERY pair at the best coverage, not just the first.
+            // Pairing is alignment-blind (coverage only), so when a mate matches a
+            // target at several equal-coverage repeat loci the first-seen pair may
+            // align worse — or be invalid (e.g. overhanging a transcript end) —
+            // than another equal-coverage locus, silently dropping a co-optimal
+            // paralog. Emitting all coverage-tied pairs lets `align`+`finalize`
+            // (which keeps the highest-scoring placement per target) pick the
+            // locus that actually aligns best. Capped to bound pathological
+            // tandem-repeat fan-out; ties are rare so this adds ~no alignments.
+            if best_cov > i32::MIN {
                 paired.insert(lt);
-                joints.push(JointMapping {
-                    tid: lt,
-                    status: MateStatus::PairedEndPaired,
-                    fragment_len: frag_len,
-                    format,
-                    left: Some(left[li].clone()),
-                    right: Some(right[ri].clone()),
-                });
+                let mut emitted = 0usize;
+                'pairs: for li in i..le {
+                    for ri in j..re {
+                        let l = &left[li];
+                        let r = &right[ri];
+                        let frag_start = l.chain.ref_start().min(r.chain.ref_start());
+                        let frag_end = l.chain.ref_end().max(r.chain.ref_end());
+                        let frag_len = frag_end - frag_start;
+                        if frag_len <= 0 || frag_len > cfg.max_fragment_len {
+                            continue;
+                        }
+                        if l.chain.covered_read_bases() + r.chain.covered_read_bases() != best_cov {
+                            continue;
+                        }
+                        let format = observed_format(l, r);
+                        if !cfg.allow_dovetail && is_dovetailed(l, r, format.orientation) {
+                            continue;
+                        }
+                        joints.push(JointMapping {
+                            tid: lt,
+                            status: MateStatus::PairedEndPaired,
+                            fragment_len: frag_len,
+                            format,
+                            left: Some(left[li].clone()),
+                            right: Some(right[ri].clone()),
+                        });
+                        emitted += 1;
+                        if emitted >= MAX_TIED_PAIRS_PER_TARGET {
+                            break 'pairs;
+                        }
+                    }
+                }
             }
             i = le;
             j = re;
@@ -418,6 +459,35 @@ mod tests {
         // paired with the near (pairing) chain, not the far high-coverage one.
         assert_eq!(pairs[0].left.as_ref().unwrap().chain.ref_start(), 100);
         assert_eq!(pairs[0].fragment_len, 350 - 100);
+    }
+
+    #[test]
+    fn emits_all_coverage_tied_pairs_per_target() {
+        // mate1 matches tid 0 at two equal-coverage repeat loci (100 and 200),
+        // both forming a valid concordant pair with mate2 at 300. Pairing is
+        // alignment-blind, so it must emit BOTH tied pairs and let alignment pick
+        // the locus that scores best — emitting only the first would silently drop
+        // a co-optimal placement (the real-data sim.7081 bug).
+        let left = vec![cand(0, true, 100, 50), cand(0, true, 200, 50)];
+        let right = vec![cand(0, false, 300, 50)];
+        let j = join_reads_and_filter(left, right, &PairingConfig::default());
+        let pairs: Vec<_> = j
+            .iter()
+            .filter(|m| m.status == MateStatus::PairedEndPaired)
+            .collect();
+        assert_eq!(
+            pairs.len(),
+            2,
+            "both coverage-tied loci must be emitted: {j:?}"
+        );
+        let starts: Vec<i32> = pairs
+            .iter()
+            .map(|m| m.left.as_ref().unwrap().chain.ref_start())
+            .collect();
+        assert!(
+            starts.contains(&100) && starts.contains(&200),
+            "starts={starts:?}"
+        );
     }
 
     #[test]
