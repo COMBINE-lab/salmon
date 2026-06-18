@@ -66,6 +66,21 @@ impl SimplePosBias {
         }
     }
 
+    /// A model with masses at `log(0) = -inf` — the true [`log_add`] identity, so
+    /// it carries *no* pseudocount. Used as the per-thread accumulator when
+    /// building an expected model in parallel: partials accumulate pure observed
+    /// log-mass and merge associatively via [`combine`](Self::combine); the single
+    /// `log(1)` pseudocount is then injected once by combining into a [`new`](Self::new)
+    /// (or [`default`](Self::default)) model.
+    pub fn new_empty(num_bins: usize) -> Self {
+        Self {
+            num_bins,
+            masses: vec![f64::NEG_INFINITY; num_bins],
+            finalized: false,
+            spline: None,
+        }
+    }
+
     /// Add `mass` (log space) to bin `bin`.
     #[inline]
     pub fn add_mass_bin(&mut self, bin: usize, mass: f64) {
