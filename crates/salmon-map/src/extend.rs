@@ -23,7 +23,7 @@
 //! MEM vs. unitig-constrained uni-MEM) account for read-placement differences
 //! vs. C++ salmon? (It does not — see `docs/mapping-parity-differences.md`.)
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use piscem_rs::index::contig_table::EntryEncoding;
 use piscem_rs::index::reference_index::ReferenceIndex;
@@ -174,6 +174,7 @@ pub fn collect_read_unimems<'idx, R: RefProvider>(
 
 /// A projected seed that also carries the reference span of the **unitig** it
 /// came from, so extension can be clamped to the unitig (true uni-MEM).
+#[derive(Clone, Copy)]
 struct SeedWithContig {
     mem: Mem,
     /// reference-forward start of the unitig
@@ -182,45 +183,47 @@ struct SeedWithContig {
     u_hi: i32,
 }
 
-/// Project raw k-mer hits, keeping each seed's **unitig reference span**.
+thread_local! {
+    /// Reused per-thread scratch for [`candidates_from_raw_hits_true_unimems`]:
+    /// a flat `(tid, is_fw, seed)` buffer (sorted to group by target/orientation
+    /// instead of a per-read `HashMap`), a per-group buffer of extended uni-MEMs,
+    /// and the merged-anchor output buffer. Mirrors `collect`'s `PROJ_SCRATCH`,
+    /// eliminating the per-read map + per-group `HashSet` allocations.
+    static UNIMEM_SCRATCH: std::cell::RefCell<(Vec<(u32, bool, SeedWithContig)>, Vec<Mem>, Vec<Mem>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
+}
+
+/// Collapse same-diagonal overlapping/abutting uni-MEMs into maximal anchors.
 ///
-/// Like [`project_raw_hits`] but records, per seed, the reference-forward
-/// `[base_pos, base_pos + contig_len)` window of the unitig the k-mer landed on
-/// (`base_pos = EntryEncoding::pos`, contiguous in the reference regardless of
-/// the contig's orientation). That window is what bounds a true uni-MEM.
-fn project_raw_hits_with_contig(
-    raw_hits: &[(i32, ProjectedHits<'_>)],
-    encoding: &EntryEncoding,
-    read_len: i32,
-    k: i32,
-    max_hit_occ: usize,
-) -> HashMap<(u32, bool), Vec<SeedWithContig>> {
-    let mut groups: HashMap<(u32, bool), Vec<SeedWithContig>> = HashMap::new();
-    for (read_pos, phit) in raw_hits {
-        if phit.num_hits() > max_hit_occ {
-            continue;
-        }
-        let contig_len = phit.contig_len() as i32;
-        for entry in phit.ref_range().iter() {
-            let tid = encoding.transcript_id(entry);
-            let base_pos = encoding.pos(entry) as i32;
-            let rp = phit.decode_hit(entry, encoding);
-            let read_start = if rp.is_fw {
-                *read_pos
-            } else {
-                read_len - (*read_pos + k)
-            };
-            groups
-                .entry((tid, rp.is_fw))
-                .or_default()
-                .push(SeedWithContig {
-                    mem: Mem::new(read_start, rp.pos as i32, k),
-                    u_lo: base_pos,
-                    u_hi: base_pos + contig_len,
-                });
+/// Extending each raw k-mer hit independently yields several heavily-overlapping
+/// uni-MEMs on one diagonal (one per surviving seed). The minimap2-style chaining
+/// gain counts a successor's new bases by its *start* offset, which undercounts a
+/// longer anchor's end extension — so the chainer scores the overlapping group
+/// below the single longest anchor and splits it, deflating chain coverage. We
+/// instead merge them here (as pufferfish's one-uni-MEM-per-diagonal seeding
+/// does), so the chain sees a single maximal anchor. Anchors on the same diagonal
+/// separated by a real gap (a SNP run) are left distinct for the chainer; only
+/// overlapping/touching runs are merged. `ext` is consumed (sorted) and the
+/// result written to `out`.
+fn merge_same_diagonal(ext: &mut [Mem], out: &mut Vec<Mem>) {
+    out.clear();
+    if ext.is_empty() {
+        return;
+    }
+    // diagonal = ref_start - read_start; collinear (gap-free) anchors share it.
+    ext.sort_unstable_by_key(|m| (m.ref_start - m.read_start, m.read_start));
+    let mut cur = ext[0];
+    for &m in &ext[1..] {
+        let same_diag = (m.ref_start - m.read_start) == (cur.ref_start - cur.read_start);
+        if same_diag && m.read_start <= cur.read_end() {
+            let new_end = cur.read_end().max(m.read_end());
+            cur = Mem::new(cur.read_start, cur.ref_start, new_end - cur.read_start);
+        } else {
+            out.push(cur);
+            cur = m;
         }
     }
-    groups
+    out.push(cur);
 }
 
 /// Project then extend each seed into a **true uni-MEM** (extension clamped to
@@ -238,30 +241,66 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
     cfg: &MemCollectorConfig,
 ) -> Vec<MappingCandidate> {
     let read_len = read.len() as i32;
-    let groups = project_raw_hits_with_contig(raw_hits, encoding, read_len, k, cfg.max_hit_occ);
     let rc = revcomp(read);
     let mut chain_cfg = cfg.chain.clone();
     chain_cfg.seed_len = k;
 
-    let mut candidates = Vec::new();
-    for ((tid, is_fw), seeds) in groups {
-        let ref_seq = refs.ref_seq(tid);
-        let query: &[u8] = if is_fw { read } else { &rc };
-
-        let mut seen = HashSet::new();
-        let mut unimems = Vec::with_capacity(seeds.len());
-        for s in seeds {
-            let e = extend_mem_within(query, ref_seq, s.mem, s.u_lo, s.u_hi);
-            if seen.insert((e.read_start, e.ref_start, e.len)) {
-                unimems.push(e);
+    UNIMEM_SCRATCH.with(|cell| {
+        let (flat, ext, merged) = &mut *cell.borrow_mut();
+        // Flatten projected seeds (carrying their unitig span) into a single
+        // buffer, grouped by (tid, is_fw) via a sort — no per-read hash map.
+        flat.clear();
+        for (read_pos, phit) in raw_hits {
+            if phit.num_hits() > cfg.max_hit_occ {
+                continue;
+            }
+            let contig_len = phit.contig_len() as i32;
+            for entry in phit.ref_range().iter() {
+                let tid = encoding.transcript_id(entry);
+                let base_pos = encoding.pos(entry) as i32;
+                let rp = phit.decode_hit(entry, encoding);
+                let read_start = if rp.is_fw {
+                    *read_pos
+                } else {
+                    read_len - (*read_pos + k)
+                };
+                flat.push((
+                    tid,
+                    rp.is_fw,
+                    SeedWithContig {
+                        mem: Mem::new(read_start, rp.pos as i32, k),
+                        u_lo: base_pos,
+                        u_hi: base_pos + contig_len,
+                    },
+                ));
             }
         }
+        flat.sort_unstable_by_key(|&(tid, fw, _)| (tid, fw));
 
-        for chain in chain_mems(&unimems, is_fw, &chain_cfg) {
-            candidates.push(MappingCandidate { tid, is_fw, chain });
+        let mut candidates = Vec::new();
+        let mut i = 0;
+        while i < flat.len() {
+            let (tid, is_fw, _) = flat[i];
+            let ref_seq = refs.ref_seq(tid);
+            let query: &[u8] = if is_fw { read } else { &rc };
+            // Extend each seed within its unitig, then merge same-diagonal
+            // overlapping uni-MEMs into maximal anchors (which also dedups exact
+            // duplicates, replacing the per-group HashSet).
+            ext.clear();
+            let mut j = i;
+            while j < flat.len() && flat[j].0 == tid && flat[j].1 == is_fw {
+                let s = &flat[j].2;
+                ext.push(extend_mem_within(query, ref_seq, s.mem, s.u_lo, s.u_hi));
+                j += 1;
+            }
+            merge_same_diagonal(ext, merged);
+            for chain in chain_mems(merged, is_fw, &chain_cfg) {
+                candidates.push(MappingCandidate { tid, is_fw, chain });
+            }
+            i = j;
         }
-    }
-    candidates
+        candidates
+    })
 }
 
 /// Collect true uni-MEM mapping candidates (unitig-constrained extension) for
@@ -294,6 +333,42 @@ mod tests {
     use super::*;
     use piscem_rs::index::contig_table::{ContigTable, ContigTableBuilder};
     use piscem_rs::mapping::projected_hits::ProjectedHits;
+
+    #[test]
+    fn merge_collapses_same_diagonal_overlaps() {
+        // The read-100000/ENST00000518938.1 geometry: three overlapping uni-MEMs
+        // on diagonal 76 (one per surviving seed). They must collapse to a single
+        // maximal anchor read[0,52) so the chain coverage matches the equivalent
+        // fixed-k-mer chain (52), instead of the chainer splitting them.
+        let mut ext = vec![
+            Mem::new(0, 76, 34),
+            Mem::new(4, 80, 34),
+            Mem::new(8, 84, 44),
+        ];
+        let mut out = Vec::new();
+        merge_same_diagonal(&mut ext, &mut out);
+        assert_eq!(out.len(), 1, "same-diagonal overlaps must merge into one");
+        assert_eq!(
+            (out[0].read_start, out[0].ref_start, out[0].len),
+            (0, 76, 52)
+        );
+    }
+
+    #[test]
+    fn merge_keeps_distinct_diagonals_and_real_gaps() {
+        // Same diagonal but a real read gap (a SNP run) stays distinct; a
+        // different diagonal stays distinct — only overlapping/touching runs merge.
+        let mut ext = vec![
+            Mem::new(0, 100, 20),  // diag 100, read[0,20)
+            Mem::new(10, 110, 20), // diag 100, overlaps prev -> merges to read[0,30)
+            Mem::new(40, 140, 10), // diag 100, gap after read 30 -> distinct
+            Mem::new(50, 200, 20), // diag 150 -> distinct
+        ];
+        let mut out = Vec::new();
+        merge_same_diagonal(&mut ext, &mut out);
+        assert_eq!(out.len(), 3);
+        assert_eq!((out[0].read_start, out[0].len), (0, 30));
+    }
 
     /// Minimal in-memory reference store for the extension tests.
     struct TestRefs {
