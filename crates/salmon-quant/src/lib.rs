@@ -465,9 +465,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // user-specified string. Fall back to a sensible default if detection saw
     // no usable samples.
     let library_type = if let Some(det) = &detector {
-        det.most_likely_type()
-            .map(|f| f.canonical().to_string())
-            .unwrap_or_else(|| if opts.is_paired() { "IU" } else { "U" }.to_string())
+        det.final_format().canonical().to_string()
     } else {
         opts.lib_type.clone()
     };

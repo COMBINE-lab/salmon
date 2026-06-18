@@ -319,10 +319,17 @@ fn record(
         }
     }
 
-    // Strand-compatibility filtering against an explicit expected format.
+    // Strand-compatibility filtering against the expected format: the explicit
+    // `-l` type, or — in auto (`-l A`) mode — the format the detector locks in
+    // once it has seen enough of the read prefix (`resolved_format`). Until the
+    // prefix is consumed this is `None` and nothing is filtered; afterwards the
+    // detected type is applied for the rest of the sample (salmon's behavior).
+    let expected = sh
+        .expected_format
+        .or_else(|| sh.detector.and_then(|d| d.resolved_format()));
     let compat: Vec<(&ScoredMapping, f64)> = maps
         .iter()
-        .filter_map(|m| match sh.expected_format {
+        .filter_map(|m| match expected {
             Some(exp) => {
                 if is_compatible(exp, m.format, m.is_fw, m.status) {
                     Some((m, m.weight))
@@ -457,9 +464,7 @@ fn record(
         for (i, (m, _)) in compat.iter().enumerate() {
             let conc = m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
-                && sh
-                    .expected_format
-                    .is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
+                && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
             if conc && fld_rng_u01() < post[i] {
                 sh.fld.add_val(m.fragment_len as usize, 0.0);
             }
