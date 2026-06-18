@@ -541,6 +541,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let mut bias_dump = BiasDump::default();
     if bias_on && !opts.skip_quant {
         use rayon::prelude::*;
+        // Expected-bias models are built only over quantification targets: decoys
+        // (the contiguous tail at `first_decoy_index`) are never expressed and so
+        // contribute nothing, but a decoy chromosome would otherwise hand one
+        // rayon worker an O(ref_len) sweep over hundreds of Mbp. See issue #1019.
+        let num_targets = salmon.info().first_decoy_index.unwrap_or(num_refs);
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
         let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
         // K excludes the leading sequence context only when seq-correcting.
@@ -556,7 +561,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             obs_fw.normalize();
             obs_rc.normalize();
             let (exp_fw, exp_rc) = salmon_model::build_expected(
-                num_refs,
+                num_targets,
                 |t| salmon.ref_seq(t as u32),
                 &em.alphas,
                 &eff_lengths,
@@ -576,7 +581,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let gc_ratio_model = if let Some(m) = gcbias_obs {
             let mut obs = m.into_inner().unwrap();
             let mut exp = salmon_model::build_expected_gc(
-                num_refs,
+                num_targets,
                 |t| salmon.ref_seq(t as u32),
                 |t| store.unwrap().view(t),
                 &em.alphas,
@@ -611,7 +616,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 x.finalize();
             }
             let (exp_fw, exp_rc) = salmon_model::build_expected_pos(
-                num_refs,
+                num_targets,
                 |t| salmon.ref_len(t) as usize,
                 &em.alphas,
                 &eff_lengths,
