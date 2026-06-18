@@ -223,6 +223,16 @@ pub fn join_reads_and_filter(
                 for ri in j..re {
                     let l = &left[li];
                     let r = &right[ri];
+                    // A concordant pair has the mates on opposite strands (salmon's
+                    // `satisfiesOri = lclust.isFw != rclust.isFw`). A same-strand
+                    // pair is discordant for an inward library — it arises when a
+                    // fragment maps to a paralog whose mate region is inverted, so
+                    // both mates read the same strand; salmon never accepts it as
+                    // concordant, and (when an opposite-strand pair exists) never
+                    // falls back to the discordant round. Skip it here too.
+                    if l.is_fw == r.is_fw {
+                        continue;
+                    }
                     let frag_start = l.chain.ref_start().min(r.chain.ref_start());
                     let frag_end = l.chain.ref_end().max(r.chain.ref_end());
                     let frag_len = frag_end - frag_start;
@@ -254,6 +264,10 @@ pub fn join_reads_and_filter(
                     for ri in j..re {
                         let l = &left[li];
                         let r = &right[ri];
+                        // opposite-strand requirement (see pass 1)
+                        if l.is_fw == r.is_fw {
+                            continue;
+                        }
                         let frag_start = l.chain.ref_start().min(r.chain.ref_start());
                         let frag_end = l.chain.ref_end().max(r.chain.ref_end());
                         let frag_len = frag_end - frag_start;
@@ -632,6 +646,32 @@ mod tests {
             j.iter().any(|m| m.status == MateStatus::PairedEndPaired),
             "{j:?}"
         );
+    }
+
+    #[test]
+    fn same_strand_pair_is_not_concordant() {
+        // Both mates on the SAME strand (R1 fw, R2 fw). This is the real-data
+        // sim.356845 case — a fragment that is a proper opposite-strand inward
+        // pair on its true transcript but maps to a paralog whose mate region is
+        // inverted, so both mates read the same strand. salmon requires opposite
+        // strands for a concordant pair (`satisfiesOri = lclust.isFw != rclust.isFw`);
+        // it must not be emitted as a concordant pair, regardless of allow_dovetail
+        // (an orientation, not an overhang, problem). Note: auto library detection
+        // leaves the downstream strand-compat filter inactive, so this geometric
+        // check is the only thing that drops it — matching C++'s joinReadsAndFilter.
+        let left = vec![cand(0, true, 232, 76)]; // R1 fw
+        let right = vec![cand(0, true, 445, 76)]; // R2 fw (same strand)
+        for allow in [false, true] {
+            let cfg = PairingConfig {
+                allow_dovetail: allow,
+                ..Default::default()
+            };
+            let j = join_reads_and_filter(left.clone(), right.clone(), &cfg);
+            assert!(
+                !j.iter().any(|m| m.status == MateStatus::PairedEndPaired),
+                "same-strand must never pair (allow_dovetail={allow}): {j:?}"
+            );
+        }
     }
 
     #[test]
