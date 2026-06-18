@@ -663,6 +663,34 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_mems_on_shifted_diagonals_incur_gap_penalty() {
+        // Two MEMs that overlap by 1 base in the read but by 4 in the reference
+        // (diagonals 3 apart) — a hidden 3 bp indel. This is the exact geometry
+        // observed for ERR188044.600028 vs ENST00000677249.1. Pre-fix the
+        // overlap branch scored it as a plain overlap (sum*match - max_overlap),
+        // silently absorbing the indel and inflating the score; now the residual
+        // is DP-aligned and the diagonal jump costs an affine gap.
+        let cfg = AlignConfig::default();
+        let query = gen_seq(76, 5);
+        let reference = gen_seq(900, 9);
+        // mem0: read[0..45]@ref790 (diag 745); mem1: read[44..76]@ref831 (diag 787).
+        // read_ov = 45-44 = 1 ; ref_ov = (790+45)-831 = 4  -> implied 3 bp indel.
+        let mems = vec![Mem::new(0, 790, 45), Mem::new(44, 831, 32)];
+        let m = cfg.match_score as i32;
+        let score = anchored_align_score(&query, &reference, &mems, &cfg);
+        // Old (buggy) behavior absorbed the indel as a 4-base overlap only:
+        let absorbed = (45 + 32) * m - 4 * m; // = 146
+                                              // Fixed: 73 matched bases minus a 3 bp affine gap (open + 3*extend).
+        let gap = cfg.gap_open_pen as i32 + 3 * cfg.gap_extend_pen as i32;
+        let expected = (45 + 32 - 4) * m - gap; // 146 - 12 = 134
+        assert_eq!(score, expected, "expected indel-penalized score");
+        assert!(
+            score < absorbed,
+            "indel was not penalized: {score} >= {absorbed}"
+        );
+    }
+
+    #[test]
     fn single_mismatch_reduces_score_but_stays_valid() {
         let reference = gen_seq(300, 11);
         let mut read = reference[50..130].to_vec();
