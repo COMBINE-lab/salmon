@@ -9,7 +9,7 @@
 //! References that yield no concordant pair fall back to orphan mappings when
 //! orphans are allowed. Mirrors pufferfish/salmon's `joinReadsAndFilter`.
 
-use ahash::{AHashMap, AHashSet};
+use ahash::AHashSet;
 
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
@@ -133,116 +133,234 @@ fn is_dovetailed(l: &MappingCandidate, r: &MappingCandidate, orientation: ReadOr
     fw.chain.ref_start() > rc.chain.ref_start() || fw.chain.ref_end() > rc.chain.ref_end()
 }
 
-fn group_by_tid(cands: &[MappingCandidate]) -> AHashMap<u32, Vec<usize>> {
-    let mut m: AHashMap<u32, Vec<usize>> = AHashMap::new();
-    for (i, c) in cands.iter().enumerate() {
-        m.entry(c.tid).or_default().push(i);
+thread_local! {
+    /// Reused per-thread `paired` set for [`join_reads_and_filter`] (the tids that
+    /// formed a concordant pair). Cleared per call; reused so pairing allocates no
+    /// per-read hash set. Grouping uses an in-place sort (no map), so the two
+    /// per-read `AHashMap<u32, Vec<usize>>` of the old `group_by_tid` are gone.
+    static PAIRED_TIDS: std::cell::RefCell<AHashSet<u32>> =
+        std::cell::RefCell::new(AHashSet::new());
+}
+
+/// Upper bound on concordant pairs emitted per target when several repeat loci
+/// tie on combined seed coverage. Each emitted pair costs one extra pair of
+/// alignments downstream; coverage ties are rare so this is almost never hit,
+/// but it bounds fan-out on pathological tandem repeats.
+const MAX_TIED_PAIRS_PER_TARGET: usize = 16;
+
+/// End (exclusive) of the contiguous same-`tid` run starting at `i` in a
+/// tid-sorted candidate slice.
+#[inline]
+fn tid_run_end(cands: &[MappingCandidate], i: usize) -> usize {
+    let tid = cands[i].tid;
+    let mut e = i + 1;
+    while e < cands.len() && cands[e].tid == tid {
+        e += 1;
     }
-    m
+    e
 }
 
 /// Pair left/right mate candidates into fragment mappings.
 ///
-/// For each reference present on both mates, the best (highest combined
-/// coverage) concordant pair within `max_fragment_len` is emitted. References
-/// with no concordant pair contribute orphan mappings when `allow_orphans`.
+/// For each reference present on both mates, every concordant pair within
+/// `max_fragment_len` at the best combined seed coverage is emitted (pairing is
+/// alignment-blind, so coverage-tied repeat loci are all forwarded and `align` +
+/// `finalize` keep the highest-scoring placement per target). References with no
+/// concordant pair contribute orphan mappings when `allow_orphans`.
+///
+/// Candidates are grouped by reference via an in-place sort + merge-join (cheap
+/// struct moves, no per-read hash map or per-tid index vectors). The grouping
+/// affects only the *order* of emitted records, not which targets/scores are
+/// produced (downstream keys/dedups by tid).
 pub fn join_reads_and_filter(
-    left: Vec<MappingCandidate>,
-    right: Vec<MappingCandidate>,
+    mut left: Vec<MappingCandidate>,
+    mut right: Vec<MappingCandidate>,
     cfg: &PairingConfig,
 ) -> Vec<JointMapping> {
-    let left_by_tid = group_by_tid(&left);
-    let right_by_tid = group_by_tid(&right);
+    left.sort_unstable_by_key(|c| c.tid);
+    right.sort_unstable_by_key(|c| c.tid);
 
     let mut joints = Vec::new();
-    let mut paired_tids = AHashSet::new();
+    PAIRED_TIDS.with(|cell| {
+        let paired = &mut *cell.borrow_mut();
+        paired.clear();
 
-    // Concordant pairs.
-    for (&tid, lidx) in &left_by_tid {
-        let Some(ridx) = right_by_tid.get(&tid) else {
-            continue;
-        };
-        // Track the best (left, right) index pair by combined coverage and only
-        // clone the winning candidates once at the end — cloning every pair we
-        // consider (each clone heap-allocates the chain's `Mem` vec) just to
-        // compare coverage was a per-fragment allocator hot spot.
-        let mut best: Option<(usize, usize, i32, LibraryFormat)> = None;
-        let mut best_cov = i32::MIN;
-        for &li in lidx {
-            for &ri in ridx {
-                let l = &left[li];
-                let r = &right[ri];
-                let frag_start = l.chain.ref_start().min(r.chain.ref_start());
-                let frag_end = l.chain.ref_end().max(r.chain.ref_end());
-                let frag_len = frag_end - frag_start;
-                if frag_len <= 0 || frag_len > cfg.max_fragment_len {
-                    continue;
-                }
-                let format = observed_format(l, r);
-                if !cfg.allow_dovetail && is_dovetailed(l, r, format.orientation) {
-                    continue;
-                }
-                let cov = l.chain.covered_read_bases() + r.chain.covered_read_bases();
-                if best.is_none() || cov > best_cov {
-                    best_cov = cov;
-                    best = Some((li, ri, frag_len, format));
+        // Concordant pairs: merge-join the two tid-sorted candidate lists. For a
+        // reference present on both mates we consider every (left, right) chain
+        // pair (so a repeat-position chain that pairs is not lost to an earlier
+        // single-best collapse) and clone only the best by combined coverage.
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < left.len() && j < right.len() {
+            let lt = left[i].tid;
+            let rt = right[j].tid;
+            if lt < rt {
+                i = tid_run_end(&left, i);
+                continue;
+            }
+            if rt < lt {
+                j = tid_run_end(&right, j);
+                continue;
+            }
+            let le = tid_run_end(&left, i);
+            let re = tid_run_end(&right, j);
+            // Pass 1: the best combined seed coverage among concordant (li, ri)
+            // pairs for this target.
+            let mut best_cov = i32::MIN;
+            for li in i..le {
+                for ri in j..re {
+                    let l = &left[li];
+                    let r = &right[ri];
+                    let frag_start = l.chain.ref_start().min(r.chain.ref_start());
+                    let frag_end = l.chain.ref_end().max(r.chain.ref_end());
+                    let frag_len = frag_end - frag_start;
+                    if frag_len <= 0 || frag_len > cfg.max_fragment_len {
+                        continue;
+                    }
+                    let format = observed_format(l, r);
+                    if !cfg.allow_dovetail && is_dovetailed(l, r, format.orientation) {
+                        continue;
+                    }
+                    let cov = l.chain.covered_read_bases() + r.chain.covered_read_bases();
+                    if cov > best_cov {
+                        best_cov = cov;
+                    }
                 }
             }
-        }
-        if let Some((li, ri, frag_len, format)) = best {
-            paired_tids.insert(tid);
-            joints.push(JointMapping {
-                tid,
-                status: MateStatus::PairedEndPaired,
-                fragment_len: frag_len,
-                format,
-                left: Some(left[li].clone()),
-                right: Some(right[ri].clone()),
-            });
-        }
-    }
-
-    // Post-merge concordant chain-pair sub-optimality prune (salmon's
-    // postMergeChainSubThresh; off by default). Drop concordant pairs whose
-    // read-coverage is below `thresh * (best concordant coverage)`, before
-    // alignment. Applied only to the concordant set (pruned tids stay in
-    // `paired_tids`, so they do not fall back to orphans).
-    if cfg.post_merge_chain_sub_thresh > 0.0 && !joints.is_empty() {
-        let best_cov = joints.iter().map(JointMapping::coverage).max().unwrap_or(0);
-        let cutoff = (cfg.post_merge_chain_sub_thresh * best_cov as f32).ceil() as i32;
-        joints.retain(|j| j.coverage() >= cutoff);
-    }
-
-    // Orphans for references that did not yield a concordant pair.
-    if cfg.allow_orphans {
-        // Optional orphan chain sub-optimality prune (salmon's orphanChainSubThresh;
-        // off by default — see PairingConfig). When enabled, only orphan candidates
-        // whose chain coverage is within `thresh` of the best orphan chain survive.
-        let cutoff = if cfg.orphan_chain_sub_thresh > 0.0 {
-            let best = left
-                .iter()
-                .chain(right.iter())
-                .filter(|c| !paired_tids.contains(&c.tid))
-                .map(|c| c.chain.covered_read_bases())
-                .max()
-                .unwrap_or(0);
-            (cfg.orphan_chain_sub_thresh * best as f32).ceil() as i32
-        } else {
-            0
-        };
-        for c in &left {
-            if !paired_tids.contains(&c.tid) && c.chain.covered_read_bases() >= cutoff {
-                joints.push(orphan(c.clone(), MateStatus::PairedEndLeft));
+            // Pass 2: emit EVERY pair at the best coverage, not just the first.
+            // Pairing is alignment-blind (coverage only), so when a mate matches a
+            // target at several equal-coverage repeat loci the first-seen pair may
+            // align worse — or be invalid (e.g. overhanging a transcript end) —
+            // than another equal-coverage locus, silently dropping a co-optimal
+            // paralog. Emitting all coverage-tied pairs lets `align`+`finalize`
+            // (which keeps the highest-scoring placement per target) pick the
+            // locus that actually aligns best. Capped to bound pathological
+            // tandem-repeat fan-out; ties are rare so this adds ~no alignments.
+            if best_cov > i32::MIN {
+                paired.insert(lt);
+                let mut emitted = 0usize;
+                'pairs: for li in i..le {
+                    for ri in j..re {
+                        let l = &left[li];
+                        let r = &right[ri];
+                        let frag_start = l.chain.ref_start().min(r.chain.ref_start());
+                        let frag_end = l.chain.ref_end().max(r.chain.ref_end());
+                        let frag_len = frag_end - frag_start;
+                        if frag_len <= 0 || frag_len > cfg.max_fragment_len {
+                            continue;
+                        }
+                        if l.chain.covered_read_bases() + r.chain.covered_read_bases() != best_cov {
+                            continue;
+                        }
+                        let format = observed_format(l, r);
+                        if !cfg.allow_dovetail && is_dovetailed(l, r, format.orientation) {
+                            continue;
+                        }
+                        joints.push(JointMapping {
+                            tid: lt,
+                            status: MateStatus::PairedEndPaired,
+                            fragment_len: frag_len,
+                            format,
+                            left: Some(left[li].clone()),
+                            right: Some(right[ri].clone()),
+                        });
+                        emitted += 1;
+                        if emitted >= MAX_TIED_PAIRS_PER_TARGET {
+                            break 'pairs;
+                        }
+                    }
+                }
             }
+            i = le;
+            j = re;
         }
-        for c in &right {
-            if !paired_tids.contains(&c.tid) && c.chain.covered_read_bases() >= cutoff {
-                joints.push(orphan(c.clone(), MateStatus::PairedEndRight));
-            }
+
+        // Post-merge concordant chain-pair sub-optimality prune (salmon's
+        // postMergeChainSubThresh; off by default). Drop concordant pairs whose
+        // read-coverage is below `thresh * (best concordant coverage)`, before
+        // alignment. Applied only to the concordant set (pruned tids stay in
+        // `paired`, so they do not fall back to orphans).
+        if cfg.post_merge_chain_sub_thresh > 0.0 && !joints.is_empty() {
+            let best_cov = joints.iter().map(JointMapping::coverage).max().unwrap_or(0);
+            let cutoff = (cfg.post_merge_chain_sub_thresh * best_cov as f32).ceil() as i32;
+            joints.retain(|j| j.coverage() >= cutoff);
         }
-    }
+
+        // Orphans for references that did not yield a concordant pair.
+        if cfg.allow_orphans {
+            // Optional orphan chain sub-optimality prune (salmon's orphanChainSubThresh;
+            // off by default). When enabled, only orphan candidates whose chain
+            // read-coverage is within `thresh` of the best orphan chain survive.
+            let cutoff = if cfg.orphan_chain_sub_thresh > 0.0 {
+                let best = left
+                    .iter()
+                    .chain(right.iter())
+                    .filter(|c| !paired.contains(&c.tid))
+                    .map(|c| c.chain.covered_read_bases())
+                    .max()
+                    .unwrap_or(0);
+                (cfg.orphan_chain_sub_thresh * best as f32).ceil() as i32
+            } else {
+                0
+            };
+            // We pair over *all* per-target chains (no `best_per_target` pre-pass),
+            // so a mate may have several chains to one reference. Emit at most one
+            // orphan per (tid, is_fw): the highest-coverage unpaired chain.
+            emit_best_orphans(
+                &left,
+                paired,
+                cutoff,
+                MateStatus::PairedEndLeft,
+                &mut joints,
+            );
+            emit_best_orphans(
+                &right,
+                paired,
+                cutoff,
+                MateStatus::PairedEndRight,
+                &mut joints,
+            );
+        }
+    });
 
     joints
+}
+
+/// Emit one orphan per `(tid, is_fw)` for references with no concordant pair:
+/// the highest-coverage unpaired chain in each orientation (≥ `cutoff`). Keeping
+/// only the best per orientation avoids redundant orphan alignments when a mate
+/// has several chains to one reference (repeat copies). `cands` is tid-sorted.
+fn emit_best_orphans(
+    cands: &[MappingCandidate],
+    paired: &AHashSet<u32>,
+    cutoff: i32,
+    status: MateStatus,
+    joints: &mut Vec<JointMapping>,
+) {
+    let mut i = 0;
+    while i < cands.len() {
+        let e = tid_run_end(cands, i);
+        if !paired.contains(&cands[i].tid) {
+            let (mut best_fw, mut best_rc): (Option<usize>, Option<usize>) = (None, None);
+            for k in i..e {
+                let cov = cands[k].chain.covered_read_bases();
+                if cov < cutoff {
+                    continue;
+                }
+                let slot = if cands[k].is_fw {
+                    &mut best_fw
+                } else {
+                    &mut best_rc
+                };
+                if slot.is_none_or(|b| cov > cands[b].chain.covered_read_bases()) {
+                    *slot = Some(k);
+                }
+            }
+            for k in [best_fw, best_rc].into_iter().flatten() {
+                joints.push(orphan(cands[k].clone(), status));
+            }
+        }
+        i = e;
+    }
 }
 
 fn orphan(c: MappingCandidate, status: MateStatus) -> JointMapping {
@@ -321,6 +439,55 @@ mod tests {
         assert!(j.iter().all(|m| m.status.is_orphan()));
         assert!(j.iter().any(|m| m.status == MateStatus::PairedEndLeft));
         assert!(j.iter().any(|m| m.status == MateStatus::PairedEndRight));
+    }
+
+    #[test]
+    fn pairs_repeat_position_chain_over_higher_coverage_nonpairing() {
+        // mate1 matches tid 0 at two positions: a higher-coverage chain too far
+        // from mate2 to pair, and a lower-coverage chain that pairs. Pairing over
+        // ALL per-target chains must form the valid pair — the old `best_per_target`
+        // pre-pass kept only the higher-coverage (non-pairing) chain and lost it.
+        let left = vec![cand(0, true, 5000, 60), cand(0, true, 100, 50)];
+        let right = vec![cand(0, false, 300, 50)];
+        let j = join_reads_and_filter(left, right, &PairingConfig::default());
+        let pairs: Vec<_> = j
+            .iter()
+            .filter(|m| m.status == MateStatus::PairedEndPaired)
+            .collect();
+        assert_eq!(pairs.len(), 1, "the valid (near) pair must be found: {j:?}");
+        assert_eq!(pairs[0].tid, 0);
+        // paired with the near (pairing) chain, not the far high-coverage one.
+        assert_eq!(pairs[0].left.as_ref().unwrap().chain.ref_start(), 100);
+        assert_eq!(pairs[0].fragment_len, 350 - 100);
+    }
+
+    #[test]
+    fn emits_all_coverage_tied_pairs_per_target() {
+        // mate1 matches tid 0 at two equal-coverage repeat loci (100 and 200),
+        // both forming a valid concordant pair with mate2 at 300. Pairing is
+        // alignment-blind, so it must emit BOTH tied pairs and let alignment pick
+        // the locus that scores best — emitting only the first would silently drop
+        // a co-optimal placement (the real-data sim.7081 bug).
+        let left = vec![cand(0, true, 100, 50), cand(0, true, 200, 50)];
+        let right = vec![cand(0, false, 300, 50)];
+        let j = join_reads_and_filter(left, right, &PairingConfig::default());
+        let pairs: Vec<_> = j
+            .iter()
+            .filter(|m| m.status == MateStatus::PairedEndPaired)
+            .collect();
+        assert_eq!(
+            pairs.len(),
+            2,
+            "both coverage-tied loci must be emitted: {j:?}"
+        );
+        let starts: Vec<i32> = pairs
+            .iter()
+            .map(|m| m.left.as_ref().unwrap().chain.ref_start())
+            .collect();
+        assert!(
+            starts.contains(&100) && starts.contains(&200),
+            "starts={starts:?}"
+        );
     }
 
     #[test]

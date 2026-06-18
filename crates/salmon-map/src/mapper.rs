@@ -21,14 +21,15 @@ use crate::extend::{collect_read_true_unimems, collect_read_unimems};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SeedMode {
     /// Sparse fixed-`k` k-mer anchors straight from piscem's skipping query
-    /// (one length-`k` anchor per unitig transition). The default.
-    #[default]
+    /// (one length-`k` anchor per unitig transition). Selected by `--sparseSeeds`.
     Sparse,
     /// Reference MEMs: each seed extended against the reference transcript,
     /// crossing unitig boundaries ([`crate::extend::collect_read_unimems`]).
     RefMem,
     /// True uni-MEMs: extension clamped to each seed's unitig, reproducing
     /// pufferfish's `expandHitEfficient` ([`crate::extend::collect_read_true_unimems`]).
+    /// The default — faster than and at least as accurate as sparse seeding.
+    #[default]
     UniMem,
 }
 use crate::pair::{join_reads_and_filter, PairingConfig};
@@ -181,14 +182,14 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
     let cf = cfg.collect.consensus_fraction;
-    let left = consensus_filter(
-        best_per_target(collect_candidates(index, hs, refs, r1, true, cfg)),
-        cf,
-    );
-    let right = consensus_filter(
-        best_per_target(collect_candidates(index, hs, refs, r2, true, cfg)),
-        cf,
-    );
+    // NOTE: deliberately do NOT collapse to one chain per (tid, is_fw) before
+    // pairing. A mate can match a transcript at several positions (an internal
+    // repeat); `best_per_target` keeps only the highest-coverage chain, which may
+    // not be the placement that forms a valid concordant pair. `join_reads_and_filter`
+    // selects the pairing-compatible chain per target over all candidates, and
+    // de-duplicates orphans to one per (tid, is_fw) itself.
+    let left = consensus_filter(collect_candidates(index, hs, refs, r1, true, cfg), cf);
+    let right = consensus_filter(collect_candidates(index, hs, refs, r2, true, cfg), cf);
     let joints = join_reads_and_filter(left, right, &cfg.pair);
 
     let had_candidates = !joints.is_empty();
