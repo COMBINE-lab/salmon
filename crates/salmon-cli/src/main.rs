@@ -728,6 +728,17 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.validate_mappings {
         tracing::warn!("--validateMappings has no effect (deprecated in salmon too): selective alignment is the default mapping mode; pass --sketch for pseudoalignment.");
     }
+    if args.sketch && args.decoy_threshold != 1.0 {
+        tracing::warn!(
+            "--decoyThreshold {} has no effect in --sketch mode: sketch (pseudoalignment) \
+             returns only equally-best mappings, so the decoy-domination comparison \
+             (bestTxpScore < decoyThreshold * bestDecoyScore) never triggers. A fragment is \
+             treated as decoy-dominated only when it maps to decoys *and no transcript*; \
+             otherwise decoy hits are dropped and transcript hits kept (use --allowDecoyOrphans \
+             to keep transcript hits even when a decoy also matches).",
+            args.decoy_threshold
+        );
+    }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
     let nthreads = if args.threads == 0 {
