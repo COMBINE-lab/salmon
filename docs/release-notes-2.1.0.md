@@ -1,10 +1,27 @@
-# salmon 2.0.2 (draft — in progress)
+# salmon 2.1.0 (draft — in progress)
 
-A correctness-focused patch that closes the remaining selective-alignment
-mapping/quantification gaps against C++ salmon (1.12.1), plus the uni-MEM default
-seeding change. **No output-format changes** — `quant.sf` and inferential
-replicates are produced as before. Indices built with 2.0.0/2.0.1 still load,
-but rebuilding is recommended to pick up the uni-MEM seeding.
+A correctness-focused release that closes the remaining selective-alignment
+mapping/quantification gaps against C++ salmon (1.12.1), adds N-aware decoy
+indexing, and introduces an explicit salmon index *format* version. Released as a
+**minor** (not patch) version because of the index-format bump and the breadth of
+the decoy / short-transcript / duplicate-symmetry correctness changes.
+
+**Index rebuild required.** salmon 2.1.0 writes (and requires) index format
+**v1**, recorded as `index_version` in `info.json`. Indices built by salmon
+2.0.0/2.0.1 carry no format version and are **rejected on load** with a rebuild
+message — they predate the decoy / short-transcript contiguity guarantee below
+and could mis-classify references. `quant.sf` and the inferential-replicate
+formats are otherwise unchanged.
+
+## Index format version (`index_version`)
+
+salmon now records its own on-disk index **format version** in `info.json`,
+independent of the software-release string (`salmon_version`) and of the
+underlying piscem/cf1-rs versions. `SalmonIndex::load` refuses to open an index
+older than the minimum it supports (currently v1) and prints an actionable
+`salmon index …` rebuild command instead of risking a silent mis-load. The field
+is bumped only when a layout/semantics change makes an older index unsafe to
+read, so version going forward is explicit rather than inferred.
 
 These changes were found and validated by a head-to-head parity study against
 C++ salmon on simulated human data (polyester, 193,759 transcripts); see
@@ -94,8 +111,8 @@ defects are fixed:
   correct. On SRR1039508 (3 M-read subset, `--seqBias --gcBias`) the abundance
   phase now completes in seconds instead of stalling, and the reported mapping
   rate drops from an inflated 98.8 % to **93.7 %**, matching C++ salmon's 94.1 %.
-  Indices built before 2.0.2 **must be rebuilt** to pick up the corrected
-  metadata (older indices fall back to the previous suffix interpretation).
+  Indices built before 2.1.0 **must be rebuilt** (they are now rejected on load by
+  the index-format-version check above, rather than silently mis-interpreted).
 
 - **Short transcripts in `quant.sf`.** The sub-`k` short transcripts are recorded
   by name and length and reported in `quant.sf` with 0 reads / 0 TPM (rather than
@@ -117,6 +134,73 @@ PR #1020 is also folded in.
   decoy test stays a single O(1) range check. Sub-`k` *transcripts* are still kept
   and reported at 0 reads. A build-time guard verifies decoy contiguity and aborts
   with a clear error rather than risk a silent mis-classification.
+
+- **Deterministic, input-order index build.** The cDBG builder (cf1-rs) now emits
+  its reference tiling in input order via a bounded reorder buffer
+  (`synchronize_output`), so the built reference numbering is deterministic and
+  decoys — always last in the input — stay one contiguous block by construction
+  (the prior task-completion order could scatter a small decoy among transcripts).
+  This makes the O(1) decoy range check and the contiguity guard correct by design.
+
+## N-aware decoy indexing (cf1-rs 0.5)
+
+Decoy sequences now **retain their ambiguous (`N`) bases** instead of having them
+replaced with pseudo-random ACGT. cf1-rs splits the de Bruijn graph on `N` runs
+natively (recording the gaps in the tiling), which avoids seeding spurious k-mers
+across assembly gaps and yields a less tangled, smaller, faster-to-build graph;
+the reference store keeps the raw bytes and the aligner encodes `N` as a mismatch
+(dna5 code 4). Transcripts are still `N`-replaced (matching salmon `FixFasta`). On
+the full GRCh38 gentrome (≈5 % N) this removes ~151 M spurious k-mers (−5.7 %),
+shrinks the index ~1.3 %, and trims build time/peak-RSS a couple percent; the
+savings scale with N content. (`cf1-rs` ≥ 0.5 also adds `--poly-N-stretch` gating:
+without it an `N`-containing input now fails loudly rather than corrupting.)
+
+## `duplicate_clusters.tsv` under `--keepDuplicates`
+
+salmon detects exact-sequence-duplicate transcripts and lists them in
+`duplicate_clusters.tsv` even when `--keepDuplicates` retains them (downstream
+tooling relies on the file). The Rust port had gated both the detection and the
+file emission behind *not* keeping duplicates, so a `--keepDuplicates` index had no
+`duplicate_clusters.tsv` at all. Duplicates are now detected in both modes (the
+cluster list is populated regardless), only *collapsed* when not keeping
+duplicates, and the file is always written. (#1015)
+
+## Decoy handling in `--sketch` (pseudoalignment) mode
+
+Decoys are now handled in sketch mode, where they previously **leaked**. Sketch
+mappings are built directly from piscem's accepted hits and bypassed the
+selective-alignment finalize where all decoy logic lived, so on a decoy-aware
+index decoy references entered the equivalence classes as if they were
+transcripts: decoy-only fragments were counted as mapped, decoys stole EM mass,
+and `num_decoy_fragments` was never recorded. On SRR1039508 (3 M-read subset,
+GRCh38 + 194 decoys) this inflated the sketch mapping rate to **97.5 %** with
+**0** decoy fragments reported.
+
+Sketch mode now applies the same decoy policy as selective alignment: decoy-only
+fragments are dropped and counted as decoy, and decoy targets are removed from the
+equivalence class. The corrected rate is **92.6 %** with **147,190** decoy
+fragments — in line with selective alignment (93.7 %) — and removing the decoy
+mass also recovers real-transcript abundances (nonzero transcripts 49.5 k → 51.1 k,
+toward SA's 51.8 k).
+
+- **`--decoyThreshold` is a no-op in sketch mode** (warned if set): pseudoalignment
+  returns only equally-best mappings, so the `bestTxp < decoyThreshold * bestDecoy`
+  comparison never triggers. A fragment is decoy-dominated only when it maps to
+  decoys *and no transcript*.
+- **`--allowDecoyOrphans` works in sketch mode.** Because sketch pairing is
+  same-tid only, a fragment with one mate on a transcript and the other on a decoy
+  forms no concordant pair and would otherwise be dropped as unmapped. With the
+  flag, the transcript mate is recovered as an orphan (only when the other mate's
+  hits are entirely decoys). On the subset above this recovers +8,270 fragments
+  (92.6 % → 92.9 %), matching SA mode's `--allowDecoyOrphans` effect.
+
+## Mapper allocation/perf
+
+The alignment/chaining hot path reuses per-thread ksw2 scratch buffers (a reusable
+aligner plus DNA5-encoded query/target buffers) instead of allocating per call, and
+`chain_mems` gains exact single-MEM and two-MEM fast paths for the common small
+cases. These are score/result-preserving; the two-MEM fast path carries the same
+contained-anchor guard as the general DP. (#1015)
 
 ## Duplicate-transcript symmetry: consistent fragment-length reads
 
