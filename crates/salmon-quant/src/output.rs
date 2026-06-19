@@ -124,18 +124,45 @@ fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
     Ok(())
 }
 
+/// Reference indices to emit in `quant.sf`, in order, given the decoy layout.
+///
+/// The index numbering is `[transcripts][decoys][short transcripts]`: transcripts
+/// occupy `[0, first_decoy_index)`, the decoy block `[first_decoy_index,
+/// first_decoy_index + num_decoys)` is skipped, and sub-`k` "short" transcripts
+/// (no k-mers, never seeded, always 0 reads) occupy the tail
+/// `[first_decoy_index + num_decoys, total)` and are still reported.
+///
+/// `first_decoy_index == None` means no decoys (emit everything). A legacy index
+/// that recorded decoys but not `num_decoys` (== 0) keeps the old behavior:
+/// everything from `first_decoy_index` on is treated as decoy and dropped.
+fn quant_row_indices(
+    total: usize,
+    first_decoy_index: Option<usize>,
+    num_decoys: usize,
+) -> impl Iterator<Item = usize> {
+    let fdi = first_decoy_index.unwrap_or(total).min(total);
+    let decoy_end = match first_decoy_index {
+        Some(_) if num_decoys > 0 => (fdi + num_decoys).min(total),
+        _ => total,
+    };
+    (0..fdi).chain(decoy_end..total)
+}
+
 /// `quant.sf`: `Name  Length  EffectiveLength  TPM  NumReads`.
 fn write_quant_sf(path: &Path, res: &QuantResult, sig_digits: usize) -> Result<()> {
     let mut w = std::io::BufWriter::new(
         std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
     );
     writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-    // Decoy references (indices >= first_decoy_index) are never quantified and
-    // are excluded from quant.sf, matching salmon.
+    // The reference numbering is `[transcripts][decoys][short transcripts]`:
+    // decoys occupy `[first_decoy_index, first_decoy_index + num_decoys)` and are
+    // never quantified (excluded here, matching salmon), while sub-`k` "short"
+    // transcripts (no k-mers, never seeded) are appended after the decoy block by
+    // the index builder. We still report the shorts — always 0 reads / 0 TPM — so
+    // `quant.sf` lists every input transcript.
     // salmon writes EffectiveLength and NumReads with `--sigDigits` decimals
     // (default 3) and TPM with the fixed `{:f}` (6-decimal) format.
-    let n = res.first_decoy_index.unwrap_or(res.names.len());
-    for i in 0..n {
+    for i in quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys) {
         writeln!(
             w,
             "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
@@ -298,10 +325,21 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         index_name_hash512: res.index_name_hash512.clone(),
         index_decoy_seq_hash: res.index_decoy_seq_hash.clone(),
         index_decoy_name_hash: res.index_decoy_name_hash.clone(),
-        num_valid_targets: res.first_decoy_index.unwrap_or(res.names.len()),
-        num_decoy_targets: res
-            .first_decoy_index
-            .map_or(0, |fdi| res.names.len().saturating_sub(fdi)),
+        // Valid targets = all non-decoy references (transcripts, including the
+        // sub-k shorts we report with 0 counts); decoys are the explicit block.
+        // Legacy indices (decoys present, `num_decoys` unrecorded) fall back to
+        // the old suffix interpretation.
+        num_valid_targets: if res.num_decoys > 0 {
+            res.names.len().saturating_sub(res.num_decoys)
+        } else {
+            res.first_decoy_index.unwrap_or(res.names.len())
+        },
+        num_decoy_targets: if res.num_decoys > 0 {
+            res.num_decoys
+        } else {
+            res.first_decoy_index
+                .map_or(0, |fdi| res.names.len().saturating_sub(fdi))
+        },
         num_eq_classes: res.num_eq_classes,
         serialized_eq_classes: opts.dump_eq || opts.dump_eq_weights,
         eq_class_properties,
@@ -326,4 +364,42 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(value)?;
     std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quant_row_indices;
+
+    fn rows(total: usize, fdi: Option<usize>, nd: usize) -> Vec<usize> {
+        quant_row_indices(total, fdi, nd).collect()
+    }
+
+    #[test]
+    fn no_decoys_emits_all() {
+        assert_eq!(rows(5, None, 0), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn decoys_then_shorts_skips_decoys_keeps_shorts() {
+        // [0,3) transcripts, [3,5) decoys, [5,7) short transcripts.
+        assert_eq!(rows(7, Some(3), 2), vec![0, 1, 2, 5, 6]);
+    }
+
+    #[test]
+    fn decoys_as_clean_suffix_no_shorts() {
+        assert_eq!(rows(5, Some(3), 2), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn legacy_index_without_num_decoys_drops_suffix() {
+        // num_decoys unrecorded (0) but decoys present -> old behavior: drop
+        // everything from first_decoy_index on (no spurious decoy/short rows).
+        assert_eq!(rows(7, Some(3), 0), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn clamps_out_of_range_decoy_block() {
+        // num_decoys overshooting total must not panic or emit phantom rows.
+        assert_eq!(rows(5, Some(3), 99), vec![0, 1, 2]);
+    }
 }

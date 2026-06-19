@@ -42,6 +42,13 @@ pub struct PairingConfig {
     /// filter and `orphan_chain_sub_thresh`. Default **0.0 (off)**: every
     /// concordant pair is aligned (current Rust behavior).
     pub post_merge_chain_sub_thresh: f32,
+    /// Only emit orphans for a mate when the *other* mate is entirely unmapped
+    /// (salmon's `--orphansRequireUnmappedMate`). Default **false**: when a pair
+    /// has no concordant mapping, orphans are emitted for both mates (their
+    /// union). When **true**, a read that mapped only because its mate also mapped
+    /// (to a disjoint reference set) is not reported as an orphan — orphans are
+    /// kept only for genuinely single-mappable fragments.
+    pub orphans_require_unmapped_mate: bool,
 }
 
 impl Default for PairingConfig {
@@ -52,6 +59,7 @@ impl Default for PairingConfig {
             allow_dovetail: false,
             orphan_chain_sub_thresh: 0.0,
             post_merge_chain_sub_thresh: 0.0,
+            orphans_require_unmapped_mate: false,
         }
     }
 }
@@ -331,20 +339,30 @@ pub fn join_reads_and_filter(
             // We pair over *all* per-target chains (no `best_per_target` pre-pass),
             // so a mate may have several chains to one reference. Emit at most one
             // orphan per (tid, is_fw): the highest-coverage unpaired chain.
-            emit_best_orphans(
-                &left,
-                paired,
-                cutoff,
-                MateStatus::PairedEndLeft,
-                &mut joints,
-            );
-            emit_best_orphans(
-                &right,
-                paired,
-                cutoff,
-                MateStatus::PairedEndRight,
-                &mut joints,
-            );
+            //
+            // Under `--orphansRequireUnmappedMate`, a mate's orphans are emitted
+            // only when the *other* mate produced no candidates at all (it is truly
+            // unmapped), so a read that mapped only alongside a mate mapping to a
+            // disjoint reference set is not reported as an orphan.
+            let req_unmapped = cfg.orphans_require_unmapped_mate;
+            if !req_unmapped || right.is_empty() {
+                emit_best_orphans(
+                    &left,
+                    paired,
+                    cutoff,
+                    MateStatus::PairedEndLeft,
+                    &mut joints,
+                );
+            }
+            if !req_unmapped || left.is_empty() {
+                emit_best_orphans(
+                    &right,
+                    paired,
+                    cutoff,
+                    MateStatus::PairedEndRight,
+                    &mut joints,
+                );
+            }
         }
     });
 

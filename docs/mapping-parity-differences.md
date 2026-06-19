@@ -197,6 +197,62 @@ than the 0.75 pre-alignment prune (not a 1:1 knob, not separately CLI-settable).
 These reads are ~70% genuine alignments in both directions, so this is a mild
 sensitivity difference, not spurious mapping.
 
+## Simulated-data residual: two distinct causes (a clipping artifact + a seeding-sensitivity tail)
+
+After the 1.12.1 / 2.0.2 fixes (inclusive fragment-length bound, orphan rescue,
+auto-libtype application, concordant-pairing correctness, anchored-alignment
+scoring), a head-to-head on simulated human data (polyester, 193,759 transcripts;
+e1M = 1M read pairs, the same `-l A` command) gives per-read target-set agreement
+of **~99.98%**, with a Rust-superset / C++-superset residual we traced carefully.
+**Caution about provenance:** salmon's `SeqHash`/`NameHash` are computed over the
+*raw input* FASTA (before poly-A clipping and N-substitution), so a matching
+`SeqHash` proves only that both tools were fed the same input — **not** that they
+index the same *processed* sequence. Comparing the post-`fixFasta` outputs
+(pufferfish's `ref_k31_fixed.fa` vs. salmon-index's `cleaned_refs.fa`) is what
+actually settles parity, and doing so changed our conclusion.
+
+**Cause 1 — a poly-A clipping mismatch (≈ half the residual; an artifact).** The
+`rust_idx` originally used for the study clipped only **1,272** bases of poly-A,
+while the pufferfish index clipped **23,325** — i.e. that Rust index barely
+clipped at all. The retained 3′ poly-A left extra k-mers that let Rust seed a
+shorter-isoform locus C++ had clipped away, producing spurious Rust-superset
+reads. `sim.932205` (which an earlier version of this note wrongly cited as a
+"genuine co-optimal paralog") is exactly this: when **both** indices are built
+from the *same* pre-clipped FASTA with `--no-clip`, Rust drops the extra locus and
+matches C++. With a correctly-clipping current Rust binary (22,278 bases clipped),
+these reads disappear. The SAM-level Rust-superset count falls from **320 → 147**.
+
+**Cause 2 — a residual seeding-sensitivity tail (≈ 147 reads; not co-optimal).**
+On provably byte-identical references (both indices built from the same clipped
+FASTA, `--no-clip`) and with matched C++ chain-sensitivity flags, **147** Rust-
+superset / **50** C++-superset reads remain. These are **not** co-optimal ties:
+scoring the extra placement Rust keeps, 14 of 15 clean (1-keep/1-extra) cases have
+the extra **6–10 AS points *below*** the kept placement (≈ 1–2 extra mismatches),
+1 is a true tie, and none are better. So Rust retains *near-optimal but
+suboptimal* secondary placements that C++ does not report. This is a
+**seed-enumeration** difference, not a chain prune: re-running C++ with
+`--preMergeChainSubThresh` all the way down to **0.0** (keep every chain) leaves
+the Rust-superset count essentially unchanged (147 → 149), so C++ never *seeds*
+these loci at all — pufferfish's SSHash seeding misses the divergent near-paralog
+that piscem's seeding finds. It is the same class of marginal MEM-extraction
+boundary difference documented for the real-data study above.
+
+**Two smaller index-construction parity differences remain** (current Rust vs.
+pufferfish, on the same input): pufferfish **drops 47 more** transcripts that fall
+to ≤ `k` (=31) after clipping, and Rust retains **1,047 more** bases overall
+(slightly less aggressive clipping on some transcripts). So even "each tool with
+its own clipping" — the normal user workflow — is not byte-for-byte identical;
+these account for a small, characterizable slice of the residual and are tracked
+as follow-ups.
+
+**Disposition.** The clipping-artifact half is resolved by the current binary.
+The 147-read seeding tail is suboptimal-placement over-reporting by Rust relative
+to C++ (Rust is *more* sensitive, not more correct — these are worse-scoring
+placements, so quantification impact is small and down-weighted by the EM), of the
+same nature as the documented real-data tie-break residual. The clipping
+record-count / base-count differences are genuine construction-parity gaps to
+close.
+
 ## Conclusion
 
 On a byte-identical index, SA quantification agrees at Pearson 0.999 and the

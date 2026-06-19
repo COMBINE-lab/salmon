@@ -82,6 +82,14 @@ pub struct ScoreConfig {
     pub decoy_thresh: f64,
     /// keep only the best-scoring mappings (each weight `1.0`)
     pub hard_filter: bool,
+    /// When a fragment has a valid (non-decoy) transcript alignment but a decoy
+    /// outscores it, keep the transcript alignment(s) as an orphan/mapping instead
+    /// of discarding the whole fragment (`--allowDecoyOrphans`). Off by default
+    /// (decoy-dominated fragments are dropped, matching salmon's default). This
+    /// only affects fragments that *have* a surviving transcript candidate; it
+    /// cannot recover fragments whose transcript placements were never generated
+    /// (e.g. high-occurrence multimappers that only seed the genome).
+    pub allow_decoy_orphans: bool,
 }
 
 impl Default for ScoreConfig {
@@ -91,6 +99,7 @@ impl Default for ScoreConfig {
             min_aln_prob: 1e-5,
             decoy_thresh: 1.0,
             hard_filter: false,
+            allow_decoy_orphans: false,
         }
     }
 }
@@ -144,9 +153,10 @@ pub fn finalize_mappings_counted(
         .max();
 
     // Decoy domination (matches salmon's `bestScore < decoyThresh * bestDecoyScore`):
-    // drop the read when its best transcript score falls below the decoy bar.
+    // drop the read when its best transcript score falls below the decoy bar —
+    // unless `--allowDecoyOrphans` asks us to keep the transcript placement(s).
     if let Some(bd) = best_decoy {
-        if (best_valid as f64) < cfg.decoy_thresh * (bd as f64) {
+        if (best_valid as f64) < cfg.decoy_thresh * (bd as f64) && !cfg.allow_decoy_orphans {
             return (Vec::new(), true, 0);
         }
     }

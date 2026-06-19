@@ -133,6 +133,16 @@ pub struct IndexInfo {
     /// all decoy records to appear contiguously at the end of the FASTA.
     #[serde(default)]
     pub first_decoy_index: Option<usize>,
+    /// Number of decoy references (the contiguous block beginning at
+    /// `first_decoy_index`). Recorded separately because the index builder
+    /// (piscem) appends sub-`k` "short" references *after* the decoy block, so
+    /// decoys are **not** the suffix of the reference numbering: transcripts
+    /// occupy `[0, first_decoy_index)`, decoys `[first_decoy_index,
+    /// first_decoy_index + num_decoys)`, and short (never-seeded, 0-count)
+    /// transcripts the remaining tail `[first_decoy_index + num_decoys,
+    /// num_refs)`. `0` when there are no decoys.
+    #[serde(default)]
+    pub num_decoys: usize,
     /// salmon version that produced the index
     pub salmon_version: String,
     /// SHA-256/512 of the reference sequences and names, computed to byte-match
@@ -252,8 +262,6 @@ struct PreprocessResult {
     /// `(retained_name, duplicate_name)` pairs in discovery order; the duplicate
     /// was *not* written to the cleaned FASTA (so it is absent from the index).
     duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)>,
-    /// retained-reference index of the first decoy, or `None` if no decoys.
-    first_decoy_index: Option<usize>,
     /// number of references whose trailing poly-A run was clipped.
     polya_clipped: u64,
     /// names of references dropped because clipping left them empty (all-`A`).
@@ -284,9 +292,6 @@ fn preprocess_fasta(
     let mut polya_clipped = 0u64;
     let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
     let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    // Number of references actually written so far (= next retained ref id).
-    let mut retained = 0usize;
-    let mut first_decoy_index: Option<usize> = None;
     let mut saw_decoy = false;
     // Exact original (pure-ACGT) sequence -> name of the first transcript that
     // carried it. salmon collapses transcripts whose *processed* sequences match;
@@ -370,23 +375,17 @@ fn preprocess_fasta(
                 }
             }
 
-            if is_decoy && first_decoy_index.is_none() {
-                first_decoy_index = Some(retained);
-            }
-
             out.write_all(b">")?;
             out.write_all(name)?;
             out.write_all(b"\n")?;
             out.write_all(&seq)?;
             out.write_all(b"\n")?;
-            retained += 1;
         }
     }
     out.flush()?;
     Ok(PreprocessResult {
         replaced,
         duplicate_clusters,
-        first_decoy_index,
         polya_clipped,
         polya_dropped,
     })
@@ -560,10 +559,37 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
     let h = compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode)
         .context("hashing reference sequences/names")?;
-    if let Some(fdi) = pre.first_decoy_index {
+    // Locate the decoy block in the *built* index's reference numbering. We
+    // cannot reuse the preprocess `retained` count (`pre.first_decoy_index`):
+    // piscem moves sub-`k` "short" references — which carry no k-mers and so
+    // never tile into the de Bruijn graph — to the *end* of the reference list,
+    // after the decoy block. The preprocess count includes those shorts among
+    // the transcripts, so it overshoots the decoys' true start by the number of
+    // shorts. Scan the actual names instead (decoys are contiguous, enforced at
+    // preprocess); this keeps `is_decoy`, the bias-model bounds, and decoy-read
+    // accounting correct, and prevents a 250 Mb genome decoy from being swept as
+    // a "transcript" in the expected-bias build.
+    let (first_decoy_index, num_decoys) = if decoy_names.is_empty() {
+        (None, 0usize)
+    } else {
+        let n = idx.num_refs();
+        let mut start: Option<usize> = None;
+        let mut count = 0usize;
+        for t in 0..n {
+            if decoy_names.contains(idx.ref_name(t).as_bytes()) {
+                if start.is_none() {
+                    start = Some(t);
+                }
+                count += 1;
+            }
+        }
+        (start, count)
+    };
+    if let Some(fdi) = first_decoy_index {
+        let n_short = idx.num_refs() - (fdi + num_decoys);
         info!(
-            "{} decoy reference(s) (first decoy index {fdi})",
-            idx.num_refs() - fdi
+            "{num_decoys} decoy reference(s) (first decoy index {fdi}); \
+             {n_short} short (sub-k, 0-count) transcript(s) recorded after the decoys"
         );
     }
     let info = IndexInfo {
@@ -572,7 +598,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         canonical: opts.canonical,
         has_ec_table: idx.has_ec_table(),
         num_refs: idx.num_refs(),
-        first_decoy_index: pre.first_decoy_index,
+        first_decoy_index,
+        num_decoys,
         salmon_version: env!("CARGO_PKG_VERSION").to_string(),
         seq_hash: h.seq_hash,
         name_hash: h.name_hash,

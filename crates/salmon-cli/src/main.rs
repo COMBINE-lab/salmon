@@ -442,9 +442,16 @@ struct QuantArgs {
     /// Significant digits for the EffectiveLength and NumReads columns of quant.sf.
     #[arg(long = "sigDigits", default_value_t = 3)]
     sig_digits: u32,
-    /// Discard a read/fragment that maps to more than this many places (reads mode).
-    #[arg(short = 'w', long = "maxReadOcc", default_value_t = 200)]
+    /// Discard a read/fragment that maps to more than this many places — counting
+    /// the total set of distinct mappings (concordant + orphan union) (reads mode).
+    #[arg(short = 'w', long = "maxReadOcc", default_value_t = 250)]
     max_read_occ: usize,
+    /// Only emit a single-mate (orphan) mapping when the read's mate is entirely
+    /// unmapped. By default, when a pair has no concordant mapping, orphans are
+    /// reported for both mates (their union); with this flag a read that maps only
+    /// because its mate also mapped (to a disjoint set) is not reported as an orphan.
+    #[arg(long = "orphansRequireUnmappedMate")]
+    orphans_require_unmapped_mate: bool,
     /// Allow dovetailed mappings (mates extending past each other) as concordant.
     #[arg(long = "allowDovetail")]
     allow_dovetail: bool,
@@ -476,6 +483,14 @@ struct QuantArgs {
     /// only the best-scoring mapping(s), each with equal weight.
     #[arg(long = "hardFilter")]
     hard_filter: bool,
+    /// When a fragment's best transcript alignment is outscored by a decoy
+    /// (genome) alignment, keep the transcript placement instead of discarding the
+    /// fragment. Off by default (decoy-dominated fragments are dropped, matching
+    /// salmon). Increases the reported mapping rate on decoy-aware indices at the
+    /// cost of retaining transcript mappings for fragments better explained by the
+    /// genome; only affects fragments that retain a transcript candidate.
+    #[arg(long = "allowDecoyOrphans")]
+    allow_decoy_orphans: bool,
     /// Allow soft-clipping of read ends during selective alignment: unaligned
     /// read-end bases are clipped rather than penalized. (salmon's --softclip)
     #[arg(long = "softclip")]
@@ -847,6 +862,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.align.bandwidth = args.bandwidth;
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
+    opts.map_config.pair.orphans_require_unmapped_mate = args.orphans_require_unmapped_mate;
     opts.map_config.align.softclip = args.softclip;
     opts.map_config.align.softclip_overhangs = args.softclip_overhangs;
     opts.map_config.score.score_exp = args.score_exp;
@@ -858,6 +874,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.score.decoy_thresh = args.decoy_threshold;
     opts.map_config.score.min_aln_prob = args.min_aln_prob;
     opts.map_config.score.hard_filter = args.hard_filter;
+    opts.map_config.score.allow_decoy_orphans = args.allow_decoy_orphans;
     // chaining sub-optimality thresholds (Tier 2)
     opts.map_config.collect.chain.chain_subopt_thresh = args.pre_merge_chain_sub_thresh;
     opts.map_config.pair.post_merge_chain_sub_thresh = args.post_merge_chain_sub_thresh;

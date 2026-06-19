@@ -173,7 +173,7 @@ impl QuantOptions {
             fld_max: 1000,
             forgetting_factor: 0.65,
             sig_digits: 3,
-            max_read_occ: 200,
+            max_read_occ: 250,
             bias_speed_samp: 5,
             num_aux_model_samples: 5_000_000,
             no_bias_length_threshold: false,
@@ -204,9 +204,14 @@ pub struct QuantResult {
     /// mapped fragments placed as orphans (only one mate of a pair mapped)
     pub num_orphan: u64,
     pub num_eq_classes: usize,
-    /// index of the first decoy reference (`None` if the index has no decoys);
-    /// references at/after this are excluded from `quant.sf` and counted as decoys
+    /// index of the first decoy reference (`None` if the index has no decoys).
+    /// The decoy block is `[first_decoy_index, first_decoy_index + num_decoys)`;
+    /// any references beyond it are short (sub-`k`, never-seeded) transcripts that
+    /// are still reported in `quant.sf` with 0 reads.
     pub first_decoy_index: Option<usize>,
+    /// number of decoy references in the contiguous decoy block (see
+    /// [`Self::first_decoy_index`]); 0 when the index has no decoys
+    pub num_decoys: usize,
     /// whether the index collapsed duplicate sequences (for meta_info)
     pub keep_duplicates: bool,
     /// fragments dropped because their best alignment was to a decoy
@@ -658,7 +663,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let corrected: Vec<f64> = (0..num_refs)
             .into_par_iter()
             .map(|tid| {
-                if em.alphas[tid] < 1e-8 {
+                // Decoys (the contiguous tail at `first_decoy_index`) are never
+                // quantified or reported, so their bias-corrected effective length
+                // is unused. Skipping them here avoids a second, single-threaded
+                // #1019-style stall: a decoy that catches a few non-decoy-dominated
+                // fragments gets a tiny non-zero alpha, and the per-reference
+                // `corrected_effective_length_full` sweep over a whole genome-decoy
+                // chromosome (up to ~250 Mb) then serializes the entire phase while
+                // the other worker threads sit idle. Mirrors PR #1020's exclusion of
+                // decoys from the expected bias models.
+                if tid >= num_targets || em.alphas[tid] < 1e-8 {
                     return eff_lengths[tid];
                 }
                 let s = salmon.ref_seq(tid as u32);
@@ -792,6 +806,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_orphan: num_orphan.load(Ordering::Relaxed),
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,
+        num_decoys: salmon.info().num_decoys,
         keep_duplicates: false,
         num_decoy_fragments: num_decoy.load(Ordering::Relaxed),
         num_dovetail_fragments: num_dovetail.load(Ordering::Relaxed),
