@@ -78,7 +78,11 @@ pub struct ScoreConfig {
     pub score_exp: f64,
     /// drop mappings whose weight falls below this
     pub min_aln_prob: f64,
-    /// drop the read if `best_decoy >= decoy_thresh * best_valid`
+    /// drop the read only when a decoy is *strictly* better than the best
+    /// transcript: `best_valid < decoy_thresh * best_decoy` (so at the default
+    /// `decoy_thresh = 1.0` a decoy that merely ties the transcript does **not**
+    /// dominate — the transcript is kept). Matches C++ salmon's
+    /// `bestScore < decoyThresh * bestDecoyScore`.
     pub decoy_thresh: f64,
     /// keep only the best-scoring mappings (each weight `1.0`)
     pub hard_filter: bool,
