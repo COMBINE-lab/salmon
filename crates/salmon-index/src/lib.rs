@@ -34,6 +34,28 @@ const REFSEQ_FILE: &str = "refseq.bin";
 /// Per-reference offsets into [`REFSEQ_FILE`] (`num_refs + 1` entries).
 const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 
+/// On-disk salmon index *format* version written into `info.json` by this build.
+/// Distinct from `salmon_version` (the software release string): this is bumped
+/// only when a change to the index layout or its semantics makes a previously
+/// written index unsafe to load with the current code.
+///
+/// History:
+/// - **0** — implicit (no `index_version` field); salmon 2.0.0–2.0.1. The decoy
+///   block could be non-contiguous when the decoy set contained a sub-`k`
+///   reference (piscem relocated it into the trailing "short" block), which the
+///   O(1) `is_decoy` range test would then mis-classify, silently dropping real
+///   transcripts. Short/N-untileable decoy handling was also different.
+/// - **1** — salmon 2.1.0: sub-`k` / N-untileable decoys are dropped at build so
+///   the decoy block is always a single contiguous range (enforced by a
+///   build-time contiguity guard), `N` is retained in decoy sequences, and the
+///   reference layout `[transcripts][decoys][short transcripts]` is guaranteed.
+pub const INDEX_FORMAT_VERSION: u32 = 1;
+
+/// Minimum index format version this build can load. Indices below this are
+/// rejected with an actionable rebuild message (their decoy / short-transcript
+/// layout predates the contiguity guarantee and cannot be loaded safely).
+pub const MIN_READABLE_INDEX_VERSION: u32 = 1;
+
 /// Default minimizer length for a given k (used when `m == 0`).
 fn default_minimizer_len(k: usize) -> usize {
     (k / 2) + 1
@@ -143,6 +165,12 @@ pub struct IndexInfo {
     /// num_refs)`. `0` when there are no decoys.
     #[serde(default)]
     pub num_decoys: usize,
+    /// Salmon index *format* version (see [`INDEX_FORMAT_VERSION`]). Absent in
+    /// indices built by salmon <= 2.0.1, which deserialize to `0` — below
+    /// [`MIN_READABLE_INDEX_VERSION`], so those are rejected on load. Distinct
+    /// from `salmon_version`, the software release string below.
+    #[serde(default)]
+    pub index_version: u32,
     /// salmon version that produced the index
     pub salmon_version: String,
     /// SHA-256/512 of the reference sequences and names, computed to byte-match
@@ -716,6 +744,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         num_refs: idx.num_refs(),
         first_decoy_index,
         num_decoys,
+        index_version: INDEX_FORMAT_VERSION,
         salmon_version: env!("CARGO_PKG_VERSION").to_string(),
         seq_hash: h.seq_hash,
         name_hash: h.name_hash,
@@ -852,6 +881,29 @@ impl SalmonIndex {
             );
         }
         let info = read_info(dir)?;
+        // Reject an index whose format predates the decoy / short-transcript
+        // contiguity guarantee (salmon <= 2.0.1, which wrote no `index_version`
+        // and so deserializes to 0). Such an index can mis-classify decoys and
+        // silently drop transcripts, so force a rebuild rather than load it.
+        if info.index_version < MIN_READABLE_INDEX_VERSION {
+            let built_by = if info.salmon_version.is_empty() {
+                "salmon <= 2.0.1".to_string()
+            } else {
+                format!("salmon {}", info.salmon_version)
+            };
+            anyhow::bail!(
+                "{} was built by {} (index format v{}), which this salmon cannot read \
+                 (requires index format v{}+).\n\
+                 Indices built before salmon 2.1.0 could mis-handle decoy and short \
+                 (sub-k) transcript references; rebuild it with \
+                 `salmon index -t <transcripts> [-d <decoys>] -i {}`.",
+                dir.display(),
+                built_by,
+                info.index_version,
+                MIN_READABLE_INDEX_VERSION,
+                dir.display(),
+            );
+        }
         let index_prefix = dir.join(INDEX_PREFIX);
         // Load the EC table when the index has one (enables pseudoalignment-only mode).
         let inner = ReferenceIndex::load(&index_prefix, info.has_ec_table, false)
@@ -1139,5 +1191,37 @@ mod tests {
             5,
             "all 5 decoy Ns preserved in the reference store"
         );
+    }
+
+    #[test]
+    fn rejects_pre_2_1_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+
+        // A freshly built index loads and records the current format version.
+        let idx = SalmonIndex::load(&out).expect("current index loads");
+        assert_eq!(idx.info().index_version, INDEX_FORMAT_VERSION);
+
+        // Simulate a salmon <= 2.0.1 index: strip the `index_version` field (it
+        // deserializes to 0 via `#[serde(default)]`) and set an old software
+        // version string. Loading it must fail with an actionable message.
+        let info_path = out.join(INFO_FILE);
+        let mut info: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&info_path).unwrap()).unwrap();
+        info.as_object_mut().unwrap().remove("index_version");
+        info["salmon_version"] = serde_json::Value::String("2.0.1".into());
+        std::fs::write(&info_path, serde_json::to_vec_pretty(&info).unwrap()).unwrap();
+
+        let err = match SalmonIndex::load(&out) {
+            Ok(_) => panic!("pre-2.1 index must be rejected"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(msg.contains("salmon 2.0.1"), "message was: {msg}");
+        assert!(msg.contains("rebuild"), "message was: {msg}");
     }
 }
