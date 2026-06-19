@@ -190,7 +190,6 @@ impl QuantOptions {
     }
 }
 
-
 /// Quantification results (also written to disk by [`write_outputs`]).
 #[derive(Debug, Clone)]
 pub struct QuantResult {

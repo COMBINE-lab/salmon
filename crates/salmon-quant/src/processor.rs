@@ -445,24 +445,26 @@ fn record(
     // distribution) returned slightly different values for the same length and let
     // the VBEM α<1 prior break duplicate symmetry. Mirrors C++ salmon's per-worker
     // `LogCMFCache` snapshot.
-    let fld_snap = if use_aux { Some(sh.fld.online_snapshot()) } else { None };
+    let fld_snap = if use_aux {
+        Some(sh.fld.online_snapshot())
+    } else {
+        None
+    };
     let mut pairs: Vec<(u32, f64)> = compat
         .iter()
         .map(|(m, w)| {
-            let log_frag_prob = if use_aux
-                && m.status == MateStatus::PairedEndPaired
-                && m.fragment_len > 0
-            {
-                match fld_snap.as_deref() {
-                    Some(snap) if !snap.is_empty() => {
-                        snap[(m.fragment_len as usize).min(snap.len() - 1)]
+            let log_frag_prob =
+                if use_aux && m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
+                    match fld_snap.as_deref() {
+                        Some(snap) if !snap.is_empty() => {
+                            snap[(m.fragment_len as usize).min(snap.len() - 1)]
+                        }
+                        // pre-first-refresh fallback (only the early pre-burn-in batches)
+                        _ => sh.fld.pmf(m.fragment_len as usize),
                     }
-                    // pre-first-refresh fallback (only the early pre-burn-in batches)
-                    _ => sh.fld.pmf(m.fragment_len as usize),
-                }
-            } else {
-                0.0
-            };
+                } else {
+                    0.0
+                };
             (m.tid, *w * log_frag_prob.exp())
         })
         .collect();

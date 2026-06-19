@@ -711,10 +711,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             Some(first) => {
                 let count = decoy_tids.len();
                 // contiguous iff the decoy tids are exactly first..first+count
-                let contiguous = decoy_tids
-                    .iter()
-                    .enumerate()
-                    .all(|(i, &t)| t == first + i);
+                let contiguous = decoy_tids.iter().enumerate().all(|(i, &t)| t == first + i);
                 if !contiguous {
                     anyhow::bail!(
                         "decoy references are not contiguous in the built index \
@@ -1095,9 +1092,9 @@ mod tests {
     #[test]
     fn build_composes_short_transcript_short_and_n_decoys() {
         use salmon_core::RefProvider; // brings `is_decoy` into scope
-        // Lengths below are relative to the default k = 31.
-        // Distinct ACGT content with no consecutive repeats, so nothing collapses
-        // as a duplicate and no trailing poly-A run triggers clipping.
+                                      // Lengths below are relative to the default k = 31.
+                                      // Distinct ACGT content with no consecutive repeats, so nothing collapses
+                                      // as a duplicate and no trailing poly-A run triggers clipping.
         let acgt = |len: usize, seed: usize| -> String {
             const B: [u8; 4] = *b"ACGT";
             (0..len).map(|i| B[(i * 3 + seed) % 4] as char).collect()
@@ -1105,10 +1102,10 @@ mod tests {
 
         let t_long = acgt(80, 0); // normal transcript: KEPT, tiled
         let t_short = acgt(20, 1); // sub-k transcript: KEPT (0 count), relocated to tail
-        // decoy with N flanked by two >= k ACGT runs: KEPT, N preserved verbatim
+                                   // decoy with N flanked by two >= k ACGT runs: KEPT, N preserved verbatim
         let d_long = format!("{}NNNNN{}", acgt(40, 2), acgt(40, 3));
         let d_short = acgt(25, 4); // sub-k decoy: DROPPED
-        // len 46 (> k) but every ACGT run (20, 25) is < k: DROPPED
+                                   // len 46 (> k) but every ACGT run (20, 25) is < k: DROPPED
         let d_nfrag = format!("{}N{}", acgt(20, 5), acgt(25, 6));
 
         let tmp = tempfile::tempdir().unwrap();
