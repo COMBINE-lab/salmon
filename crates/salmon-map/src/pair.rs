@@ -161,6 +161,23 @@ thread_local! {
     /// per-read `AHashMap<u32, Vec<usize>>` of the old `group_by_tid` are gone.
     static PAIRED_TIDS: std::cell::RefCell<AHashSet<u32>> =
         std::cell::RefCell::new(AHashSet::new());
+
+    /// Set by [`join_reads_and_filter`] when it rejects an otherwise-valid
+    /// (opposite-strand, in-range fragment length) concordant pair *solely*
+    /// because the mates dovetail, under the default no-dovetail policy. Cleared
+    /// at the start of every call and read once per fragment by the mapper, which
+    /// — combined with "no concordant pair survived" — counts the fragment toward
+    /// `num_dovetail_fragments` (salmon's diagnostic for fragments whose only
+    /// concordant pairing was a dovetail). The pairs are dropped either way; this
+    /// only wires up the count, which previously stayed 0 because the mapper only
+    /// inspected surviving pairs (never dovetailed after filtering).
+    static DOVETAIL_REJECTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the most recent [`join_reads_and_filter`] rejected an otherwise-valid
+/// concordant pair as a dovetail (see [`DOVETAIL_REJECTED`]).
+pub fn dovetail_rejected() -> bool {
+    DOVETAIL_REJECTED.with(|c| c.get())
 }
 
 /// Upper bound on concordant pairs emitted per target when several repeat loci
@@ -201,6 +218,7 @@ pub fn join_reads_and_filter(
     left.sort_unstable_by_key(|c| c.tid);
     right.sort_unstable_by_key(|c| c.tid);
 
+    DOVETAIL_REJECTED.with(|c| c.set(false));
     let mut joints = Vec::new();
     PAIRED_TIDS.with(|cell| {
         let paired = &mut *cell.borrow_mut();
@@ -248,6 +266,9 @@ pub fn join_reads_and_filter(
                         continue;
                     }
                     if !cfg.allow_dovetail && is_dovetailed(l, r) {
+                        // An otherwise-valid concordant pair, dropped only because
+                        // the mates dovetail — flag it for the num_dovetail count.
+                        DOVETAIL_REJECTED.with(|c| c.set(true));
                         continue;
                     }
                     let cov = l.chain.covered_read_bases() + r.chain.covered_read_bases();

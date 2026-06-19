@@ -193,23 +193,23 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     let joints = join_reads_and_filter(left, right, &cfg.pair);
 
     let had_candidates = !joints.is_empty();
+    // Count this fragment toward num_dovetail_fragments when an otherwise-valid
+    // concordant pair was rejected only because the mates dovetail AND no
+    // concordant pair survived for any target — i.e. its only concordant pairing
+    // was a dovetail (salmon's diagnostic). The pair is dropped regardless; this
+    // just reports it. (Pairing already filtered dovetails, so the surviving
+    // PairedEndPaired joints below are never themselves dovetailed.)
+    let has_concordant_pair = joints
+        .iter()
+        .any(|j| matches!(j.status, MateStatus::PairedEndPaired));
+    let dovetail = crate::pair::dovetail_rejected() && !has_concordant_pair;
     let mut below = 0u32;
-    let mut dovetail = false;
     let mut raw = Vec::new();
     for j in joints {
         match j.status {
             MateStatus::PairedEndPaired => {
                 let l = j.left.as_ref().unwrap();
                 let r = j.right.as_ref().unwrap();
-                // Dovetail: opposite-strand mates where the downstream (reverse)
-                // mate actually starts upstream of the forward mate — they extend
-                // past each other's start (salmon's `num_dovetail_fragments`).
-                if l.is_fw != r.is_fw {
-                    let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
-                    if rc.chain.ref_start() < fw.chain.ref_start() {
-                        dovetail = true;
-                    }
-                }
                 let refseq = refs.ref_seq(j.tid);
                 let al = align_chain(r1, refseq, &l.chain, &cfg.align);
                 let ar = align_chain(r2, refseq, &r.chain, &cfg.align);
