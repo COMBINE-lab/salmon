@@ -134,7 +134,9 @@ fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
 ///
 /// `first_decoy_index == None` means no decoys (emit everything). A legacy index
 /// that recorded decoys but not `num_decoys` (== 0) keeps the old behavior:
-/// everything from `first_decoy_index` on is treated as decoy and dropped.
+/// everything from `first_decoy_index` on is treated as decoy and dropped. The
+/// build guarantees decoys are one contiguous block, so the emitted set is simply
+/// the two non-decoy ranges below.
 fn quant_row_indices(
     total: usize,
     first_decoy_index: Option<usize>,

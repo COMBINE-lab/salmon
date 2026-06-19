@@ -266,6 +266,13 @@ struct PreprocessResult {
     polya_clipped: u64,
     /// names of references dropped because clipping left them empty (all-`A`).
     polya_dropped: Vec<Vec<u8>>,
+    /// names of *decoy* references dropped because their cleaned/clipped length is
+    /// `<= k`: such a reference carries no k-mers, can never be seeded, and so can
+    /// never function as a decoy. Keeping it would only let the index builder
+    /// relocate it into the trailing sub-`k` block, breaking the contiguity of the
+    /// decoy region that decoy classification relies on. (Sub-`k` *transcripts*
+    /// are kept — they are still reported in `quant.sf` with 0 reads.)
+    short_decoys_dropped: Vec<Vec<u8>>,
 }
 
 /// salmon/pufferfish `FixFasta` clips a reference iff its (cleaned) sequence ends
@@ -280,6 +287,7 @@ fn preprocess_fasta(
     decoy_names: &ahash::AHashSet<Vec<u8>>,
     gencode: bool,
     clip_polya: bool,
+    k: usize,
 ) -> Result<PreprocessResult> {
     use std::io::Write as _;
     const B: [u8; 4] = *b"ACGT";
@@ -291,6 +299,7 @@ fn preprocess_fasta(
     let mut replaced = 0u64;
     let mut polya_clipped = 0u64;
     let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
+    let mut short_decoys_dropped: Vec<Vec<u8>> = Vec::new();
     let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     let mut saw_decoy = false;
     // Exact original (pure-ACGT) sequence -> name of the first transcript that
@@ -375,6 +384,15 @@ fn preprocess_fasta(
                 }
             }
 
+            // Drop a decoy whose cleaned/clipped length is <= k: it has no k-mers,
+            // can never catch a read, and keeping it only risks the index builder
+            // relocating it into the trailing sub-`k` block (breaking decoy-region
+            // contiguity). Sub-`k` *transcripts* are kept (reported at 0 reads).
+            if is_decoy && seq.len() <= k {
+                short_decoys_dropped.push(name.to_vec());
+                continue;
+            }
+
             out.write_all(b">")?;
             out.write_all(name)?;
             out.write_all(b"\n")?;
@@ -388,6 +406,7 @@ fn preprocess_fasta(
         duplicate_clusters,
         polya_clipped,
         polya_dropped,
+        short_decoys_dropped,
     })
 }
 
@@ -491,6 +510,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         &decoy_names,
         opts.gencode,
         opts.clip_polya,
+        opts.k,
     )
     .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
     if pre.replaced > 0 {
@@ -509,6 +529,19 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         warn!(
             "transcript {:?} was all A's after cleaning; dropped from the index",
             String::from_utf8_lossy(dropped)
+        );
+    }
+    if !pre.short_decoys_dropped.is_empty() {
+        warn!(
+            "dropped {} decoy reference(s) whose cleaned/clipped length is <= k={} \
+             (no k-mers, so they can never catch a read): {}",
+            pre.short_decoys_dropped.len(),
+            opts.k,
+            pre.short_decoys_dropped
+                .iter()
+                .map(|n| String::from_utf8_lossy(n).into_owned())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
     if !opts.keep_duplicates {
@@ -565,25 +598,48 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // never tile into the de Bruijn graph — to the *end* of the reference list,
     // after the decoy block. The preprocess count includes those shorts among
     // the transcripts, so it overshoots the decoys' true start by the number of
-    // shorts. Scan the actual names instead (decoys are contiguous, enforced at
-    // preprocess); this keeps `is_decoy`, the bias-model bounds, and decoy-read
-    // accounting correct, and prevents a 250 Mb genome decoy from being swept as
-    // a "transcript" in the expected-bias build.
+    // shorts. Scan the actual names instead; this keeps `is_decoy`, the
+    // bias-model bounds, and decoy-read accounting correct, and prevents a 250 Mb
+    // genome decoy from being swept as a "transcript" in the expected-bias build.
+    //
+    // Decoys form one contiguous block `[first_decoy_index, first_decoy_index +
+    // num_decoys)` (the genome sits after all transcripts, before the trailing
+    // sub-`k` shorts). Dropping sub-`k` decoys at preprocess is what keeps that
+    // block contiguous: a relocated short decoy would otherwise scatter into the
+    // trailing block. We rely on contiguity so the per-fragment decoy check is a
+    // single O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`),
+    // rather than a per-mapping set lookup. As a build-time safety net we verify
+    // contiguity here and fail loudly if it is ever violated, rather than silently
+    // mis-classifying a transcript as a decoy (or vice-versa) at quant time.
     let (first_decoy_index, num_decoys) = if decoy_names.is_empty() {
         (None, 0usize)
     } else {
         let n = idx.num_refs();
-        let mut start: Option<usize> = None;
-        let mut count = 0usize;
-        for t in 0..n {
-            if decoy_names.contains(idx.ref_name(t).as_bytes()) {
-                if start.is_none() {
-                    start = Some(t);
+        let decoy_tids: Vec<usize> = (0..n)
+            .filter(|&t| decoy_names.contains(idx.ref_name(t).as_bytes()))
+            .collect();
+        match decoy_tids.first().copied() {
+            None => (None, 0usize),
+            Some(first) => {
+                let count = decoy_tids.len();
+                // contiguous iff the decoy tids are exactly first..first+count
+                let contiguous = decoy_tids
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &t)| t == first + i);
+                if !contiguous {
+                    anyhow::bail!(
+                        "decoy references are not contiguous in the built index \
+                         (first decoy at {first}, {count} decoys, but they do not occupy \
+                         {first}..{}). This is unexpected after sub-k decoys are dropped at \
+                         preprocess — please report, including your decoy set. Built-index \
+                         decoy indices: {decoy_tids:?}",
+                        first + count
+                    );
                 }
-                count += 1;
+                (Some(first), count)
             }
         }
-        (start, count)
     };
     if let Some(fdi) = first_decoy_index {
         let n_short = idx.num_refs() - (fdi + num_decoys);
@@ -823,10 +879,22 @@ impl salmon_core::RefProvider for SalmonIndex {
         self.ref_seq(tid)
     }
     fn is_decoy(&self, tid: u32) -> bool {
-        // References at or beyond `first_decoy_index` are decoys.
-        self.info
-            .first_decoy_index
-            .is_some_and(|fdi| (tid as usize) >= fdi)
+        // O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`). The
+        // build guarantees decoys occupy one contiguous block
+        // `[first_decoy_index, first_decoy_index + num_decoys)` (it errors out
+        // otherwise), so this needs no per-fragment set lookup. The trailing sub-`k`
+        // "short" transcripts after the block are NOT decoys (they are 0-count
+        // transcripts reported in quant.sf); they carry no k-mers, so `is_decoy` is
+        // never consulted for them during mapping regardless.
+        let t = tid as usize;
+        match self.info.first_decoy_index {
+            // Legacy index that recorded `first_decoy_index` but not `num_decoys`
+            // (== 0): keep the old behavior — everything from `first_decoy_index`
+            // on is a decoy.
+            Some(fdi) if self.info.num_decoys == 0 => t >= fdi,
+            Some(fdi) => t >= fdi && t < fdi + self.info.num_decoys,
+            None => false,
+        }
     }
 }
 
