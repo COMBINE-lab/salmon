@@ -15,6 +15,7 @@ use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor};
 use paraseq::Record;
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 
+use salmon_core::math::{log_add, LOG_0, LOG_1};
 use salmon_core::{is_compatible, LibraryFormat, MateStatus};
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
 use salmon_index::SalmonIndex;
@@ -450,23 +451,45 @@ fn record(
     } else {
         None
     };
+    // Per-mapping FLD log-probability (the un-normalized log-pmf at the implied
+    // fragment length; `LOG_1` = 0 when the auxiliary model is inactive or the
+    // mapping is not a proper pair).
+    let log_fps: Vec<f64> = compat
+        .iter()
+        .map(|(m, _)| {
+            if use_aux && m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
+                match fld_snap.as_deref() {
+                    Some(snap) if !snap.is_empty() => {
+                        snap[(m.fragment_len as usize).min(snap.len() - 1)]
+                    }
+                    // pre-first-refresh fallback (only the early pre-burn-in batches)
+                    _ => sh.fld.pmf(m.fragment_len as usize),
+                }
+            } else {
+                LOG_1
+            }
+        })
+        .collect();
+    // Per-fragment conditional probabilities, normalized in *log* space — the
+    // log weight of each mapping is `ln(score weight) + logFragProb`, and we
+    // subtract the log-sum-exp over the fragment's mappings (C++'s
+    // `exp(auxProb - auxDenom)`). This is the same normalization salmon's
+    // C++ does and is mathematically identical to the linear `w/Σw`, but doing it
+    // in log space keeps it well-defined when every FLD weight underflows: a
+    // fragment whose implied lengths all have ~0 FLD probability (logFragProb at
+    // the no-mass sentinel) would, in linear space, give all-zero weights — the
+    // `wsum > 0` normalization below then leaves them zero, the eq-class denom is
+    // 0, and the VBEM silently drops the fragment's count (lost mapped mass; the
+    // EM's degenerate-class branch is a no-op, as in C++). In log space the same
+    // fragment yields well-defined relative weights, so no mass is lost.
+    let log_denom = compat
+        .iter()
+        .zip(&log_fps)
+        .fold(LOG_0, |acc, ((_, w), &lfp)| log_add(acc, w.ln() + lfp));
     let mut pairs: Vec<(u32, f64)> = compat
         .iter()
-        .map(|(m, w)| {
-            let log_frag_prob =
-                if use_aux && m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
-                    match fld_snap.as_deref() {
-                        Some(snap) if !snap.is_empty() => {
-                            snap[(m.fragment_len as usize).min(snap.len() - 1)]
-                        }
-                        // pre-first-refresh fallback (only the early pre-burn-in batches)
-                        _ => sh.fld.pmf(m.fragment_len as usize),
-                    }
-                } else {
-                    0.0
-                };
-            (m.tid, *w * log_frag_prob.exp())
-        })
+        .zip(&log_fps)
+        .map(|((m, w), &lfp)| (m.tid, (w.ln() + lfp - log_denom).exp()))
         .collect();
 
     // Abundance-aware FLD training: accept each concordant compatible pair's
