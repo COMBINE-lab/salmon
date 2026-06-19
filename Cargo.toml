@@ -104,3 +104,6 @@ lto = "thin"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[patch.crates-io]
+cf1-rs = { path = "../cf1-rs" }

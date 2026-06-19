@@ -280,6 +280,24 @@ struct PreprocessResult {
 /// removed (an all-`A` reference is dropped).
 const POLYA_CLIP_LEN: usize = 10;
 
+/// Length of the longest run of consecutive ACGT (case-insensitive) bases — the
+/// longest stretch Cuttlefish can extract k-mers from (it splits the de Bruijn
+/// graph on any other base, e.g. `N`). A run of length `L` carries `L - k + 1`
+/// k-mers, so a reference is tileable iff its longest ACGT run is `>= k`.
+fn longest_acgt_run(seq: &[u8]) -> usize {
+    let mut best = 0usize;
+    let mut cur = 0usize;
+    for &b in seq {
+        if matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+            cur += 1;
+            best = best.max(cur);
+        } else {
+            cur = 0;
+        }
+    }
+    best
+}
+
 fn preprocess_fasta(
     inputs: &[PathBuf],
     out_path: &Path,
@@ -349,6 +367,15 @@ fn preprocess_fasta(
             }
 
             let mut seq = orig.into_owned();
+            // Replace non-ACGT bases with pseudo-random ACGT (salmon FixFasta
+            // behavior). This is currently applied to decoys too: ideally decoys
+            // would keep their N-runs so Cuttlefish splits the graph on them
+            // (yielding a much smaller/faster cDBG for genome decoys with large
+            // assembly gaps), but cf1-rs (<= 0.4.1) panics on `N` in its
+            // minimizer-counting phase (packed-seq rejects non-ACGTN) despite
+            // `poly_n_stretch` being set — so we cannot yet feed it N. The
+            // longest-ACGT-run decoy-drop below is already written to that future
+            // (it reduces to a length test while decoys are N-free).
             for b in seq.iter_mut() {
                 if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
                     x = x
@@ -384,11 +411,16 @@ fn preprocess_fasta(
                 }
             }
 
-            // Drop a decoy whose cleaned/clipped length is <= k: it has no k-mers,
-            // can never catch a read, and keeping it only risks the index builder
-            // relocating it into the trailing sub-`k` block (breaking decoy-region
-            // contiguity). Sub-`k` *transcripts* are kept (reported at 0 reads).
-            if is_decoy && seq.len() <= k {
+            // Drop a decoy that Cuttlefish cannot tile. A reference carries a k-mer
+            // (and so a unitig) iff it has a run of >= k consecutive ACGT bases — a
+            // run of exactly k has one k-mer (validated empirically). A decoy with
+            // no such run (too short, or fragmented into sub-k pieces by N-runs)
+            // can never be seeded or catch a read, and keeping it would let the
+            // builder relocate it into the trailing sub-`k`/untiled block, breaking
+            // the contiguity that the O(1) decoy check relies on. Sub-`k`/N-broken
+            // *transcripts* are kept (reported at 0 reads); after the replacement
+            // above transcripts have no N-runs, so only decoys are affected here.
+            if is_decoy && longest_acgt_run(&seq) < k {
                 short_decoys_dropped.push(name.to_vec());
                 continue;
             }
@@ -499,9 +531,11 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         None => ahash::AHashSet::new(),
     };
 
-    // Replace non-ACGT bases up front (cf1-rs/packed-seq can't index N); the
-    // cleaned FASTA feeds the cDBG build and the refseq store, while the hashes
-    // below use the original input.
+    // Preprocess the references into the cleaned FASTA that feeds both the cDBG
+    // build and the refseq store (the hashes below use the original input):
+    // transcripts get non-ACGT bases replaced with pseudo-random ACGT (salmon
+    // FixFasta behavior); decoys keep their non-ACGT bases (e.g. genome N-runs) so
+    // Cuttlefish splits the graph on them instead of tiling random replacements.
     let cleaned = intermediate_dir.join("cleaned_refs.fa");
     let pre = preprocess_fasta(
         &opts.transcripts,
@@ -533,8 +567,9 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     }
     if !pre.short_decoys_dropped.is_empty() {
         warn!(
-            "dropped {} decoy reference(s) whose cleaned/clipped length is <= k={} \
-             (no k-mers, so they can never catch a read): {}",
+            "dropped {} decoy reference(s) with no run of >= k={} consecutive ACGT bases \
+             (too short, or fragmented by N-runs): they carry no k-mers and can never be \
+             seeded or catch a read: {}",
             pre.short_decoys_dropped.len(),
             opts.k,
             pre.short_decoys_dropped
@@ -563,12 +598,35 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         .output_prefix(cdbg_prefix.clone())
         .k(opts.k)
         .threads(threads)
+        // Emit references in input order so the decoy block (always last in the
+        // input) stays contiguous in the built index — letting `is_decoy` be a
+        // single O(1) range test and making the build deterministic.
+        .synchronize_output(true)
         .call()
         .context("cf1-rs cDBG construction failed")?;
     info!(
         "cDBG: {} unitigs, {} distinct k-mers",
         cf.unitig_count, cf.vertex_count
     );
+    // Authoritative cross-check of our pre-detection against Cuttlefish's own
+    // tiling: having dropped every decoy with no >= k ACGT run at preprocess,
+    // Cuttlefish should report no untiled sequence (transcripts have no N-runs
+    // after replacement; sub-k transcripts are "short", not "untiled"). A
+    // non-empty list means our longest-ACGT-run criterion disagreed with
+    // Cuttlefish for some reference — warn here; the decoy-contiguity guard below
+    // is the hard backstop against any resulting mis-classification.
+    if !cf.untiled_seqs.is_empty() {
+        warn!(
+            "Cuttlefish reported {} untiled reference(s) not dropped at preprocess: {:?}. \
+             This is unexpected (decoys with no >= k ACGT run should already be dropped); \
+             please report.",
+            cf.untiled_seqs.len(),
+            cf.untiled_seqs
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
 
     // Stage 2: piscem SSHash + contig-table index over the tiling.
     info!("building piscem index (m={})", m);
