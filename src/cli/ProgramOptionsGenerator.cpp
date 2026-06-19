@@ -211,6 +211,13 @@ namespace salmon {
        "union); with this flag a read that maps only alongside a mate mapping to a disjoint reference set is not "
        "reported as an orphan."
        )
+      ("allowDecoyOrphans",
+       po::bool_switch(&(sopt.allowDecoyOrphans))->default_value(salmon::defaults::allowDecoyOrphans),
+       "[selective-alignment mode only] : Keep a fragment's transcript mapping(s) even when a decoy mapping "
+       "dominates it (e.g. one mate is exonic and the other intronic, so the fragment pairs best to the genome "
+       "decoy). By default such decoy-dominated fragments are discarded; with this flag the transcript "
+       "placement is retained as an orphan/mapping. Mirrors the same flag in the Rust implementation."
+       )
       ("mimicBT2", // horrible flag name, think of something better
        po::bool_switch(&(sopt.mimicBT2))->default_value(salmon::defaults::mimicBT2),
        "[selective-alignment mode only] : Set flags to mimic parameters similar to "

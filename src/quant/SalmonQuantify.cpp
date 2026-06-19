@@ -1217,6 +1217,7 @@ void processReads(
   // we only collect detailed decoy information if we will be
   // writing output to SAM.
   msi.collect_decoys(writeQuasimappings);
+  msi.allow_decoy_orphans(salmonOpts.allowDecoyOrphans);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
@@ -1609,7 +1610,11 @@ void processReads(
           }
 
           bool bestHitDecoy = msi.haveOnlyDecoyMappings();
-          if (msi.bestScore > invalidScore and !bestHitDecoy) {
+          // --allowDecoyOrphans: keep the transcript placement(s) even when a
+          // decoy dominates (so long as a transcript mapping exists). Default
+          // (deny) discards decoy-dominated fragments. Mirrors Rust salmon.
+          if (msi.bestScore > invalidScore and
+              (!bestHitDecoy or salmonOpts.allowDecoyOrphans)) {
             salmon::mapping_utils::filterAndCollectAlignments(
                 jointHits, readLen, mateLen,
                 false, // true for single-end false otherwise
@@ -2069,6 +2074,7 @@ void processReads(
   // we only collect detailed decoy information if we will be
   // writing output to SAM.
   msi.collect_decoys(writeQuasimappings);
+  msi.allow_decoy_orphans(salmonOpts.allowDecoyOrphans);
 
   // std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache;
@@ -2213,7 +2219,10 @@ void processReads(
         }
 
         bool bestHitDecoy = msi.haveOnlyDecoyMappings();
-        if (msi.bestScore > invalidScore and !bestHitDecoy) {
+        // --allowDecoyOrphans: keep the transcript placement even when a decoy
+        // dominates (so long as a transcript mapping exists). Mirrors Rust salmon.
+        if (msi.bestScore > invalidScore and
+            (!bestHitDecoy or salmonOpts.allowDecoyOrphans)) {
           salmon::mapping_utils::filterAndCollectAlignments(
               jointHits, readLen, readLen,
               true, // true for single-end false otherwise

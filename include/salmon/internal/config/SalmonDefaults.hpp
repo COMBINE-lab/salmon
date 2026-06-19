@@ -46,6 +46,7 @@ namespace defaults {
   constexpr const bool allowDovetail{false};
   constexpr const bool recoverOrphans{false};
   constexpr const bool orphansRequireUnmappedMate{false};
+  constexpr const bool allowDecoyOrphans{false};
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";
   constexpr const bool consistentHits{false};

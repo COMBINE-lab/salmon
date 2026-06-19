@@ -93,6 +93,13 @@ public:
   void collect_decoys(bool do_collect) { collect_decoy_info_ = do_collect; }
   bool collect_decoys() const { return collect_decoy_info_; }
 
+  // When set, updateRefMappings keeps tracking a non-decoy (transcript) hit even
+  // if it scores below the decoy bar, so bestScore reflects the transcript
+  // placement and --allowDecoyOrphans can retain it instead of discarding the
+  // fragment as decoy-dominated.
+  void allow_decoy_orphans(bool v) { allow_decoy_orphans_ = v; }
+  bool allow_decoy_orphans() const { return allow_decoy_orphans_; }
+
   // clear everything but the decoy threshold
   void clear(size_t num_hits) {
     bestScore = invalid_score_;
@@ -142,6 +149,7 @@ public:
   int32_t secondBestScore;
   int32_t bestDecoyScore;
   double decoyThresh;
+  bool allow_decoy_orphans_{false};
   itlib::small_vector<std::pair<int32_t, int32_t>> best_decoy_hits;
   bool collect_decoy_info_;
   std::vector<int32_t> scores_;
@@ -207,6 +215,7 @@ initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector,
 
   mpol.noOrphans = !salmonOpts.allowOrphans;
   mpol.orphansRequireUnmappedMate = salmonOpts.orphansRequireUnmappedMate;
+  mpol.allowDecoyOrphans = salmonOpts.allowDecoyOrphans;
   // TODO : PF_INTEGRATION
   // decide how we want to set this
   // I think we don't want to allow general discordant reads
@@ -245,9 +254,13 @@ inline void updateRefMappings(uint32_t tid, int32_t hitScore, bool isCompat,
     bool did_update = msi.update_decoy_mappings(hitScore, idx, tid);
     (void)did_update;
     return;
-  } else if (hitScore < decoyCutoff or (hitScore == invalidScore)) {
-    // if the current score is to a valid target but doesn't
-    // exceed the necessary decoy threshold, then skip it.
+  } else if ((hitScore < decoyCutoff and !msi.allow_decoy_orphans()) or
+             (hitScore == invalidScore)) {
+    // if the current score is to a valid target but doesn't exceed the necessary
+    // decoy threshold, then skip it -- UNLESS --allowDecoyOrphans is set, in which
+    // case we keep tracking the transcript hit (so bestScore reflects it and the
+    // fragment can be reported as a transcript orphan rather than discarded as
+    // decoy-dominated).
     return;
   }
   // otherwise, we have a "high-scoring" hit to a non-decoy
@@ -308,7 +321,17 @@ inline void filterAndCollectAlignments(
   // the bestScore
   std::vector<std::pair<int32_t, int32_t>> keptPerm;
   keptPerm.reserve(perm.size());
-  const int32_t scoreThreshold = hardFilter ? msi.bestScore : decoyThreshold;
+  // --allowDecoyOrphans: a decoy *pair* sets bestDecoyScore to ~2x a single-mate
+  // transcript orphan, so gating on decoyThreshold (= decoyThresh*bestDecoyScore)
+  // would always drop the orphan. Since `perm`/`scores` only ever hold non-decoy
+  // hits (decoys are tracked separately in updateRefMappings), under the flag we
+  // keep all non-decoy hits and let the relative estAlnProb/minAlnProb filter
+  // below prune them against bestScore -- matching Rust (keep transcript
+  // placements regardless of decoy domination). Default path is unchanged.
+  const int32_t scoreThreshold =
+      hardFilter ? msi.bestScore
+                 : (msi.allow_decoy_orphans() ? (invalidScore + 1)
+                                              : decoyThreshold);
   for (auto const& idxtid : perm) {
     if (scores[idxtid.first] >= scoreThreshold) {
       keptPerm.emplace_back(idxtid);

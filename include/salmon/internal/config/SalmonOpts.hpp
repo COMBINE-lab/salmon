@@ -297,6 +297,11 @@ struct SalmonOpts {
   bool recoverOrphans;
   // Only emit orphan mappings when the read's mate is entirely unmapped.
   bool orphansRequireUnmappedMate;
+  // Keep a fragment's transcript mapping(s) even when a decoy mapping dominates
+  // (e.g. one mate is exonic and the other is intronic, so the pair maps best to
+  // the genome decoy). Default false = discard such decoy-dominated fragments
+  // (matches the Rust port's default). Mirrors Rust salmon's --allowDecoyOrphans.
+  bool allowDecoyOrphans;
   bool hardFilter;
   uint32_t maxOccsPerHit;
   double decoyThreshold;
