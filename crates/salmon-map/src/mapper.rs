@@ -295,14 +295,23 @@ pub fn map_read_pair<'idx, R: RefProvider>(
             MateStatus::SingleEnd => {}
         }
     }
-    // Orphans are a *fallback*: if this fragment has any concordant (proper-pair)
-    // mapping, discard all orphan mappings. A lone mate matching a paralog is weak
-    // evidence and would spuriously enlarge the equivalence class / leak count mass
-    // to the wrong transcript; the concordant mappings are the trustworthy signal.
-    // Orphans are kept only when the fragment has *no* concordant mapping at all.
+    // Orphans are a *fallback*: if this fragment has a concordant (proper-pair)
+    // mapping to a *transcript*, discard all orphan mappings. A lone mate matching
+    // a paralog is weak evidence and would spuriously enlarge the equivalence class
+    // / leak count mass to the wrong transcript; the concordant transcript mapping
+    // is the trustworthy signal.
+    //
+    // A concordant pair to a *decoy* must NOT suppress a transcript orphan: a
+    // fragment that pairs on the genome but only orphans onto a transcript would
+    // otherwise lose its transcript evidence entirely (the decoy pair leaves no
+    // surviving non-decoy mapping, so `best_valid` is None and even
+    // `--allowDecoyOrphans` cannot rescue it). Instead we keep both and let the
+    // decoy-domination logic in `finalize_mappings_counted` adjudicate
+    // (default: drop the decoy-dominated transcript orphan; `--allowDecoyOrphans`:
+    // keep it), matching C++ salmon's orphan handling on a decoy-aware index.
     if raw
         .iter()
-        .any(|m| matches!(m.status, MateStatus::PairedEndPaired))
+        .any(|m| matches!(m.status, MateStatus::PairedEndPaired) && !m.is_decoy)
     {
         raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
     }
