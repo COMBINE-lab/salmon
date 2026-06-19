@@ -68,7 +68,7 @@ clap = { version = "4", features = ["derive"] }
 # hashing of reference sequences/names for index provenance
 sha2 = "0.10"
 # COMBINE-lab dependencies, from crates.io.
-cf1-rs = "0.4.1"
+cf1-rs = "0.5"
 piscem-rs = "0.6.0"
 
 # dev / test helpers
