@@ -292,6 +292,63 @@ simulated references (same clipped FASTA, matched thresholds) the per-read
 target-set residual is 147 Rust-superset / 50 C++-superset, unchanged by the cap
 fix now that both cap on the aligned-mapping count.
 
+## Decoy-orphan handling in selective alignment (`--allowDecoyOrphans`)
+
+Two related fixes to how a fragment that pairs concordantly on the genome decoy
+but only orphans onto a transcript (one mate exonic, the other intronic/genomic —
+very common with a decoy-aware index) is handled:
+
+- **A concordant decoy pair no longer suppresses a transcript orphan.** The
+  orphan-fallback rule discarded *all* orphans whenever any concordant pair
+  existed — including a concordant pair to a *decoy*. That destroyed the
+  transcript orphan, leaving only the decoy pair, so the fragment was dropped as
+  decoy-dominated with no surviving non-decoy mapping — and `--allowDecoyOrphans`
+  could not even rescue it (it only acts when a transcript mapping survives). Now
+  only a concordant *transcript* pair suppresses orphans; a decoy pair leaves the
+  transcript orphan for the decoy-domination logic to adjudicate.
+- **`--allowDecoyOrphans` now works as intended.** With the above fixed, the flag
+  recovers the transcript orphan when the other mate maps to the genome decoy
+  (default still drops it). On SRR1039508 (full) this raises the `--allowDecoyOrphans`
+  rate 93.92 % → 94.81 %; the **default rate is unchanged** (byte-identical), and
+  the recovered fragments match what C++ keeps as orphans. This is the
+  selective-alignment mirror of the sketch-mode decoy-orphan rescue above.
+
+## Equivalence-class weights: log-space normalization (no lost mapped mass)
+
+Per-fragment equivalence-class weights are now normalized in **log** space
+(`exp(auxProb − auxDenom)`, as C++ salmon does) rather than linearly (`w/Σw`). The
+linear form, guarded by `Σw > 0`, silently produced all-zero weights for a
+fragment whose implied lengths all have ~0 fragment-length-distribution
+probability (every `w·exp(logFragProb)` underflows to 0); the VBEM then dropped
+that equivalence class's count, **losing mapped mass**. The log-space form is
+mathematically identical for the normal case (per-class scaling is EM-invariant)
+but stays well-defined under total underflow. On SRR1039508 (full) the
+mapped-mass loss (sum of `quant.sf` `NumReads` vs `num_mapped`) drops from **190
+fragments to 0.1** — matching C++.
+
+## `num_dovetail_fragments` is now reported
+
+Rust always dropped dovetailed concordant pairs under the default no-dovetail
+policy (matching C++) but reported `num_dovetail_fragments = 0`, because it only
+inspected surviving pairs (never dovetailed after filtering). The counter is now
+wired to the pairing stage and reports fragments whose only concordant pairing was
+a dovetail. Diagnostic only — no change to mapping or quantification.
+
+## Run-to-run reproducibility
+
+Quantification is **byte-identical run-to-run when single-threaded** (`-p 1`); the
+duplicate-transcript symmetry fix (per-fragment FLD snapshot + uniform init) means
+exact-duplicate groups converge deterministically. Multi-threaded runs have a
+small residual wobble (~0.26 % of assigned reads on SRR1039508, nonzero-transcript
+set unchanged) from the **stochastic FLD training** under nondeterministic
+fragment→thread scheduling — the same mechanism present in C++ salmon. Measured
+head-to-head (`-p 16`, two runs each), Rust is in fact **more reproducible than
+C++**: about half the average and total per-transcript variation, and far fewer
+transcripts shifting by >2 % (Rust 2.2 % of expressed transcripts vs C++ 5.1 %).
+Full parallel determinism (per-fragment-seeded FLD acceptance + order-independent
+accumulation) is tracked as a follow-up; it is an improvement *over* C++, not a
+correctness gap.
+
 ## Related C++ fixes (salmon 1.12.1)
 
 These were also applied to the final C++ line so the two implementations agree:
