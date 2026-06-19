@@ -367,6 +367,8 @@ dependencies = [
 [[package]]
 name = "cf1-rs"
 version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b202e915361725b118b05720c39a3741681f6cafbe7417b723bcd6a94b47ac7c"
 dependencies = [
  "ahash",
  "anyhow",
