@@ -1,4 +1,4 @@
-# salmon 2.1.0 (draft — in progress)
+# salmon 2.1.0
 
 A correctness-focused release that closes the remaining selective-alignment
 mapping/quantification gaps against C++ salmon (1.12.1), adds N-aware decoy
@@ -325,6 +325,27 @@ mathematically identical for the normal case (per-class scaling is EM-invariant)
 but stays well-defined under total underflow. On SRR1039508 (full) the
 mapped-mass loss (sum of `quant.sf` `NumReads` vs `num_mapped`) drops from **190
 fragments to 0.1** — matching C++.
+
+## Orphan / single-end fragment-length probability (`--noSingleFragProb`)
+
+Orphan and single-end mappings now receive C++ salmon's **bounded-CMF
+"ambiguous" fragment-length weight** (`getAmbigFragLengthProb`) rather than a flat
+penalty. The mapped mate bounds the maximum fragment length — downstream space
+(`txpLen − pos`) for a forward read, `pos + readLen` for a reverse read — and the
+weight is the fragment-length-distribution mass up to that bound, conditioned on
+the transcript length (`cmf(maxFragLen) − cmf(txpLen)`). This discriminates orphan
+placements by geometry (a placement with ample room for the unseen mate is more
+probable than one crammed against a transcript end) instead of weighting them all
+equally. Previously Rust used a flat `LOG_EPSILON` (paired-library orphan) or
+weight 1 (single-end) — i.e. it behaved as if `--noSingleFragProb` were always on.
+
+The per-fragment fragment-length term is now computed **once** and shared by both
+the abundance-aware online posterior and the persistent equivalence-class weight
+(C++ computes it once as `aln.logProb`); the two had previously drifted apart.
+Proper pairs are likewise length-conditioned (`pmf(flen) − cmf(txpLen)`), which is
+≈0 for transcripts longer than the fragment-length support and only adjusts short
+transcripts. The new `--noSingleFragProb` flag (default off) restores the old flat
+behavior, matching salmon's option of the same name.
 
 ## `num_dovetail_fragments` is now reported
 
