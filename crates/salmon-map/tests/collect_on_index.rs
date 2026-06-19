@@ -307,6 +307,8 @@ fn pseudoalignment_only_mode() {
         SkippingStrategy::Permissive,
         256,
         2500,
+        &idx,
+        false,
     );
     assert!(
         sp.iter()

@@ -16,7 +16,7 @@ use piscem_rs::mapping::hits::MappingType;
 use piscem_rs::mapping::merge_pairs::merge_se_mappings;
 use piscem_rs::mapping::sketch_hit_simple::SketchHitInfoSimple;
 use piscem_rs::mapping::streaming_query::PiscemStreamingQuery;
-use salmon_core::MateStatus;
+use salmon_core::{MateStatus, RefProvider};
 use sshash_lib::dispatch_on_k;
 
 use crate::score::ScoredMapping;
@@ -114,7 +114,8 @@ pub fn map_single_read_sketch<'idx>(
 ///   (piscem's `check_kmers_orphans` / `MappingCache::has_matching_kmers` rule).
 ///   More conservative; mates that have k-mers but no consensus target leave the
 ///   pair unmapped. Selected by `--sketchStrictOrphans`.
-pub fn map_read_pair_sketch<'idx>(
+#[allow(clippy::too_many_arguments)]
+pub fn map_read_pair_sketch<'idx, R: RefProvider>(
     index: &'idx ReferenceIndex,
     hs: &mut HitSearcher<'idx>,
     scratch: &mut SketchScratch,
@@ -125,6 +126,8 @@ pub fn map_read_pair_sketch<'idx>(
     strat: SkippingStrategy,
     max_hit_occ: usize,
     max_read_occ: usize,
+    refs: &R,
+    allow_decoy_orphans: bool,
 ) -> Vec<ScoredMapping> {
     let k = index.k();
     if r1.len() < k && r2.len() < k {
@@ -163,6 +166,32 @@ pub fn map_read_pair_sketch<'idx>(
             map_read::<K, SketchHitInfoSimple, _, _>(r2, right, hs, &mut q, index, &mut poison, strat);
         }
         merge_se_mappings(left, right, r1.len() as i32, r2.len() as i32, out);
+
+        // Decoy-orphan rescue (`--allowDecoyOrphans`). Sketch pairing is same-tid
+        // only (`merge_lists`), so a fragment whose mates map to a transcript and
+        // a decoy respectively forms no concordant pair and `merge_se_mappings`
+        // returns Unmapped — the SA-mode "a decoy dominates the fragment's other
+        // placement" scenario, but here it is silently dropped rather than kept as
+        // a transcript orphan. When the flag is set, recover the transcript mate as
+        // an orphan, but only when the *other* mate's hits are entirely decoys (so
+        // this never changes the discordant transcript-vs-transcript case, which
+        // stays unmapped as in piscem). The retained hits are transcript-only, so
+        // the downstream `filter_sketch_decoys` is a no-op on them.
+        if allow_decoy_orphans && out.accepted_hits.is_empty() {
+            let left_has_txp = left.accepted_hits.iter().any(|h| !refs.is_decoy(h.tid));
+            let right_has_txp = right.accepted_hits.iter().any(|h| !refs.is_decoy(h.tid));
+            let left_all_decoy = !left.accepted_hits.is_empty() && !left_has_txp;
+            let right_all_decoy = !right.accepted_hits.is_empty() && !right_has_txp;
+            if left_has_txp && right_all_decoy {
+                out.accepted_hits
+                    .extend(left.accepted_hits.iter().filter(|h| !refs.is_decoy(h.tid)).cloned());
+                out.map_type = MappingType::MappedFirstOrphan;
+            } else if right_has_txp && left_all_decoy {
+                out.accepted_hits
+                    .extend(right.accepted_hits.iter().filter(|h| !refs.is_decoy(h.tid)).cloned());
+                out.map_type = MappingType::MappedSecondOrphan;
+            }
+        }
 
         let status = match out.map_type {
             MappingType::MappedPair => Some(MateStatus::PairedEndPaired),

@@ -613,6 +613,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.skip,
                     sh.map_cfg.collect.max_hit_occ,
                     sh.max_read_occ,
+                    sh.salmon,
+                    sh.map_cfg.score.allow_decoy_orphans,
                 )
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
