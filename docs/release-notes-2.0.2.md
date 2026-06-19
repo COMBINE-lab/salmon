@@ -106,6 +106,35 @@ This was found and fixed using the #1019 reproducer (GRCh38 Ensembl r115 gentrom
 + SRR1039508); the related expected-bias-model parallelization/decoy-exclusion of
 PR #1020 is also folded in.
 
+- **Sub-`k` decoy references are dropped at index time.** A decoy whose sequence
+  is `<= k` after cleaning/poly-A clipping carries no k-mers, so it can never be
+  seeded or catch a read. Previously the builder relocated such a reference into
+  the trailing "short" block, scattering the decoy region; the contiguous-decoy
+  assumption then broke and a transcript adjacent to the decoys could be
+  mis-classified as a decoy — its reads dropped and its row omitted from
+  `quant.sf` (silent data loss). These useless sub-`k` decoys are now dropped at
+  build with a warning, which keeps the decoy block contiguous so the per-fragment
+  decoy test stays a single O(1) range check. Sub-`k` *transcripts* are still kept
+  and reported at 0 reads. A build-time guard verifies decoy contiguity and aborts
+  with a clear error rather than risk a silent mis-classification.
+
+## Duplicate-transcript symmetry: consistent fragment-length reads
+
+For sets of exact-duplicate transcripts the per-member read split is statistically
+unidentifiable, so it must be handled symmetrically (as C++ salmon does). The Rust
+port had been reading the fragment-length distribution's `pmf` directly from the
+live, concurrently-updated histogram while building equivalence classes, so two
+lookups of the *same* length (for two duplicate transcripts in one fragment) could
+return slightly different values. The VBEM Dirichlet prior (`α<1`, sparsity-
+inducing) then amplified that tiny asymmetry into a winner-take-all split,
+concentrating a duplicate group's mass on one member and reporting fewer expressed
+transcripts than C++. The FLD probability is now read from a per-fragment snapshot
+(refreshed at mini-batch boundaries, mirroring salmon's cached CMF), so duplicate
+transcripts receive identical weights and stay symmetric; quantification is also
+now deterministic across thread counts on this path. On GEUVADIS ERR188044 vs C++
+(byte-identical references) this raised NumReads `log`-Pearson 0.974→0.992 and
+brought the nonzero-transcript counts into agreement (90.9k→95.3k vs C++ 95.3k).
+
 ### `--allowDecoyOrphans` (new flag)
 
 By default a fragment whose best transcript alignment is outscored by a decoy
