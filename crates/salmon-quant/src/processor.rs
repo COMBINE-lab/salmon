@@ -15,6 +15,7 @@ use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor};
 use paraseq::Record;
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 
+use salmon_core::math::{log_add, LOG_0, LOG_1};
 use salmon_core::{is_compatible, LibraryFormat, MateStatus};
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
 use salmon_index::SalmonIndex;
@@ -82,6 +83,10 @@ pub(crate) struct Shared<'a> {
     pub online: Option<&'a OnlineInference>,
     /// whether the library is paired (for the online orphan penalty)
     pub paired_lib: bool,
+    /// model the fragment-length probability of orphan / single-end mappings via
+    /// the bounded-CMF "ambiguous" weight (salmon default). When `false`
+    /// (`--noSingleFragProb`) orphans fall back to a flat penalty / weight-1.
+    pub model_single_frag_prob: bool,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
     /// mapped fragments whose representative mapping is an orphan (only one mate
@@ -164,6 +169,62 @@ const LOG_EPSILON: f64 = -23.998_158_637_57; // (0.375e-10f64).ln()
 /// salmon's `numPreBurninFrags`: fold the fragment-length term into the online
 /// posterior only after this many fragments have been assigned.
 pub(crate) const NUM_PRE_BURNIN: u64 = 5000;
+
+/// Per-mapping fragment-length log-probability (`logFragProb`) — the single term
+/// shared by the abundance-aware online posterior and the persistent eq-class
+/// weight. C++ salmon computes this once as part of `aln.logProb` and reuses it
+/// for both; the Rust port previously duplicated it inconsistently (online used a
+/// flat `LOG_EPSILON` for orphans, the eq-class used `LOG_1`), so this unifies
+/// them.
+///
+/// * proper pair → length-conditioned `pmf(flen) − cmf(txpLen)` (salmon's
+///   `lenProb − refLengthCM`); `cmf(txpLen)` ≈ 0 for transcripts longer than the
+///   FLD support, so this only differs from the bare PMF for short transcripts.
+/// * orphan / single-end → the bounded-CMF "ambiguous" weight
+///   ([`ambig_frag_log_prob`](salmon_model::ambig_frag_log_prob)), which is
+///   already conditioned on the transcript length.
+///
+/// `pmf`/`cmf` are the per-fragment FLD snapshots (empty before the auxiliary
+/// model is trained). With `model_single_frag_prob` off (`--noSingleFragProb`)
+/// orphans fall back to a flat `LOG_EPSILON` (paired library) / `LOG_1`
+/// (single-end), matching salmon. Returns `LOG_1` (= 0, unmodelled) before the
+/// model is trained or when no position is available (sketch mode).
+#[allow(clippy::too_many_arguments)]
+fn frag_log_prob(
+    m: &ScoredMapping,
+    txp_len: i32,
+    use_aux: bool,
+    model_single_frag_prob: bool,
+    paired_lib: bool,
+    pmf: &[f64],
+    cmf: &[f64],
+) -> f64 {
+    if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
+        if use_aux && !pmf.is_empty() {
+            let flen = (m.fragment_len as usize).min(pmf.len() - 1);
+            // length-conditioning normalizer log P(L ≤ txpLen); ~0 for long txps.
+            let cond = cmf[(txp_len.max(0) as usize).min(cmf.len().saturating_sub(1))];
+            pmf[flen] - cond
+        } else {
+            LOG_1
+        }
+    } else {
+        // orphan (PairedEndLeft / PairedEndRight) or single-end read
+        let pos = if m.is_fw { m.fw_pos } else { m.rc_pos };
+        if model_single_frag_prob && use_aux && pos >= 0 {
+            salmon_model::ambig_frag_log_prob(cmf, m.is_fw, pos, m.read_len, txp_len)
+        } else if paired_lib
+            && matches!(
+                m.status,
+                MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+            )
+        {
+            LOG_EPSILON // unexpected orphan, fragment length unmodelled
+        } else {
+            LOG_1
+        }
+    }
+}
 
 thread_local! {
     /// Per-thread PRNG state for stochastic FLD-sample acceptance (mirrors
@@ -319,10 +380,17 @@ fn record(
         }
     }
 
-    // Strand-compatibility filtering against an explicit expected format.
+    // Strand-compatibility filtering against the expected format: the explicit
+    // `-l` type, or — in auto (`-l A`) mode — the format the detector locks in
+    // once it has seen enough of the read prefix (`resolved_format`). Until the
+    // prefix is consumed this is `None` and nothing is filtered; afterwards the
+    // detected type is applied for the rest of the sample (salmon's behavior).
+    let expected = sh
+        .expected_format
+        .or_else(|| sh.detector.and_then(|d| d.resolved_format()));
     let compat: Vec<(&ScoredMapping, f64)> = maps
         .iter()
-        .filter_map(|m| match sh.expected_format {
+        .filter_map(|m| match expected {
             Some(exp) => {
                 if is_compatible(exp, m.format, m.is_fw, m.status) {
                     Some((m, m.weight))
@@ -339,6 +407,21 @@ fn record(
         return; // no compatible mapping -> fragment is unassigned
     }
 
+    // Capture ONE immutable FLD snapshot pair (PMF + CMF) for this fragment — a
+    // pair of cheap `Arc` clones, no per-fragment allocation — and share it
+    // between the online posterior and the persistent eq-class weight. Indexing
+    // the same snapshot for every mapping guarantees that transcripts sharing a
+    // fragment length (in particular exact-duplicate transcripts) receive an
+    // identical fragment-length probability even if another thread refreshes the
+    // shared snapshot meanwhile. Reading the live FLD per mapping (racing atomic
+    // loads on a concurrently-updated distribution) returned slightly different
+    // values for the same length and let the VBEM α<1 prior break duplicate
+    // symmetry. Mirrors C++ salmon's per-worker `LogCMFCache`. Empty until the
+    // first online refresh (the pre-burn-in window, where the FLD term is not
+    // folded in anyway).
+    let fld_pmf = sh.fld.online_snapshot();
+    let fld_cmf = sh.fld.online_cmf_snapshot();
+
     // Per-fragment bias-collection weights. With online (dual-phase) inference
     // these are abundance-aware posteriors `softmax(mass_t + log w_t)`, which
     // also advances the online masses by `logForgettingMass + log(posterior)`;
@@ -351,15 +434,16 @@ fn record(
     //   logFragCov   = ln(score weight)
     //   startPosProb = proper pair -> -ln(refLen - flen + 1) (flen<=refLen, else
     //                  LOG_EPSILON); otherwise -ln(refLen)
-    //   logFragProb  = proper pair (after pre-burn-in) -> live FLD pmf(flen);
-    //                  unexpected orphan in a paired library -> LOG_EPSILON.
+    //   logFragProb  = the shared `frag_log_prob` term (proper-pair conditioned
+    //                  PMF, or the orphan / single-end ambiguous-length weight).
     // Used for abundance-aware bias collection and abundance-aware FLD training.
     let online_post: Option<Vec<f64>> = sh.online.filter(|o| o.collecting()).map(|online| {
         let use_aux = online.num_assigned() >= sh.pre_burnin;
         let mm: Vec<(u32, f64)> = compat
             .iter()
             .map(|(m, w)| {
-                let rl = sh.salmon.ref_len(m.tid as usize).max(1) as f64;
+                let ref_len = sh.salmon.ref_len(m.tid as usize);
+                let rl = ref_len.max(1) as f64;
                 let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
                 let flen = m.fragment_len as f64;
                 let start_pos_prob = if proper {
@@ -371,17 +455,15 @@ fn record(
                 } else {
                     -(rl.ln())
                 };
-                let log_frag_prob = if proper {
-                    if use_aux {
-                        sh.fld.pmf(m.fragment_len as usize)
-                    } else {
-                        0.0
-                    }
-                } else if sh.paired_lib {
-                    LOG_EPSILON // unexpected orphan
-                } else {
-                    0.0
-                };
+                let log_frag_prob = frag_log_prob(
+                    m,
+                    ref_len as i32,
+                    use_aux,
+                    sh.model_single_frag_prob,
+                    sh.paired_lib,
+                    &fld_pmf,
+                    &fld_cmf,
+                );
                 let log_cov = if *w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
                 (m.tid, log_cov + start_pos_prob + log_frag_prob)
             })
@@ -429,20 +511,49 @@ fn record(
     // applied once the auxiliary model is trained (after `pre_burnin` fragments),
     // matching salmon's `numPreAuxModelSamples` gating.
     let use_aux = sh.num_processed.load(Ordering::Relaxed) >= sh.pre_burnin;
+    // Per-mapping FLD log-probability via the shared `frag_log_prob` term — the
+    // same one the online posterior uses, reading the same per-fragment snapshot
+    // pair captured above (so the two paths share one consistent FLD view, as
+    // C++ does via a single `aln.logProb`). Proper pairs get the length-
+    // conditioned PMF; orphans / single-end reads get the bounded-CMF ambiguous
+    // weight. `LOG_1` (= 0) before the auxiliary model is trained. The snapshot
+    // is primed from the prior before the run starts and refreshed at every
+    // mini-batch boundary, so it is never empty here.
+    let log_fps: Vec<f64> = compat
+        .iter()
+        .map(|(m, _)| {
+            let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
+            frag_log_prob(
+                m,
+                ref_len,
+                use_aux,
+                sh.model_single_frag_prob,
+                sh.paired_lib,
+                &fld_pmf,
+                &fld_cmf,
+            )
+        })
+        .collect();
+    // Per-fragment conditional probabilities, normalized in *log* space — the
+    // log weight of each mapping is `ln(score weight) + logFragProb`, and we
+    // subtract the log-sum-exp over the fragment's mappings (C++'s
+    // `exp(auxProb - auxDenom)`). This is the same normalization salmon's
+    // C++ does and is mathematically identical to the linear `w/Σw`, but doing it
+    // in log space keeps it well-defined when every FLD weight underflows: a
+    // fragment whose implied lengths all have ~0 FLD probability (logFragProb at
+    // the no-mass sentinel) would, in linear space, give all-zero weights — the
+    // `wsum > 0` normalization below then leaves them zero, the eq-class denom is
+    // 0, and the VBEM silently drops the fragment's count (lost mapped mass; the
+    // EM's degenerate-class branch is a no-op, as in C++). In log space the same
+    // fragment yields well-defined relative weights, so no mass is lost.
+    let log_denom = compat
+        .iter()
+        .zip(&log_fps)
+        .fold(LOG_0, |acc, ((_, w), &lfp)| log_add(acc, w.ln() + lfp));
     let mut pairs: Vec<(u32, f64)> = compat
         .iter()
-        .map(|(m, w)| {
-            let log_frag_prob = if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
-                if use_aux {
-                    sh.fld.pmf(m.fragment_len as usize)
-                } else {
-                    0.0
-                }
-            } else {
-                0.0
-            };
-            (m.tid, *w * log_frag_prob.exp())
-        })
+        .zip(&log_fps)
+        .map(|((m, w), &lfp)| (m.tid, (w.ln() + lfp - log_denom).exp()))
         .collect();
 
     // Abundance-aware FLD training: accept each concordant compatible pair's
@@ -457,9 +568,7 @@ fn record(
         for (i, (m, _)) in compat.iter().enumerate() {
             let conc = m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
-                && sh
-                    .expected_format
-                    .is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
+                && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
             if conc && fld_rng_u01() < post[i] {
                 sh.fld.add_val(m.fragment_len as usize, 0.0);
             }
@@ -591,10 +700,24 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.skip,
                     sh.map_cfg.collect.max_hit_occ,
                     sh.max_read_occ,
+                    sh.salmon,
+                    sh.map_cfg.score.allow_decoy_orphans,
                 )
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
+            // Sketch mappings carry no per-hit decoy flag and bypass the
+            // selective-alignment finalize, so decoys would otherwise leak into
+            // the eq-classes. Apply the same decoy policy here (drop decoy tids,
+            // decoy-domination, --allowDecoyOrphans) and account decoy-dominated
+            // fragments. SA mode already handled decoys inside finalize.
+            if sh.sketch && sh.salmon.info().num_decoys > 0 {
+                let decoy_dominated =
+                    salmon_map::filter_sketch_decoys(&mut maps, sh.salmon, &sh.map_cfg.score);
+                if decoy_dominated {
+                    sh.num_decoy.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             // A fragment mapping to too many places is discarded (salmon's
             // tooManyHits / maxReadOccs): treat as unmapped everywhere below.
             if maps.len() > sh.max_read_occ {
@@ -629,6 +752,10 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
+        // next batch's per-fragment reads are stable (see `record`). No-op once the
+        // final FLD cache is taken; amortized over the whole batch.
+        self.shared.fld.refresh_online();
         flush_sam(self);
         Ok(())
     }
@@ -681,6 +808,15 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };
+            // Sketch decoy policy (see the paired-end branch): drop decoy tids /
+            // decoy-dominated fragments that SA mode handles inside finalize.
+            if sh.sketch && sh.salmon.info().num_decoys > 0 {
+                let decoy_dominated =
+                    salmon_map::filter_sketch_decoys(&mut maps, sh.salmon, &sh.map_cfg.score);
+                if decoy_dominated {
+                    sh.num_decoy.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             if maps.len() > sh.max_read_occ {
                 maps.clear();
             }
@@ -706,6 +842,10 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
+        // next batch's per-fragment reads are stable (see `record`). No-op once the
+        // final FLD cache is taken; amortized over the whole batch.
+        self.shared.fld.refresh_online();
         flush_sam(self);
         Ok(())
     }

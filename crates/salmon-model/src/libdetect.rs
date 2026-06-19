@@ -8,18 +8,25 @@
 //! thresholds.
 
 use salmon_core::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 
 /// Default number of samples to collect before guessing (matches salmon).
 pub const DEFAULT_SAMPLES_NEEDED: i64 = 50_000;
 
+/// Sentinel for `resolved` meaning "not yet locked in" (no valid format has this
+/// id; `MAX_FORMAT_ID` is 11).
+const UNSET_FORMAT: u8 = 0xFF;
+
 /// Accumulates observed library formats and infers the most likely type.
 #[derive(Debug)]
 pub struct LibraryTypeDetector {
+    /// still sampling (gates [`add_sample`]); cleared once the format locks in
     active: AtomicBool,
     read_type: ReadType,
     samples_needed: AtomicI64,
     counts: Vec<AtomicU64>,
+    /// the locked-in format id once detection completes, else [`UNSET_FORMAT`]
+    resolved: AtomicU8,
 }
 
 impl LibraryTypeDetector {
@@ -32,6 +39,7 @@ impl LibraryTypeDetector {
             read_type,
             samples_needed: AtomicI64::new(DEFAULT_SAMPLES_NEEDED),
             counts,
+            resolved: AtomicU8::new(UNSET_FORMAT),
         }
     }
 
@@ -54,17 +62,61 @@ impl LibraryTypeDetector {
         }
     }
 
-    /// Infer the most likely library format from the accumulated counts. Marks
-    /// the detector inactive (so this is effectively done once). Returns `None`
-    /// if the detector was already inactive.
-    pub fn most_likely_type(&self) -> Option<LibraryFormat> {
-        if !self.active.swap(false, Ordering::AcqRel) {
+    /// Mid-run resolution (salmon's prefix-detect-then-apply): once enough
+    /// samples have been collected ([`can_guess`]), infer and **lock in** the
+    /// library format (one writer wins the CAS), stop sampling, and return it;
+    /// idempotent thereafter. Returns `None` while still sampling. The caller
+    /// applies the returned format as a strand-compatibility filter for the rest
+    /// of the run.
+    pub fn resolved_format(&self) -> Option<LibraryFormat> {
+        let r = self.resolved.load(Ordering::Acquire);
+        if r != UNSET_FORMAT {
+            return Some(LibraryFormat::from_format_id(r));
+        }
+        if !self.can_guess() {
             return None;
         }
+        let f = self.infer_format();
+        match self.resolved.compare_exchange(
+            UNSET_FORMAT,
+            f.format_id(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                self.active.store(false, Ordering::Release);
+                Some(f)
+            }
+            // Another thread locked in first; use its result.
+            Err(existing) => Some(LibraryFormat::from_format_id(existing)),
+        }
+    }
 
+    /// The final library format to report at end of run: the locked-in format if
+    /// resolution happened mid-run, else inferred from whatever samples were
+    /// collected (recorded so repeat calls agree). Always returns a format.
+    pub fn final_format(&self) -> LibraryFormat {
+        let r = self.resolved.load(Ordering::Acquire);
+        if r != UNSET_FORMAT {
+            return LibraryFormat::from_format_id(r);
+        }
+        let f = self.infer_format();
+        let _ = self.resolved.compare_exchange(
+            UNSET_FORMAT,
+            f.format_id(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        LibraryFormat::from_format_id(self.resolved.load(Ordering::Acquire))
+    }
+
+    /// Pure inference of the most likely library format from the accumulated
+    /// counts (no state change). Falls back to inward/unstranded when there are
+    /// no usable samples.
+    fn infer_format(&self) -> LibraryFormat {
         let count = |id: u8| self.counts[id as usize].load(Ordering::Relaxed);
 
-        let fmt = match self.read_type {
+        match self.read_type {
             ReadType::SingleEnd => {
                 let mut nf = 0u64;
                 let mut nr = 0u64;
@@ -136,9 +188,7 @@ impl LibraryTypeDetector {
                     )
                 }
             }
-        };
-
-        Some(fmt)
+        }
     }
 }
 
@@ -177,10 +227,10 @@ mod tests {
         for _ in 0..10 {
             d.add_sample(sr);
         }
-        let f = d.most_likely_type().unwrap();
-        assert_eq!(f.canonical(), "SF");
-        // detector becomes inactive after guessing
-        assert!(d.most_likely_type().is_none());
+        assert_eq!(d.infer_format().canonical(), "SF");
+        // final_format records and returns the same result idempotently
+        assert_eq!(d.final_format().canonical(), "SF");
+        assert_eq!(d.final_format().canonical(), "SF");
     }
 
     #[test]
@@ -192,7 +242,7 @@ mod tests {
             d.add_sample(sf);
             d.add_sample(sr);
         }
-        assert_eq!(d.most_likely_type().unwrap().canonical(), "U");
+        assert_eq!(d.infer_format().canonical(), "U");
     }
 
     #[test]
@@ -203,7 +253,7 @@ mod tests {
             d.add_sample(isr);
         }
         // ISR: inward + antisense -> toward + AS
-        assert_eq!(d.most_likely_type().unwrap().canonical(), "ISR");
+        assert_eq!(d.infer_format().canonical(), "ISR");
     }
 
     #[test]
@@ -216,7 +266,40 @@ mod tests {
             d.add_sample(isr);
         }
         // balanced strandedness -> unstranded, inward -> IU
-        assert_eq!(d.most_likely_type().unwrap().canonical(), "IU");
+        assert_eq!(d.infer_format().canonical(), "IU");
+    }
+
+    #[test]
+    fn resolved_format_locks_in_after_prefix() {
+        let d = LibraryTypeDetector::new(ReadType::PairedEnd);
+        let isr = LibraryFormat::parse("ISR").unwrap();
+        // Before the sample budget is consumed: no resolution yet, so the caller
+        // applies no filter, and the detector keeps sampling.
+        assert!(d.resolved_format().is_none());
+        assert!(d.is_active());
+        // Feed the full prefix budget.
+        for _ in 0..DEFAULT_SAMPLES_NEEDED {
+            d.add_sample(isr);
+        }
+        assert!(d.can_guess());
+        // Now it locks in to the inferred type, stops sampling, and is idempotent.
+        assert_eq!(d.resolved_format().unwrap().canonical(), "ISR");
+        assert!(!d.is_active());
+        assert_eq!(d.resolved_format().unwrap().canonical(), "ISR");
+        assert_eq!(d.final_format().canonical(), "ISR");
+    }
+
+    #[test]
+    fn final_format_without_lockin_infers_from_partial() {
+        // Fewer than the budget: never locks in mid-run, but end-of-run reporting
+        // still returns a best-guess format from the partial samples.
+        let d = LibraryTypeDetector::new(ReadType::PairedEnd);
+        let isf = LibraryFormat::parse("ISF").unwrap();
+        for _ in 0..100 {
+            d.add_sample(isf);
+        }
+        assert!(d.resolved_format().is_none()); // not enough to lock in mid-run
+        assert_eq!(d.final_format().canonical(), "ISF");
     }
 
     #[test]

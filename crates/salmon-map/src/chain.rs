@@ -161,6 +161,70 @@ fn gap_cost(gap: i32, seed_len: i32, log2_lut: &[f32]) -> f32 {
     }
 }
 
+/// Exact `chain_mems` fast path for the common two-anchor case. Returns `None`
+/// for tie cases where matching `sort_unstable_by`'s arbitrary equal-key/order
+/// behavior would be brittle; the caller then uses the general implementation.
+fn chain_two_mems(m0: Mem, m1: Mem, is_fw: bool, cfg: &ChainConfig) -> Option<Vec<MemChain>> {
+    let k0 = (m0.ref_start, m0.read_start);
+    let k1 = (m1.ref_start, m1.read_start);
+    let (a, b) = if k0 < k1 {
+        (m0, m1)
+    } else if k1 < k0 {
+        (m1, m0)
+    } else {
+        return None;
+    };
+
+    let f0 = a.len as f32;
+    let mut f1 = b.len as f32;
+    let mut p1 = usize::MAX;
+
+    let dr = b.ref_start - a.ref_start;
+    if dr <= cfg.max_gap {
+        let dq = b.read_start - a.read_start;
+        // Mirror the general DP's contained-anchor guard: `dr,dq > 0` only means
+        // `b` *starts* after `a`. If `b` is fully contained in `a` on either axis
+        // (`b`'s end <= `a`'s end) it adds no new coverage — a repeat-copy /
+        // sub-anchor on a different diagonal — so it must not chain onto `a`.
+        if dr > 0
+            && dq > 0
+            && dq <= cfg.max_gap
+            && b.read_end() > a.read_end()
+            && b.ref_end() > a.ref_end()
+        {
+            let gap = (dr - dq).abs();
+            let gain = dq.min(dr).min(b.len) as f32;
+            let sc = f0 + gain - gap_cost(gap, cfg.seed_len, &LOG2_LUT);
+            if sc > f1 {
+                f1 = sc;
+                p1 = 0;
+            }
+        }
+    }
+
+    if f0 == f1 {
+        return None;
+    }
+
+    let mut chains = Vec::with_capacity(2);
+    if f1 > f0 {
+        if p1 == 0 {
+            chains.push(MemChain::new(vec![a, b], f1, is_fw));
+        } else {
+            chains.push(MemChain::new(vec![b], f1, is_fw));
+            chains.push(MemChain::new(vec![a], f0, is_fw));
+        }
+    } else {
+        chains.push(MemChain::new(vec![a], f0, is_fw));
+        chains.push(MemChain::new(vec![b], f1, is_fw));
+    }
+
+    let best = f0.max(f1);
+    let cutoff = best * cfg.chain_subopt_thresh;
+    chains.retain(|c| c.score >= cutoff);
+    Some(chains)
+}
+
 /// Reusable per-thread scratch for [`chain_mems`]. The chaining DP allocates a
 /// handful of `n`-sized buffers per (tid, orientation) group; with many groups
 /// per read this dominated the mapper's allocator traffic. We keep one set of
@@ -189,6 +253,14 @@ thread_local! {
 pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain> {
     if mems.is_empty() {
         return Vec::new();
+    }
+    if let [mem] = mems {
+        return vec![MemChain::new(vec![*mem], mem.len as f32, is_fw)];
+    }
+    if let [m0, m1] = mems {
+        if let Some(chains) = chain_two_mems(*m0, *m1, is_fw, cfg) {
+            return chains;
+        }
     }
 
     CHAIN_SCRATCH.with(|cell| {
@@ -238,6 +310,19 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
                 let dq = sorted[i].read_start - sorted[j].read_start;
                 // strictly colinear and increasing on both axes
                 if dr <= 0 || dq <= 0 {
+                    continue;
+                }
+                // `dr,dq > 0` only guarantees anchor `i` *starts* after `j`; it does
+                // not guarantee `i` reaches further. If `i` is fully contained in
+                // `j` on either axis (`i`'s end ≤ `j`'s end), it adds no new
+                // read/reference coverage — it's a repeat-copy / sub-anchor on a
+                // different diagonal, not a real chain extension. Chaining it would
+                // inject a spurious overlap + gap (e.g. a perfect full-length anchor
+                // dragged below threshold by a contained off-diagonal repeat hit),
+                // so it must not be a successor of `j`.
+                if sorted[i].read_end() <= sorted[j].read_end()
+                    || sorted[i].ref_end() <= sorted[j].ref_end()
+                {
                     continue;
                 }
                 if dq > cfg.max_gap {
@@ -337,6 +422,27 @@ mod tests {
             chains[0].score
         );
         assert_eq!(chains[0].covered_read_bases(), 30);
+    }
+
+    #[test]
+    fn contained_anchor_not_chained_with_container() {
+        // The second anchor starts after the first on both axes (so dr,dq > 0) but
+        // is fully *contained* in the first's span (a repeat-copy / sub-anchor on a
+        // different diagonal). The DP must NOT chain it onto the container — doing
+        // so would inject a spurious overlap+gap that drags the full-length anchor
+        // below threshold. The full-length anchor stands alone.
+        let mems = [Mem::new(0, 1604, 76), Mem::new(32, 1618, 37)];
+        let chains = chain_mems(&mems, true, &cfg());
+        let best = chains
+            .iter()
+            .max_by_key(|c| c.covered_read_bases())
+            .unwrap();
+        assert_eq!(best.covered_read_bases(), 76);
+        assert_eq!(
+            best.mems.len(),
+            1,
+            "full-length anchor must not be chained with the contained hit: {chains:?}"
+        );
     }
 
     #[test]

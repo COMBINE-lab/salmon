@@ -208,10 +208,14 @@ struct DebugMapArgs {
     /// Single-end FASTQ (plain text).
     #[arg(short = 'r', long = "reads", required = true)]
     reads: PathBuf,
+    /// Seed with sparse fixed-k k-mer anchors instead of the default
+    /// unitig-constrained uni-MEMs.
+    #[arg(long = "sparseSeeds", conflicts_with_all = ["unimems", "refmems"])]
+    sparse_seeds: bool,
     /// Seed with reference-extended MEMs (cross unitig boundaries).
     #[arg(long = "refMEMs", conflicts_with = "unimems")]
     refmems: bool,
-    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
+    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style; default).
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
 }
@@ -379,10 +383,15 @@ struct QuantArgs {
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
     full_length_alignment: bool,
+    /// Seed with sparse fixed-k k-mer anchors instead of the default
+    /// unitig-constrained uni-MEMs.
+    #[arg(long = "sparseSeeds", conflicts_with_all = ["unimems", "refmems"])]
+    sparse_seeds: bool,
     /// Seed with reference-extended MEMs (cross unitig boundaries).
     #[arg(long = "refMEMs", conflicts_with = "unimems")]
     refmems: bool,
-    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
+    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style). This is the
+    /// default; the flag is accepted for explicitness/back-compat.
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
     /// Match score for selective alignment (reads mode).
@@ -433,9 +442,16 @@ struct QuantArgs {
     /// Significant digits for the EffectiveLength and NumReads columns of quant.sf.
     #[arg(long = "sigDigits", default_value_t = 3)]
     sig_digits: u32,
-    /// Discard a read/fragment that maps to more than this many places (reads mode).
-    #[arg(short = 'w', long = "maxReadOcc", default_value_t = 200)]
+    /// Discard a read/fragment that maps to more than this many places — counting
+    /// the total set of distinct mappings (concordant + orphan union) (reads mode).
+    #[arg(short = 'w', long = "maxReadOcc", default_value_t = 250)]
     max_read_occ: usize,
+    /// Only emit a single-mate (orphan) mapping when the read's mate is entirely
+    /// unmapped. By default, when a pair has no concordant mapping, orphans are
+    /// reported for both mates (their union); with this flag a read that maps only
+    /// because its mate also mapped (to a disjoint set) is not reported as an orphan.
+    #[arg(long = "orphansRequireUnmappedMate")]
+    orphans_require_unmapped_mate: bool,
     /// Allow dovetailed mappings (mates extending past each other) as concordant.
     #[arg(long = "allowDovetail")]
     allow_dovetail: bool,
@@ -467,6 +483,14 @@ struct QuantArgs {
     /// only the best-scoring mapping(s), each with equal weight.
     #[arg(long = "hardFilter")]
     hard_filter: bool,
+    /// When a fragment's best transcript alignment is outscored by a decoy
+    /// (genome) alignment, keep the transcript placement instead of discarding the
+    /// fragment. Off by default (decoy-dominated fragments are dropped, matching
+    /// salmon). Increases the reported mapping rate on decoy-aware indices at the
+    /// cost of retaining transcript mappings for fragments better explained by the
+    /// genome; only affects fragments that retain a transcript candidate.
+    #[arg(long = "allowDecoyOrphans")]
+    allow_decoy_orphans: bool,
     /// Allow soft-clipping of read ends during selective alignment: unaligned
     /// read-end bases are clipped rather than penalized. (salmon's --softclip)
     #[arg(long = "softclip")]
@@ -578,15 +602,20 @@ struct QuantArgs {
     validate_mappings: bool,
 }
 
-/// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
-/// enforces they are mutually exclusive).
-fn seed_mode(unimems: bool, refmems: bool) -> salmon_map::SeedMode {
-    if unimems {
-        salmon_map::SeedMode::UniMem
+/// Resolve the `--sparseSeeds` / `--uniMEMs` / `--refMEMs` flags into a seeding
+/// mode (clap enforces they are mutually exclusive). The default is uni-MEM
+/// seeding (`--uniMEMs`): it is faster than sparse k-mer seeding and at least as
+/// accurate, and faithfully reproduces pufferfish's seeding. `--sparseSeeds`
+/// selects the older sparse fixed-k anchors.
+fn seed_mode(unimems: bool, refmems: bool, sparse_seeds: bool) -> salmon_map::SeedMode {
+    if sparse_seeds {
+        salmon_map::SeedMode::Sparse
     } else if refmems {
         salmon_map::SeedMode::RefMem
     } else {
-        salmon_map::SeedMode::Sparse
+        // default (and explicit `--uniMEMs`)
+        let _ = unimems;
+        salmon_map::SeedMode::UniMem
     }
 }
 
@@ -682,9 +711,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.no_frag_length_dist {
         tracing::warn!("--noFragLengthDist is accepted but not yet implemented and has no effect: the fragment-length distribution is still used in the per-fragment probability.");
     }
-    if args.no_single_frag_prob {
-        tracing::warn!("--noSingleFragProb is accepted but not yet implemented and has no effect.");
-    }
     if args.sample_out || args.sample_unaligned || args.write_qualities {
         tracing::warn!("--sampleOut/--sampleUnaligned/--writeQualities (posterior-sampled BAM output) are accepted but not yet implemented and have no effect.");
     }
@@ -698,6 +724,17 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     }
     if args.validate_mappings {
         tracing::warn!("--validateMappings has no effect (deprecated in salmon too): selective alignment is the default mapping mode; pass --sketch for pseudoalignment.");
+    }
+    if args.sketch && args.decoy_threshold != 1.0 {
+        tracing::warn!(
+            "--decoyThreshold {} has no effect in --sketch mode: sketch (pseudoalignment) \
+             returns only equally-best mappings, so the decoy-domination comparison \
+             (bestTxpScore < decoyThreshold * bestDecoyScore) never triggers. A fragment is \
+             treated as decoy-dominated only when it maps to decoys *and no transcript*; \
+             otherwise decoy hits are dropped and transcript hits kept (use --allowDecoyOrphans \
+             to keep transcript hits even when a decoy also matches).",
+            args.decoy_threshold
+        );
     }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
@@ -828,11 +865,13 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.num_gibbs_samples = args.num_gibbs_samples;
     opts.thinning_factor = args.thinning_factor;
     opts.no_length_correction = args.no_length_correction;
+    opts.model_single_frag_prob = !args.no_single_frag_prob;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.align.bandwidth = args.bandwidth;
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
+    opts.map_config.pair.orphans_require_unmapped_mate = args.orphans_require_unmapped_mate;
     opts.map_config.align.softclip = args.softclip;
     opts.map_config.align.softclip_overhangs = args.softclip_overhangs;
     opts.map_config.score.score_exp = args.score_exp;
@@ -844,6 +883,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.score.decoy_thresh = args.decoy_threshold;
     opts.map_config.score.min_aln_prob = args.min_aln_prob;
     opts.map_config.score.hard_filter = args.hard_filter;
+    opts.map_config.score.allow_decoy_orphans = args.allow_decoy_orphans;
     // chaining sub-optimality thresholds (Tier 2)
     opts.map_config.collect.chain.chain_subopt_thresh = args.pre_merge_chain_sub_thresh;
     opts.map_config.pair.post_merge_chain_sub_thresh = args.post_merge_chain_sub_thresh;
@@ -855,7 +895,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.cond_gc_bins = args.conditional_gc_bins;
     opts.skip_quant = args.skip_quant;
     opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
-    opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
+    opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;
     opts.map_config.align.mismatch_pen = args.mp as i8;
@@ -1057,7 +1097,7 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
     let idx = SalmonIndex::load(&args.index).context("loading index")?;
     let mut hs = HitSearcher::new(idx.inner());
     let cfg = MapConfig {
-        seed_mode: seed_mode(args.unimems, args.refmems),
+        seed_mode: seed_mode(args.unimems, args.refmems, args.sparse_seeds),
         ..MapConfig::default()
     };
 

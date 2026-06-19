@@ -244,46 +244,76 @@ pub(crate) fn conditional_cdf(cdf: &[f64], cdf_max_arg: usize, cdf_max_val: f64,
 /// mass that can start there (`conditionalCDF(maxFragLen)`), matching salmon's
 /// expected-model construction in `updateEffectiveLengths`.
 pub fn build_expected<'a, F>(
-    num_refs: usize,
+    num_targets: usize,
     seq_of: F,
     alphas: &[f64],
     eff_lens: &[f64],
     cdf: &[f64],
 ) -> (SBModel, SBModel)
 where
-    F: Fn(usize) -> &'a [u8],
+    F: Fn(usize) -> &'a [u8] + Sync,
 {
+    use rayon::prelude::*;
     let k = CONTEXT_LENGTH;
     let cu = CONTEXT_LEFT as i32;
-    let mut exp_fw = SBModel::new();
-    let mut exp_rc = SBModel::new();
-    for tid in 0..num_refs {
+    // Each expressed transcript contributes independently to the expected
+    // forward/RC context counts, an O(refLen) sweep per transcript. salmon
+    // parallelizes this over transcripts; do the same with rayon (per-thread
+    // `SBModel` partials reduced via `combine_counts`). `seq_of` must be `Sync`
+    // to share across threads (it is: a closure over the index). `num_targets`
+    // excludes decoys (the contiguous tail): decoys are never expressed and so
+    // contribute nothing, but skipping them outright guarantees no O(refLen)
+    // decoy sweep can ever run.
+    let per_tid = |tid: usize| -> Option<(SBModel, SBModel)> {
         if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
-            continue;
+            return None;
         }
         let seq = seq_of(tid);
         let ref_len = seq.len();
         if ref_len < k {
-            continue;
+            return None;
         }
         let cdf_max_arg = (cdf.len() - 1).min(ref_len);
         let cdf_max_val = cdf[cdf_max_arg];
         if cdf_max_val < MIN_CDF_MASS {
-            continue;
+            return None;
         }
         let weight = alphas[tid] / eff_lens[tid];
         let rc = revcomp_bytes(seq);
+        let mut fw = SBModel::new();
+        let mut rc_m = SBModel::new();
         // fragStartPos in 0..(refLen - K) (salmon's loop bound)
         for frag_start in 0..(ref_len - k) {
             let max_frag_len = ref_len as i32 - (frag_start as i32 + cu);
             if max_frag_len >= 0 && (max_frag_len as usize) < ref_len {
                 let cdensity = conditional_cdf(cdf, cdf_max_arg, cdf_max_val, max_frag_len);
                 let w = weight * cdensity;
-                exp_fw.add_context(&seq[frag_start..frag_start + k], false, w);
-                exp_rc.add_context(&rc[frag_start..frag_start + k], false, w);
+                fw.add_context(&seq[frag_start..frag_start + k], false, w);
+                rc_m.add_context(&rc[frag_start..frag_start + k], false, w);
             }
         }
-    }
+        Some((fw, rc_m))
+    };
+    let (mut exp_fw, mut exp_rc) = (0..num_targets)
+        .into_par_iter()
+        .fold(
+            || (SBModel::new(), SBModel::new()),
+            |mut acc, tid| {
+                if let Some((fw, rc_m)) = per_tid(tid) {
+                    acc.0.combine_counts(&fw);
+                    acc.1.combine_counts(&rc_m);
+                }
+                acc
+            },
+        )
+        .reduce(
+            || (SBModel::new(), SBModel::new()),
+            |mut a, b| {
+                a.0.combine_counts(&b.0);
+                a.1.combine_counts(&b.1);
+                a
+            },
+        );
     exp_fw.normalize();
     exp_rc.normalize();
     (exp_fw, exp_rc)
@@ -489,5 +519,60 @@ mod tests {
             })
             .collect();
         assert_eq!(SBModel::encode(&ctx, true), SBModel::encode(&rc, false));
+    }
+
+    #[test]
+    fn build_expected_respects_num_targets_bound() {
+        // Five real transcripts plus a sixth "decoy" with a very distinctive
+        // composition (poly-AC). The decoy must influence the expected model only
+        // when `num_targets` includes it, and must be skipped (cheaply) when its
+        // alpha is zero — the two ways decoys are kept out of the bias models.
+        let bases = b"ACGTACGTAGGCCTTAACCGGTTACGTACGT";
+        let mut refs: Vec<Vec<u8>> = (0..5)
+            .map(|s| (0..200).map(|i| bases[(i + s) % bases.len()]).collect())
+            .collect();
+        refs.push(
+            (0..400)
+                .map(|i| if i % 2 == 0 { b'A' } else { b'C' })
+                .collect(),
+        );
+        let num_refs = refs.len();
+        let alphas = vec![1.0; num_refs];
+        let eff_lens = vec![150.0; num_refs];
+        let mut pmf = vec![0.0; 200];
+        pmf[100] = 1.0;
+        let (cdf, _lo, _hi) = fld_cdf_and_bounds(&pmf);
+
+        // Exclude the decoy (num_targets = 5) vs include it (num_targets = 6).
+        let (a_fw, _) = build_expected(5, |t| refs[t].as_slice(), &alphas, &eff_lens, &cdf);
+        let (b_fw, _) = build_expected(6, |t| refs[t].as_slice(), &alphas, &eff_lens, &cdf);
+        assert!(a_fw.is_trained() && b_fw.is_trained());
+        assert!(a_fw.dump().iter().all(|v| v.is_finite()));
+        let diff: f64 = a_fw
+            .dump()
+            .iter()
+            .zip(b_fw.dump())
+            .map(|(x, y)| (x - y).abs())
+            .sum();
+        assert!(
+            diff > 1e-6,
+            "a target beyond num_targets must not contribute (diff={diff})"
+        );
+
+        // With the decoy's alpha zeroed the MIN_ALPHA guard skips it, so including
+        // it (num_targets = 6) must match excluding it (num_targets = 5).
+        let mut alphas0 = alphas.clone();
+        alphas0[5] = 0.0;
+        let (c_fw, _) = build_expected(6, |t| refs[t].as_slice(), &alphas0, &eff_lens, &cdf);
+        let diff2: f64 = a_fw
+            .dump()
+            .iter()
+            .zip(c_fw.dump())
+            .map(|(x, y)| (x - y).abs())
+            .sum();
+        assert!(
+            diff2 < 1e-9,
+            "zero-alpha target must not contribute (diff={diff2})"
+        );
     }
 }

@@ -34,6 +34,28 @@ const REFSEQ_FILE: &str = "refseq.bin";
 /// Per-reference offsets into [`REFSEQ_FILE`] (`num_refs + 1` entries).
 const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 
+/// On-disk salmon index *format* version written into `info.json` by this build.
+/// Distinct from `salmon_version` (the software release string): this is bumped
+/// only when a change to the index layout or its semantics makes a previously
+/// written index unsafe to load with the current code.
+///
+/// History:
+/// - **0** — implicit (no `index_version` field); salmon 2.0.0–2.0.1. The decoy
+///   block could be non-contiguous when the decoy set contained a sub-`k`
+///   reference (piscem relocated it into the trailing "short" block), which the
+///   O(1) `is_decoy` range test would then mis-classify, silently dropping real
+///   transcripts. Short/N-untileable decoy handling was also different.
+/// - **1** — salmon 2.1.0: sub-`k` / N-untileable decoys are dropped at build so
+///   the decoy block is always a single contiguous range (enforced by a
+///   build-time contiguity guard), `N` is retained in decoy sequences, and the
+///   reference layout `[transcripts][decoys][short transcripts]` is guaranteed.
+pub const INDEX_FORMAT_VERSION: u32 = 1;
+
+/// Minimum index format version this build can load. Indices below this are
+/// rejected with an actionable rebuild message (their decoy / short-transcript
+/// layout predates the contiguity guarantee and cannot be loaded safely).
+pub const MIN_READABLE_INDEX_VERSION: u32 = 1;
+
 /// Default minimizer length for a given k (used when `m == 0`).
 fn default_minimizer_len(k: usize) -> usize {
     (k / 2) + 1
@@ -133,6 +155,22 @@ pub struct IndexInfo {
     /// all decoy records to appear contiguously at the end of the FASTA.
     #[serde(default)]
     pub first_decoy_index: Option<usize>,
+    /// Number of decoy references (the contiguous block beginning at
+    /// `first_decoy_index`). Recorded separately because the index builder
+    /// (piscem) appends sub-`k` "short" references *after* the decoy block, so
+    /// decoys are **not** the suffix of the reference numbering: transcripts
+    /// occupy `[0, first_decoy_index)`, decoys `[first_decoy_index,
+    /// first_decoy_index + num_decoys)`, and short (never-seeded, 0-count)
+    /// transcripts the remaining tail `[first_decoy_index + num_decoys,
+    /// num_refs)`. `0` when there are no decoys.
+    #[serde(default)]
+    pub num_decoys: usize,
+    /// Salmon index *format* version (see [`INDEX_FORMAT_VERSION`]). Absent in
+    /// indices built by salmon <= 2.0.1, which deserialize to `0` — below
+    /// [`MIN_READABLE_INDEX_VERSION`], so those are rejected on load. Distinct
+    /// from `salmon_version`, the software release string below.
+    #[serde(default)]
+    pub index_version: u32,
     /// salmon version that produced the index
     pub salmon_version: String,
     /// SHA-256/512 of the reference sequences and names, computed to byte-match
@@ -249,21 +287,46 @@ struct RefHashes {
 struct PreprocessResult {
     /// non-ACGT bases replaced with pseudo-random ACGT
     replaced: u64,
-    /// `(retained_name, duplicate_name)` pairs in discovery order; the duplicate
-    /// was *not* written to the cleaned FASTA (so it is absent from the index).
+    /// `(retained_name, duplicate_name)` pairs in discovery order. Without
+    /// `--keepDuplicates` the duplicate was *not* written to the cleaned FASTA (so
+    /// it is absent from the index); with `--keepDuplicates` every transcript is
+    /// written and this just records which ones are exact duplicates of each other.
     duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)>,
-    /// retained-reference index of the first decoy, or `None` if no decoys.
-    first_decoy_index: Option<usize>,
     /// number of references whose trailing poly-A run was clipped.
     polya_clipped: u64,
     /// names of references dropped because clipping left them empty (all-`A`).
     polya_dropped: Vec<Vec<u8>>,
+    /// names of *decoy* references dropped because their cleaned/clipped length is
+    /// `<= k`: such a reference carries no k-mers, can never be seeded, and so can
+    /// never function as a decoy. Keeping it would only let the index builder
+    /// relocate it into the trailing sub-`k` block, breaking the contiguity of the
+    /// decoy region that decoy classification relies on. (Sub-`k` *transcripts*
+    /// are kept — they are still reported in `quant.sf` with 0 reads.)
+    short_decoys_dropped: Vec<Vec<u8>>,
 }
 
 /// salmon/pufferfish `FixFasta` clips a reference iff its (cleaned) sequence ends
 /// in a run of at least this many `A`s; the entire trailing `A` run is then
 /// removed (an all-`A` reference is dropped).
 const POLYA_CLIP_LEN: usize = 10;
+
+/// Length of the longest run of consecutive ACGT (case-insensitive) bases — the
+/// longest stretch Cuttlefish can extract k-mers from (it splits the de Bruijn
+/// graph on any other base, e.g. `N`). A run of length `L` carries `L - k + 1`
+/// k-mers, so a reference is tileable iff its longest ACGT run is `>= k`.
+fn longest_acgt_run(seq: &[u8]) -> usize {
+    let mut best = 0usize;
+    let mut cur = 0usize;
+    for &b in seq {
+        if matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+            cur += 1;
+            best = best.max(cur);
+        } else {
+            cur = 0;
+        }
+    }
+    best
+}
 
 fn preprocess_fasta(
     inputs: &[PathBuf],
@@ -272,6 +335,7 @@ fn preprocess_fasta(
     decoy_names: &ahash::AHashSet<Vec<u8>>,
     gencode: bool,
     clip_polya: bool,
+    k: usize,
 ) -> Result<PreprocessResult> {
     use std::io::Write as _;
     const B: [u8; 4] = *b"ACGT";
@@ -283,10 +347,8 @@ fn preprocess_fasta(
     let mut replaced = 0u64;
     let mut polya_clipped = 0u64;
     let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
+    let mut short_decoys_dropped: Vec<Vec<u8>> = Vec::new();
     let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    // Number of references actually written so far (= next retained ref id).
-    let mut retained = 0usize;
-    let mut first_decoy_index: Option<usize> = None;
     let mut saw_decoy = false;
     // Exact original (pure-ACGT) sequence -> name of the first transcript that
     // carried it. salmon collapses transcripts whose *processed* sequences match;
@@ -294,7 +356,8 @@ fn preprocess_fasta(
     // identical sequences that contain any non-ACGT base never compare equal and
     // so are never collapsed — we mirror that by only deduplicating pure-ACGT
     // sequences (keyed on the exact original bytes, matching salmon's pre-process
-    // XXH64 over the unmodified sequence). Only populated when removing dups.
+    // XXH64 over the unmodified sequence). Populated in both modes so duplicates
+    // are detected for `duplicate_clusters.tsv` even under --keepDuplicates.
     let mut seen: ahash::AHashMap<Vec<u8>, Vec<u8>> = ahash::AHashMap::new();
     for path in inputs {
         let mut reader = needletail::parse_fastx_file(path)
@@ -319,29 +382,46 @@ fn preprocess_fasta(
                 );
             }
 
-            if !keep_duplicates {
-                let pure_acgt = orig
-                    .iter()
-                    .all(|&b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'));
-                if pure_acgt {
-                    if let Some(retained_name) = seen.get(orig.as_ref()) {
-                        // Exact duplicate of an earlier reference: record the
-                        // cluster and drop it from the index entirely.
-                        duplicate_clusters.push((retained_name.clone(), name.to_vec()));
+            // Detect exact-sequence duplicates (pure-ACGT only — salmon hashes the
+            // unmodified sequence, and because it randomizes any non-ACGT base
+            // per-position, sequences containing one never compare equal). The
+            // cluster is recorded for `duplicate_clusters.tsv` in BOTH modes,
+            // matching salmon (which reports duplicates even with --keepDuplicates);
+            // without --keepDuplicates the duplicate is additionally dropped
+            // (collapsed onto the first occurrence).
+            let pure_acgt = orig
+                .iter()
+                .all(|&b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'));
+            if pure_acgt {
+                if let Some(retained_name) = seen.get(orig.as_ref()) {
+                    duplicate_clusters.push((retained_name.clone(), name.to_vec()));
+                    if !keep_duplicates {
                         continue;
                     }
+                } else {
                     seen.insert(orig.to_vec(), name.to_vec());
                 }
             }
 
             let mut seq = orig.into_owned();
-            for b in seq.iter_mut() {
-                if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
-                    x = x
-                        .wrapping_mul(6364136223846793005)
-                        .wrapping_add(1442695040888963407);
-                    *b = B[((x >> 33) & 3) as usize];
-                    replaced += 1;
+            // Transcripts: replace non-ACGT bases with pseudo-random ACGT so the
+            // processed sequence is fully k-mer-able (salmon FixFasta behavior).
+            // DECOYS: leave non-ACGT bases (e.g. genome N-runs) in place — cf1-rs
+            // splits the de Bruijn graph on them natively (and records the N-gaps in
+            // the tiling), yielding a far less tangled, smaller, faster-to-build
+            // cDBG than seeding spurious k-mers from random replacements across
+            // assembly gaps. The refseq store keeps the raw bytes and the aligner
+            // encodes N as a mismatch (dna5 code 4), so a read aligning over a decoy
+            // N-run simply scores it as a mismatch.
+            if !is_decoy {
+                for b in seq.iter_mut() {
+                    if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+                        x = x
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        *b = B[((x >> 33) & 3) as usize];
+                        replaced += 1;
+                    }
                 }
             }
             // Kallisto-esque poly-A clipping (salmon/pufferfish FixFasta): if the
@@ -370,8 +450,18 @@ fn preprocess_fasta(
                 }
             }
 
-            if is_decoy && first_decoy_index.is_none() {
-                first_decoy_index = Some(retained);
+            // Drop a decoy that Cuttlefish cannot tile. A reference carries a k-mer
+            // (and so a unitig) iff it has a run of >= k consecutive ACGT bases — a
+            // run of exactly k has one k-mer (validated empirically). A decoy with
+            // no such run (too short, or fragmented into sub-k pieces by N-runs)
+            // can never be seeded or catch a read, and keeping it would let the
+            // builder relocate it into the trailing sub-`k`/untiled block, breaking
+            // the contiguity that the O(1) decoy check relies on. Sub-`k`/N-broken
+            // *transcripts* are kept (reported at 0 reads); after the replacement
+            // above transcripts have no N-runs, so only decoys are affected here.
+            if is_decoy && longest_acgt_run(&seq) < k {
+                short_decoys_dropped.push(name.to_vec());
+                continue;
             }
 
             out.write_all(b">")?;
@@ -379,16 +469,15 @@ fn preprocess_fasta(
             out.write_all(b"\n")?;
             out.write_all(&seq)?;
             out.write_all(b"\n")?;
-            retained += 1;
         }
     }
     out.flush()?;
     Ok(PreprocessResult {
         replaced,
         duplicate_clusters,
-        first_decoy_index,
         polya_clipped,
         polya_dropped,
+        short_decoys_dropped,
     })
 }
 
@@ -481,9 +570,11 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         None => ahash::AHashSet::new(),
     };
 
-    // Replace non-ACGT bases up front (cf1-rs/packed-seq can't index N); the
-    // cleaned FASTA feeds the cDBG build and the refseq store, while the hashes
-    // below use the original input.
+    // Preprocess the references into the cleaned FASTA that feeds both the cDBG
+    // build and the refseq store (the hashes below use the original input):
+    // transcripts get non-ACGT bases replaced with pseudo-random ACGT (salmon
+    // FixFasta behavior); decoys keep their non-ACGT bases (e.g. genome N-runs) so
+    // Cuttlefish splits the graph on them instead of tiling random replacements.
     let cleaned = intermediate_dir.join("cleaned_refs.fa");
     let pre = preprocess_fasta(
         &opts.transcripts,
@@ -492,6 +583,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         &decoy_names,
         opts.gencode,
         opts.clip_polya,
+        opts.k,
     )
     .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
     if pre.replaced > 0 {
@@ -512,17 +604,40 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             String::from_utf8_lossy(dropped)
         );
     }
-    if !opts.keep_duplicates {
-        if !pre.duplicate_clusters.is_empty() {
+    if !pre.short_decoys_dropped.is_empty() {
+        warn!(
+            "dropped {} decoy reference(s) with no run of >= k={} consecutive ACGT bases \
+             (too short, or fragmented by N-runs): they carry no k-mers and can never be \
+             seeded or catch a read: {}",
+            pre.short_decoys_dropped.len(),
+            opts.k,
+            pre.short_decoys_dropped
+                .iter()
+                .map(|n| String::from_utf8_lossy(n).into_owned())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    if !pre.duplicate_clusters.is_empty() {
+        if opts.keep_duplicates {
+            info!(
+                "detected {} exact-sequence-duplicate transcripts; retained them \
+                 (--keepDuplicates) and recorded them in duplicate_clusters.tsv",
+                pre.duplicate_clusters.len()
+            );
+        } else {
             info!(
                 "removed {} transcripts that were exact sequence duplicates \
                  (use --keepDuplicates to retain them)",
                 pre.duplicate_clusters.len()
             );
         }
-        write_duplicate_clusters(&opts.output_dir, &pre.duplicate_clusters)
-            .context("writing duplicate_clusters.tsv")?;
     }
+    // Always emit duplicate_clusters.tsv (header + one row per duplicate), matching
+    // salmon — downstream tooling expects it, and with --keepDuplicates it is the
+    // record of which retained transcripts are exact duplicates of each other.
+    write_duplicate_clusters(&opts.output_dir, &pre.duplicate_clusters)
+        .context("writing duplicate_clusters.tsv")?;
 
     // Stage 1: compacted de Bruijn graph / reference tiling.
     info!("building compacted dBG (k={}, threads={})", opts.k, threads);
@@ -531,12 +646,35 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         .output_prefix(cdbg_prefix.clone())
         .k(opts.k)
         .threads(threads)
+        // Emit references in input order so the decoy block (always last in the
+        // input) stays contiguous in the built index — letting `is_decoy` be a
+        // single O(1) range test and making the build deterministic.
+        .synchronize_output(true)
         .call()
         .context("cf1-rs cDBG construction failed")?;
     info!(
         "cDBG: {} unitigs, {} distinct k-mers",
         cf.unitig_count, cf.vertex_count
     );
+    // Authoritative cross-check of our pre-detection against Cuttlefish's own
+    // tiling: having dropped every decoy with no >= k ACGT run at preprocess,
+    // Cuttlefish should report no untiled sequence (transcripts have no N-runs
+    // after replacement; sub-k transcripts are "short", not "untiled"). A
+    // non-empty list means our longest-ACGT-run criterion disagreed with
+    // Cuttlefish for some reference — warn here; the decoy-contiguity guard below
+    // is the hard backstop against any resulting mis-classification.
+    if !cf.untiled_seqs.is_empty() {
+        warn!(
+            "Cuttlefish reported {} untiled reference(s) not dropped at preprocess: {:?}. \
+             This is unexpected (decoys with no >= k ACGT run should already be dropped); \
+             please report.",
+            cf.untiled_seqs.len(),
+            cf.untiled_seqs
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
 
     // Stage 2: piscem SSHash + contig-table index over the tiling.
     info!("building piscem index (m={})", m);
@@ -560,10 +698,57 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
     let h = compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode)
         .context("hashing reference sequences/names")?;
-    if let Some(fdi) = pre.first_decoy_index {
+    // Locate the decoy block in the *built* index's reference numbering. We
+    // cannot reuse the preprocess `retained` count (`pre.first_decoy_index`):
+    // piscem moves sub-`k` "short" references — which carry no k-mers and so
+    // never tile into the de Bruijn graph — to the *end* of the reference list,
+    // after the decoy block. The preprocess count includes those shorts among
+    // the transcripts, so it overshoots the decoys' true start by the number of
+    // shorts. Scan the actual names instead; this keeps `is_decoy`, the
+    // bias-model bounds, and decoy-read accounting correct, and prevents a 250 Mb
+    // genome decoy from being swept as a "transcript" in the expected-bias build.
+    //
+    // Decoys form one contiguous block `[first_decoy_index, first_decoy_index +
+    // num_decoys)` (the genome sits after all transcripts, before the trailing
+    // sub-`k` shorts). Dropping sub-`k` decoys at preprocess is what keeps that
+    // block contiguous: a relocated short decoy would otherwise scatter into the
+    // trailing block. We rely on contiguity so the per-fragment decoy check is a
+    // single O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`),
+    // rather than a per-mapping set lookup. As a build-time safety net we verify
+    // contiguity here and fail loudly if it is ever violated, rather than silently
+    // mis-classifying a transcript as a decoy (or vice-versa) at quant time.
+    let (first_decoy_index, num_decoys) = if decoy_names.is_empty() {
+        (None, 0usize)
+    } else {
+        let n = idx.num_refs();
+        let decoy_tids: Vec<usize> = (0..n)
+            .filter(|&t| decoy_names.contains(idx.ref_name(t).as_bytes()))
+            .collect();
+        match decoy_tids.first().copied() {
+            None => (None, 0usize),
+            Some(first) => {
+                let count = decoy_tids.len();
+                // contiguous iff the decoy tids are exactly first..first+count
+                let contiguous = decoy_tids.iter().enumerate().all(|(i, &t)| t == first + i);
+                if !contiguous {
+                    anyhow::bail!(
+                        "decoy references are not contiguous in the built index \
+                         (first decoy at {first}, {count} decoys, but they do not occupy \
+                         {first}..{}). This is unexpected after sub-k decoys are dropped at \
+                         preprocess — please report, including your decoy set. Built-index \
+                         decoy indices: {decoy_tids:?}",
+                        first + count
+                    );
+                }
+                (Some(first), count)
+            }
+        }
+    };
+    if let Some(fdi) = first_decoy_index {
+        let n_short = idx.num_refs() - (fdi + num_decoys);
         info!(
-            "{} decoy reference(s) (first decoy index {fdi})",
-            idx.num_refs() - fdi
+            "{num_decoys} decoy reference(s) (first decoy index {fdi}); \
+             {n_short} short (sub-k, 0-count) transcript(s) recorded after the decoys"
         );
     }
     let info = IndexInfo {
@@ -572,7 +757,9 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         canonical: opts.canonical,
         has_ec_table: idx.has_ec_table(),
         num_refs: idx.num_refs(),
-        first_decoy_index: pre.first_decoy_index,
+        first_decoy_index,
+        num_decoys,
+        index_version: INDEX_FORMAT_VERSION,
         salmon_version: env!("CARGO_PKG_VERSION").to_string(),
         seq_hash: h.seq_hash,
         name_hash: h.name_hash,
@@ -709,6 +896,29 @@ impl SalmonIndex {
             );
         }
         let info = read_info(dir)?;
+        // Reject an index whose format predates the decoy / short-transcript
+        // contiguity guarantee (salmon <= 2.0.1, which wrote no `index_version`
+        // and so deserializes to 0). Such an index can mis-classify decoys and
+        // silently drop transcripts, so force a rebuild rather than load it.
+        if info.index_version < MIN_READABLE_INDEX_VERSION {
+            let built_by = if info.salmon_version.is_empty() {
+                "salmon <= 2.0.1".to_string()
+            } else {
+                format!("salmon {}", info.salmon_version)
+            };
+            anyhow::bail!(
+                "{} was built by {} (index format v{}), which this salmon cannot read \
+                 (requires index format v{}+).\n\
+                 Indices built before salmon 2.1.0 could mis-handle decoy and short \
+                 (sub-k) transcript references; rebuild it with \
+                 `salmon index -t <transcripts> [-d <decoys>] -i {}`.",
+                dir.display(),
+                built_by,
+                info.index_version,
+                MIN_READABLE_INDEX_VERSION,
+                dir.display(),
+            );
+        }
         let index_prefix = dir.join(INDEX_PREFIX);
         // Load the EC table when the index has one (enables pseudoalignment-only mode).
         let inner = ReferenceIndex::load(&index_prefix, info.has_ec_table, false)
@@ -796,10 +1006,22 @@ impl salmon_core::RefProvider for SalmonIndex {
         self.ref_seq(tid)
     }
     fn is_decoy(&self, tid: u32) -> bool {
-        // References at or beyond `first_decoy_index` are decoys.
-        self.info
-            .first_decoy_index
-            .is_some_and(|fdi| (tid as usize) >= fdi)
+        // O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`). The
+        // build guarantees decoys occupy one contiguous block
+        // `[first_decoy_index, first_decoy_index + num_decoys)` (it errors out
+        // otherwise), so this needs no per-fragment set lookup. The trailing sub-`k`
+        // "short" transcripts after the block are NOT decoys (they are 0-count
+        // transcripts reported in quant.sf); they carry no k-mers, so `is_decoy` is
+        // never consulted for them during mapping regardless.
+        let t = tid as usize;
+        match self.info.first_decoy_index {
+            // Legacy index that recorded `first_decoy_index` but not `num_decoys`
+            // (== 0): keep the old behavior — everything from `first_decoy_index`
+            // on is a decoy.
+            Some(fdi) if self.info.num_decoys == 0 => t >= fdi,
+            Some(fdi) => t >= fdi && t < fdi + self.info.num_decoys,
+            None => false,
+        }
     }
 }
 
@@ -870,5 +1092,151 @@ mod tests {
             );
             assert!(seq.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')));
         }
+    }
+
+    /// Build ONE index that simultaneously exercises every short/decoy edge case
+    /// and verifies they compose correctly:
+    ///   * a sub-`k` **transcript** — KEPT (piscem relocates it to the trailing
+    ///     untiled block, reported at 0 reads); the regression that motivated the
+    ///     decoy-contiguity guard,
+    ///   * a sub-`k` **decoy** — DROPPED at preprocess (no `k`-mer to seed),
+    ///   * an N-fragmented **decoy** longer than `k` whose every ACGT run is `< k`
+    ///     — DROPPED (longest ACGT run governs tileability, not raw length),
+    ///   * a **decoy** with an internal N-run flanked by `>= k` ACGT runs — KEPT,
+    ///     with its `N` bytes preserved verbatim in the reference store.
+    ///
+    /// Then asserts the surviving decoy is one contiguous block so `is_decoy`
+    /// stays an O(1) range test.
+    #[test]
+    fn build_composes_short_transcript_short_and_n_decoys() {
+        use salmon_core::RefProvider; // brings `is_decoy` into scope
+                                      // Lengths below are relative to the default k = 31.
+                                      // Distinct ACGT content with no consecutive repeats, so nothing collapses
+                                      // as a duplicate and no trailing poly-A run triggers clipping.
+        let acgt = |len: usize, seed: usize| -> String {
+            const B: [u8; 4] = *b"ACGT";
+            (0..len).map(|i| B[(i * 3 + seed) % 4] as char).collect()
+        };
+
+        let t_long = acgt(80, 0); // normal transcript: KEPT, tiled
+        let t_short = acgt(20, 1); // sub-k transcript: KEPT (0 count), relocated to tail
+                                   // decoy with N flanked by two >= k ACGT runs: KEPT, N preserved verbatim
+        let d_long = format!("{}NNNNN{}", acgt(40, 2), acgt(40, 3));
+        let d_short = acgt(25, 4); // sub-k decoy: DROPPED
+                                   // len 46 (> k) but every ACGT run (20, 25) is < k: DROPPED
+        let d_nfrag = format!("{}N{}", acgt(20, 5), acgt(25, 6));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = tmp.path().join("gentrome.fa");
+        {
+            let mut f = std::fs::File::create(&fasta).unwrap();
+            // Transcripts first; decoys contiguous at the end (salmon requirement).
+            for (n, s) in [
+                ("t_long", &t_long),
+                ("t_short", &t_short),
+                ("d_long", &d_long),
+                ("d_short", &d_short),
+                ("d_nfrag", &d_nfrag),
+            ] {
+                writeln!(f, ">{n}\n{s}").unwrap();
+            }
+        }
+        let decoys = tmp.path().join("decoys.txt");
+        std::fs::write(&decoys, "d_long\nd_short\nd_nfrag\n").unwrap();
+
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        opts.decoys = Some(decoys);
+        let built = build(&opts).expect("index build");
+
+        // Dropped d_short + d_nfrag; kept t_long, t_short, d_long.
+        assert_eq!(
+            built.num_refs, 3,
+            "kept t_long + t_short + d_long; dropped d_short + d_nfrag"
+        );
+        assert_eq!(
+            built.first_decoy_index,
+            Some(1),
+            "the one surviving decoy forms a contiguous block at index 1"
+        );
+        assert_eq!(built.num_decoys, 1);
+
+        let idx = SalmonIndex::load(&out).expect("index load");
+        assert_eq!(idx.num_refs(), 3);
+        let names: Vec<&str> = (0..idx.num_refs()).map(|i| idx.ref_name(i)).collect();
+        assert!(names.contains(&"t_long"), "names {names:?}");
+        assert!(
+            names.contains(&"t_short"),
+            "sub-k transcript must be kept; names {names:?}"
+        );
+        assert!(
+            names.contains(&"d_long"),
+            "tileable N-decoy must be kept; names {names:?}"
+        );
+        assert!(
+            !names.contains(&"d_short"),
+            "sub-k decoy must be dropped; names {names:?}"
+        );
+        assert!(
+            !names.contains(&"d_nfrag"),
+            "N-fragmented decoy must be dropped; names {names:?}"
+        );
+
+        // Decoy classification is exactly {d_long}, via the O(1) range test.
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(
+                idx.is_decoy(i as u32),
+                *n == "d_long",
+                "is_decoy({n}) misclassified"
+            );
+        }
+
+        // The sub-k transcript is reported at its real (untiled) length.
+        let t_short_tid = names.iter().position(|n| *n == "t_short").unwrap();
+        assert_eq!(idx.ref_len(t_short_tid), t_short.len() as u64);
+
+        // The surviving decoy keeps its N bytes verbatim (decoys are NOT
+        // N-replaced, unlike transcripts).
+        let d_long_tid = names.iter().position(|n| *n == "d_long").unwrap() as u32;
+        let seq = idx.ref_seq(d_long_tid);
+        assert_eq!(seq.len(), d_long.len(), "decoy stored at full length");
+        assert_eq!(
+            seq.iter().filter(|&&b| b == b'N').count(),
+            5,
+            "all 5 decoy Ns preserved in the reference store"
+        );
+    }
+
+    #[test]
+    fn rejects_pre_2_1_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+
+        // A freshly built index loads and records the current format version.
+        let idx = SalmonIndex::load(&out).expect("current index loads");
+        assert_eq!(idx.info().index_version, INDEX_FORMAT_VERSION);
+
+        // Simulate a salmon <= 2.0.1 index: strip the `index_version` field (it
+        // deserializes to 0 via `#[serde(default)]`) and set an old software
+        // version string. Loading it must fail with an actionable message.
+        let info_path = out.join(INFO_FILE);
+        let mut info: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&info_path).unwrap()).unwrap();
+        info.as_object_mut().unwrap().remove("index_version");
+        info["salmon_version"] = serde_json::Value::String("2.0.1".into());
+        std::fs::write(&info_path, serde_json::to_vec_pretty(&info).unwrap()).unwrap();
+
+        let err = match SalmonIndex::load(&out) {
+            Ok(_) => panic!("pre-2.1 index must be rejected"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(msg.contains("salmon 2.0.1"), "message was: {msg}");
+        assert!(msg.contains("rebuild"), "message was: {msg}");
     }
 }

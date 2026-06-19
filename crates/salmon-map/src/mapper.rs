@@ -21,14 +21,15 @@ use crate::extend::{collect_read_true_unimems, collect_read_unimems};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SeedMode {
     /// Sparse fixed-`k` k-mer anchors straight from piscem's skipping query
-    /// (one length-`k` anchor per unitig transition). The default.
-    #[default]
+    /// (one length-`k` anchor per unitig transition). Selected by `--sparseSeeds`.
     Sparse,
     /// Reference MEMs: each seed extended against the reference transcript,
     /// crossing unitig boundaries ([`crate::extend::collect_read_unimems`]).
     RefMem,
     /// True uni-MEMs: extension clamped to each seed's unitig, reproducing
     /// pufferfish's `expandHitEfficient` ([`crate::extend::collect_read_true_unimems`]).
+    /// The default — faster than and at least as accurate as sparse seeding.
+    #[default]
     UniMem,
 }
 use crate::pair::{join_reads_and_filter, PairingConfig};
@@ -132,6 +133,7 @@ pub fn map_single_read<'idx, R: RefProvider>(
                     status: MateStatus::SingleEnd,
                     score: aln.score,
                     fragment_len: 0,
+                    read_len: read.len() as i32,
                     is_decoy: refs.is_decoy(c.tid),
                     // 5' position: leftmost for a forward read, rightmost for a
                     // reverse read (orientation-aware sequence-bias context).
@@ -181,34 +183,34 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
     let cf = cfg.collect.consensus_fraction;
-    let left = consensus_filter(
-        best_per_target(collect_candidates(index, hs, refs, r1, true, cfg)),
-        cf,
-    );
-    let right = consensus_filter(
-        best_per_target(collect_candidates(index, hs, refs, r2, true, cfg)),
-        cf,
-    );
+    // NOTE: deliberately do NOT collapse to one chain per (tid, is_fw) before
+    // pairing. A mate can match a transcript at several positions (an internal
+    // repeat); `best_per_target` keeps only the highest-coverage chain, which may
+    // not be the placement that forms a valid concordant pair. `join_reads_and_filter`
+    // selects the pairing-compatible chain per target over all candidates, and
+    // de-duplicates orphans to one per (tid, is_fw) itself.
+    let left = consensus_filter(collect_candidates(index, hs, refs, r1, true, cfg), cf);
+    let right = consensus_filter(collect_candidates(index, hs, refs, r2, true, cfg), cf);
     let joints = join_reads_and_filter(left, right, &cfg.pair);
 
     let had_candidates = !joints.is_empty();
+    // Count this fragment toward num_dovetail_fragments when an otherwise-valid
+    // concordant pair was rejected only because the mates dovetail AND no
+    // concordant pair survived for any target — i.e. its only concordant pairing
+    // was a dovetail (salmon's diagnostic). The pair is dropped regardless; this
+    // just reports it. (Pairing already filtered dovetails, so the surviving
+    // PairedEndPaired joints below are never themselves dovetailed.)
+    let has_concordant_pair = joints
+        .iter()
+        .any(|j| matches!(j.status, MateStatus::PairedEndPaired));
+    let dovetail = crate::pair::dovetail_rejected() && !has_concordant_pair;
     let mut below = 0u32;
-    let mut dovetail = false;
     let mut raw = Vec::new();
     for j in joints {
         match j.status {
             MateStatus::PairedEndPaired => {
                 let l = j.left.as_ref().unwrap();
                 let r = j.right.as_ref().unwrap();
-                // Dovetail: opposite-strand mates where the downstream (reverse)
-                // mate actually starts upstream of the forward mate — they extend
-                // past each other's start (salmon's `num_dovetail_fragments`).
-                if l.is_fw != r.is_fw {
-                    let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
-                    if rc.chain.ref_start() < fw.chain.ref_start() {
-                        dovetail = true;
-                    }
-                }
                 let refseq = refs.ref_seq(j.tid);
                 let al = align_chain(r1, refseq, &l.chain, &cfg.align);
                 let ar = align_chain(r2, refseq, &r.chain, &cfg.align);
@@ -234,6 +236,7 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                             status: MateStatus::PairedEndPaired,
                             score: al.score + ar.score,
                             fragment_len: j.fragment_len,
+                            read_len: 0, // proper pair: fragment_len carries the length signal
                             is_decoy: refs.is_decoy(j.tid),
                             ref_pos: l.chain.ref_start().min(r.chain.ref_start()),
                             fw_pos,
@@ -251,10 +254,24 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                         // salmon emits an `m1`/`m2` orphan here rather than dropping
                         // the whole fragment. Forming the (failed) pair had otherwise
                         // suppressed this mate's orphan in `join_reads_and_filter`.
-                        raw.push(orphan_raw(j.tid, l, al.score, true, refs.is_decoy(j.tid)));
+                        raw.push(orphan_raw(
+                            j.tid,
+                            l,
+                            al.score,
+                            true,
+                            refs.is_decoy(j.tid),
+                            r1.len() as i32,
+                        ));
                         below += 1;
                     } else if ar.valid {
-                        raw.push(orphan_raw(j.tid, r, ar.score, false, refs.is_decoy(j.tid)));
+                        raw.push(orphan_raw(
+                            j.tid,
+                            r,
+                            ar.score,
+                            false,
+                            refs.is_decoy(j.tid),
+                            r2.len() as i32,
+                        ));
                         below += 1;
                     } else {
                         below += 1;
@@ -294,14 +311,23 @@ pub fn map_read_pair<'idx, R: RefProvider>(
             MateStatus::SingleEnd => {}
         }
     }
-    // Orphans are a *fallback*: if this fragment has any concordant (proper-pair)
-    // mapping, discard all orphan mappings. A lone mate matching a paralog is weak
-    // evidence and would spuriously enlarge the equivalence class / leak count mass
-    // to the wrong transcript; the concordant mappings are the trustworthy signal.
-    // Orphans are kept only when the fragment has *no* concordant mapping at all.
+    // Orphans are a *fallback*: if this fragment has a concordant (proper-pair)
+    // mapping to a *transcript*, discard all orphan mappings. A lone mate matching
+    // a paralog is weak evidence and would spuriously enlarge the equivalence class
+    // / leak count mass to the wrong transcript; the concordant transcript mapping
+    // is the trustworthy signal.
+    //
+    // A concordant pair to a *decoy* must NOT suppress a transcript orphan: a
+    // fragment that pairs on the genome but only orphans onto a transcript would
+    // otherwise lose its transcript evidence entirely (the decoy pair leaves no
+    // surviving non-decoy mapping, so `best_valid` is None and even
+    // `--allowDecoyOrphans` cannot rescue it). Instead we keep both and let the
+    // decoy-domination logic in `finalize_mappings_counted` adjudicate
+    // (default: drop the decoy-dominated transcript orphan; `--allowDecoyOrphans`:
+    // keep it), matching C++ salmon's orphan handling on a decoy-aware index.
     if raw
         .iter()
-        .any(|m| matches!(m.status, MateStatus::PairedEndPaired))
+        .any(|m| matches!(m.status, MateStatus::PairedEndPaired) && !m.is_decoy)
     {
         raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
     }
@@ -329,6 +355,7 @@ fn orphan_raw(
     score: i32,
     is_left: bool,
     is_decoy: bool,
+    read_len: i32,
 ) -> RawMapping {
     let start = c.chain.ref_start();
     RawMapping {
@@ -341,6 +368,7 @@ fn orphan_raw(
         },
         score,
         fragment_len: 0,
+        read_len,
         is_decoy,
         ref_pos: start,
         fw_pos: if c.is_fw { start } else { -1 },
@@ -432,6 +460,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 status: MateStatus::PairedEndPaired,
                 score: anchor_aln.score + partner_score,
                 fragment_len: frag_len,
+                read_len: 0, // recovered proper pair: fragment_len carries the length signal
                 is_decoy,
                 ref_pos: anchor.chain.ref_start(),
                 // orientation not re-derived for recovered pairs; attribute the
@@ -480,6 +509,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
         status,
         score: anchor_aln.score,
         fragment_len: 0,
+        read_len: anchor_read.len() as i32,
         is_decoy,
         ref_pos: anchor.chain.ref_start(),
         // orphan: leftmost coordinate attributed to its own strand.
