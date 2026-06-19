@@ -9,7 +9,7 @@
 
 use ahash::AHashMap;
 
-use salmon_core::{LibraryFormat, MateStatus};
+use salmon_core::{LibraryFormat, MateStatus, RefProvider};
 
 /// A validated mapping before final collapse/weighting.
 #[derive(Debug, Clone, Copy)]
@@ -203,6 +203,69 @@ pub fn finalize_mappings_counted(
     (out, false, num_below)
 }
 
+/// Apply decoy filtering to sketch-mode mappings, consistent with the decoy
+/// logic [`finalize_mappings_counted`] applies on the selective-alignment path.
+///
+/// Sketch mappings ([`map_read_pair_sketch`](crate::map_read_pair_sketch) /
+/// [`map_single_read_sketch`](crate::map_single_read_sketch)) are built directly
+/// from piscem's accepted hits and carry no per-mapping `is_decoy` flag, so decoy
+/// references would otherwise leak into the equivalence classes. Decoys are
+/// identified here via `refs.is_decoy`, using the sketch *score* (matching-k-mer
+/// coverage) as the comparison key — the same role the alignment score plays in
+/// selective alignment.
+///
+/// Returns `true` if the fragment is decoy-dominated (in which case `maps` is
+/// cleared and the fragment is unmapped); otherwise the decoy mappings are
+/// removed from `maps` (so only transcript hits enter the eq-class) and `false`
+/// is returned. With `cfg.allow_decoy_orphans`, a fragment that has any non-decoy
+/// hit keeps its transcript hits even when a decoy scores at least as high
+/// (`--allowDecoyOrphans`), mirroring the SA-mode flag.
+pub fn filter_sketch_decoys<R: RefProvider>(
+    maps: &mut Vec<ScoredMapping>,
+    refs: &R,
+    cfg: &ScoreConfig,
+) -> bool {
+    if maps.is_empty() {
+        return false;
+    }
+    let best_valid = maps
+        .iter()
+        .filter(|m| !refs.is_decoy(m.tid))
+        .map(|m| m.score)
+        .max();
+    let best_decoy = maps
+        .iter()
+        .filter(|m| refs.is_decoy(m.tid))
+        .map(|m| m.score)
+        .max();
+    match best_valid {
+        // No transcript hit at all. If any decoy was hit, the fragment is
+        // decoy-dominated (its signal is best explained by the genome); either
+        // way it carries no transcript placement.
+        None => {
+            let had_decoy = best_decoy.is_some();
+            maps.clear();
+            had_decoy
+        }
+        Some(best_valid) => {
+            // Decoy domination (matches salmon's `bestScore < decoyThresh *
+            // bestDecoyScore`): drop the fragment when its best transcript score
+            // falls below the decoy bar, unless `--allowDecoyOrphans` keeps the
+            // transcript hits.
+            if let Some(bd) = best_decoy {
+                if (best_valid as f64) < cfg.decoy_thresh * (bd as f64) && !cfg.allow_decoy_orphans
+                {
+                    maps.clear();
+                    return true;
+                }
+            }
+            // Keep only transcript mappings; decoy tids never enter the eq-class.
+            maps.retain(|m| !refs.is_decoy(m.tid));
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +365,86 @@ mod tests {
     fn only_decoy_is_unmapped() {
         let m = finalize_mappings(vec![raw(0, 100, true)], &ScoreConfig::default());
         assert!(m.is_empty());
+    }
+
+    // --- sketch-mode decoy filtering ---
+
+    /// A `RefProvider` where every tid `>= first_decoy` is a decoy.
+    struct DecoyAt(u32);
+    impl RefProvider for DecoyAt {
+        fn num_refs(&self) -> usize {
+            u32::MAX as usize
+        }
+        fn ref_seq(&self, _tid: u32) -> &[u8] {
+            &[]
+        }
+        fn is_decoy(&self, tid: u32) -> bool {
+            tid >= self.0
+        }
+    }
+
+    fn scored(tid: u32, score: i32) -> ScoredMapping {
+        ScoredMapping {
+            tid,
+            is_fw: true,
+            status: MateStatus::PairedEndPaired,
+            score,
+            fragment_len: 200,
+            weight: 1.0,
+            ref_pos: 0,
+            fw_pos: -1,
+            rc_pos: -1,
+            format: None,
+            r1_pos: -1,
+            r2_pos: -1,
+            r2_fw: false,
+            r1_score: score,
+        }
+    }
+
+    #[test]
+    fn sketch_drops_decoy_tids_but_keeps_transcripts() {
+        // tids 0,1 transcript; tid 2 decoy. Transcript outscores decoy.
+        let refs = DecoyAt(2);
+        let mut maps = vec![scored(0, 30), scored(1, 28), scored(2, 25)];
+        let dominated = filter_sketch_decoys(&mut maps, &refs, &ScoreConfig::default());
+        assert!(!dominated);
+        assert_eq!(maps.len(), 2);
+        assert!(maps.iter().all(|m| m.tid < 2), "decoy tid must be removed");
+    }
+
+    #[test]
+    fn sketch_decoy_only_is_decoy_dominated() {
+        let refs = DecoyAt(0); // everything is a decoy
+        let mut maps = vec![scored(0, 30), scored(1, 25)];
+        let dominated = filter_sketch_decoys(&mut maps, &refs, &ScoreConfig::default());
+        assert!(dominated);
+        assert!(maps.is_empty());
+    }
+
+    #[test]
+    fn sketch_decoy_dominates_higher_score() {
+        // decoy (tid 2) scores higher than the best transcript -> dropped.
+        let refs = DecoyAt(2);
+        let mut maps = vec![scored(0, 20), scored(2, 30)];
+        let dominated = filter_sketch_decoys(&mut maps, &refs, &ScoreConfig::default());
+        assert!(dominated);
+        assert!(maps.is_empty());
+    }
+
+    #[test]
+    fn sketch_allow_decoy_orphans_keeps_transcript() {
+        // Same as above but --allowDecoyOrphans keeps the transcript hit even
+        // though the decoy scores higher (the mate maps to the decoy).
+        let refs = DecoyAt(2);
+        let cfg = ScoreConfig {
+            allow_decoy_orphans: true,
+            ..Default::default()
+        };
+        let mut maps = vec![scored(0, 20), scored(2, 30)];
+        let dominated = filter_sketch_decoys(&mut maps, &refs, &cfg);
+        assert!(!dominated);
+        assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].tid, 0);
     }
 }

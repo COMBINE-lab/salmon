@@ -617,6 +617,18 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
+            // Sketch mappings carry no per-hit decoy flag and bypass the
+            // selective-alignment finalize, so decoys would otherwise leak into
+            // the eq-classes. Apply the same decoy policy here (drop decoy tids,
+            // decoy-domination, --allowDecoyOrphans) and account decoy-dominated
+            // fragments. SA mode already handled decoys inside finalize.
+            if sh.sketch && sh.salmon.info().num_decoys > 0 {
+                let decoy_dominated =
+                    salmon_map::filter_sketch_decoys(&mut maps, sh.salmon, &sh.map_cfg.score);
+                if decoy_dominated {
+                    sh.num_decoy.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             // A fragment mapping to too many places is discarded (salmon's
             // tooManyHits / maxReadOccs): treat as unmapped everywhere below.
             if maps.len() > sh.max_read_occ {
@@ -707,6 +719,15 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };
+            // Sketch decoy policy (see the paired-end branch): drop decoy tids /
+            // decoy-dominated fragments that SA mode handles inside finalize.
+            if sh.sketch && sh.salmon.info().num_decoys > 0 {
+                let decoy_dominated =
+                    salmon_map::filter_sketch_decoys(&mut maps, sh.salmon, &sh.map_cfg.score);
+                if decoy_dominated {
+                    sh.num_decoy.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             if maps.len() > sh.max_read_occ {
                 maps.clear();
             }
