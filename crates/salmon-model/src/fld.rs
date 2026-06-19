@@ -13,6 +13,7 @@ use salmon_core::atomic::AtomicF64;
 use salmon_core::math::{log_add, LOG_0, LOG_EPSILON};
 use statrs::distribution::{Binomial, ContinuousCDF, Discrete, Normal};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 /// Tracks the observed distribution of fragment lengths.
 #[derive(Debug)]
@@ -35,6 +36,19 @@ pub struct FragmentLengthDistribution {
     /// cached CMF
     cached_cmf: Vec<f64>,
     have_cache: bool,
+
+    /// Periodically-refreshed snapshot of the (un-normalized) log-PMF used during
+    /// the *online* phase, indexed by raw length. Reading the live `hist`/`tot_mass`
+    /// directly (two separate atomic loads on a concurrently-updated distribution)
+    /// returns slightly different values for the same length across calls, which
+    /// breaks the weight symmetry of exact-duplicate transcripts and is then
+    /// amplified by the VBEM `α<1` prior. Mirroring C++ salmon (`cachedPMF_` +
+    /// `LogCMFCache`), worker threads instead capture an immutable snapshot of this
+    /// once per fragment ([`online_snapshot`](Self::online_snapshot)) so every
+    /// transcript of a given length in that fragment gets an identical value;
+    /// [`refresh_online`](Self::refresh_online) rebuilds it at mini-batch
+    /// boundaries.
+    online_pmf: RwLock<Arc<Vec<f64>>>,
 }
 
 impl FragmentLengthDistribution {
@@ -112,6 +126,7 @@ impl FragmentLengthDistribution {
             cached_pmf: Vec::new(),
             cached_cmf: Vec::new(),
             have_cache: false,
+            online_pmf: RwLock::new(Arc::new(Vec::new())),
         }
     }
 
@@ -174,6 +189,37 @@ impl FragmentLengthDistribution {
             l = max_v;
         }
         self.hist[l].load() - self.tot_mass.load()
+    }
+
+    /// Rebuild the online log-PMF snapshot from the current histogram (one pass
+    /// over the length bins, with a single `tot_mass` read so the snapshot is
+    /// internally consistent). Call at mini-batch boundaries during the online
+    /// phase; no-op once the final [`cache`](Self::cache) has been taken. Cheap
+    /// relative to mapping a batch, and decouples per-fragment reads from the
+    /// concurrent `add_val` writes so identical lengths read identical values.
+    pub fn refresh_online(&self) {
+        if self.have_cache {
+            return;
+        }
+        let max_raw = self.max_val();
+        let max_v = max_raw / self.bin_size;
+        let tot = self.tot_mass.load();
+        let mut v = Vec::with_capacity(max_raw + 1);
+        for raw in 0..=max_raw {
+            let l = (raw / self.bin_size).min(max_v);
+            v.push(self.hist[l].load() - tot);
+        }
+        *self.online_pmf.write().unwrap() = Arc::new(v);
+    }
+
+    /// Cheap (one `Arc` clone) immutable handle to the current online log-PMF
+    /// snapshot. Capture once per fragment and index by raw length: every
+    /// transcript of a given length then reads an identical value even if another
+    /// thread refreshes the shared snapshot meanwhile. Empty until the first
+    /// [`refresh_online`](Self::refresh_online) (the pre-burn-in window, where this
+    /// term is not folded into the eq-class weight anyway).
+    pub fn online_snapshot(&self) -> Arc<Vec<f64>> {
+        self.online_pmf.read().unwrap().clone()
     }
 
     /// Logged cumulative mass up to and including `len`.

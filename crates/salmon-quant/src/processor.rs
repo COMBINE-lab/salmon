@@ -436,14 +436,29 @@ fn record(
     // applied once the auxiliary model is trained (after `pre_burnin` fragments),
     // matching salmon's `numPreAuxModelSamples` gating.
     let use_aux = sh.num_processed.load(Ordering::Relaxed) >= sh.pre_burnin;
+    // Capture ONE immutable FLD snapshot for this fragment (a cheap `Arc` clone,
+    // no per-fragment allocation). Indexing it for every mapping guarantees that
+    // transcripts sharing a fragment length — in particular exact-duplicate
+    // transcripts — receive an identical fragment-length probability, even if
+    // another thread refreshes the shared snapshot meanwhile. Reading the live FLD
+    // per mapping instead (two racing atomic loads on a concurrently-updated
+    // distribution) returned slightly different values for the same length and let
+    // the VBEM α<1 prior break duplicate symmetry. Mirrors C++ salmon's per-worker
+    // `LogCMFCache` snapshot.
+    let fld_snap = if use_aux { Some(sh.fld.online_snapshot()) } else { None };
     let mut pairs: Vec<(u32, f64)> = compat
         .iter()
         .map(|(m, w)| {
-            let log_frag_prob = if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
-                if use_aux {
-                    sh.fld.pmf(m.fragment_len as usize)
-                } else {
-                    0.0
+            let log_frag_prob = if use_aux
+                && m.status == MateStatus::PairedEndPaired
+                && m.fragment_len > 0
+            {
+                match fld_snap.as_deref() {
+                    Some(snap) if !snap.is_empty() => {
+                        snap[(m.fragment_len as usize).min(snap.len() - 1)]
+                    }
+                    // pre-first-refresh fallback (only the early pre-burn-in batches)
+                    _ => sh.fld.pmf(m.fragment_len as usize),
                 }
             } else {
                 0.0
@@ -634,6 +649,10 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
+        // next batch's per-fragment reads are stable (see `record`). No-op once the
+        // final FLD cache is taken; amortized over the whole batch.
+        self.shared.fld.refresh_online();
         flush_sam(self);
         Ok(())
     }
@@ -711,6 +730,10 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
+        // next batch's per-fragment reads are stable (see `record`). No-op once the
+        // final FLD cache is taken; amortized over the whole batch.
+        self.shared.fld.refresh_online();
         flush_sam(self);
         Ok(())
     }

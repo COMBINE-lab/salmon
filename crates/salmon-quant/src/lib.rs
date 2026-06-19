@@ -190,6 +190,7 @@ impl QuantOptions {
     }
 }
 
+
 /// Quantification results (also written to disk by [`write_outputs`]).
 #[derive(Debug, Clone)]
 pub struct QuantResult {
@@ -265,6 +266,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // observations from concordant pairs refine it.
     let mut fld =
         FragmentLengthDistribution::new(1.0, opts.fld_max, opts.fld_mean, opts.fld_sd, 4, 0.5, 1);
+    // Prime the online PMF snapshot from the prior so it is never empty: once
+    // `use_aux` turns on (after the pre-burn-in count) a fragment could otherwise
+    // be processed before the first mini-batch boundary refresh and fall back to a
+    // racy live read. With it primed, every per-fragment read is from a stable
+    // snapshot, keeping exact-duplicate transcripts symmetric.
+    fld.refresh_online();
     // `processed`/`mapped` live in a (possibly caller-shared) `ProgressCounters`
     // so a CLI progress bar can poll them live; the rest are local.
     let progress = opts.progress.clone().unwrap_or_default();
