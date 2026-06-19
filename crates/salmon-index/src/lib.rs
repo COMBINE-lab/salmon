@@ -367,22 +367,24 @@ fn preprocess_fasta(
             }
 
             let mut seq = orig.into_owned();
-            // Replace non-ACGT bases with pseudo-random ACGT (salmon FixFasta
-            // behavior). This is currently applied to decoys too: ideally decoys
-            // would keep their N-runs so Cuttlefish splits the graph on them
-            // (yielding a much smaller/faster cDBG for genome decoys with large
-            // assembly gaps), but cf1-rs (<= 0.4.1) panics on `N` in its
-            // minimizer-counting phase (packed-seq rejects non-ACGTN) despite
-            // `poly_n_stretch` being set — so we cannot yet feed it N. The
-            // longest-ACGT-run decoy-drop below is already written to that future
-            // (it reduces to a length test while decoys are N-free).
-            for b in seq.iter_mut() {
-                if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
-                    x = x
-                        .wrapping_mul(6364136223846793005)
-                        .wrapping_add(1442695040888963407);
-                    *b = B[((x >> 33) & 3) as usize];
-                    replaced += 1;
+            // Transcripts: replace non-ACGT bases with pseudo-random ACGT so the
+            // processed sequence is fully k-mer-able (salmon FixFasta behavior).
+            // DECOYS: leave non-ACGT bases (e.g. genome N-runs) in place — cf1-rs
+            // splits the de Bruijn graph on them natively (and records the N-gaps in
+            // the tiling), yielding a far less tangled, smaller, faster-to-build
+            // cDBG than seeding spurious k-mers from random replacements across
+            // assembly gaps. The refseq store keeps the raw bytes and the aligner
+            // encodes N as a mismatch (dna5 code 4), so a read aligning over a decoy
+            // N-run simply scores it as a mismatch.
+            if !is_decoy {
+                for b in seq.iter_mut() {
+                    if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+                        x = x
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        *b = B[((x >> 33) & 3) as usize];
+                        replaced += 1;
+                    }
                 }
             }
             // Kallisto-esque poly-A clipping (salmon/pufferfish FixFasta): if the
