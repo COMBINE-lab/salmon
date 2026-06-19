@@ -16,7 +16,7 @@ pub mod spline;
 pub use bias::{
     build_expected_pos, corrected_effective_length_full, positional_factor, BiasInputs,
 };
-pub use fld::{smoothed_effective_length, FragmentLengthDistribution};
+pub use fld::{ambig_frag_log_prob, smoothed_effective_length, FragmentLengthDistribution};
 pub use gcbias::{
     build_expected_gc, gc_corrected_effective_length, gc_desc, gc_prefix, gc_ratio, GcFragModel,
     GcRank, GcStore, GcView, GC_SAMP_STRIDE,

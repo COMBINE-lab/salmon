@@ -19,6 +19,10 @@ pub struct RawMapping {
     pub status: MateStatus,
     pub score: i32,
     pub fragment_len: i32,
+    /// length of the mapped (anchor) read; used for the ambiguous
+    /// fragment-length probability of orphans / single-end reads. `0` when not
+    /// applicable.
+    pub read_len: i32,
     pub is_decoy: bool,
     /// leftmost fragment position on the reference (for sequence-bias context)
     pub ref_pos: i32,
@@ -50,6 +54,10 @@ pub struct ScoredMapping {
     pub status: MateStatus,
     pub score: i32,
     pub fragment_len: i32,
+    /// length of the mapped (anchor) read; used for the ambiguous
+    /// fragment-length probability of orphans / single-end reads (the reverse-
+    /// strand bound is `ref_pos + read_len`). `0` when not applicable.
+    pub read_len: i32,
     /// equivalence-class weight (`1.0` for best-scoring; decays below)
     pub weight: f64,
     /// leftmost fragment position on the reference (for sequence-bias context)
@@ -191,6 +199,7 @@ pub fn finalize_mappings_counted(
                 status: m.status,
                 score: m.score,
                 fragment_len: m.fragment_len,
+                read_len: m.read_len,
                 weight,
                 ref_pos: m.ref_pos,
                 fw_pos: m.fw_pos,
@@ -281,6 +290,7 @@ mod tests {
             status: MateStatus::SingleEnd,
             score,
             fragment_len: 0,
+            read_len: 0,
             is_decoy,
             ref_pos: 0,
             fw_pos: 0,
@@ -394,6 +404,7 @@ mod tests {
             status: MateStatus::PairedEndPaired,
             score,
             fragment_len: 200,
+            read_len: 0,
             weight: 1.0,
             ref_pos: 0,
             fw_pos: -1,

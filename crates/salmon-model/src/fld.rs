@@ -49,6 +49,15 @@ pub struct FragmentLengthDistribution {
     /// [`refresh_online`](Self::refresh_online) rebuilds it at mini-batch
     /// boundaries.
     online_pmf: RwLock<Arc<Vec<f64>>>,
+
+    /// Periodically-refreshed snapshot of the (normalized) log-CMF, the
+    /// cumulative companion to [`online_pmf`](Self::online_pmf). Used for the
+    /// ambiguous (orphan / single-end) fragment-length probability and for the
+    /// `pmf(flen) − cmf(txpLen)` length-conditioning of proper pairs, both of
+    /// which need cumulative mass. Rebuilt alongside `online_pmf` in
+    /// [`refresh_online`](Self::refresh_online); mirrors C++ salmon's
+    /// `LogCMFCache`.
+    online_cmf: RwLock<Arc<Vec<f64>>>,
 }
 
 impl FragmentLengthDistribution {
@@ -127,6 +136,7 @@ impl FragmentLengthDistribution {
             cached_cmf: Vec::new(),
             have_cache: false,
             online_pmf: RwLock::new(Arc::new(Vec::new())),
+            online_cmf: RwLock::new(Arc::new(Vec::new())),
         }
     }
 
@@ -204,12 +214,25 @@ impl FragmentLengthDistribution {
         let max_raw = self.max_val();
         let max_v = max_raw / self.bin_size;
         let tot = self.tot_mass.load();
+        // Per-bin cumulative mass (matches `cmf()`), so the snapshot CMF at raw
+        // index `raw` equals `cmf(raw)`. Built first, then both the PMF and CMF
+        // snapshots are expanded over raw indices from the same `tot` read so
+        // they are mutually consistent.
+        let mut bin_cum = Vec::with_capacity(max_v + 1);
+        let mut cum = LOG_0;
+        for b in 0..=max_v {
+            cum = log_add(cum, self.hist[b].load() - tot);
+            bin_cum.push(cum);
+        }
         let mut v = Vec::with_capacity(max_raw + 1);
+        let mut c = Vec::with_capacity(max_raw + 1);
         for raw in 0..=max_raw {
             let l = (raw / self.bin_size).min(max_v);
             v.push(self.hist[l].load() - tot);
+            c.push(bin_cum[l]);
         }
         *self.online_pmf.write().unwrap() = Arc::new(v);
+        *self.online_cmf.write().unwrap() = Arc::new(c);
     }
 
     /// Cheap (one `Arc` clone) immutable handle to the current online log-PMF
@@ -220,6 +243,15 @@ impl FragmentLengthDistribution {
     /// term is not folded into the eq-class weight anyway).
     pub fn online_snapshot(&self) -> Arc<Vec<f64>> {
         self.online_pmf.read().unwrap().clone()
+    }
+
+    /// Cheap (one `Arc` clone) immutable handle to the current online log-CMF
+    /// snapshot, the cumulative companion to [`online_snapshot`](Self::online_snapshot).
+    /// Capture once per fragment for the ambiguous (orphan / single-end)
+    /// fragment-length probability and the proper-pair length-conditioning.
+    /// Empty until the first [`refresh_online`](Self::refresh_online).
+    pub fn online_cmf_snapshot(&self) -> Arc<Vec<f64>> {
+        self.online_cmf.read().unwrap().clone()
     }
 
     /// Logged cumulative mass up to and including `len`.
@@ -332,6 +364,48 @@ impl FragmentLengthDistribution {
     }
 }
 
+/// Index a length into a (log) CMF snapshot, clamping out-of-range lengths to
+/// the last bin (which holds the total mass). Returns [`LOG_0`] for an empty
+/// snapshot.
+#[inline]
+fn cmf_at(cmf: &[f64], len: i32) -> f64 {
+    if cmf.is_empty() {
+        return LOG_0;
+    }
+    let i = (len.max(0) as usize).min(cmf.len() - 1);
+    cmf[i]
+}
+
+/// Logged ambiguous-fragment-length probability for an orphan / single-end
+/// read, given a (log) CMF snapshot. Direct port of C++ salmon's
+/// `LogCMFCache::getAmbigFragLengthProb` (`DistributionUtils.cpp`).
+///
+/// The mapped mate bounds the maximum possible fragment length: a forward read
+/// at `pos` can extend downstream to the transcript 3' end (`txp_len − pos`); a
+/// reverse read's outer (5') end sits at `pos + read_len`, bounding the upstream
+/// extent toward the 5' end. The weight is the FLD mass up to that bound,
+/// *conditioned* on the mass up to the full transcript length — i.e.
+/// `cmf(maxFragLen) − cmf(txpLen)` — so orphan weights sit on the same
+/// length-conditioned scale as proper pairs. Returns [`LOG_EPSILON`] when the
+/// transcript admits no representable fragment mass, and `LOG_1` (= 0) when no
+/// snapshot is available yet (pre-burn-in), leaving the weight unmodelled.
+pub fn ambig_frag_log_prob(cmf: &[f64], fwd: bool, pos: i32, read_len: i32, txp_len: i32) -> f64 {
+    if cmf.is_empty() {
+        return 0.0; // LOG_1: no model yet
+    }
+    let stxp = txp_len.max(0);
+    let max_frag_len = if fwd {
+        stxp - pos.clamp(0, stxp)
+    } else {
+        (pos + read_len).clamp(0, stxp)
+    };
+    let ref_cm = cmf_at(cmf, stxp);
+    if ref_cm <= LOG_0 {
+        return LOG_EPSILON;
+    }
+    cmf_at(cmf, max_frag_len) - ref_cm
+}
+
 /// salmon's base effective length (`computeSmoothedEffectiveLengths`):
 /// `effLen = refLen − E[L | L ≤ refLen]`, clamped back to `refLen` if it would
 /// fall below 1. `cond_means` is [`FragmentLengthDistribution::conditional_means`].
@@ -420,6 +494,35 @@ mod tests {
         // below the 1.0 barrier the raw length is returned
         let tiny = smoothed_effective_length(&cm, 2);
         assert_eq!(tiny, 2.0, "tiny transcript should fall back to refLen");
+    }
+
+    #[test]
+    fn ambig_frag_prob_bounds_and_orientation() {
+        let mut fld = FragmentLengthDistribution::new(1000.0, 1000, 250.0, 25.0, 4, 0.5, 1);
+        fld.cache();
+        // Use the cached (frozen) CMF as a stand-in for the online snapshot.
+        let cmf = fld.cached_cmf.clone();
+        let txp_len = 2000i32;
+        // A forward read with ample downstream space (mate fits at the typical
+        // insert) should be near log(1) ≈ 0, since cmf(maxFrag) ≈ cmf(txpLen).
+        let ample = ambig_frag_log_prob(&cmf, true, 100, 75, txp_len);
+        assert!(ample > -0.01, "ample-space orphan logProb {ample} not ~0");
+        // A forward read crammed against the 3' end (little downstream space)
+        // implies an implausibly short fragment -> much smaller probability.
+        let crammed = ambig_frag_log_prob(&cmf, true, txp_len - 50, 75, txp_len);
+        assert!(
+            crammed < ample - 1.0,
+            "crammed orphan {crammed} not << ample {ample}"
+        );
+        // Reverse-strand orientation uses pos + read_len for the upstream bound:
+        // a reverse read whose outer end is near the 5' start is likewise crammed.
+        let rc_crammed = ambig_frag_log_prob(&cmf, false, 0, 50, txp_len);
+        assert!(
+            rc_crammed < ample - 1.0,
+            "rc crammed orphan {rc_crammed} not << ample {ample}"
+        );
+        // Empty snapshot -> unmodelled (LOG_1 = 0).
+        assert_eq!(ambig_frag_log_prob(&[], true, 100, 75, txp_len), 0.0);
     }
 
     #[test]

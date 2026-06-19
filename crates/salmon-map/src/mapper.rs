@@ -133,6 +133,7 @@ pub fn map_single_read<'idx, R: RefProvider>(
                     status: MateStatus::SingleEnd,
                     score: aln.score,
                     fragment_len: 0,
+                    read_len: read.len() as i32,
                     is_decoy: refs.is_decoy(c.tid),
                     // 5' position: leftmost for a forward read, rightmost for a
                     // reverse read (orientation-aware sequence-bias context).
@@ -235,6 +236,7 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                             status: MateStatus::PairedEndPaired,
                             score: al.score + ar.score,
                             fragment_len: j.fragment_len,
+                            read_len: 0, // proper pair: fragment_len carries the length signal
                             is_decoy: refs.is_decoy(j.tid),
                             ref_pos: l.chain.ref_start().min(r.chain.ref_start()),
                             fw_pos,
@@ -252,10 +254,24 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                         // salmon emits an `m1`/`m2` orphan here rather than dropping
                         // the whole fragment. Forming the (failed) pair had otherwise
                         // suppressed this mate's orphan in `join_reads_and_filter`.
-                        raw.push(orphan_raw(j.tid, l, al.score, true, refs.is_decoy(j.tid)));
+                        raw.push(orphan_raw(
+                            j.tid,
+                            l,
+                            al.score,
+                            true,
+                            refs.is_decoy(j.tid),
+                            r1.len() as i32,
+                        ));
                         below += 1;
                     } else if ar.valid {
-                        raw.push(orphan_raw(j.tid, r, ar.score, false, refs.is_decoy(j.tid)));
+                        raw.push(orphan_raw(
+                            j.tid,
+                            r,
+                            ar.score,
+                            false,
+                            refs.is_decoy(j.tid),
+                            r2.len() as i32,
+                        ));
                         below += 1;
                     } else {
                         below += 1;
@@ -339,6 +355,7 @@ fn orphan_raw(
     score: i32,
     is_left: bool,
     is_decoy: bool,
+    read_len: i32,
 ) -> RawMapping {
     let start = c.chain.ref_start();
     RawMapping {
@@ -351,6 +368,7 @@ fn orphan_raw(
         },
         score,
         fragment_len: 0,
+        read_len,
         is_decoy,
         ref_pos: start,
         fw_pos: if c.is_fw { start } else { -1 },
@@ -442,6 +460,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 status: MateStatus::PairedEndPaired,
                 score: anchor_aln.score + partner_score,
                 fragment_len: frag_len,
+                read_len: 0, // recovered proper pair: fragment_len carries the length signal
                 is_decoy,
                 ref_pos: anchor.chain.ref_start(),
                 // orientation not re-derived for recovered pairs; attribute the
@@ -490,6 +509,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
         status,
         score: anchor_aln.score,
         fragment_len: 0,
+        read_len: anchor_read.len() as i32,
         is_decoy,
         ref_pos: anchor.chain.ref_start(),
         // orphan: leftmost coordinate attributed to its own strand.

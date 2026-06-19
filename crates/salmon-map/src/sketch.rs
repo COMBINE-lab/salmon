@@ -80,6 +80,9 @@ pub fn map_single_read_sketch<'idx>(
                 status: MateStatus::SingleEnd,
                 score: h.score as i32,
                 fragment_len: 0,
+                // sketch mode has no alignment positions, so the ambiguous
+                // fragment-length probability is not modelled.
+                read_len: 0,
                 weight: 1.0,
                 ref_pos: 0,
                 fw_pos: -1,
@@ -213,6 +216,9 @@ pub fn map_read_pair_sketch<'idx, R: RefProvider>(
                     // length in `fragment_length`; feed it through so the FLD
                     // is actually learned from the data (orphans report 0).
                     fragment_len: h.frag_len(),
+                    // sketch mode has no alignment positions, so the ambiguous
+                    // fragment-length probability is not modelled.
+                    read_len: 0,
                     weight: 1.0,
                     ref_pos: 0,
                     fw_pos: -1,

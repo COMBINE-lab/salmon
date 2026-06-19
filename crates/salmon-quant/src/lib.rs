@@ -97,6 +97,10 @@ pub struct QuantOptions {
     /// disable effective-length correction; use the raw reference length
     /// (`--noLengthCorrection`)
     pub no_length_correction: bool,
+    /// model the fragment-length probability of orphan / single-end mappings via
+    /// the bounded-CMF "ambiguous" weight (salmon default `true`); `false` =
+    /// `--noSingleFragProb`.
+    pub model_single_frag_prob: bool,
     /// fragment-length distribution prior mean, SD, and max tracked length
     /// (`--fldMean` / `--fldSD` / `--fldMax`)
     pub fld_mean: f64,
@@ -168,6 +172,7 @@ impl QuantOptions {
             num_gibbs_samples: 0,
             thinning_factor: 16,
             no_length_correction: false,
+            model_single_frag_prob: true,
             fld_mean: 250.0,
             fld_sd: 25.0,
             fld_max: 1000,
@@ -416,6 +421,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             posbias_obs: posbias_obs.as_ref(),
             online: online.as_ref(),
             paired_lib: opts.is_paired(),
+            model_single_frag_prob: opts.model_single_frag_prob,
             num_processed,
             num_mapped,
             num_orphan: &num_orphan,
