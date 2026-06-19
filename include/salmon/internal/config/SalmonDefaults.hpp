@@ -45,6 +45,7 @@ namespace defaults {
   constexpr const bool fullLengthAlignment{false};
   constexpr const bool allowDovetail{false};
   constexpr const bool recoverOrphans{false};
+  constexpr const bool orphansRequireUnmappedMate{false};
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";
   constexpr const bool consistentHits{false};
@@ -62,7 +63,7 @@ namespace defaults {
   constexpr const uint32_t maxSMEMOccs{200};
   constexpr const bool initUniform{false};
   constexpr const bool useOnlineSeed{false};
-  constexpr const uint32_t maxReadOccs{200};
+  constexpr const uint32_t maxReadOccs{250};
   constexpr const uint32_t maxRecoverReadOccs{2500};
   constexpr const uint32_t maxOccsPerHit{1000};
   constexpr const bool noLengthCorrection{false};

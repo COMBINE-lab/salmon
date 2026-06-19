@@ -1391,7 +1391,12 @@ void processReads(
         // alignment phase (and therefore filter nothing based on pre-alignment
         // hits), or clear the jointHits at this point.
 
-        // If the read mapped to > maxReadOccs places, discard it
+        // NOTE: `tooManyHits` (computed on the pre-alignment candidate count)
+        // gates orphan recovery above. The actual maxReadOccs *discard* is applied
+        // after alignment, on the final set of distinct aligned mappings (see
+        // below) — matching the Rust port's `maps.len()` cap. Capping here on the
+        // pre-alignment jointHits over-counts seed-only candidates that later fail
+        // full alignment.
         if (tooManyHits) {
           jointAlignmentGroup.clearAlignments();
         }
@@ -1670,6 +1675,24 @@ void processReads(
         // decoys.
         if (mapType == salmon::utils::MappingType::DECOY) {
           jointAlignmentGroup.clearAlignments();
+        }
+
+        // maxReadOccs cap (applied here, post-alignment): discard a fragment that
+        // *aligns* to more than maxReadOccs distinct non-decoy targets. We count
+        // the final aligned mappings (not the pre-alignment seed candidates), so
+        // this matches the Rust port's `maps.len()` cap and the intended semantics
+        // of "too many places". Decoy placements (kept above only for SAM output)
+        // are excluded from the count.
+        {
+          size_t nNonDecoyTargets = 0;
+          for (auto& h : jointAlignments) {
+            if (static_cast<uint64_t>(h.tid) < firstDecoyIndex) {
+              ++nNonDecoyTargets;
+            }
+          }
+          if (nNonDecoyTargets > salmonOpts.maxReadOccs) {
+            jointAlignmentGroup.clearAlignments();
+          }
         }
 
         bool needBiasSample = salmonOpts.biasCorrect;
@@ -2125,7 +2148,10 @@ void processReads(
         // alignment phase (and therefore filter nothing based on pre-alignment
         // hits), or clear the jointHits at this point.
 
-        // If the read mapped to > maxReadOccs places, discard it
+        // The maxReadOccs discard is applied post-alignment (below), on the final
+        // aligned-mapping count, to match the Rust port and avoid capping on
+        // seed-only candidates. Here we only compute the flag (unused gating in
+        // the single-end path) and keep the original no-op clear.
         tooManyHits = jointHits.size() > salmonOpts.maxReadOccs;
         if (tooManyHits) {
           jointHitGroup.clearAlignments();
@@ -2213,6 +2239,22 @@ void processReads(
       // decoys.
       if (mapType == salmon::utils::MappingType::DECOY) {
         jointHitGroup.clearAlignments();
+      }
+
+      // maxReadOccs cap (post-alignment): discard a read aligning to more than
+      // maxReadOccs distinct non-decoy targets — counting final aligned mappings
+      // (not seed candidates), matching the Rust port and the paired-end path.
+      {
+        uint64_t firstDecoyIndex = qidx->firstDecoyIndex();
+        size_t nNonDecoyTargets = 0;
+        for (auto& h : jointAlignments) {
+          if (static_cast<uint64_t>(h.tid) < firstDecoyIndex) {
+            ++nNonDecoyTargets;
+          }
+        }
+        if (nNonDecoyTargets > salmonOpts.maxReadOccs) {
+          jointHitGroup.clearAlignments();
+        }
       }
 
       bool needBiasSample = salmonOpts.biasCorrect;

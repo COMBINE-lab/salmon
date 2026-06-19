@@ -204,6 +204,13 @@ namespace salmon {
        "[selective-alignment mode only] : Attempt to recover the mates of orphaned reads. This uses edlib for "
        "orphan recovery, and so introduces some computational overhead, but it can improve sensitivity."
        )
+      ("orphansRequireUnmappedMate",
+       po::bool_switch(&(sopt.orphansRequireUnmappedMate))->default_value(salmon::defaults::orphansRequireUnmappedMate),
+       "[selective-alignment mode only] : Only emit a single-mate (orphan) mapping when the read's mate is entirely "
+       "unmapped. By default, when a fragment has no concordant mapping, orphans are reported for both mates (their "
+       "union); with this flag a read that maps only alongside a mate mapping to a disjoint reference set is not "
+       "reported as an orphan."
+       )
       ("mimicBT2", // horrible flag name, think of something better
        po::bool_switch(&(sopt.mimicBT2))->default_value(salmon::defaults::mimicBT2),
        "[selective-alignment mode only] : Set flags to mimic parameters similar to "

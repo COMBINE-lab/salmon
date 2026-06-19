@@ -206,6 +206,7 @@ initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector,
   }
 
   mpol.noOrphans = !salmonOpts.allowOrphans;
+  mpol.orphansRequireUnmappedMate = salmonOpts.orphansRequireUnmappedMate;
   // TODO : PF_INTEGRATION
   // decide how we want to set this
   // I think we don't want to allow general discordant reads
