@@ -1026,4 +1026,118 @@ mod tests {
             assert!(seq.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')));
         }
     }
+
+    /// Build ONE index that simultaneously exercises every short/decoy edge case
+    /// and verifies they compose correctly:
+    ///   * a sub-`k` **transcript** — KEPT (piscem relocates it to the trailing
+    ///     untiled block, reported at 0 reads); the regression that motivated the
+    ///     decoy-contiguity guard,
+    ///   * a sub-`k` **decoy** — DROPPED at preprocess (no `k`-mer to seed),
+    ///   * an N-fragmented **decoy** longer than `k` whose every ACGT run is `< k`
+    ///     — DROPPED (longest ACGT run governs tileability, not raw length),
+    ///   * a **decoy** with an internal N-run flanked by `>= k` ACGT runs — KEPT,
+    ///     with its `N` bytes preserved verbatim in the reference store.
+    ///
+    /// Then asserts the surviving decoy is one contiguous block so `is_decoy`
+    /// stays an O(1) range test.
+    #[test]
+    fn build_composes_short_transcript_short_and_n_decoys() {
+        use salmon_core::RefProvider; // brings `is_decoy` into scope
+        // Lengths below are relative to the default k = 31.
+        // Distinct ACGT content with no consecutive repeats, so nothing collapses
+        // as a duplicate and no trailing poly-A run triggers clipping.
+        let acgt = |len: usize, seed: usize| -> String {
+            const B: [u8; 4] = *b"ACGT";
+            (0..len).map(|i| B[(i * 3 + seed) % 4] as char).collect()
+        };
+
+        let t_long = acgt(80, 0); // normal transcript: KEPT, tiled
+        let t_short = acgt(20, 1); // sub-k transcript: KEPT (0 count), relocated to tail
+        // decoy with N flanked by two >= k ACGT runs: KEPT, N preserved verbatim
+        let d_long = format!("{}NNNNN{}", acgt(40, 2), acgt(40, 3));
+        let d_short = acgt(25, 4); // sub-k decoy: DROPPED
+        // len 46 (> k) but every ACGT run (20, 25) is < k: DROPPED
+        let d_nfrag = format!("{}N{}", acgt(20, 5), acgt(25, 6));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = tmp.path().join("gentrome.fa");
+        {
+            let mut f = std::fs::File::create(&fasta).unwrap();
+            // Transcripts first; decoys contiguous at the end (salmon requirement).
+            for (n, s) in [
+                ("t_long", &t_long),
+                ("t_short", &t_short),
+                ("d_long", &d_long),
+                ("d_short", &d_short),
+                ("d_nfrag", &d_nfrag),
+            ] {
+                writeln!(f, ">{n}\n{s}").unwrap();
+            }
+        }
+        let decoys = tmp.path().join("decoys.txt");
+        std::fs::write(&decoys, "d_long\nd_short\nd_nfrag\n").unwrap();
+
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        opts.decoys = Some(decoys);
+        let built = build(&opts).expect("index build");
+
+        // Dropped d_short + d_nfrag; kept t_long, t_short, d_long.
+        assert_eq!(
+            built.num_refs, 3,
+            "kept t_long + t_short + d_long; dropped d_short + d_nfrag"
+        );
+        assert_eq!(
+            built.first_decoy_index,
+            Some(1),
+            "the one surviving decoy forms a contiguous block at index 1"
+        );
+        assert_eq!(built.num_decoys, 1);
+
+        let idx = SalmonIndex::load(&out).expect("index load");
+        assert_eq!(idx.num_refs(), 3);
+        let names: Vec<&str> = (0..idx.num_refs()).map(|i| idx.ref_name(i)).collect();
+        assert!(names.contains(&"t_long"), "names {names:?}");
+        assert!(
+            names.contains(&"t_short"),
+            "sub-k transcript must be kept; names {names:?}"
+        );
+        assert!(
+            names.contains(&"d_long"),
+            "tileable N-decoy must be kept; names {names:?}"
+        );
+        assert!(
+            !names.contains(&"d_short"),
+            "sub-k decoy must be dropped; names {names:?}"
+        );
+        assert!(
+            !names.contains(&"d_nfrag"),
+            "N-fragmented decoy must be dropped; names {names:?}"
+        );
+
+        // Decoy classification is exactly {d_long}, via the O(1) range test.
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(
+                idx.is_decoy(i as u32),
+                *n == "d_long",
+                "is_decoy({n}) misclassified"
+            );
+        }
+
+        // The sub-k transcript is reported at its real (untiled) length.
+        let t_short_tid = names.iter().position(|n| *n == "t_short").unwrap();
+        assert_eq!(idx.ref_len(t_short_tid), t_short.len() as u64);
+
+        // The surviving decoy keeps its N bytes verbatim (decoys are NOT
+        // N-replaced, unlike transcripts).
+        let d_long_tid = names.iter().position(|n| *n == "d_long").unwrap() as u32;
+        let seq = idx.ref_seq(d_long_tid);
+        assert_eq!(seq.len(), d_long.len(), "decoy stored at full length");
+        assert_eq!(
+            seq.iter().filter(|&&b| b == b'N').count(),
+            5,
+            "all 5 decoy Ns preserved in the reference store"
+        );
+    }
 }
