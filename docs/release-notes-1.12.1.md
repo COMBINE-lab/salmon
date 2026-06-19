@@ -57,6 +57,33 @@ pufferfish commit `17e1ccf`):
   strong mate is not lost because its partner is error-laden or mis-oriented —
   matching the Rust port's `m1`/`m2` orphan emission.
 
+### `--writeMappings` + `--gcBias` out-of-bounds crash (#1010)
+
+Issue #1010 reported a segfault when `--writeMappings` and `--gcBias` were used
+together (stack trace in `Transcript::gcDesc`). The root cause is a data-flow
+hazard between the two features: the SAM writer clamped a right-overhanging
+fragment's length by writing the clamped value back into the shared
+`QuasiAlignment::fragLen`, and the GC-bias collector then reused that mutated
+field to compute its `[start, stop]` window — so a wrapped/corrupted `stop` could
+slip past the old `start >= 0 && stop < RefLength` guard and index `GCCount_[]`
+out of bounds inside `gcDesc`.
+
+This release closes the hazard at every link:
+
+- **pufferfish `SAMWriter`** no longer mutates `qa.fragLen`; the TLEN clamp is
+  computed into a local, so bias collection always sees the original value.
+- **GC/positional-bias collection** (`SalmonQuantify.cpp`) computes its window
+  from the clamped `fragLengthPedantic(RefLength)` recompute rather than the raw
+  `fragLen` field, and tightens the guard to also require `start < RefLength` and
+  `stop >= start`.
+- **`Transcript::gcDesc`** gains an entry bounds-guard that returns an invalid GC
+  descriptor (rather than reading out of bounds) for any out-of-range or
+  ill-formed window — the defensive backstop at the faulting access itself.
+
+These changes are defensive in depth and produce identical bias models and
+`quant.sf`/SAM output on non-pathological inputs; together they make the
+`gcDesc` out-of-bounds access unreachable.
+
 ## Known limitation: residual run-to-run variability (the FLD-feedback path)
 
 The seed change removes the *dominant, amplified* run-to-run variability, but a

@@ -292,6 +292,16 @@ public:
   bool hasAnchorFragment() { return hasAnchorFragment_.load(); }
 
   inline GCDesc gcDesc(int32_t s, int32_t e, bool& valid) const {
+    // Defensive bounds guard: GCCount_ has RefLength entries, so any out-of-range
+    // or ill-formed [s, e] window would read out of bounds (the root crash in
+    // issue #1010). Callers are expected to pass a valid in-range window; if they
+    // do not, report invalid rather than crash.
+    if (s < 0 || e < 0 || e < s ||
+        s >= static_cast<int32_t>(RefLength) ||
+        e >= static_cast<int32_t>(RefLength)) {
+      valid = false;
+      return GCDesc{};
+    }
     int outsideContext{3};
     int insideContext{2};
 

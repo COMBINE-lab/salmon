@@ -906,7 +906,12 @@ void processMiniBatch(
               // coordinate mismatch between the observed and expected 3' models.
               int32_t fragStart = std::min(aln.pos, aln.matePos);
               int32_t posFW = fragStart;
-              int32_t posRC = fragStart + aln.fragLen - 1;
+              // Use the clamped, recomputed fragment length (not the raw
+              // `aln.fragLen` field, which can be the unset sentinel or a value
+              // mutated elsewhere) so posRC stays in-bounds. See #1010.
+              int32_t fragLenP =
+                  static_cast<int32_t>(aln.fragLengthPedantic(transcript.RefLength));
+              int32_t posRC = fragStart + fragLenP - 1;
               posFW = posFW < 0 ? 0 : posFW;
               posFW = posFW >= static_cast<int32_t>(transcript.RefLength)
                           ? static_cast<int32_t>(transcript.RefLength) - 1
@@ -945,9 +950,20 @@ void processMiniBatch(
         if (gcBiasCorrect) {
           if (aln.libFormat().type == ReadType::PAIRED_END) {
             int32_t start = std::min(aln.pos, aln.matePos);
-            int32_t stop = start + aln.fragLen - 1;
+            // Use the clamped, recomputed fragment length (fragLengthPedantic),
+            // not the raw `aln.fragLen` field: the field can be the unset sentinel
+            // (UINT32_MAX) or a value mutated by SAM writing, and `start + field`
+            // can wrap so that `stop` slips below RefLength while `start` itself is
+            // out of range — defeating the bound check below and reading past
+            // GCCount_ in gcDesc (issue #1010). Also require start < RefLength and
+            // stop >= start so the window is well-formed.
+            int32_t fragLenP =
+                static_cast<int32_t>(aln.fragLengthPedantic(transcript.RefLength));
+            int32_t stop = start + fragLenP - 1;
             // WITH CONTEXT
             if (start >= 0 and
+                start < static_cast<int32_t>(transcript.RefLength) and
+                stop >= start and
                 stop < static_cast<int32_t>(transcript.RefLength)) {
               bool valid{false};
               auto desc = transcript.gcDesc(start, stop, valid);
