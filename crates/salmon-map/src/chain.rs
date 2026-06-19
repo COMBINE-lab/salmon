@@ -182,7 +182,16 @@ fn chain_two_mems(m0: Mem, m1: Mem, is_fw: bool, cfg: &ChainConfig) -> Option<Ve
     let dr = b.ref_start - a.ref_start;
     if dr <= cfg.max_gap {
         let dq = b.read_start - a.read_start;
-        if dr > 0 && dq > 0 && dq <= cfg.max_gap {
+        // Mirror the general DP's contained-anchor guard: `dr,dq > 0` only means
+        // `b` *starts* after `a`. If `b` is fully contained in `a` on either axis
+        // (`b`'s end <= `a`'s end) it adds no new coverage — a repeat-copy /
+        // sub-anchor on a different diagonal — so it must not chain onto `a`.
+        if dr > 0
+            && dq > 0
+            && dq <= cfg.max_gap
+            && b.read_end() > a.read_end()
+            && b.ref_end() > a.ref_end()
+        {
             let gap = (dr - dq).abs();
             let gain = dq.min(dr).min(b.len) as f32;
             let sc = f0 + gain - gap_cost(gap, cfg.seed_len, &LOG2_LUT);
