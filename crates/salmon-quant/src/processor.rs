@@ -637,7 +637,12 @@ fn record(
     } else {
         TranscriptGroup::from_sorted(tids)
     };
-    sh.eq.add_group(group, weights, 1);
+    // Key the contribution by the fragment's identity so the per-class weight sum
+    // is reduced in a fixed, thread-count-independent order (determinism).
+    // Key the contribution by the fragment's identity so the per-class weight sum
+    // is reduced in a fixed, thread-count-independent order (determinism).
+    let eq_key = xxhash_rust::xxh3::xxh3_128(read_id);
+    sh.eq.add_group_keyed(eq_key, group, weights, 1);
 }
 
 /// Fold the most recent fragment's selective-alignment [`MapStats`] into the

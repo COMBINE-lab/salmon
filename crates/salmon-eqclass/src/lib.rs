@@ -12,6 +12,8 @@
 //! into a flat [`CollapsedEqClasses`] for inference.
 
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use xxhash_rust::xxh3::Xxh3;
 
 /// The label of an equivalence class: the sorted set of transcript ids a
@@ -211,12 +213,38 @@ impl TGValue {
     }
 }
 
-/// Concurrent equivalence-class builder backed by `scc::HashMap`.
+/// One fragment's contribution to an equivalence class, retained with a stable
+/// per-fragment key so the per-class weight sum is reduced in a deterministic,
+/// thread-count-independent order (see [`EquivalenceClassBuilder::finish`]).
+pub struct Contribution {
+    /// stable per-fragment sort key (e.g. a hash of the read name); ties on the
+    /// transcript label are broken by this key so the reduction order is fixed.
+    pub key: u128,
+    pub group: TranscriptGroup,
+    pub weights: Vec<f64>,
+    pub count: u64,
+}
+
+/// Number of buffer shards (a power of two) the builder spreads contributions
+/// across to bound lock contention during the concurrent mapping phase.
+const SHARDS: usize = 64;
+
+/// Concurrent equivalence-class builder.
 ///
-/// Worker threads call [`add_group`](Self::add_group) with `&self` while
-/// mapping reads; insertion is lock-free per bucket.
+/// Worker threads call [`add_group_keyed`](Self::add_group_keyed) with `&self`
+/// while mapping reads; each fragment's contribution is appended to a key-sharded
+/// buffer (low contention) rather than summed in place. [`finish`](Self::finish)
+/// then groups the contributions by class and **sums each class's weights in a
+/// fixed order** (sorted by the transcript label, ties broken by the per-fragment
+/// key), so the result is byte-identical regardless of how fragments were
+/// distributed across threads. (Summing floats in arrival order — the previous
+/// `DashMap` accumulation — is not associative and drifted run-to-run for
+/// multimapping classes.)
 pub struct EquivalenceClassBuilder {
-    map: dashmap::DashMap<TranscriptGroup, TGValue, IdentityBuildHasher>,
+    shards: Vec<Mutex<Vec<Contribution>>>,
+    /// fallback monotonic key source for [`add_group`](Self::add_group) callers
+    /// that have no stable per-fragment key (single-threaded / alignment mode).
+    next_seq: AtomicU64,
 }
 
 impl Default for EquivalenceClassBuilder {
@@ -228,36 +256,72 @@ impl Default for EquivalenceClassBuilder {
 impl EquivalenceClassBuilder {
     pub fn new() -> Self {
         Self {
-            map: dashmap::DashMap::with_hasher(IdentityBuildHasher),
+            shards: (0..SHARDS).map(|_| Mutex::new(Vec::new())).collect(),
+            next_seq: AtomicU64::new(0),
         }
     }
 
-    /// Add one fragment's worth of evidence: the transcript group, its
-    /// per-transcript weights, and a count (usually 1). Thread-safe.
-    pub fn add_group(&self, group: TranscriptGroup, weights: Vec<f64>, count: u64) {
+    /// Add one fragment's evidence with a **stable per-fragment key** (e.g. a
+    /// hash of the read name). The key fixes the per-class weight-summation order
+    /// in [`finish`](Self::finish), making the result thread-count-independent.
+    pub fn add_group_keyed(
+        &self,
+        key: u128,
+        group: TranscriptGroup,
+        weights: Vec<f64>,
+        count: u64,
+    ) {
         debug_assert_eq!(group.txps.len(), weights.len());
-        self.map
-            .entry(group)
-            .and_modify(|v| v.accumulate(&weights, count))
-            .or_insert_with(|| TGValue::new(weights, count));
+        let shard = (key as usize) & (SHARDS - 1);
+        self.shards[shard].lock().unwrap().push(Contribution {
+            key,
+            group,
+            weights,
+            count,
+        });
     }
 
-    /// Number of distinct equivalence classes accumulated so far.
+    /// Add one fragment's evidence without a stable key (single-threaded callers
+    /// and alignment mode); a monotonic sequence number is used as the key.
+    pub fn add_group(&self, group: TranscriptGroup, weights: Vec<f64>, count: u64) {
+        let key = self.next_seq.fetch_add(1, Ordering::Relaxed) as u128;
+        self.add_group_keyed(key, group, weights, count);
+    }
+
+    /// Number of buffered contributions so far (not distinct classes).
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.shards.iter().map(|s| s.lock().unwrap().len()).sum()
     }
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.shards.iter().all(|s| s.lock().unwrap().is_empty())
     }
 
-    /// Finalize into a flat, index-stable collection for inference. Classes are
-    /// sorted by their transcript label for determinism.
+    /// Finalize into a flat, index-stable collection for inference. Contributions
+    /// are sorted by `(txps, bins, key)` and consecutive same-class contributions
+    /// are summed in that fixed order, so both the class ordering and the summed
+    /// weights are deterministic.
     pub fn finish(self) -> CollapsedEqClasses {
-        let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::with_capacity(self.map.len());
-        self.map
-            .iter()
-            .for_each(|e| classes.push((e.key().clone(), e.value().clone())));
-        classes.sort_by(|a, b| a.0.txps.cmp(&b.0.txps));
+        let mut contribs: Vec<Contribution> = Vec::new();
+        for shard in self.shards {
+            contribs.extend(shard.into_inner().unwrap());
+        }
+        contribs.sort_by(|a, b| {
+            a.group
+                .txps
+                .cmp(&b.group.txps)
+                .then_with(|| a.group.bins.cmp(&b.group.bins))
+                .then_with(|| a.key.cmp(&b.key))
+        });
+        let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::new();
+        for c in contribs {
+            if let Some((g, v)) = classes.last_mut() {
+                if g.txps == c.group.txps && g.bins == c.group.bins {
+                    v.accumulate(&c.weights, c.count);
+                    continue;
+                }
+            }
+            classes.push((c.group, TGValue::new(c.weights, c.count)));
+        }
         let total_count = classes.iter().map(|(_, v)| v.count).sum();
         CollapsedEqClasses {
             classes,
@@ -334,9 +398,9 @@ mod tests {
         b.add_group(TranscriptGroup::new(vec![1, 2]), vec![0.5, 0.5], 1);
         b.add_group(TranscriptGroup::new(vec![2, 1]), vec![0.5, 0.5], 1);
         b.add_group(TranscriptGroup::new(vec![3]), vec![1.0], 1);
-        assert_eq!(b.len(), 2);
 
         let collapsed = b.finish();
+        assert_eq!(collapsed.classes.len(), 2, "two distinct classes");
         assert_eq!(collapsed.total_count, 3);
         // sorted: [1,2] then [3]
         let (g0, v0) = &collapsed.classes[0];
@@ -346,6 +410,38 @@ mod tests {
         let (g1, v1) = &collapsed.classes[1];
         assert_eq!(g1.txps, vec![3]);
         assert_eq!(v1.count, 1);
+    }
+
+    #[test]
+    fn weight_sum_is_insertion_order_independent() {
+        // The per-class weight sum must be byte-identical regardless of the order
+        // fragments were added (how threads interleaved). Plain f64 addition is
+        // not associative, so this fails for arrival-order accumulation and holds
+        // only because `finish` reduces in a fixed key-sorted order.
+        let make = |order: &[usize]| -> Vec<u64> {
+            let b = EquivalenceClassBuilder::new();
+            for &i in order {
+                let key = (i as u128).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let w = vec![
+                    1.0 / 3.0 + (i as f64) * 1e-12,
+                    2.0 / 3.0 - (i as f64) * 1e-12,
+                ];
+                b.add_group_keyed(key, TranscriptGroup::new(vec![0, 1]), w, 1);
+            }
+            let c = b.finish();
+            c.classes[0].1.weights.iter().map(|x| x.to_bits()).collect()
+        };
+        let fwd: Vec<usize> = (0..200).collect();
+        let mut rev = fwd.clone();
+        rev.reverse();
+        // 137 is coprime to 200, so this is a permutation.
+        let shuf: Vec<usize> = (0..200).map(|i| (i * 137) % 200).collect();
+        assert_eq!(make(&fwd), make(&rev), "weight sum differs by order (rev)");
+        assert_eq!(
+            make(&fwd),
+            make(&shuf),
+            "weight sum differs by order (shuf)"
+        );
     }
 
     #[test]
@@ -374,7 +470,7 @@ mod tests {
         // a third fragment matching g1's shape merges with it
         let g3 = TranscriptGroup::with_bins(txps, range_factorize_bins(&[0.92, 0.08], 4));
         b.add_group(g3, vec![0.92, 0.08], 1);
-        assert_eq!(b.len(), 2, "expected 2 factorized classes");
+        assert_eq!(b.finish().len(), 2, "expected 2 factorized classes");
     }
 
     #[test]
