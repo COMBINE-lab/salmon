@@ -708,9 +708,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.eqclasses.is_some() {
         tracing::warn!("--eqclasses (quantify from a precomputed equivalence-class file) is not yet implemented and is ignored; mapping/alignment input is used instead.");
     }
-    if args.no_frag_length_dist {
-        tracing::warn!("--noFragLengthDist is accepted but not yet implemented and has no effect: the fragment-length distribution is still used in the per-fragment probability.");
-    }
     if args.sample_out || args.sample_unaligned || args.write_qualities {
         tracing::warn!("--sampleOut/--sampleUnaligned/--writeQualities (posterior-sampled BAM output) are accepted but not yet implemented and have no effect.");
     }
@@ -866,6 +863,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.thinning_factor = args.thinning_factor;
     opts.no_length_correction = args.no_length_correction;
     opts.model_single_frag_prob = !args.no_single_frag_prob;
+    opts.no_frag_length_dist = args.no_frag_length_dist;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;

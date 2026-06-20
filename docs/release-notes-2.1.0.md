@@ -356,6 +356,17 @@ Proper pairs are likewise length-conditioned (`pmf(flen) − cmf(txpLen)`), whic
 transcripts. The new `--noSingleFragProb` flag (default off) restores the old flat
 behavior, matching salmon's option of the same name.
 
+This fragment-length weighting now applies to **sketch (pseudoalignment) mode**
+too: sketch already trains the fragment-length distribution from concordant
+pairs, and — now that sketch mappings carry their positions (above) — the
+orphan/single-end ambiguous term contributes as well. `--noFragLengthDist`,
+previously an accept-and-warn no-op, is **now implemented**: it disables the
+fragment-length term in the per-fragment assignment probability for both modes.
+On the simulated data, enabling the fragment-length model (the default) improves
+accuracy in both modes — Spearman vs truth rises ~0.011 (SA) / ~0.012 (sketch) on
+the easy set and ~0.015 / ~0.016 on the hard set — and brings sketch accuracy to
+within ~0.005 Spearman of selective alignment.
+
 ## `num_dovetail_fragments` is now reported
 
 Rust always dropped dovetailed concordant pairs under the default no-dovetail
