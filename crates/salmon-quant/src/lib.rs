@@ -31,7 +31,11 @@ use salmon_map::MapConfig;
 use salmon_model::dumps::BiasDump;
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
 
-use processor::{QuantProcessor, Shared};
+use processor::{run_inference_serial, QuantProcessor, Shared};
+
+/// Mini-batch size for the deterministic inference pass (forgetting-mass
+/// schedule + FLD-snapshot refresh granularity).
+const INFERENCE_BATCH: usize = 5000;
 
 pub use output::write_outputs;
 
@@ -397,6 +401,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     };
 
     // ---- parallel mapping pass (borrows the accumulators) -------------------
+    // Pass 1 maps reads in parallel and buffers each mapped fragment here; pass 2
+    // (`run_inference_serial`) replays the inference deterministically.
+    let frag_sink: std::sync::Mutex<Vec<(Vec<u8>, Vec<salmon_map::ScoredMapping>)>> =
+        std::sync::Mutex::new(Vec::new());
     {
         let shared = Shared {
             salmon: &salmon,
@@ -436,6 +444,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             num_below_threshold_vm: &num_below_threshold_vm,
             unmapped_names: unmapped_collector.as_ref(),
             sam: sam_writer.as_ref(),
+            frag_sink: &frag_sink,
         };
         let mut proc = QuantProcessor::new(shared);
         tracing::info!(
@@ -451,6 +460,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         } else {
             run_single(&opts.unmated, &mut proc, nthreads)?;
         }
+        drop(proc);
+        // ---- deterministic inference pass (single-threaded, key-sorted) ------
+        let frags = std::mem::take(&mut *frag_sink.lock().unwrap());
+        run_inference_serial(&shared, frags, INFERENCE_BATCH);
     }
     {
         let p = num_processed.load(Ordering::Relaxed);

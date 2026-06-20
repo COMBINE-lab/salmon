@@ -1,11 +1,13 @@
-//! paraseq parallel processor that maps reads and accumulates equivalence
-//! classes, fragment lengths, observed library formats, and (for `--seqBias`)
-//! observed sequence-bias contexts.
+//! Two-pass reads-mode quantification core.
 //!
-//! Shared `&'a` references hold the index and thread-safe accumulators; the
-//! per-thread scratch (a [`HitSearcher`] and, when bias-correcting, observed
-//! sequence-bias models) is rebuilt on `Clone` (paraseq clones the processor
-//! per worker) and merged into shared state in `on_thread_complete`.
+//! **Pass 1** (parallel, paraseq): each worker maps its reads, samples the
+//! library format, writes SAM/`--writeMappings`, and buffers every mapped
+//! fragment's `(read_id, mappings)` into [`Shared::frag_sink`]. No inference runs
+//! here. **Pass 2** ([`run_inference_serial`]): the buffered fragments are sorted
+//! by a stable per-fragment key and the online posterior, FLD training, bias
+//! collection, and equivalence-class accumulation are replayed single-threaded in
+//! that fixed order. Every order-dependent accumulation is therefore
+//! byte-identical regardless of how many threads mapped the reads.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -108,6 +110,12 @@ pub(crate) struct Shared<'a> {
     pub unmapped_names: Option<&'a Mutex<Vec<String>>>,
     /// when set, write per-mapping SAM records (`--writeMappings`)
     pub sam: Option<&'a crate::sam::SamWriter>,
+    /// Mapping-phase fragment sink. The parallel pass maps each fragment and
+    /// appends `(read_id, mappings)` here; the inference (online posterior, FLD
+    /// training, bias collection, eq-class accumulation) then runs in a
+    /// deterministic, key-sorted, single-threaded second pass, so the result is
+    /// byte-identical regardless of thread count (see [`run_inference_serial`]).
+    pub frag_sink: &'a Mutex<Vec<(Vec<u8>, Vec<ScoredMapping>)>>,
 }
 
 /// Per-thread mapping processor.
@@ -116,45 +124,24 @@ pub(crate) struct QuantProcessor<'a> {
     pub hs: Option<HitSearcher<'a>>,
     /// per-thread reusable sketch caches (avoids per-read MappingCache allocs)
     pub sketch_scratch: Option<salmon_map::SketchScratch>,
-    /// per-thread observed (fw, rc) sequence-bias models (when collecting)
-    pub seqbias: Option<(SBModel, SBModel)>,
-    /// per-thread observed fragment-GC model (when collecting)
-    pub gcbias: Option<GcFragModel>,
-    /// per-thread observed (5', 3') positional-bias models, per length class
-    pub posbias: Option<(Vec<SimplePosBias>, Vec<SimplePosBias>)>,
     /// per-thread collected unmapped-fragment names (merged in on_thread_complete)
     pub unmapped: Vec<String>,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
+    /// per-thread buffer of mapped fragments `(read_id, mappings)`, drained into
+    /// `Shared::frag_sink` at thread completion for the deterministic second pass.
+    pub frag_buf: Vec<(Vec<u8>, Vec<ScoredMapping>)>,
 }
 
 impl<'a> QuantProcessor<'a> {
     pub fn new(shared: Shared<'a>) -> Self {
-        let seqbias = shared
-            .collect_seqbias
-            .then(|| (SBModel::new(), SBModel::new()));
-        let gcbias = shared
-            .collect_gcbias
-            .then(|| GcFragModel::new(shared.cond_gc_bins, shared.gc_bins));
-        let posbias = shared.collect_posbias.then(|| {
-            (
-                (0..NUM_LENGTH_CLASSES)
-                    .map(|_| SimplePosBias::default())
-                    .collect(),
-                (0..NUM_LENGTH_CLASSES)
-                    .map(|_| SimplePosBias::default())
-                    .collect(),
-            )
-        });
         Self {
             shared,
             hs: None,
             sketch_scratch: None,
-            seqbias,
-            gcbias,
-            posbias,
             unmapped: Vec::new(),
             sam_buf: String::new(),
+            frag_buf: Vec::new(),
         }
     }
 }
@@ -385,7 +372,8 @@ fn record(
     gcbias: Option<&mut GcFragModel>,
     posbias: Option<&mut (Vec<SimplePosBias>, Vec<SimplePosBias>)>,
 ) {
-    sh.num_processed.fetch_add(1, Ordering::Relaxed);
+    // `num_processed` is counted during the mapping pass; pass 2 only receives
+    // mapped fragments.
     if maps.is_empty() {
         return;
     }
@@ -545,7 +533,10 @@ fn record(
     // differs and coarsening the range-factorized classes. The FLD term is only
     // applied once the auxiliary model is trained (after `pre_burnin` fragments),
     // matching salmon's `numPreAuxModelSamples` gating.
-    let use_aux = sh.num_processed.load(Ordering::Relaxed) >= sh.pre_burnin;
+    // Gate on the online inference's own progressive count (equal to the
+    // fragments processed so far in the deterministic pass), not the pre-counted
+    // total `num_processed`, so the burn-in window is honored in pass 2.
+    let use_aux = sh.online.map_or(0, |o| o.num_assigned()) >= sh.pre_burnin;
     // Per-mapping FLD log-probability via the shared `frag_log_prob` term — the
     // same one the online posterior uses, reading the same per-fragment snapshot
     // pair captured above (so the two paths share one consistent FLD view, as
@@ -685,17 +676,66 @@ fn merge_unmapped(proc: &mut QuantProcessor) {
     }
 }
 
-fn merge_bias(proc: &QuantProcessor) {
-    if let (Some(local), Some(shared_mtx)) = (proc.seqbias.as_ref(), proc.shared.seqbias_obs) {
+/// Run the per-fragment inference over the mapped fragments in a deterministic,
+/// key-sorted, single-threaded order. The parallel mapping pass only maps and
+/// buffers fragments; this pass replays the online posterior, FLD training, bias
+/// collection, and eq-class accumulation in a fixed order (sorted by a stable
+/// per-fragment key), so every order-dependent accumulation — the online masses,
+/// the FLD, and the observed bias models — is byte-identical regardless of how
+/// many threads mapped the reads. `batch_size` sets the mini-batch granularity
+/// for the forgetting-mass schedule and the FLD-snapshot refresh.
+pub(crate) fn run_inference_serial(
+    sh: &Shared,
+    mut frags: Vec<(Vec<u8>, Vec<ScoredMapping>)>,
+    batch_size: usize,
+) {
+    frags.sort_by_key(|(id, _)| xxhash_rust::xxh3::xxh3_128(id));
+
+    let mut seqbias = sh.collect_seqbias.then(|| (SBModel::new(), SBModel::new()));
+    let mut gcbias = sh
+        .collect_gcbias
+        .then(|| GcFragModel::new(sh.cond_gc_bins, sh.gc_bins));
+    let mut posbias = sh.collect_posbias.then(|| {
+        (
+            (0..NUM_LENGTH_CLASSES)
+                .map(|_| SimplePosBias::default())
+                .collect::<Vec<_>>(),
+            (0..NUM_LENGTH_CLASSES)
+                .map(|_| SimplePosBias::default())
+                .collect::<Vec<_>>(),
+        )
+    });
+
+    let bs = batch_size.max(1);
+    for chunk in frags.chunks(bs) {
+        // one forgetting-mass timestep per minibatch (online inference)
+        let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
+        for (read_id, maps) in chunk {
+            record(
+                sh,
+                read_id,
+                maps,
+                log_fm,
+                seqbias.as_mut(),
+                gcbias.as_mut(),
+                posbias.as_mut(),
+            );
+        }
+        // refresh the FLD snapshot at the minibatch boundary (mirrors salmon)
+        sh.fld.refresh_online();
+    }
+
+    // Merge the collected bias models into the shared accumulators that the
+    // effective-length step reads.
+    if let (Some(local), Some(shared_mtx)) = (seqbias.as_ref(), sh.seqbias_obs) {
         let mut g = shared_mtx.lock().unwrap();
         g.0.combine_counts(&local.0);
         g.1.combine_counts(&local.1);
     }
-    if let (Some(local), Some(shared_mtx)) = (proc.gcbias.as_ref(), proc.shared.gcbias_obs) {
-        let mut g = shared_mtx.lock().unwrap();
-        g.combine_counts(local);
+    if let (Some(local), Some(shared_mtx)) = (gcbias.as_ref(), sh.gcbias_obs) {
+        shared_mtx.lock().unwrap().combine_counts(local);
     }
-    if let (Some(local), Some(shared_mtx)) = (proc.posbias.as_ref(), proc.shared.posbias_obs) {
+    if let (Some(local), Some(shared_mtx)) = (posbias.as_ref(), sh.posbias_obs) {
         let mut g = shared_mtx.lock().unwrap();
         for (a, b) in g.0.iter_mut().zip(&local.0) {
             a.combine(b);
@@ -715,11 +755,10 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             shared,
             hs,
             sketch_scratch,
-            seqbias,
-            gcbias,
-            posbias,
             unmapped,
             sam_buf,
+            frag_buf,
+            ..
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -730,8 +769,6 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         if sh.sketch && sketch_scratch.is_none() {
             *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
         }
-        // one forgetting-mass timestep per minibatch (online inference)
-        let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();
@@ -786,30 +823,29 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     &maps,
                 );
             }
-            record(
-                &sh,
-                r1.id(),
-                &maps,
-                log_fm,
-                seqbias.as_mut(),
-                gcbias.as_mut(),
-                posbias.as_mut(),
-            );
+            // Pass 1 only maps + buffers; the inference runs deterministically in
+            // pass 2 (see `run_inference_serial`).
+            sh.num_processed.fetch_add(1, Ordering::Relaxed);
+            if !maps.is_empty() {
+                frag_buf.push((r1.id().to_vec(), maps));
+            }
         }
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
-        // next batch's per-fragment reads are stable (see `record`). No-op once the
-        // final FLD cache is taken; amortized over the whole batch.
-        self.shared.fld.refresh_online();
+        // Pass 1 only maps; the FLD is trained in the deterministic pass 2.
         flush_sam(self);
         Ok(())
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
-        merge_bias(self);
+        // Hand this worker's mapped fragments to the shared sink for the
+        // deterministic inference pass (bias models are collected there, not here).
+        if !self.frag_buf.is_empty() {
+            let mut sink = self.shared.frag_sink.lock().unwrap();
+            sink.append(&mut self.frag_buf);
+        }
         merge_unmapped(self);
         flush_sam(self);
         Ok(())
@@ -825,11 +861,10 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             shared,
             hs,
             sketch_scratch,
-            seqbias,
-            gcbias,
-            posbias,
             unmapped,
             sam_buf,
+            frag_buf,
+            ..
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -840,7 +875,6 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         if sh.sketch && sketch_scratch.is_none() {
             *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
         }
-        let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
         for rec in records {
             let s = rec.seq();
             let mut maps = if sh.sketch {
@@ -877,30 +911,27 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if sh.sam.is_some() && !maps.is_empty() {
                 crate::sam::write_fragment(sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps);
             }
-            record(
-                &sh,
-                rec.id(),
-                &maps,
-                log_fm,
-                seqbias.as_mut(),
-                gcbias.as_mut(),
-                posbias.as_mut(),
-            );
+            sh.num_processed.fetch_add(1, Ordering::Relaxed);
+            if !maps.is_empty() {
+                frag_buf.push((rec.id().to_vec(), maps));
+            }
         }
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
-        // next batch's per-fragment reads are stable (see `record`). No-op once the
-        // final FLD cache is taken; amortized over the whole batch.
-        self.shared.fld.refresh_online();
+        // Pass 1 only maps; the FLD is trained in the deterministic pass 2.
         flush_sam(self);
         Ok(())
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
-        merge_bias(self);
+        // Hand this worker's mapped fragments to the shared sink for the
+        // deterministic inference pass (bias models are collected there, not here).
+        if !self.frag_buf.is_empty() {
+            let mut sink = self.shared.frag_sink.lock().unwrap();
+            sink.append(&mut self.frag_buf);
+        }
         merge_unmapped(self);
         flush_sam(self);
         Ok(())
