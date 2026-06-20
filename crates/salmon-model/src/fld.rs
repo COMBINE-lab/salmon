@@ -12,7 +12,7 @@
 use salmon_core::atomic::AtomicF64;
 use salmon_core::math::{log_add, LOG_0, LOG_EPSILON};
 use statrs::distribution::{Binomial, ContinuousCDF, Discrete, Normal};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 /// Tracks the observed distribution of fragment lengths.
@@ -24,12 +24,24 @@ pub struct FragmentLengthDistribution {
     hist: Vec<AtomicF64>,
     /// logged total observed mass (including pseudo-counts)
     tot_mass: AtomicF64,
-    /// logged sum of length*mass, for fast mean computation
-    sum: AtomicF64,
     /// minimum observed length (bin units)
     min: AtomicUsize,
     /// internal bin size
     bin_size: usize,
+
+    /// Order-independent observation counter (one per length bin). [`add_val`]
+    /// increments this in addition to spreading the kernel into `hist`. Because
+    /// every observation contributes the *same* kernel (`add_val(len, 0.0)`), the
+    /// trained histogram is exactly `prior + Σ_bin counts[bin]·kernel`, which the
+    /// deterministic reads-mode paths ([`refresh_online`](Self::refresh_online),
+    /// [`cache`](Self::cache), [`mean`](Self::mean)) rebuild from these counts in a
+    /// fixed bin order — independent of how observations were interleaved across
+    /// worker threads. The live `hist`/`tot_mass`/`sum` accumulation is retained
+    /// for the alignment-mode live `pmf` reads, which do not require determinism.
+    counts: Vec<AtomicU64>,
+    /// linear-space prior mass per bin (the initial `hist` before any
+    /// observation), captured once at construction for the deterministic rebuild.
+    prior_lin: Vec<f64>,
 
     /// cached normalized PMF, valid once [`cache`](Self::cache) is called
     cached_pmf: Vec<f64>,
@@ -89,7 +101,6 @@ impl FragmentLengthDistribution {
 
         let tot = alpha.ln();
         let hist: Vec<AtomicF64>;
-        let mut sum = LOG_0;
         let mut tot_mass;
 
         if prior_mu > 0.0 {
@@ -108,7 +119,6 @@ impl FragmentLengthDistribution {
                     LOG_EPSILON
                 };
                 slot.store(mass);
-                sum = log_add(sum, (i as f64).ln() + mass);
                 tot_mass = log_add(tot_mass, mass);
             }
         } else {
@@ -116,8 +126,6 @@ impl FragmentLengthDistribution {
             let per = tot - (max_val as f64).ln();
             hist = (0..=max_val).map(|_| AtomicF64::new(per)).collect();
             hist[0].store(LOG_0);
-            let h1 = hist.get(1).map(|a| a.load()).unwrap_or(per);
-            sum = h1 + ((max_val * (max_val + 1)) as f64).ln() - 2.0_f64.ln();
             tot_mass = tot;
         }
 
@@ -125,13 +133,19 @@ impl FragmentLengthDistribution {
         let binom = Binomial::new(kernel_p, kernel_n as u64).expect("valid binomial kernel");
         let kernel: Vec<f64> = (0..=kernel_n).map(|i| binom.pmf(i as u64).ln()).collect();
 
+        // Linear-space prior (the initial histogram) and a zeroed observation
+        // counter per bin, for the deterministic rebuild.
+        let prior_lin: Vec<f64> = hist.iter().map(|a| a.load().exp()).collect();
+        let counts: Vec<AtomicU64> = (0..hist.len()).map(|_| AtomicU64::new(0)).collect();
+
         Self {
             kernel,
             hist,
             tot_mass: AtomicF64::new(tot_mass),
-            sum: AtomicF64::new(sum),
             min: AtomicUsize::new(max_val),
             bin_size,
+            counts,
+            prior_lin,
             cached_pmf: Vec::new(),
             cached_cmf: Vec::new(),
             have_cache: false,
@@ -170,6 +184,11 @@ impl FragmentLengthDistribution {
         }
         self.min.fetch_min(len, Ordering::Relaxed);
 
+        // Order-independent count for the deterministic rebuild. Every quant/align
+        // observation is a unit count (`mass == 0.0`); the rebuild assumes that.
+        debug_assert_eq!(mass, 0.0, "deterministic rebuild assumes unit observations");
+        self.counts[len].fetch_add(1, Ordering::Relaxed);
+
         let half = self.kernel.len() / 2;
         // offset can go negative conceptually; use isize math then bound-check.
         let mut offset = len as isize - half as isize;
@@ -178,11 +197,44 @@ impl FragmentLengthDistribution {
                 let o = offset as usize;
                 let k_mass = mass + k;
                 self.hist[o].log_add_assign(k_mass);
-                self.sum.log_add_assign((o as f64).ln() + k_mass);
                 self.tot_mass.log_add_assign(k_mass);
             }
             offset += 1;
         }
+    }
+
+    /// Deterministically rebuild the linear-space histogram from the prior plus
+    /// the order-independent observation counts: `lin[o] = prior_lin[o] +
+    /// Σ_bin counts[bin]·kernel_lin[o − bin + half]`, accumulated in a fixed bin
+    /// order so the result does not depend on thread interleaving. Returns the
+    /// per-bin log-mass and the log total. Used by the reads-mode snapshot /
+    /// cache / mean paths so their outputs are byte-identical across thread
+    /// counts.
+    fn counts_hist(&self) -> (Vec<f64>, f64) {
+        let n = self.hist.len();
+        let mut lin = self.prior_lin.clone();
+        let kernel_lin: Vec<f64> = self.kernel.iter().map(|k| k.exp()).collect();
+        let half = self.kernel.len() / 2;
+        for bin in 0..n {
+            let c = self.counts[bin].load(Ordering::Relaxed);
+            if c == 0 {
+                continue;
+            }
+            let cf = c as f64;
+            for (kidx, &kl) in kernel_lin.iter().enumerate() {
+                let offset = bin as isize - half as isize + kidx as isize;
+                if offset > 0 && (offset as usize) < n {
+                    lin[offset as usize] += cf * kl;
+                }
+            }
+        }
+        let log_hist: Vec<f64> = lin
+            .iter()
+            .map(|&m| if m > 0.0 { m.ln() } else { LOG_0 })
+            .collect();
+        let tot: f64 = lin.iter().sum();
+        let log_tot = if tot > 0.0 { tot.ln() } else { LOG_0 };
+        (log_hist, log_tot)
     }
 
     /// Logged probability of observing a fragment of length `len`.
@@ -213,22 +265,25 @@ impl FragmentLengthDistribution {
         }
         let max_raw = self.max_val();
         let max_v = max_raw / self.bin_size;
-        let tot = self.tot_mass.load();
+        // Rebuild from the order-independent counts (not the live `hist`), so the
+        // snapshot a fragment reads is byte-identical regardless of how
+        // observations were interleaved across worker threads.
+        let (log_hist, tot) = self.counts_hist();
         // Per-bin cumulative mass (matches `cmf()`), so the snapshot CMF at raw
         // index `raw` equals `cmf(raw)`. Built first, then both the PMF and CMF
-        // snapshots are expanded over raw indices from the same `tot` read so
-        // they are mutually consistent.
+        // snapshots are expanded over raw indices from the same `tot` so they are
+        // mutually consistent.
         let mut bin_cum = Vec::with_capacity(max_v + 1);
         let mut cum = LOG_0;
         for b in 0..=max_v {
-            cum = log_add(cum, self.hist[b].load() - tot);
+            cum = log_add(cum, log_hist[b] - tot);
             bin_cum.push(cum);
         }
         let mut v = Vec::with_capacity(max_raw + 1);
         let mut c = Vec::with_capacity(max_raw + 1);
         for raw in 0..=max_raw {
             let l = (raw / self.bin_size).min(max_v);
-            v.push(self.hist[l].load() - tot);
+            v.push(log_hist[l] - tot);
             c.push(bin_cum[l]);
         }
         *self.online_pmf.write().unwrap() = Arc::new(v);
@@ -279,9 +334,21 @@ impl FragmentLengthDistribution {
         self.tot_mass.load()
     }
 
-    /// Mean observed length.
+    /// Mean observed length (in bin units, matching the historical
+    /// `sum/tot_mass` ratio). Computed from the order-independent counts so the
+    /// reported `frag_len_mean` is byte-identical across thread counts.
     pub fn mean(&self) -> f64 {
-        (self.sum.load() - self.tot_mass.load()).exp()
+        let (log_hist, log_tot) = self.counts_hist();
+        let mut s = 0.0;
+        for (bin, &lh) in log_hist.iter().enumerate() {
+            s += (bin as f64) * lh.exp();
+        }
+        let tot = log_tot.exp();
+        if tot > 0.0 {
+            s / tot
+        } else {
+            0.0
+        }
     }
 
     /// Standard deviation of the observed length distribution, computed from the
@@ -310,11 +377,16 @@ impl FragmentLengthDistribution {
             return;
         }
         let max_v = self.max_val();
-        // normalized PMF over [0, max_v]
+        // Build from the order-independent counts (not the live `hist`) so the
+        // cached PMF/CMF — and therefore the effective lengths derived from it —
+        // are byte-identical regardless of thread count.
+        let (log_hist, log_tot) = self.counts_hist();
+        let max_bin = log_hist.len() - 1;
+        // un-normalized log-PMF over [0, max_v] (raw indices, binned like `pmf`)
         let mut pmf = Vec::with_capacity(max_v + 1);
         let mut tot = LOG_0;
         for i in 0..=max_v {
-            let p = self.pmf(i);
+            let p = log_hist[(i / self.bin_size).min(max_bin)] - log_tot;
             pmf.push(p);
             tot = log_add(tot, p);
         }
@@ -448,6 +520,48 @@ mod tests {
         let fld = FragmentLengthDistribution::new(1000.0, 1000, 250.0, 25.0, 4, 0.5, 1);
         let m = fld.mean();
         assert!((m - 250.0).abs() < 5.0, "mean {m} not near 250");
+    }
+
+    #[test]
+    fn accumulation_is_order_independent() {
+        // The trained distribution must be byte-identical regardless of the order
+        // in which observations arrive (i.e. how they were interleaved across
+        // worker threads). Same multiset of lengths, two different orders.
+        let lengths_fwd: Vec<usize> = (0..2000).map(|i| 150 + (i * 7) % 500).collect();
+        let mut lengths_rev = lengths_fwd.clone();
+        lengths_rev.reverse();
+        let mut lengths_shuf = lengths_fwd.clone();
+        // deterministic shuffle (no Math.random; index-driven swaps)
+        for i in 0..lengths_shuf.len() {
+            let j = (i.wrapping_mul(2654435761)) % lengths_shuf.len();
+            lengths_shuf.swap(i, j);
+        }
+
+        let build = |order: &[usize]| {
+            let mut fld = FragmentLengthDistribution::new(1.0, 1000, 0.0, 0.0, 4, 0.5, 1);
+            for &l in order {
+                fld.add_val(l, 0.0);
+            }
+            // exercise the online snapshot path too
+            fld.refresh_online();
+            let snap = fld.online_snapshot().as_ref().clone();
+            let mean = fld.mean();
+            fld.cache();
+            (fld.log_pmf().to_vec(), fld.cached_cmf.clone(), snap, mean)
+        };
+
+        let (pmf_f, cmf_f, snap_f, mean_f) = build(&lengths_fwd);
+        let (pmf_r, cmf_r, snap_r, mean_r) = build(&lengths_rev);
+        let (pmf_s, cmf_s, snap_s, mean_s) = build(&lengths_shuf);
+
+        assert_eq!(pmf_f, pmf_r, "cached PMF differs by insertion order (rev)");
+        assert_eq!(pmf_f, pmf_s, "cached PMF differs by insertion order (shuf)");
+        assert_eq!(cmf_f, cmf_r, "cached CMF differs by insertion order (rev)");
+        assert_eq!(cmf_f, cmf_s, "cached CMF differs by insertion order (shuf)");
+        assert_eq!(snap_f, snap_r, "online snapshot differs by insertion order");
+        assert_eq!(snap_f, snap_s, "online snapshot differs by insertion order");
+        assert_eq!(mean_f.to_bits(), mean_r.to_bits(), "mean differs by order");
+        assert_eq!(mean_f.to_bits(), mean_s.to_bits(), "mean differs by order");
     }
 
     #[test]
