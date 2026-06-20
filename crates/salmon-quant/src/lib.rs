@@ -749,17 +749,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
     let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
     let ambig = salmon_infer::ambiguity_counts(&packed);
-    let num_mapped_frags = num_mapped.load(Ordering::Relaxed);
+    // Bootstrap/Gibbs rescale replicates to the eq-class input total
+    // (`packed.total_count`) internally — the same total the point estimate sums
+    // to — so no external mapped-fragment count is threaded in here.
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()
     } else if opts.num_bootstraps > 0 {
-        salmon_infer::bootstrap(
-            &packed,
-            &opts.em,
-            opts.num_bootstraps,
-            num_mapped_frags,
-            0x5A13_0000,
-        )
+        salmon_infer::bootstrap(&packed, &opts.em, opts.num_bootstraps, 0x5A13_0000)
     } else if opts.num_gibbs_samples > 0 {
         // Gibbs prior follows the main optimizer (salmon): with VBEM and a
         // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
@@ -775,14 +771,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             prior,
             per_transcript_prior: true,
         };
-        salmon_infer::gibbs_sample(
-            &packed,
-            &eff_lengths,
-            &counts,
-            &gopts,
-            num_mapped_frags,
-            0x6217_0000,
-        )
+        salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
     } else {
         Vec::new()
     };

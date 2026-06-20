@@ -56,17 +56,19 @@ fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
 /// Run `num_bootstraps` multinomial bootstrap replicates. Each resamples the
 /// per-class counts (multinomial over the original counts, `total_count` draws),
 /// runs EM/VBEM to convergence (min 50 iters), and rescales the abundances to sum
-/// to `num_mapped_frags`. The rescale restores the mass the `min_alpha` truncation
-/// below removes, so each replicate sums to the mapped-fragment count just like
-/// the point estimate; it is unconditional (like [`gibbs_sample`]) — the EM is
-/// mass-conserving, so there is no use for un-rescaled, truncation-lossy
-/// replicates (this is *not* C++'s mode-gated `useScaledCounts` prior-inflation
-/// correction). Returns one abundance vector per replicate.
+/// to the input total `p.total_count` (the summed equivalence-class counts that
+/// were resampled). The rescale restores the mass the `min_alpha` truncation
+/// below removes, so each replicate sums to exactly what the point estimate does
+/// (`Σ alphas == p.total_count`). We rescale to this *intrinsic* total — not an
+/// externally-computed mapped-fragment counter — so the replicates stay
+/// self-consistent with the resampled input regardless of how (or whether)
+/// `num_mapped` is computed elsewhere. (This is also unconditional, unlike C++'s
+/// mode-gated `useScaledCounts`, which corrects prior-inflated VBEM alphas we do
+/// not have.) Returns one abundance vector per replicate.
 pub fn bootstrap(
     p: &PackedEqClasses,
     opts: &EmOptions,
     num_bootstraps: u32,
-    num_mapped_frags: u64,
     seed: u64,
 ) -> Vec<Vec<f64>> {
     let sample_weights: Vec<f64> = p.counts.iter().map(|&c| c as f64).collect();
@@ -84,12 +86,12 @@ pub fn bootstrap(
                     *a = 0.0;
                 }
             }
-            // Rescale to num_mapped_frags, restoring the mass the truncation
-            // above removed so the replicate sums to the mapped-fragment count
-            // (consistent with the point estimate).
+            // Rescale to the resampled input total (`total == p.total_count`),
+            // restoring the mass the truncation above removed so the replicate
+            // sums to exactly what the point estimate does.
             let sum: f64 = alphas.iter().sum();
             if sum > 0.0 {
-                let scale = num_mapped_frags as f64 / sum;
+                let scale = total as f64 / sum;
                 for a in &mut alphas {
                     *a *= scale;
                 }
@@ -186,13 +188,14 @@ fn gibbs_round(
 /// Draw `opts.num_samples` Gibbs posterior samples. `init_alphas` is the point
 /// estimate (EM result) each chain restarts from; `eff_lens` the effective
 /// lengths. Chains (1/2/4/8 by sample count, like salmon) run in parallel.
-/// Returns one abundance vector per sample (scaled to `num_mapped_frags`).
+/// Returns one abundance vector per sample (scaled to the input total
+/// `p.total_count`, matching the point estimate — not an external mapped-fragment
+/// counter).
 pub fn gibbs_sample(
     p: &PackedEqClasses,
     eff_lens: &[f64],
     init_alphas: &[f64],
     opts: &GibbsOptions,
-    num_mapped_frags: u64,
     seed: u64,
 ) -> Vec<Vec<f64>> {
     let num_txps = p.num_txps;
@@ -279,7 +282,7 @@ pub fn gibbs_sample(
                 // Extrapolate scaled counts from the final fractions mu.
                 let denom: f64 = (0..num_txps).map(|t| mu[t] * eff_lens[t]).sum();
                 let scale = if denom > 0.0 {
-                    num_mapped_frags as f64 / denom
+                    p.total_count as f64 / denom
                 } else {
                     0.0
                 };
@@ -346,7 +349,7 @@ mod tests {
     fn bootstrap_mean_near_point_estimate() {
         // unique evidence -> every bootstrap recovers ~the same counts
         let p = packed(&[(vec![0], 300), (vec![1], 700)], 2);
-        let bs = bootstrap(&p, &EmOptions::default(), 50, 1000, 12345);
+        let bs = bootstrap(&p, &EmOptions::default(), 50, 12345);
         assert_eq!(bs.len(), 50);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 50.0;
         let m1: f64 = bs.iter().map(|b| b[1]).sum::<f64>() / 50.0;
@@ -362,7 +365,7 @@ mod tests {
     fn bootstrap_variance_grows_with_ambiguity() {
         // a fully shared class has higher per-transcript bootstrap variance
         let p = packed(&[(vec![0], 10), (vec![1], 10), (vec![0, 1], 980)], 2);
-        let bs = bootstrap(&p, &EmOptions::default(), 100, 1000, 7);
+        let bs = bootstrap(&p, &EmOptions::default(), 100, 7);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 100.0;
         let var0: f64 = bs.iter().map(|b| (b[0] - m0).powi(2)).sum::<f64>() / 100.0;
         assert!(
@@ -379,7 +382,7 @@ mod tests {
             thinning: 8,
             ..Default::default()
         };
-        let samples = gibbs_sample(&p, &[1.0, 1.0], &[300.0, 700.0], &opts, 1000, 99);
+        let samples = gibbs_sample(&p, &[1.0, 1.0], &[300.0, 700.0], &opts, 99);
         assert_eq!(samples.len(), 20);
         for s in &samples {
             let tot = s[0] + s[1];
