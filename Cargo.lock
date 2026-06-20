@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-align"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2341,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-cli"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2360,7 +2360,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-core"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-eqclass"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "dashmap",
  "salmon-core",
@@ -2378,7 +2378,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-index"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2396,7 +2396,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-infer"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "rand 0.8.6",
  "rand_distr",
@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-map"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "ahash",
  "ksw2rs",
@@ -2423,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-model"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "flate2",
  "rayon",
@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-quant"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "anyhow",
  "flate2",
