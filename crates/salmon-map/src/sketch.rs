@@ -71,6 +71,7 @@ pub fn map_single_read_sketch<'idx>(
         map_read::<K, SketchHitInfoSimple, _, _>(
             read, cache, hs, &mut query, index, &mut poison, strat,
         );
+        let rl = read.len() as i32;
         cache
             .accepted_hits
             .iter()
@@ -80,15 +81,17 @@ pub fn map_single_read_sketch<'idx>(
                 status: MateStatus::SingleEnd,
                 score: h.score as i32,
                 fragment_len: 0,
-                // sketch mode has no alignment positions, so the ambiguous
-                // fragment-length probability is not modelled.
-                read_len: 0,
+                read_len: rl,
                 weight: 1.0,
-                ref_pos: 0,
-                fw_pos: -1,
-                rc_pos: -1,
+                // piscem's SimpleHit.pos is the read's approximate leftmost
+                // reference coordinate. ref_pos is the orientation-aware 5' end
+                // (leftmost for fw, rightmost for rc) used as the bias context
+                // anchor, mirroring selective alignment's single-end case.
+                ref_pos: if h.is_fw { h.pos.max(0) } else { h.pos.max(0) + rl },
+                fw_pos: if h.is_fw { h.pos.max(0) } else { -1 },
+                rc_pos: if h.is_fw { -1 } else { h.pos.max(0) },
                 format: None,
-                r1_pos: -1,
+                r1_pos: h.pos.max(0),
                 r2_pos: -1,
                 r2_fw: false,
                 r1_score: h.score as i32,
@@ -202,32 +205,64 @@ pub fn map_read_pair_sketch<'idx, R: RefProvider>(
             MappingType::MappedSecondOrphan => Some(MateStatus::PairedEndRight),
             _ => None,
         };
+        let (r1l, r2l) = (r1.len() as i32, r2.len() as i32);
         match status {
             None => Vec::new(),
             Some(status) => out
                 .accepted_hits
                 .iter()
-                .map(|h| ScoredMapping {
-                    tid: h.tid,
-                    is_fw: h.is_fw,
-                    status,
-                    score: h.score as i32,
-                    // For concordant pairs `merge_lists` stored the template
-                    // length in `fragment_length`; feed it through so the FLD
-                    // is actually learned from the data (orphans report 0).
-                    fragment_len: h.frag_len(),
-                    // sketch mode has no alignment positions, so the ambiguous
-                    // fragment-length probability is not modelled.
-                    read_len: 0,
-                    weight: 1.0,
-                    ref_pos: 0,
-                    fw_pos: -1,
-                    rc_pos: -1,
-                    format: None,
-                    r1_pos: -1,
-                    r2_pos: -1,
-                    r2_fw: false,
-                    r1_score: h.score as i32,
+                .map(|h| {
+                    // piscem's SimpleHit gives read1's leftmost in `pos` and
+                    // read2's in `mate_pos` (for a pair); for an orphan only the
+                    // surviving mate's `pos` is set. Derive the same position
+                    // fields selective alignment fills so bias context, the
+                    // ambiguous-fragment FLD term, and SAM output all work.
+                    let frag = h.frag_len();
+                    let (ref_pos, fw_pos, rc_pos, read_len, r1_pos, r2_pos, r2_fw) = match status
+                    {
+                        MateStatus::PairedEndPaired => {
+                            let (p1, p2) = (h.pos.max(0), h.mate_pos.max(0));
+                            let frag_start = p1.min(p2);
+                            // 5' START -> fw positional model, 3' END -> rc model
+                            // (matches the SA paired case).
+                            (frag_start, frag_start, frag_start + frag - 1, 0, p1, p2, h.mate_is_fw)
+                        }
+                        // Orphan: only one mate placed; `pos` is its leftmost,
+                        // `is_fw` its orientation. ref_pos is the 5' end; fw_pos/
+                        // rc_pos carry the leftmost on the mate's own strand (what
+                        // the ambiguous-fragment FLD term reads).
+                        MateStatus::PairedEndRight => {
+                            let p = h.pos.max(0);
+                            let r5 = if h.is_fw { p } else { p + r2l };
+                            (r5, if h.is_fw { p } else { -1 }, if h.is_fw { -1 } else { p }, r2l, -1, p, false)
+                        }
+                        _ => {
+                            // PairedEndLeft (and any fallback): orphan = read1.
+                            let p = h.pos.max(0);
+                            let r5 = if h.is_fw { p } else { p + r1l };
+                            (r5, if h.is_fw { p } else { -1 }, if h.is_fw { -1 } else { p }, r1l, p, -1, false)
+                        }
+                    };
+                    ScoredMapping {
+                        tid: h.tid,
+                        is_fw: h.is_fw,
+                        status,
+                        score: h.score as i32,
+                        // For concordant pairs `merge_lists` stored the template
+                        // length in `fragment_length`; feed it through so the FLD
+                        // is learned from the data (orphans report 0).
+                        fragment_len: frag,
+                        read_len,
+                        weight: 1.0,
+                        ref_pos,
+                        fw_pos,
+                        rc_pos,
+                        format: None,
+                        r1_pos,
+                        r2_pos,
+                        r2_fw,
+                        r1_score: h.score as i32,
+                    }
                 })
                 .collect::<Vec<_>>(),
         }
