@@ -180,6 +180,37 @@ fn selective_alignment_quantification_tracks_truth() {
 }
 
 #[test]
+fn quant_is_byte_identical_across_thread_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, _truth) = simulate(tmp.path());
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let run = |threads: usize, tag: &str| {
+        let out = tmp.path().join(format!("quant_{tag}"));
+        let mut opts = QuantOptions::new(idx_dir.clone(), out.clone());
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = "IU".to_string();
+        opts.num_threads = threads;
+        quantify(&opts).expect("quantify");
+        std::fs::read_to_string(out.join("quant.sf")).unwrap()
+    };
+
+    let p1 = run(1, "p1");
+    let p4a = run(4, "p4a");
+    let p4b = run(4, "p4b");
+
+    // Multi-threaded runs must be byte-identical to each other and to the
+    // single-threaded run (no thread-scheduling-dependent drift).
+    assert_eq!(p4a, p4b, "two -p 4 runs differ");
+    assert_eq!(p1, p4a, "-p 1 and -p 4 differ");
+}
+
+#[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();
     let (fasta, r1, r2, truth) = simulate(tmp.path());
