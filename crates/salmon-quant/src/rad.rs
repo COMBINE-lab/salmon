@@ -30,8 +30,9 @@
 //!   [`TagSection`]s (written via `libradicl`).
 //! - one or more chunks: `nbytes (u32, incl. this 8-byte header)`, `nrec (u32)`,
 //!   then `nrec` records.
-//! - record: `num_aln (u32)`, the read-level `frag_key (u128)`, then per
-//!   alignment the alignment-level tag values in the declared order.
+//! - record: `num_aln (u32)`, the read-level `frag_key` (a 128-bit key stored as
+//!   two `u64` halves, low then high), then per alignment the alignment-level tag
+//!   values in the declared order.
 
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -50,13 +51,20 @@ use salmon_map::ScoredMapping;
 /// `u8` value is free to use as the "absent" marker.
 const FORMAT_NONE: u8 = 0xFF;
 
-/// The read-level tag section: the stable per-fragment sort key.
+/// The read-level tag section: the stable per-fragment sort key, declared as two
+/// `u64` halves (low then high) rather than one `u128`. The published `libradicl`
+/// 0.10 reader does not decode the `u128` type id (9), so a single-`u128` tag,
+/// though encodable, would make the prelude unparseable by the canonical reader;
+/// two `u64`s are byte-identical to the `u128` little-endian layout and fully
+/// conformant. Our own hot-path reader still reads the 16 bytes as one `u128`.
 fn read_tag_section() -> TagSection {
     let mut s = TagSection::new_with_label(TagSectionLabel::ReadTags);
-    s.add_tag_desc(TagDesc {
-        name: "frag_key".to_string(),
-        typeid: RadType::Int(RadIntId::U128),
-    });
+    let u64tag = |name: &str| TagDesc {
+        name: name.to_string(),
+        typeid: RadType::Int(RadIntId::U64),
+    };
+    s.add_tag_desc(u64tag("frag_key_lo"));
+    s.add_tag_desc(u64tag("frag_key_hi"));
     s
 }
 
@@ -132,11 +140,21 @@ fn write_prelude<W: Write>(
     is_paired: bool,
     num_chunks: u64,
 ) -> Result<()> {
+    let names: Vec<&str> = (0..salmon.num_refs()).map(|t| salmon.ref_name(t)).collect();
+    write_prelude_parts(w, is_paired, &names, num_chunks)
+}
+
+/// Prelude writer parameterized by the raw reference names, so it can be unit
+/// tested (and round-tripped through `libradicl`'s reader) without a full index.
+fn write_prelude_parts<W: Write>(
+    w: &mut W,
+    is_paired: bool,
+    ref_names: &[&str],
+    num_chunks: u64,
+) -> Result<()> {
     w.write_all(&[is_paired as u8])?;
-    let num_refs = salmon.num_refs();
-    w.write_all(&(num_refs as u64).to_le_bytes())?;
-    for t in 0..num_refs {
-        let name = salmon.ref_name(t);
+    w.write_all(&(ref_names.len() as u64).to_le_bytes())?;
+    for name in ref_names {
         let len: u16 = name
             .len()
             .try_into()
@@ -462,6 +480,56 @@ mod tests {
         let mut cur = std::io::Cursor::new(buf);
         let (_k, rmaps) = read_record(&mut cur).unwrap();
         assert_eq!(rmaps[0].format, None);
+    }
+
+    #[test]
+    fn prelude_parses_with_libradicl() {
+        // The canonical reader must accept our prelude: this is what makes the
+        // store genuine RAD (readable by piscem-infer / alevin-fry tooling) rather
+        // than a bespoke format wearing RAD's name.
+        use libradicl::header::RadPrelude;
+        let names = ["txA", "transcript_B", "c"];
+        let mut buf = Vec::new();
+        write_prelude_parts(&mut buf, true, &names, 0).unwrap();
+
+        let mut cur = std::io::Cursor::new(buf);
+        let prelude = RadPrelude::from_bytes(&mut cur).expect("libradicl parses our prelude");
+
+        assert_eq!(prelude.hdr.is_paired, 1);
+        assert_eq!(prelude.hdr.ref_count, 3);
+        let got: Vec<&str> = prelude.hdr.ref_names.iter().map(String::as_str).collect();
+        assert_eq!(got, names);
+        assert_eq!(prelude.hdr.num_chunks, 0);
+
+        assert!(prelude.file_tags.tags.is_empty());
+        let read: Vec<&str> = prelude
+            .read_tags
+            .tags
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(read, ["frag_key_lo", "frag_key_hi"]);
+        let aln: Vec<&str> = prelude
+            .aln_tags
+            .tags
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(
+            aln,
+            [
+                "tid",
+                "weight",
+                "status",
+                "is_fw",
+                "fragment_len",
+                "read_len",
+                "ref_pos",
+                "fw_pos",
+                "rc_pos",
+                "format",
+            ]
+        );
     }
 
     #[test]
