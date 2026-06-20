@@ -236,22 +236,45 @@ fn frag_log_prob(
     }
 }
 
-thread_local! {
-    /// Per-thread PRNG state for stochastic FLD-sample acceptance (mirrors
-    /// salmon's per-thread RNG used when training the fragment-length model).
-    static FLD_RNG: std::cell::Cell<u64> = const { std::cell::Cell::new(0x2545_F491_4F6C_DD1D) };
+/// Deterministic per-fragment acceptance sampler for stochastic FLD training.
+///
+/// salmon trains the fragment-length distribution online by accepting each
+/// concordant mapping's length with probability equal to its abundance-aware
+/// posterior. The previous port drew that acceptance coin from a *thread-local*
+/// PRNG, so which fragments trained the FLD depended on how the reads happened to
+/// be distributed across worker threads — the documented source of multi-threaded
+/// run-to-run wobble. Seeding instead from the read's own identity makes the
+/// acceptance decision a pure function of `(read_id, mapping_index, posterior)`,
+/// so the *set* of fragments training the FLD is identical regardless of thread
+/// count or fragment-arrival order. The draw for mapping `i` is derived directly
+/// from `(seed, i)` (not from a sequential stream), so it is independent of how
+/// many earlier mappings of the same fragment were concordant.
+#[derive(Clone, Copy)]
+struct FldSampler {
+    seed: u64,
 }
 
-/// Draw a pseudo-random value in `[0, 1)` from the per-thread xorshift state.
-fn fld_rng_u01() -> f64 {
-    FLD_RNG.with(|s| {
-        let mut x = s.get();
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        s.set(x);
-        ((x >> 11) as f64) * (1.0 / ((1u64 << 53) as f64))
-    })
+impl FldSampler {
+    /// Seed from the stable fragment name (the full read id bytes). xxh3 is the
+    /// workspace hash already used for eq-class labels. The `| 1` keeps the seed
+    /// nonzero for any input (including an empty id).
+    fn for_read(read_id: &[u8]) -> Self {
+        FldSampler {
+            seed: xxhash_rust::xxh3::xxh3_64(read_id) | 1,
+        }
+    }
+
+    /// A pseudo-random value in `[0, 1)` for compatible-mapping index `i`,
+    /// derived statelessly from `(seed, i)` via the splitmix64 finalizer.
+    fn u01(&self, i: usize) -> f64 {
+        let mut z = self
+            .seed
+            .wrapping_add((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        ((z >> 11) as f64) * (1.0 / ((1u64 << 53) as f64))
+    }
 }
 
 /// Collect the orientation-aware 5'/3' sequence-bias contexts for one mapping,
@@ -355,6 +378,7 @@ fn collect_pos(
 /// inference is active).
 fn record(
     sh: &Shared,
+    read_id: &[u8],
     maps: &[ScoredMapping],
     log_fm: f64,
     seqbias: Option<&mut (SBModel, SBModel)>,
@@ -577,11 +601,17 @@ fn record(
     // pair at full weight, which overdisperses it). Frozen after the training
     // window (`online_post` is `None`).
     if let Some(post) = &online_post {
+        // Seed the acceptance sampler from the fragment's own identity, so the
+        // set of fragments that train the FLD is independent of which worker
+        // thread processed this fragment (the documented source of multi-threaded
+        // run-to-run wobble). Computed once per fragment, only inside the
+        // training window.
+        let sampler = FldSampler::for_read(read_id);
         for (i, (m, _)) in compat.iter().enumerate() {
             let conc = m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
                 && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
-            if conc && fld_rng_u01() < post[i] {
+            if conc && sampler.u01(i) < post[i] {
                 sh.fld.add_val(m.fragment_len as usize, 0.0);
             }
         }
@@ -753,6 +783,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             }
             record(
                 &sh,
+                r1.id(),
                 &maps,
                 log_fm,
                 seqbias.as_mut(),
@@ -843,6 +874,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             }
             record(
                 &sh,
+                rec.id(),
                 &maps,
                 log_fm,
                 seqbias.as_mut(),
@@ -876,6 +908,80 @@ fn flush_sam(proc: &mut QuantProcessor) {
         if !proc.sam_buf.is_empty() {
             let _ = sw.write_block(&proc.sam_buf);
             proc.sam_buf.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproduce the FLD-acceptance rule exactly: accept mapping `i` iff
+    /// `u01(i) < post[i]`, evaluating the indices in the given `order`.
+    fn accepts(read_id: &[u8], posts: &[f64], order: &[usize]) -> Vec<bool> {
+        let s = FldSampler::for_read(read_id);
+        let mut out = vec![false; posts.len()];
+        for &i in order {
+            out[i] = s.u01(i) < posts[i];
+        }
+        out
+    }
+
+    #[test]
+    fn fld_acceptance_is_order_and_thread_independent() {
+        let read_id = b"SRR1039508.frag_0042";
+        // Mix certain-accept (1.0), certain-reject (0.0), and middling probs so
+        // the decision actually depends on the draws.
+        let posts = [1.0, 0.0, 0.5, 0.5, 0.0, 1.0, 0.3, 0.7, 0.9, 0.1];
+
+        let forward: Vec<usize> = (0..posts.len()).collect();
+        let mut reversed = forward.clone();
+        reversed.reverse();
+        let shuffled = [3usize, 7, 0, 9, 1, 5, 8, 2, 6, 4];
+
+        let a = accepts(read_id, &posts, &forward);
+        let b = accepts(read_id, &posts, &reversed);
+        let c = accepts(read_id, &posts, &shuffled);
+
+        // The accept decision for index i is a pure function of (read_id, i,
+        // post[i]); permuting evaluation order (i.e. thread scheduling) must not
+        // change any decision.
+        assert_eq!(a, b, "acceptance must not depend on evaluation order");
+        assert_eq!(a, c, "acceptance must not depend on evaluation order");
+
+        // post == 1.0 always accepts, post == 0.0 never accepts (u01 in [0,1)).
+        assert!(a[0] && a[5]);
+        assert!(!a[1] && !a[4]);
+    }
+
+    #[test]
+    fn fld_sampler_is_deterministic_and_seed_robust() {
+        // Same id -> identical draws (run-to-run determinism).
+        let s1 = FldSampler::for_read(b"frag_x");
+        let s2 = FldSampler::for_read(b"frag_x");
+        for i in 0..16 {
+            assert_eq!(s1.u01(i), s2.u01(i));
+        }
+        // Different ids -> different seeds (no collapse onto a global constant).
+        assert_ne!(
+            FldSampler::for_read(b"frag_a").seed,
+            FldSampler::for_read(b"frag_b").seed
+        );
+        // Empty id is still a usable, nonzero-seeded, in-range stream.
+        let se = FldSampler::for_read(b"");
+        assert_ne!(se.seed, 0);
+        for i in 0..16 {
+            let u = se.u01(i);
+            assert!((0.0..1.0).contains(&u));
+        }
+    }
+
+    #[test]
+    fn fld_u01_in_unit_interval() {
+        let s = FldSampler::for_read(b"range_check");
+        for i in 0..10_000 {
+            let u = s.u01(i);
+            assert!((0.0..1.0).contains(&u), "u01({i}) = {u} out of [0,1)");
         }
     }
 }

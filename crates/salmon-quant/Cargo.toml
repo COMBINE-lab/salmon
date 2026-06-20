@@ -17,6 +17,7 @@ salmon-eqclass = { workspace = true }
 salmon-infer = { workspace = true }
 piscem-rs = { workspace = true }
 paraseq = "0.4"
+xxhash-rust = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
