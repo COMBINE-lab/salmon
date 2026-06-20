@@ -313,6 +313,38 @@ fn multimapping_counts_bit_identical_across_threads() {
     assert_eq!(p1, p8a, "-p 1 and -p 8 differ (full precision)");
 }
 
+/// Same determinism guarantee for the single-end (unmated) path, which uses the
+/// other `ParallelProcessor` impl and the single-read RAD record. Reuses the 20k
+/// multimapping reads as unmated single-end input so the multi-thread store is
+/// genuinely exercised.
+#[test]
+fn single_end_counts_bit_identical_across_threads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, _r2) = simulate_multimapping(tmp.path());
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let run = |threads: usize| -> Vec<u64> {
+        let out = tmp.path().join(format!("se_{threads}"));
+        let mut opts = QuantOptions::new(idx_dir.clone(), out);
+        opts.unmated = vec![r1.clone()];
+        opts.lib_type = "U".to_string();
+        opts.num_threads = threads;
+        opts.seq_bias = true;
+        opts.num_pre_aux_model_samples = 50;
+        opts.deterministic = true;
+        let res = quantify(&opts).expect("quantify");
+        res.counts.iter().map(|c| c.to_bits()).collect()
+    };
+    let p1 = run(1);
+    let p8a = run(8);
+    let p8b = run(8);
+    assert_eq!(p8a, p8b, "two single-end -p 8 runs differ (full precision)");
+    assert_eq!(p1, p8a, "single-end -p 1 and -p 8 differ (full precision)");
+}
+
 #[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();
