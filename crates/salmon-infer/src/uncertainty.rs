@@ -55,15 +55,18 @@ fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
 
 /// Run `num_bootstraps` multinomial bootstrap replicates. Each resamples the
 /// per-class counts (multinomial over the original counts, `total_count` draws),
-/// runs EM/VBEM to convergence (min 50 iters), and — when `scale_counts` (salmon's
-/// `useScaledCounts`) — rescales the abundances to sum to `num_mapped_frags`.
-/// Returns one abundance vector per replicate.
+/// runs EM/VBEM to convergence (min 50 iters), and rescales the abundances to sum
+/// to `num_mapped_frags`. The rescale restores the mass the `min_alpha` truncation
+/// below removes, so each replicate sums to the mapped-fragment count just like
+/// the point estimate; it is unconditional (like [`gibbs_sample`]) — the EM is
+/// mass-conserving, so there is no use for un-rescaled, truncation-lossy
+/// replicates (this is *not* C++'s mode-gated `useScaledCounts` prior-inflation
+/// correction). Returns one abundance vector per replicate.
 pub fn bootstrap(
     p: &PackedEqClasses,
     opts: &EmOptions,
     num_bootstraps: u32,
     num_mapped_frags: u64,
-    scale_counts: bool,
     seed: u64,
 ) -> Vec<Vec<f64>> {
     let sample_weights: Vec<f64> = p.counts.iter().map(|&c| c as f64).collect();
@@ -81,13 +84,14 @@ pub fn bootstrap(
                     *a = 0.0;
                 }
             }
-            if scale_counts {
-                let sum: f64 = alphas.iter().sum();
-                if sum > 0.0 {
-                    let scale = num_mapped_frags as f64 / sum;
-                    for a in &mut alphas {
-                        *a *= scale;
-                    }
+            // Rescale to num_mapped_frags, restoring the mass the truncation
+            // above removed so the replicate sums to the mapped-fragment count
+            // (consistent with the point estimate).
+            let sum: f64 = alphas.iter().sum();
+            if sum > 0.0 {
+                let scale = num_mapped_frags as f64 / sum;
+                for a in &mut alphas {
+                    *a *= scale;
                 }
             }
             alphas
@@ -342,7 +346,7 @@ mod tests {
     fn bootstrap_mean_near_point_estimate() {
         // unique evidence -> every bootstrap recovers ~the same counts
         let p = packed(&[(vec![0], 300), (vec![1], 700)], 2);
-        let bs = bootstrap(&p, &EmOptions::default(), 50, 1000, true, 12345);
+        let bs = bootstrap(&p, &EmOptions::default(), 50, 1000, 12345);
         assert_eq!(bs.len(), 50);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 50.0;
         let m1: f64 = bs.iter().map(|b| b[1]).sum::<f64>() / 50.0;
@@ -358,7 +362,7 @@ mod tests {
     fn bootstrap_variance_grows_with_ambiguity() {
         // a fully shared class has higher per-transcript bootstrap variance
         let p = packed(&[(vec![0], 10), (vec![1], 10), (vec![0, 1], 980)], 2);
-        let bs = bootstrap(&p, &EmOptions::default(), 100, 1000, true, 7);
+        let bs = bootstrap(&p, &EmOptions::default(), 100, 1000, 7);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 100.0;
         let var0: f64 = bs.iter().map(|b| (b[0] - m0).powi(2)).sum::<f64>() / 100.0;
         assert!(
