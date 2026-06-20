@@ -87,6 +87,9 @@ pub(crate) struct Shared<'a> {
     /// the bounded-CMF "ambiguous" weight (salmon default). When `false`
     /// (`--noSingleFragProb`) orphans fall back to a flat penalty / weight-1.
     pub model_single_frag_prob: bool,
+    /// disable the fragment-length distribution in the per-fragment assignment
+    /// probability entirely (`--noFragLengthDist`).
+    pub no_frag_length_dist: bool,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
     /// mapped fragments whose representative mapping is an orphan (only one mate
@@ -196,9 +199,16 @@ fn frag_log_prob(
     use_aux: bool,
     model_single_frag_prob: bool,
     paired_lib: bool,
+    no_frag_length_dist: bool,
     pmf: &[f64],
     cmf: &[f64],
 ) -> f64 {
+    // --noFragLengthDist: do not consider the fragment-length distribution in the
+    // per-fragment assignment probability (salmon's flag). Applies to both the
+    // proper-pair PMF term and the orphan/single-end ambiguous term.
+    if no_frag_length_dist {
+        return LOG_1;
+    }
     if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
         if use_aux && !pmf.is_empty() {
             let flen = (m.fragment_len as usize).min(pmf.len() - 1);
@@ -461,6 +471,7 @@ fn record(
                     use_aux,
                     sh.model_single_frag_prob,
                     sh.paired_lib,
+                    sh.no_frag_length_dist,
                     &fld_pmf,
                     &fld_cmf,
                 );
@@ -529,6 +540,7 @@ fn record(
                 use_aux,
                 sh.model_single_frag_prob,
                 sh.paired_lib,
+                sh.no_frag_length_dist,
                 &fld_pmf,
                 &fld_cmf,
             )

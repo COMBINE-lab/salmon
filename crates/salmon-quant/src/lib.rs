@@ -101,6 +101,9 @@ pub struct QuantOptions {
     /// the bounded-CMF "ambiguous" weight (salmon default `true`); `false` =
     /// `--noSingleFragProb`.
     pub model_single_frag_prob: bool,
+    /// disable the fragment-length distribution in the per-fragment assignment
+    /// probability (`--noFragLengthDist`); default `false`.
+    pub no_frag_length_dist: bool,
     /// fragment-length distribution prior mean, SD, and max tracked length
     /// (`--fldMean` / `--fldSD` / `--fldMax`)
     pub fld_mean: f64,
@@ -173,6 +176,7 @@ impl QuantOptions {
             thinning_factor: 16,
             no_length_correction: false,
             model_single_frag_prob: true,
+            no_frag_length_dist: false,
             fld_mean: 250.0,
             fld_sd: 25.0,
             fld_max: 1000,
@@ -422,6 +426,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             online: online.as_ref(),
             paired_lib: opts.is_paired(),
             model_single_frag_prob: opts.model_single_frag_prob,
+            no_frag_length_dist: opts.no_frag_length_dist,
             num_processed,
             num_mapped,
             num_orphan: &num_orphan,
