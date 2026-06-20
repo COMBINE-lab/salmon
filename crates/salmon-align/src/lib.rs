@@ -102,6 +102,13 @@ pub struct AlignQuantOptions {
     /// fragments processed before the FLD aux model is applied
     /// (salmon's `--numPreAuxModelSamples`; prior hardcoded value 5,000)
     pub num_pre_aux_model_samples: u64,
+    /// number of posterior bootstrap replicates to draw (`--numBootstraps`, 0 = off)
+    pub num_bootstraps: u32,
+    /// number of posterior Gibbs samples to draw (`--numGibbsSamples`, 0 = off);
+    /// ignored when `num_bootstraps > 0` (bootstrap takes precedence, like reads mode)
+    pub num_gibbs_samples: u32,
+    /// Gibbs thinning factor (`--thinningFactor`, salmon default 16)
+    pub thinning_factor: u32,
     /// Optional shared progress counters. When `Some`, the BAM pass reports
     /// processed/mapped fragment counts here as it runs so the caller can drive
     /// a live progress display. `None` (the default) disables sharing.
@@ -138,6 +145,9 @@ impl AlignQuantOptions {
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
             num_pre_aux_model_samples: 5_000,
+            num_bootstraps: 0,
+            num_gibbs_samples: 0,
+            thinning_factor: 16,
             progress: None,
         }
     }
@@ -153,6 +163,9 @@ pub struct AlignQuantResult {
     pub counts: Vec<f64>,
     pub num_processed: u64,
     pub num_mapped: u64,
+    /// fragment mass dropped in the final min-alpha redistribution (every member
+    /// of an equivalence class truncated); normally 0.
+    pub inference_truncated_mass: f64,
     pub num_eq_classes: usize,
     pub frag_len_mean: f64,
     pub frag_len_sd: f64,
@@ -162,6 +175,9 @@ pub struct AlignQuantResult {
     pub bias_dump: salmon_model::dumps::BiasDump,
     /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
     pub ambig: (Vec<u32>, Vec<u32>),
+    /// posterior samples (bootstrap or Gibbs), one abundance vector each; empty
+    /// when neither was requested. Length is `num_refs`, matching `quant.sf` rows.
+    pub bootstraps: Vec<Vec<f64>>,
 }
 
 /// Current local time as an asctime-style string, matching salmon's timestamps.
@@ -1461,6 +1477,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
         optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
@@ -1593,6 +1610,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         collapsed.update_eff_lengths(&eff_lengths);
         em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
     }
+    let inference_truncated_mass = em.dropped_mass;
     let counts = em.alphas;
 
     let rates: Vec<f64> = (0..num_refs)
@@ -1618,9 +1636,34 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     let length_classes =
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES);
-    let ambig = salmon_infer::ambiguity_counts(&salmon_infer::PackedEqClasses::from_collapsed(
-        &collapsed, num_refs,
-    ));
+
+    // Posterior uncertainty (bootstrap / Gibbs) + ambiguity. The packed CSR
+    // layout is identical to reads mode — alignment mode simply feeds it from the
+    // BAM-derived eq-classes — so the same `salmon_infer` samplers apply. Bootstrap
+    // takes precedence over Gibbs, matching reads mode.
+    let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
+    let ambig = salmon_infer::ambiguity_counts(&packed);
+    let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
+        Vec::new()
+    } else if opts.num_bootstraps > 0 {
+        salmon_infer::bootstrap(&packed, &opts.em, opts.num_bootstraps, 0x5A13_0000)
+    } else if opts.num_gibbs_samples > 0 {
+        let prior = if opts.em.use_vbem {
+            opts.em.vb_prior.max(1.0)
+        } else {
+            1e-3
+        };
+        let gopts = salmon_infer::GibbsOptions {
+            num_samples: opts.num_gibbs_samples,
+            thinning: opts.thinning_factor,
+            prior,
+            per_transcript_prior: true,
+        };
+        salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
+    } else {
+        Vec::new()
+    };
+
     let result = AlignQuantResult {
         names,
         lengths,
@@ -1629,6 +1672,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         counts,
         num_processed,
         num_mapped,
+        inference_truncated_mass,
         num_eq_classes,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
@@ -1637,6 +1681,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         start_time,
         bias_dump,
         ambig,
+        bootstraps,
     };
     write_outputs(opts, &result)?;
     Ok(result)
@@ -1699,6 +1744,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_alignments_below_threshold_for_mapped_fragments_vm: u64,
         percent_mapped: f64,
         num_decoy_fragments: u64,
+        inference_truncated_mass: f64,
         num_bootstraps: u32,
         call: String,
         start_time: String,
@@ -1747,7 +1793,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_alignments_below_threshold_for_mapped_fragments_vm: 0,
         percent_mapped: pct,
         num_decoy_fragments: 0,
-        num_bootstraps: 0,
+        inference_truncated_mass: res.inference_truncated_mass,
+        num_bootstraps: res.bootstraps.len() as u32,
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: asctime_now(),
@@ -1756,6 +1803,38 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         dir.join("aux_info").join("meta_info.json"),
         serde_json::to_string_pretty(&meta)?,
     )?;
+
+    // aux_info/bootstrap/{names.tsv.gz, bootstraps.gz}: posterior samples in the
+    // same layout reads mode uses (gzipped tab-separated names; gzipped raw
+    // little-endian f64, each sample's `num_refs` values contiguously). Alignment
+    // mode has no decoy/short references, so every `quant.sf` row is emitted,
+    // keeping the two files aligned positionally with `quant.sf`.
+    if !res.bootstraps.is_empty() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        let bdir = dir.join("aux_info").join("bootstrap");
+        std::fs::create_dir_all(&bdir).context("creating bootstrap dir")?;
+
+        let f = std::fs::File::create(bdir.join("names.tsv.gz"))?;
+        let mut enc = GzEncoder::new(f, Compression::new(6));
+        for (i, name) in res.names.iter().enumerate() {
+            if i > 0 {
+                enc.write_all(b"\t")?;
+            }
+            enc.write_all(name.as_bytes())?;
+        }
+        enc.write_all(b"\n")?;
+        enc.finish()?;
+
+        let f = std::fs::File::create(bdir.join("bootstraps.gz"))?;
+        let mut enc = GzEncoder::new(f, Compression::new(6));
+        for sample in &res.bootstraps {
+            for v in sample {
+                enc.write_all(&v.to_le_bytes())?;
+            }
+        }
+        enc.finish()?;
+    }
 
     // libParams/flenDist.txt, logs/salmon_quant.log, and the aux dumps (shared).
     std::fs::create_dir_all(dir.join("libParams")).context("creating libParams")?;

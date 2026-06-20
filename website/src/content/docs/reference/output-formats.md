@@ -143,12 +143,17 @@ Written when bootstrap or Gibbs sampling is requested; byte-compatible with C++
 salmon's `GZipWriter::writeBootstrap<double>`.
 
 - **`names.tsv.gz`** — uncompressed payload is the transcript names,
-  **tab-separated** on a single line terminated by a newline, in index order.
+  **tab-separated** on a single line terminated by a newline, in the same order
+  and set as the `quant.sf` rows: decoy references are **excluded** and sub-`k`
+  "short" transcripts are **included** (always 0). Aligns positionally with both
+  `quant.sf` and `bootstraps.gz`.
 - **`bootstraps.gz`** — uncompressed payload is raw **`f64` little-endian** values
   with no header: `n_replicates` samples written contiguously, each sample being
-  `num_valid_targets` values in index order. Total length =
-  `n_replicates × num_valid_targets × 8` bytes. `samp_type` in `meta_info.json`
-  records whether the replicates are `bootstrap` or `gibbs`.
+  `num_valid_targets` values in `quant.sf` row order (decoys excluded, shorts
+  included). Total length = `n_replicates × num_valid_targets × 8` bytes.
+  `samp_type` in `meta_info.json` records whether the replicates are `bootstrap`
+  or `gibbs`. Available in both mapping-based and **alignment-based** (`-a`)
+  quantification.
 
 ### `cmd_info.json` / `lib_format_counts.json` (JSON)
 

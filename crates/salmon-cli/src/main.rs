@@ -791,6 +791,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.cond_gc_bins = args.conditional_gc_bins;
         opts.skip_quant = args.skip_quant;
         opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
+        opts.num_bootstraps = args.num_bootstraps;
+        opts.num_gibbs_samples = args.num_gibbs_samples;
+        opts.thinning_factor = args.thinning_factor;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
         // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
@@ -829,6 +832,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 "{} aligned fragments, all strand-compatible and quantified; {} equivalence classes",
                 res.num_processed,
                 res.num_eq_classes
+            );
+        }
+        if res.inference_truncated_mass > 0.0 {
+            tracing::warn!(
+                "{:.3} fragments of equivalence-class mass could not be assigned (every member \
+                 transcript was truncated below the min-alpha threshold); reported as \
+                 inference_truncated_mass in meta_info.json",
+                res.inference_truncated_mass
             );
         }
         if let Some(gm) = &gene_map {
@@ -951,6 +962,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         pct,
         res.num_eq_classes
     );
+    if res.inference_truncated_mass > 0.0 {
+        tracing::warn!(
+            "{:.3} fragments of equivalence-class mass could not be assigned (every member \
+             transcript was truncated below the min-alpha threshold); reported as \
+             inference_truncated_mass in meta_info.json",
+            res.inference_truncated_mass
+        );
+    }
     if let Some(gm) = &gene_map {
         write_gene_level(
             &out_dir,

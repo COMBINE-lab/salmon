@@ -69,6 +69,11 @@ pub struct EmResult {
     pub iters: u32,
     /// whether the relative-difference criterion was met before `max_iter`
     pub converged: bool,
+    /// total count in equivalence classes whose every transcript was truncated
+    /// below `min_alpha` in the final redistribution step — mass that could not be
+    /// reassigned to any surviving transcript (reported, not rescaled away). 0 in
+    /// the normal case.
+    pub dropped_mass: f64,
 }
 
 /// Relative-difference convergence check, matching salmon: the max over
@@ -138,7 +143,7 @@ pub fn optimize_packed_with_init(
     init_alphas: Option<&[f64]>,
     eff_lens: Option<&[f64]>,
 ) -> EmResult {
-    let (mut alphas, iters, converged) = run_em_counts(
+    let (alphas, iters, converged) = run_em_counts(
         p,
         &p.counts,
         opts,
@@ -147,17 +152,52 @@ pub fn optimize_packed_with_init(
         init_alphas,
         eff_lens,
     );
-    // truncate negligible abundances (matches salmon's cutoff)
-    for a in &mut alphas {
-        if *a < opts.min_alpha {
-            *a = 0.0;
-        }
-    }
+    // Truncate negligible abundances (matches salmon's cutoff), but rather than
+    // zero-and-rescale, redistribute the truncated mass to eq-class co-members via
+    // one masked final M-step (see `redistribute_truncated`). `min_alpha <= 0`
+    // (e.g. the bias warm-up) keeps the continuous vector untouched.
+    let (alphas, dropped_mass) =
+        finalize_truncate_redistribute(p, &p.counts, alphas, opts, eff_lens);
     EmResult {
         alphas,
         iters,
         converged,
+        dropped_mass,
     }
+}
+
+/// VBEM Dirichlet prior per transcript: flat `vb_prior`, or `vb_prior·max(1,effLen)`
+/// under `--perNucleotidePrior`.
+pub(crate) fn prior_alphas_vec(
+    opts: &EmOptions,
+    eff_lens: Option<&[f64]>,
+    num_txps: usize,
+) -> Vec<f64> {
+    match (opts.per_nucleotide_prior, eff_lens) {
+        (true, Some(el)) if el.len() == num_txps => {
+            el.iter().map(|&l| opts.vb_prior * l.max(1.0)).collect()
+        }
+        _ => vec![opts.vb_prior; num_txps],
+    }
+}
+
+/// Apply the post-convergence min-alpha truncation as a mass-preserving
+/// redistribution (not a rescale). Returns the finalized alphas and the mass that
+/// could not be redistributed (fully-truncated classes). A non-positive
+/// `min_alpha` is a no-op (used by the bias warm-up, whose alphas continue into
+/// the warm-started EM).
+pub(crate) fn finalize_truncate_redistribute(
+    p: &PackedEqClasses,
+    counts: &[u64],
+    alphas: Vec<f64>,
+    opts: &EmOptions,
+    eff_lens: Option<&[f64]>,
+) -> (Vec<f64>, f64) {
+    if opts.min_alpha <= 0.0 {
+        return (alphas, 0.0);
+    }
+    let prior = prior_alphas_vec(opts, eff_lens, p.num_txps);
+    packed::redistribute_truncated(p, counts, &alphas, &prior, opts.min_alpha, opts.use_vbem)
 }
 
 /// Run EM/VBEM to convergence on `p` with explicit per-class `counts`, returning
@@ -190,12 +230,7 @@ pub(crate) fn run_em_counts(
     let mut alphas_prime = vec![0.0f64; num_txps];
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
-    let prior_alphas = match (opts.per_nucleotide_prior, eff_lens) {
-        (true, Some(el)) if el.len() == num_txps => {
-            el.iter().map(|&l| opts.vb_prior * l.max(1.0)).collect()
-        }
-        _ => vec![opts.vb_prior; num_txps],
-    };
+    let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
     // Per-shard dense accumulators reused across all parallel M-steps (allocated

@@ -97,31 +97,57 @@ fn write_ambig_info(path: &Path, res: &QuantResult) -> Result<()> {
 /// layout — `names.tsv.gz` lists the transcript names (tab-separated, id order),
 /// `bootstraps.gz` is the gzip of raw little-endian `f64`s with each sample's
 /// `num_txps` values written contiguously (tximport reads it directly).
+///
+/// The emitted set is restricted to the same rows as `quant.sf` via
+/// `quant_row_indices` — decoys are excluded and the sub-`k` "short" transcripts
+/// (always 0) are included — so both files align positionally and by name with
+/// `quant.sf`, which is what tximport and friends assume when they read
+/// `bootstraps.gz` against the `quant.sf` rows. (The per-sample vectors are
+/// indexed by reference id over the full `[transcripts][decoys][shorts]` range;
+/// without this filter they would carry the decoy columns and misalign.)
 fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
+    let row_indices: Vec<usize> =
+        quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys).collect();
+
     let f = std::fs::File::create(dir.join("names.tsv.gz"))?;
     let mut enc = GzEncoder::new(f, Compression::new(6));
-    for (i, name) in res.names.iter().enumerate() {
-        if i > 0 {
-            enc.write_all(b"\t")?;
-        }
-        enc.write_all(name.as_bytes())?;
-    }
-    enc.write_all(b"\n")?;
+    enc.write_all(&select_names_tsv(&res.names, &row_indices))?;
     enc.finish()?;
 
     let f = std::fs::File::create(dir.join("bootstraps.gz"))?;
     let mut enc = GzEncoder::new(f, Compression::new(6));
     for sample in &res.bootstraps {
-        for v in sample {
-            enc.write_all(&v.to_le_bytes())?;
-        }
+        enc.write_all(&select_sample_bytes(sample, &row_indices))?;
     }
     enc.finish()?;
     Ok(())
+}
+
+/// Tab-separated, newline-terminated `names.tsv.gz` body for the selected rows.
+fn select_names_tsv(names: &[String], row_indices: &[usize]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (j, &i) in row_indices.iter().enumerate() {
+        if j > 0 {
+            out.push(b'\t');
+        }
+        out.extend_from_slice(names[i].as_bytes());
+    }
+    out.push(b'\n');
+    out
+}
+
+/// Little-endian `f64` bytes for one posterior sample, restricted to the selected
+/// rows (in `row_indices` order) so the stream aligns positionally with `quant.sf`.
+fn select_sample_bytes(sample: &[f64], row_indices: &[usize]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(row_indices.len() * 8);
+    for &i in row_indices {
+        out.extend_from_slice(&sample[i].to_le_bytes());
+    }
+    out
 }
 
 /// Reference indices to emit in `quant.sf`, in order, given the decoy layout.
@@ -281,6 +307,9 @@ struct MetaInfo {
     num_alignments_below_threshold_for_mapped_fragments_vm: u64,
     percent_mapped: f64,
     num_decoy_fragments: u64,
+    /// fragment mass dropped in the final min-alpha redistribution (every member
+    /// of an equivalence class truncated); normally 0.
+    inference_truncated_mass: f64,
     num_bootstraps: u32,
     call: String,
     start_time: String,
@@ -354,6 +383,7 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
             .num_alignments_below_threshold_for_mapped_fragments_vm,
         percent_mapped,
         num_decoy_fragments: res.num_decoy_fragments,
+        inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
@@ -370,7 +400,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::quant_row_indices;
+    use super::{quant_row_indices, select_names_tsv, select_sample_bytes};
 
     fn rows(total: usize, fdi: Option<usize>, nd: usize) -> Vec<usize> {
         quant_row_indices(total, fdi, nd).collect()
@@ -403,5 +433,32 @@ mod tests {
     fn clamps_out_of_range_decoy_block() {
         // num_decoys overshooting total must not panic or emit phantom rows.
         assert_eq!(rows(5, Some(3), 99), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn bootstrap_output_aligns_with_quant_rows() {
+        // Reference layout: [t0 t1 t2][d0 d1][s0] — 3 transcripts, 2 decoys, 1
+        // short. The per-sample vector is indexed by reference id over the full
+        // range (decoys carry residual mass, the short is always 0). The emitted
+        // bootstrap rows must drop the decoys, keep the short at 0, and stay in
+        // quant.sf order so names.tsv.gz/bootstraps.gz align positionally.
+        let names: Vec<String> = ["t0", "t1", "t2", "d0", "d1", "s0"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let sample = vec![10.0_f64, 20.0, 30.0, 7.0, 9.0, 0.0];
+        let row_indices: Vec<usize> = quant_row_indices(names.len(), Some(3), 2).collect();
+        assert_eq!(row_indices, vec![0, 1, 2, 5]);
+
+        let names_tsv = select_names_tsv(&names, &row_indices);
+        assert_eq!(names_tsv, b"t0\tt1\tt2\ts0\n");
+
+        let bytes = select_sample_bytes(&sample, &row_indices);
+        let got: Vec<f64> = bytes
+            .chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        // decoy values 7.0/9.0 excluded; short s0 present at 0.0.
+        assert_eq!(got, vec![10.0, 20.0, 30.0, 0.0]);
     }
 }

@@ -212,6 +212,10 @@ pub struct QuantResult {
     pub num_mapped: u64,
     /// mapped fragments placed as orphans (only one mate of a pair mapped)
     pub num_orphan: u64,
+    /// fragment mass (sum of equivalence-class counts) that could not be assigned
+    /// to any transcript in the final min-alpha redistribution because every
+    /// member of the class was truncated; reported, not rescaled. Normally 0.
+    pub inference_truncated_mass: f64,
     pub num_eq_classes: usize,
     /// index of the first decoy reference (`None` if the index has no decoys).
     /// The decoy block is `[first_decoy_index, first_decoy_index + num_decoys)`;
@@ -541,6 +545,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            dropped_mass: 0.0,
         }
     } else if bias_on {
         let mut pre = opts.em.clone();
@@ -743,15 +748,17 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             Some(&eff_lengths),
         );
     }
+    // The min-alpha truncation is applied inside the EM as a mass-preserving
+    // redistribution (see `redistribute_truncated`): the truncated mass flows to
+    // eq-class co-members, so `counts` already sum to `total_count` minus only the
+    // mass in fully-truncated classes (`dropped_mass`, normally 0). No rescale.
+    let inference_truncated_mass = em.dropped_mass;
     let counts = em.alphas;
 
     // ---- posterior uncertainty (bootstrap / Gibbs) + ambiguity --------------
     // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
     let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
     let ambig = salmon_infer::ambiguity_counts(&packed);
-    // Bootstrap/Gibbs rescale replicates to the eq-class input total
-    // (`packed.total_count`) internally — the same total the point estimate sums
-    // to — so no external mapped-fragment count is threaded in here.
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()
     } else if opts.num_bootstraps > 0 {
@@ -809,6 +816,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_processed: num_processed.load(Ordering::Relaxed),
         num_mapped: num_mapped.load(Ordering::Relaxed),
         num_orphan: num_orphan.load(Ordering::Relaxed),
+        inference_truncated_mass,
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,
         num_decoys: salmon.info().num_decoys,

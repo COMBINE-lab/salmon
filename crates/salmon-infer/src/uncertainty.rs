@@ -79,23 +79,14 @@ pub fn bootstrap(
             let mut rng =
                 Pcg64Mcg::seed_from_u64(seed ^ (bs as u64).wrapping_mul(0x9E3779B97F4A7C15));
             let resampled = multinomial(total, &sample_weights, &mut rng);
-            let (mut alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, None, None);
-            // truncate tiny values
-            for a in &mut alphas {
-                if *a < opts.min_alpha {
-                    *a = 0.0;
-                }
-            }
-            // Rescale to the resampled input total (`total == p.total_count`),
-            // restoring the mass the truncation above removed so the replicate
-            // sums to exactly what the point estimate does.
-            let sum: f64 = alphas.iter().sum();
-            if sum > 0.0 {
-                let scale = total as f64 / sum;
-                for a in &mut alphas {
-                    *a *= scale;
-                }
-            }
+            let (alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, None, None);
+            // Finalize like the point estimate: truncate the negligible
+            // abundances, then redistribute that mass to eq-class co-members via a
+            // masked final M-step over the *resampled* counts (no rescale-up). The
+            // replicate's `dropped` mass is negligible and not reported (only the
+            // point estimate surfaces `inference_truncated_mass`).
+            let (alphas, _dropped) =
+                crate::finalize_truncate_redistribute(p, &resampled, alphas, opts, None);
             alphas
         })
         .collect()
@@ -279,17 +270,27 @@ pub fn gibbs_sample(
                         &mut rng,
                     );
                 }
-                // Extrapolate scaled counts from the final fractions mu.
-                let denom: f64 = (0..num_txps).map(|t| mu[t] * eff_lens[t]).sum();
-                let scale = if denom > 0.0 {
-                    p.total_count as f64 / denom
-                } else {
-                    0.0
-                };
+                // Extrapolate counts from the final fractions mu, then normalize
+                // to total_count. We TRUNCATE the negligible rate values FIRST and
+                // normalize the survivors, so each sample sums to *exactly*
+                // total_count with no mass lost to a post-normalization truncation.
+                // The normalization is intrinsic to converting the μ rate back to
+                // counts (and is paradox-free: μ is anchored to the conserving
+                // discrete assignment and the scale factor is ≤ 1).
                 let mut sample = vec![0.0f64; num_txps];
+                let mut denom = 0.0;
                 for t in 0..num_txps {
-                    let a = mu[t] * eff_lens[t] * scale;
-                    sample[t] = if a > 1e-8 { a } else { 0.0 };
+                    let ext = mu[t] * eff_lens[t];
+                    if ext > 1e-8 {
+                        sample[t] = ext;
+                        denom += ext;
+                    }
+                }
+                if denom > 0.0 {
+                    let scale = p.total_count as f64 / denom;
+                    for s in &mut sample {
+                        *s *= scale;
+                    }
                 }
                 out.push(sample);
             }
