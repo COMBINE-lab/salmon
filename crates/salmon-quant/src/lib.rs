@@ -758,7 +758,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             &opts.em,
             opts.num_bootstraps,
             num_mapped_frags,
-            true, // useScaledCounts (selective-alignment, no orphan-only quasi)
+            // Enforce that each replicate's counts sum to num_mapped, matching the
+            // point estimate. Our M-step is already mass-conserving (it distributes
+            // exactly `count` per eq-class; the VBEM prior only reweights and adds
+            // no mass), so this is an exactness renormalization, not C++'s
+            // prior-inflation correction — hence it is unconditional here rather
+            // than gated on `!(quasi||orphans||aln)` as in C++.
+            true,
             0x5A13_0000,
         )
     } else if opts.num_gibbs_samples > 0 {
