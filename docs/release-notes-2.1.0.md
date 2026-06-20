@@ -193,6 +193,15 @@ toward SA's 51.8 k).
   flag, the transcript mate is recovered as an orphan (only when the other mate's
   hits are entirely decoys). On the subset above this recovers +8,270 fragments
   (92.6 % → 92.9 %), matching SA mode's `--allowDecoyOrphans` effect.
+- **Sketch mappings now carry their reference positions.** The port previously
+  discarded the positions piscem computes for each pseudoalignment hit, so
+  `--sketch --writeMappings` wrote `POS=1` for every record, sketch `--seqBias`/
+  `--gcBias` collected bias context from position 0 of every transcript (a
+  degenerate model), and the orphan/single-end ambiguous-fragment-length term
+  could not fire. Sketch mappings now populate the approximate hit positions
+  (k-mer-anchor `ref_pos − read_pos`), so SAM output, bias context, and the
+  ambiguous FLD term all work. Sketch `quant.sf` is unchanged on concordant data
+  (positions do not alter equivalence-class membership).
 
 ## Mapper allocation/perf
 
