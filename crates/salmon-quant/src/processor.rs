@@ -2,7 +2,7 @@
 //!
 //! **Pass 1** (parallel, paraseq): each worker maps its reads, samples the
 //! library format, writes SAM/`--writeMappings`, and buffers every mapped
-//! fragment's `(read_id, mappings)` into [`Shared::frag_sink`]. No inference runs
+//! fragment's `(key, mappings)` into [`Shared::frag_sink`]. No inference runs
 //! here. **Pass 2** ([`run_inference_serial`]): the buffered fragments are sorted
 //! by a stable per-fragment key and the online posterior, FLD training, bias
 //! collection, and equivalence-class accumulation are replayed single-threaded in
@@ -111,11 +111,11 @@ pub(crate) struct Shared<'a> {
     /// when set, write per-mapping SAM records (`--writeMappings`)
     pub sam: Option<&'a crate::sam::SamWriter>,
     /// Mapping-phase fragment sink. The parallel pass maps each fragment and
-    /// appends `(read_id, mappings)` here; the inference (online posterior, FLD
+    /// appends `(key, mappings)` here; the inference (online posterior, FLD
     /// training, bias collection, eq-class accumulation) then runs in a
     /// deterministic, key-sorted, single-threaded second pass, so the result is
     /// byte-identical regardless of thread count (see [`run_inference_serial`]).
-    pub frag_sink: &'a Mutex<Vec<(Vec<u8>, Vec<ScoredMapping>)>>,
+    pub frag_sink: &'a Mutex<Vec<(u128, Vec<ScoredMapping>)>>,
 }
 
 /// Per-thread mapping processor.
@@ -128,9 +128,9 @@ pub(crate) struct QuantProcessor<'a> {
     pub unmapped: Vec<String>,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
-    /// per-thread buffer of mapped fragments `(read_id, mappings)`, drained into
+    /// per-thread buffer of mapped fragments `(key, mappings)`, drained into
     /// `Shared::frag_sink` at thread completion for the deterministic second pass.
-    pub frag_buf: Vec<(Vec<u8>, Vec<ScoredMapping>)>,
+    pub frag_buf: Vec<(u128, Vec<ScoredMapping>)>,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -242,12 +242,11 @@ struct FldSampler {
 }
 
 impl FldSampler {
-    /// Seed from the stable fragment name (the full read id bytes). xxh3 is the
-    /// workspace hash already used for eq-class labels. The `| 1` keeps the seed
-    /// nonzero for any input (including an empty id).
-    fn for_read(read_id: &[u8]) -> Self {
+    /// Seed from the fragment's precomputed key (`xxh3_128(read_id)`); the low 64
+    /// bits give a stable per-fragment seed. `| 1` keeps it nonzero.
+    fn from_key(key: u128) -> Self {
         FldSampler {
-            seed: xxhash_rust::xxh3::xxh3_64(read_id) | 1,
+            seed: (key as u64) | 1,
         }
     }
 
@@ -365,7 +364,7 @@ fn collect_pos(
 /// inference is active).
 fn record(
     sh: &Shared,
-    read_id: &[u8],
+    key: u128,
     maps: &[ScoredMapping],
     log_fm: f64,
     seqbias: Option<&mut (SBModel, SBModel)>,
@@ -597,7 +596,7 @@ fn record(
         // thread processed this fragment (the documented source of multi-threaded
         // run-to-run wobble). Computed once per fragment, only inside the
         // training window.
-        let sampler = FldSampler::for_read(read_id);
+        let sampler = FldSampler::from_key(key);
         for (i, (m, _)) in compat.iter().enumerate() {
             let conc = m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
@@ -628,12 +627,8 @@ fn record(
     } else {
         TranscriptGroup::from_sorted(tids)
     };
-    // Key the contribution by the fragment's identity so the per-class weight sum
-    // is reduced in a fixed, thread-count-independent order (determinism).
-    // Key the contribution by the fragment's identity so the per-class weight sum
-    // is reduced in a fixed, thread-count-independent order (determinism).
-    let eq_key = xxhash_rust::xxh3::xxh3_128(read_id);
-    sh.eq.add_group_keyed(eq_key, group, weights, 1);
+    // The fragment's key fixes the per-class weight-summation order (determinism).
+    sh.eq.add_group_keyed(key, group, weights, 1);
 }
 
 /// Fold the most recent fragment's selective-alignment [`MapStats`] into the
@@ -686,10 +681,10 @@ fn merge_unmapped(proc: &mut QuantProcessor) {
 /// for the forgetting-mass schedule and the FLD-snapshot refresh.
 pub(crate) fn run_inference_serial(
     sh: &Shared,
-    mut frags: Vec<(Vec<u8>, Vec<ScoredMapping>)>,
+    mut frags: Vec<(u128, Vec<ScoredMapping>)>,
     batch_size: usize,
 ) {
-    frags.sort_by_key(|(id, _)| xxhash_rust::xxh3::xxh3_128(id));
+    frags.sort_by_key(|(key, _)| *key);
 
     let mut seqbias = sh.collect_seqbias.then(|| (SBModel::new(), SBModel::new()));
     let mut gcbias = sh
@@ -710,10 +705,10 @@ pub(crate) fn run_inference_serial(
     for chunk in frags.chunks(bs) {
         // one forgetting-mass timestep per minibatch (online inference)
         let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
-        for (read_id, maps) in chunk {
+        for (key, maps) in chunk {
             record(
                 sh,
-                read_id,
+                *key,
                 maps,
                 log_fm,
                 seqbias.as_mut(),
@@ -827,7 +822,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             // pass 2 (see `run_inference_serial`).
             sh.num_processed.fetch_add(1, Ordering::Relaxed);
             if !maps.is_empty() {
-                frag_buf.push((r1.id().to_vec(), maps));
+                frag_buf.push((xxhash_rust::xxh3::xxh3_128(r1.id()), maps));
             }
         }
         Ok(())
@@ -913,7 +908,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             }
             sh.num_processed.fetch_add(1, Ordering::Relaxed);
             if !maps.is_empty() {
-                frag_buf.push((rec.id().to_vec(), maps));
+                frag_buf.push((xxhash_rust::xxh3::xxh3_128(rec.id()), maps));
             }
         }
         Ok(())
@@ -954,8 +949,8 @@ mod tests {
 
     /// Reproduce the FLD-acceptance rule exactly: accept mapping `i` iff
     /// `u01(i) < post[i]`, evaluating the indices in the given `order`.
-    fn accepts(read_id: &[u8], posts: &[f64], order: &[usize]) -> Vec<bool> {
-        let s = FldSampler::for_read(read_id);
+    fn accepts(key: u128, posts: &[f64], order: &[usize]) -> Vec<bool> {
+        let s = FldSampler::from_key(key);
         let mut out = vec![false; posts.len()];
         for &i in order {
             out[i] = s.u01(i) < posts[i];
@@ -965,7 +960,7 @@ mod tests {
 
     #[test]
     fn fld_acceptance_is_order_and_thread_independent() {
-        let read_id = b"SRR1039508.frag_0042";
+        let key: u128 = 0x1234_5678_9ABC_DEF0_0FED_CBA9_8765_4321;
         // Mix certain-accept (1.0), certain-reject (0.0), and middling probs so
         // the decision actually depends on the draws.
         let posts = [1.0, 0.0, 0.5, 0.5, 0.0, 1.0, 0.3, 0.7, 0.9, 0.1];
@@ -975,13 +970,13 @@ mod tests {
         reversed.reverse();
         let shuffled = [3usize, 7, 0, 9, 1, 5, 8, 2, 6, 4];
 
-        let a = accepts(read_id, &posts, &forward);
-        let b = accepts(read_id, &posts, &reversed);
-        let c = accepts(read_id, &posts, &shuffled);
+        let a = accepts(key, &posts, &forward);
+        let b = accepts(key, &posts, &reversed);
+        let c = accepts(key, &posts, &shuffled);
 
-        // The accept decision for index i is a pure function of (read_id, i,
-        // post[i]); permuting evaluation order (i.e. thread scheduling) must not
-        // change any decision.
+        // The accept decision for index i is a pure function of (key, i, post[i]);
+        // permuting evaluation order (i.e. thread scheduling) must not change any
+        // decision.
         assert_eq!(a, b, "acceptance must not depend on evaluation order");
         assert_eq!(a, c, "acceptance must not depend on evaluation order");
 
@@ -992,19 +987,16 @@ mod tests {
 
     #[test]
     fn fld_sampler_is_deterministic_and_seed_robust() {
-        // Same id -> identical draws (run-to-run determinism).
-        let s1 = FldSampler::for_read(b"frag_x");
-        let s2 = FldSampler::for_read(b"frag_x");
+        // Same key -> identical draws (run-to-run determinism).
+        let s1 = FldSampler::from_key(0xAAAA_BBBB_CCCC_DDDD);
+        let s2 = FldSampler::from_key(0xAAAA_BBBB_CCCC_DDDD);
         for i in 0..16 {
             assert_eq!(s1.u01(i), s2.u01(i));
         }
-        // Different ids -> different seeds (no collapse onto a global constant).
-        assert_ne!(
-            FldSampler::for_read(b"frag_a").seed,
-            FldSampler::for_read(b"frag_b").seed
-        );
-        // Empty id is still a usable, nonzero-seeded, in-range stream.
-        let se = FldSampler::for_read(b"");
+        // Different keys -> different seeds (no collapse onto a global constant).
+        assert_ne!(FldSampler::from_key(1).seed, FldSampler::from_key(2).seed);
+        // A zero key still yields a usable, nonzero-seeded, in-range stream.
+        let se = FldSampler::from_key(0);
         assert_ne!(se.seed, 0);
         for i in 0..16 {
             let u = se.u01(i);
@@ -1014,7 +1006,7 @@ mod tests {
 
     #[test]
     fn fld_u01_in_unit_interval() {
-        let s = FldSampler::for_read(b"range_check");
+        let s = FldSampler::from_key(0xDEAD_BEEF_F00D);
         for i in 0..10_000 {
             let u = s.u01(i);
             assert!((0.0..1.0).contains(&u), "u01({i}) = {u} out of [0,1)");

@@ -403,7 +403,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // ---- parallel mapping pass (borrows the accumulators) -------------------
     // Pass 1 maps reads in parallel and buffers each mapped fragment here; pass 2
     // (`run_inference_serial`) replays the inference deterministically.
-    let frag_sink: std::sync::Mutex<Vec<(Vec<u8>, Vec<salmon_map::ScoredMapping>)>> =
+    let frag_sink: std::sync::Mutex<Vec<(u128, Vec<salmon_map::ScoredMapping>)>> =
         std::sync::Mutex::new(Vec::new());
     {
         let shared = Shared {
