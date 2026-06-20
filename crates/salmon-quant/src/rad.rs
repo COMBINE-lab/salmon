@@ -34,8 +34,9 @@
 //!   alignment the alignment-level tag values in the declared order.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
+use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
 use libradicl::rad_types::{RadFloatId, RadIntId, RadType, TagDesc, TagSection, TagSectionLabel};
@@ -157,9 +158,26 @@ fn write_prelude<W: Write>(
     Ok(())
 }
 
-/// Write a complete single-chunk RAD file holding `frags`. Used for the in-memory
-/// store and as the round-trip reference; the parallel store appends chunks
-/// incrementally (a later step).
+/// Serialize one chunk (`nbytes`, `nrec`, records) into a standalone byte
+/// buffer. Doing this off-lock lets the parallel store hold its file mutex only
+/// for the final `write_all`.
+fn serialize_chunk(frags: &[(u128, Vec<ScoredMapping>)]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (key, maps) in frags {
+        write_record(&mut body, *key, maps);
+    }
+    // A single chunk over 4 GiB would need splitting; per-batch chunks are far
+    // below that, so saturate rather than fail (the reader streams to EOF).
+    let nbytes: u32 = (body.len() + 8).try_into().unwrap_or(u32::MAX);
+    let mut out = Vec::with_capacity(body.len() + 8);
+    out.extend_from_slice(&nbytes.to_le_bytes());
+    out.extend_from_slice(&(frags.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+/// Write a complete single-chunk RAD file holding `frags`. Convenience for tests
+/// and small in-memory stores; the parallel path uses [`RadChunkWriter`].
 pub fn write_rad(
     path: &Path,
     salmon: &SalmonIndex,
@@ -169,19 +187,64 @@ pub fn write_rad(
     let f = File::create(path).with_context(|| format!("creating RAD file {}", path.display()))?;
     let mut w = BufWriter::new(f);
     write_prelude(&mut w, salmon, is_paired, 1)?;
-
-    let mut body = Vec::new();
-    for (key, maps) in frags {
-        write_record(&mut body, *key, maps);
-    }
-    let nbytes: u32 = (body.len() + 8)
-        .try_into()
-        .context("RAD chunk exceeds 4 GiB; chunking not yet implemented")?;
-    w.write_all(&nbytes.to_le_bytes())?;
-    w.write_all(&(frags.len() as u32).to_le_bytes())?;
-    w.write_all(&body)?;
+    w.write_all(&serialize_chunk(frags))?;
     w.flush()?;
     Ok(())
+}
+
+/// Concurrent, append-only RAD writer for the deterministic two-pass store. The
+/// prelude (with `num_chunks = 0`, "stream to EOF") is written at construction;
+/// each mapping worker then appends its batch as a chunk via [`Self::write_chunk`]
+/// (serialized off-lock, so the file mutex is held only for the append). Records
+/// land in thread-arrival order; pass 2 sorts them by key, so the order on disk
+/// does not affect the result.
+pub struct RadChunkWriter {
+    inner: Mutex<BufWriter<File>>,
+    /// first append error, surfaced by [`Self::flush`] (the per-chunk write path
+    /// is called from `paraseq` callbacks that cannot return our error type).
+    err: Mutex<Option<io::Error>>,
+}
+
+impl RadChunkWriter {
+    pub fn create(path: &Path, salmon: &SalmonIndex, is_paired: bool) -> Result<Self> {
+        let f =
+            File::create(path).with_context(|| format!("creating RAD file {}", path.display()))?;
+        let mut w = BufWriter::new(f);
+        write_prelude(&mut w, salmon, is_paired, 0)?;
+        Ok(Self {
+            inner: Mutex::new(w),
+            err: Mutex::new(None),
+        })
+    }
+
+    /// Append `frags` as one chunk. No-op when empty. Errors are captured and
+    /// reported later by [`Self::flush`].
+    pub fn write_chunk(&self, frags: &[(u128, Vec<ScoredMapping>)]) {
+        if frags.is_empty() {
+            return;
+        }
+        let bytes = serialize_chunk(frags);
+        let mut w = self.inner.lock().unwrap();
+        if let Err(e) = w.write_all(&bytes) {
+            let mut slot = self.err.lock().unwrap();
+            if slot.is_none() {
+                *slot = Some(e);
+            }
+        }
+    }
+
+    /// Flush the buffered writer and surface the first append error, if any.
+    pub fn flush(&self) -> Result<()> {
+        if let Some(e) = self.err.lock().unwrap().take() {
+            return Err(anyhow::Error::from(e).context("appending to RAD mapping store"));
+        }
+        self.inner
+            .lock()
+            .unwrap()
+            .flush()
+            .context("flushing RAD mapping store")?;
+        Ok(())
+    }
 }
 
 fn read_u8<R: Read>(r: &mut R) -> Result<u8> {
@@ -198,6 +261,16 @@ fn read_u32<R: Read>(r: &mut R) -> Result<u32> {
     let mut b = [0u8; 4];
     r.read_exact(&mut b)?;
     Ok(u32::from_le_bytes(b))
+}
+/// Read a `u32`, returning `None` on a clean end of file (used to detect the last
+/// chunk when `num_chunks` is the "stream to EOF" sentinel `0`).
+fn read_u32_opt<R: Read>(r: &mut R) -> Result<Option<u32>> {
+    let mut b = [0u8; 4];
+    match r.read_exact(&mut b) {
+        Ok(()) => Ok(Some(u32::from_le_bytes(b))),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 fn read_u64<R: Read>(r: &mut R) -> Result<u64> {
     let mut b = [0u8; 8];
@@ -297,12 +370,24 @@ pub fn read_rad(path: &Path) -> Result<Vec<(u128, Vec<ScoredMapping>)>> {
     let mut r = BufReader::new(f);
     let num_chunks = read_prelude(&mut r)?;
     let mut out = Vec::new();
-    for _ in 0..num_chunks {
-        let _nbytes = read_u32(&mut r)?;
-        let nrec = read_u32(&mut r)?;
+    let read_one_chunk = |r: &mut BufReader<File>, out: &mut Vec<_>| -> Result<()> {
+        let nrec = read_u32(r)?;
         out.reserve(nrec as usize);
         for _ in 0..nrec {
-            out.push(read_record(&mut r)?);
+            out.push(read_record(r)?);
+        }
+        Ok(())
+    };
+    if num_chunks == 0 {
+        // "stream to EOF" sentinel: keep reading chunks until the file ends
+        // (the parallel writer does not know the chunk count up front).
+        while read_u32_opt(&mut r)?.is_some() {
+            read_one_chunk(&mut r, &mut out)?;
+        }
+    } else {
+        for _ in 0..num_chunks {
+            let _nbytes = read_u32(&mut r)?;
+            read_one_chunk(&mut r, &mut out)?;
         }
     }
     Ok(out)

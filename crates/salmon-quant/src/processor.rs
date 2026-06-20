@@ -118,17 +118,16 @@ pub(crate) struct Shared<'a> {
     /// when set, write per-mapping SAM records (`--writeMappings`)
     pub sam: Option<&'a crate::sam::SamWriter>,
     /// opt-in byte-for-byte reproducibility (`--deterministic`). When `true`, the
-    /// mapping pass only buffers fragments into `frag_sink` and the inference runs
-    /// in a deterministic key-sorted second pass ([`run_inference_serial`]); when
-    /// `false` (default) the inference runs inline during the parallel mapping pass
-    /// (no fragment store, no extra overhead), as before.
+    /// mapping pass only writes fragments to the RAD store (`rad`) and the
+    /// inference runs in a deterministic key-sorted second pass
+    /// ([`run_inference_serial`]); when `false` (default) the inference runs inline
+    /// during the parallel mapping pass (no store, no extra overhead), as before.
     pub deterministic: bool,
-    /// Mapping-phase fragment sink for the deterministic second pass; appended to
-    /// only when `deterministic` is set. The parallel pass maps each fragment and
-    /// appends `(key, mappings)`; [`run_inference_serial`] then replays the
-    /// inference key-sorted and single-threaded, byte-identical across thread
-    /// counts.
-    pub frag_sink: &'a Mutex<Vec<(u128, Vec<ScoredMapping>)>>,
+    /// RAD-format mapping store for the deterministic second pass; `Some` only
+    /// when `deterministic` is set. Each worker appends its mapped fragments
+    /// `(key, mappings)` as a chunk; pass 2 reads the file back, sorts by key, and
+    /// replays the inference single-threaded, byte-identical across thread counts.
+    pub rad: Option<&'a crate::rad::RadChunkWriter>,
 }
 
 /// Per-thread mapping processor.
@@ -147,9 +146,10 @@ pub(crate) struct QuantProcessor<'a> {
     pub unmapped: Vec<String>,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
-    /// per-thread buffer of mapped fragments `(key, mappings)`, drained into
-    /// `Shared::frag_sink` at thread completion for the deterministic second pass
-    /// (used only when `Shared::deterministic`).
+    /// per-thread buffer of mapped fragments `(key, mappings)`, written to the RAD
+    /// store (`Shared::rad`) as a chunk at each batch boundary and at thread
+    /// completion for the deterministic second pass (used only when
+    /// `Shared::deterministic`).
     pub frag_buf: Vec<(u128, Vec<ScoredMapping>)>,
 }
 
@@ -931,9 +931,12 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Inline path refreshes the FLD online snapshot at the mini-batch boundary
-        // (see `record`); the deterministic pass trains the FLD in pass 2 instead.
-        if !self.shared.deterministic {
+        if self.shared.deterministic {
+            // Stream this batch's mapped fragments to the RAD store.
+            flush_rad(self);
+        } else {
+            // Inline path refreshes the FLD online snapshot at the mini-batch
+            // boundary (see `record`); the deterministic pass trains it in pass 2.
             self.shared.fld.refresh_online();
         }
         flush_sam(self);
@@ -942,12 +945,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         if self.shared.deterministic {
-            // Hand this worker's mapped fragments to the shared sink for the
-            // deterministic inference pass (bias models are collected there).
-            if !self.frag_buf.is_empty() {
-                let mut sink = self.shared.frag_sink.lock().unwrap();
-                sink.append(&mut self.frag_buf);
-            }
+            // Flush any fragments not yet written by a batch boundary.
+            flush_rad(self);
         } else {
             merge_bias(self);
         }
@@ -1046,7 +1045,9 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        if !self.shared.deterministic {
+        if self.shared.deterministic {
+            flush_rad(self);
+        } else {
             self.shared.fld.refresh_online();
         }
         flush_sam(self);
@@ -1055,16 +1056,25 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         if self.shared.deterministic {
-            if !self.frag_buf.is_empty() {
-                let mut sink = self.shared.frag_sink.lock().unwrap();
-                sink.append(&mut self.frag_buf);
-            }
+            flush_rad(self);
         } else {
             merge_bias(self);
         }
         merge_unmapped(self);
         flush_sam(self);
         Ok(())
+    }
+}
+
+/// Write this thread's buffered mapped fragments to the RAD store as one chunk
+/// and clear the buffer (deterministic path only). Called at batch boundaries to
+/// stream the store to disk rather than holding every fragment in memory.
+fn flush_rad(proc: &mut QuantProcessor) {
+    if let Some(rad) = proc.shared.rad {
+        if !proc.frag_buf.is_empty() {
+            rad.write_chunk(&proc.frag_buf);
+            proc.frag_buf.clear();
+        }
     }
 }
 

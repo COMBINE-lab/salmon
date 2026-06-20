@@ -410,11 +410,21 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
     // ---- parallel mapping pass (borrows the accumulators) -------------------
     // The default path runs inference inline during this pass. With
-    // `--deterministic`, pass 1 instead buffers each mapped fragment into
-    // `frag_sink` and pass 2 (`run_inference_serial`) replays the inference in a
-    // fixed key-sorted order; the sink stays empty otherwise.
-    let frag_sink: std::sync::Mutex<Vec<(u128, Vec<salmon_map::ScoredMapping>)>> =
-        std::sync::Mutex::new(Vec::new());
+    // `--deterministic`, pass 1 instead streams each mapped fragment to a RAD
+    // mapping store and pass 2 (`run_inference_serial`) reads it back, sorts by
+    // key, and replays the inference in that fixed order; the store is absent
+    // otherwise. It is written under `aux_info/` and removed after pass 2.
+    let rad_path = opts.output_dir.join("aux_info").join("det_mappings.rad");
+    let rad_writer = if opts.deterministic {
+        std::fs::create_dir_all(opts.output_dir.join("aux_info"))
+            .context("creating aux_info for the RAD mapping store")?;
+        Some(
+            rad::RadChunkWriter::create(&rad_path, &salmon, opts.is_paired())
+                .context("creating RAD mapping store")?,
+        )
+    } else {
+        None
+    };
     {
         let shared = Shared {
             salmon: &salmon,
@@ -455,7 +465,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             unmapped_names: unmapped_collector.as_ref(),
             sam: sam_writer.as_ref(),
             deterministic: opts.deterministic,
-            frag_sink: &frag_sink,
+            rad: rad_writer.as_ref(),
         };
         let mut proc = QuantProcessor::new(shared);
         tracing::info!(
@@ -474,11 +484,20 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         drop(proc);
         // ---- deterministic inference pass (single-threaded, key-sorted) ------
         // Only with `--deterministic`; the default path already ran the inference
-        // inline during the parallel mapping pass.
+        // inline during the parallel mapping pass. Flush the store, read it back,
+        // and replay the inference in key-sorted order.
         if opts.deterministic {
-            let frags = std::mem::take(&mut *frag_sink.lock().unwrap());
+            if let Some(w) = &rad_writer {
+                w.flush()?;
+            }
+            let frags = rad::read_rad(&rad_path).context("reading RAD mapping store")?;
             run_inference_serial(&shared, frags, INFERENCE_BATCH);
         }
+    }
+    // Drop the writer (closing the file handle), then remove the transient store.
+    drop(rad_writer);
+    if opts.deterministic {
+        let _ = std::fs::remove_file(&rad_path);
     }
     {
         let p = num_processed.load(Ordering::Relaxed);
