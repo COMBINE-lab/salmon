@@ -737,7 +737,7 @@ where
         let mut workers = Vec::with_capacity(cfg.nthreads);
         for _ in 0..cfg.nthreads {
             let rx = rx.clone();
-            workers.push(scope.spawn(move || -> (Local, u64) {
+            workers.push(scope.spawn(move || -> (Local, u64, u64) {
                 let mut local = Local::new(
                     cfg.use_error_model,
                     cfg.error_bins,
@@ -748,6 +748,7 @@ where
                     cfg.pos_bias,
                 );
                 let mut count = 0u64;
+                let mut mapped = 0u64;
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
                     let ctx = FragCtx {
@@ -769,6 +770,7 @@ where
                         log_fm,
                     };
                     let mut since_flush = 0usize;
+                    let mut batch_mapped = 0u64;
                     for raw_group in &raw_batch {
                         frags.clear();
                         for r in raw_group {
@@ -776,7 +778,9 @@ where
                                 frags.push(f);
                             }
                         }
-                        process_fragment(&frags, &ctx, &mut local);
+                        if process_fragment(&frags, &ctx, &mut local) {
+                            batch_mapped += 1;
+                        }
                         // Publish the error-model delta into the shared model
                         // every FLUSH_INTERVAL fragments so other workers' `basis`
                         // sees fresh-enough training. The update granularity is
@@ -799,16 +803,20 @@ where
                         }
                     }
                     count += raw_batch.len() as u64;
-                    // Live progress: alignment mode treats every fragment in the
-                    // BAM as processed+mapped (see the totals below), so bump both.
+                    mapped += batch_mapped;
+                    // Live progress: every fragment in the BAM is "processed";
+                    // only fragments with a surviving strand-compatible placement
+                    // are "mapped" (so percent_mapped is correct on stranded data).
                     if let Some(p) = cfg.progress {
-                        let n = raw_batch.len() as u64;
-                        p.processed
-                            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
-                        p.mapped.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                        p.processed.fetch_add(
+                            raw_batch.len() as u64,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        p.mapped
+                            .fetch_add(batch_mapped, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-                (local, count)
+                (local, count, mapped)
             }));
         }
         drop(rx); // workers hold their own clones; lets the queue disconnect
@@ -828,18 +836,23 @@ where
             cfg.pos_bias,
         );
         let mut total = 0u64;
+        let mut total_mapped = 0u64;
         for w in workers {
-            let (local, count) = w
+            let (local, count, mapped) = w
                 .join()
                 .map_err(|_| anyhow::anyhow!("alignment worker thread panicked"))?;
             merged = merged.merge(local);
             total += count;
+            total_mapped += mapped;
         }
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
         acc.pos_obs = merged.pos_obs;
+        // num_processed = every aligned fragment in the BAM; num_mapped = those
+        // with a surviving strand-compatible placement (assigned to an eq-class).
+        // They differ only for stranded libraries; matches reads-mode (#1025).
         acc.num_processed = total;
-        acc.num_mapped = total;
+        acc.num_mapped = total_mapped;
         Ok(())
     })
 }
@@ -961,7 +974,13 @@ impl Local {
 /// (during burn-in) accumulate the error-model and bias deltas into `local`.
 /// Pure with respect to shared state except for the concurrency-safe sinks
 /// (`fld`, `online`, `eq_builder`), so it is safe to run in parallel.
-fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
+/// Returns `true` if the fragment was assigned (had at least one surviving,
+/// strand-compatible placement and joined an equivalence class), `false` if it
+/// was dropped (every reported alignment incompatible / orphan-discarded). The
+/// caller counts a fragment as *mapped* only when this returns `true`, so a
+/// stranded library does not over-report `num_mapped` for fragments whose every
+/// alignment is strand-incompatible (the alignment-mode analog of #1025).
+fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bool {
     use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
     // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
     const LOG_EPSILON: f64 = -23.998_158_637_57;
@@ -1054,7 +1073,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
     // a fragment whose every reported alignment was incompatible is a
     // zero-probability fragment: it is not assigned and joins no eq-class.
     if sp_tid.is_empty() {
-        return;
+        return false;
     }
 
     // Aggregate surviving placements by distinct transcript id (sorted).
@@ -1197,6 +1216,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
         TranscriptGroup::from_sorted(tids)
     };
     ctx.eq_builder.add_group(group, weights, 1);
+    true
 }
 
 /// Is the input coordinate-sorted and *not* grouped by read name?
@@ -1749,9 +1769,14 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     salmon_model::dumps::write_aux_bias_dumps(&dir.join("aux_info"), &res.bias_dump)
         .context("writing aux bias dumps")?;
     std::fs::create_dir_all(dir.join("logs")).context("creating logs")?;
+    // In alignment mode the input records are already aligned, so `num_processed`
+    // is the count of aligned fragments and `num_mapped` is those with a strand-
+    // compatible placement that were quantified; label them accordingly so a
+    // <100% rate on a stranded library is not read as lost alignments.
     let log = format!(
         "salmon (rust port, alignment mode) v{SALMON_VERSION}\nstart: {}\nend:   {}\n\
-         library type: {}\nobserved fragments: {}\nmapped fragments:   {}\nmapping rate: {pct:.4}%\n\
+         library type: {}\naligned fragments: {}\nstrand-compatible (quantified): {}\n\
+         compatible rate: {pct:.4}%\n\
          number of equivalence classes: {}\nfragment length mean (sd): {:.2} ({:.2})\n",
         res.start_time,
         asctime_now(),
