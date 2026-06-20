@@ -808,13 +808,29 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         } else {
             0.0
         };
-        tracing::info!(
-            "processed {} fragments, mapped {} ({:.2}%), {} equivalence classes",
-            res.num_processed,
-            res.num_mapped,
-            pct,
-            res.num_eq_classes
-        );
+        // Alignment mode: the records are already aligned (by the upstream
+        // aligner), so `num_processed` is the count of *aligned* fragments and
+        // `num_mapped` is those with a strand-compatible placement we could
+        // quantify. Report it that way so a (necessarily) <100% rate on a
+        // stranded library reads as "strand-incompatible", not "lost alignments".
+        if res.num_processed > res.num_mapped {
+            tracing::info!(
+                "{} aligned fragments; {} strand-compatible and quantified ({:.2}%); \
+                 {} dropped as incompatible with library type {}; {} equivalence classes",
+                res.num_processed,
+                res.num_mapped,
+                pct,
+                res.num_processed - res.num_mapped,
+                opts.lib_type,
+                res.num_eq_classes
+            );
+        } else {
+            tracing::info!(
+                "{} aligned fragments, all strand-compatible and quantified; {} equivalence classes",
+                res.num_processed,
+                res.num_eq_classes
+            );
+        }
         if let Some(gm) = &gene_map {
             write_gene_level(
                 &out_dir,
