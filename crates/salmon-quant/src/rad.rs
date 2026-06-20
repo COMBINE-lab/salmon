@@ -34,9 +34,11 @@
 //!   two `u64` halves, low then high), then per alignment the alignment-level tag
 //!   values in the declared order.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
@@ -342,43 +344,59 @@ fn read_prelude<R: Read>(r: &mut R) -> Result<u64> {
     Ok(num_chunks)
 }
 
-/// Read one mapped fragment record (the inverse of [`write_record`]).
-fn read_record<R: Read>(r: &mut R) -> Result<(u128, Vec<ScoredMapping>)> {
-    let na = read_u32(r)? as usize;
+/// Read one alignment's tag values (the inverse of the per-mapping write in
+/// [`write_record`]).
+fn read_aln<R: Read>(r: &mut R) -> Result<ScoredMapping> {
+    let tid = read_u32(r)?;
+    let weight = read_f64(r)?;
+    let status = status_from_u8(read_u8(r)?)?;
+    let is_fw = read_u8(r)? != 0;
+    let fragment_len = read_u32(r)? as i32;
+    let read_len = read_u32(r)? as i32;
+    let ref_pos = read_u32(r)? as i32;
+    let fw_pos = read_u32(r)? as i32;
+    let rc_pos = read_u32(r)? as i32;
+    let fmt_id = read_u8(r)?;
+    let format = (fmt_id != FORMAT_NONE).then(|| LibraryFormat::from_format_id(fmt_id));
+    Ok(ScoredMapping {
+        tid,
+        is_fw,
+        status,
+        score: 0,
+        fragment_len,
+        read_len,
+        weight,
+        ref_pos,
+        fw_pos,
+        rc_pos,
+        format,
+        // SAM-output-only fields; not used by pass-2 inference.
+        r1_pos: -1,
+        r2_pos: -1,
+        r2_fw: false,
+        r1_score: 0,
+    })
+}
+
+/// Read one mapped fragment record, or `None` at a clean end of file (used by the
+/// run reader, which streams to EOF).
+fn read_record_opt<R: Read>(r: &mut R) -> Result<Option<(u128, Vec<ScoredMapping>)>> {
+    let na = match read_u32_opt(r)? {
+        Some(na) => na as usize,
+        None => return Ok(None),
+    };
     let key = read_u128(r)?;
     let mut maps = Vec::with_capacity(na);
     for _ in 0..na {
-        let tid = read_u32(r)?;
-        let weight = read_f64(r)?;
-        let status = status_from_u8(read_u8(r)?)?;
-        let is_fw = read_u8(r)? != 0;
-        let fragment_len = read_u32(r)? as i32;
-        let read_len = read_u32(r)? as i32;
-        let ref_pos = read_u32(r)? as i32;
-        let fw_pos = read_u32(r)? as i32;
-        let rc_pos = read_u32(r)? as i32;
-        let fmt_id = read_u8(r)?;
-        let format = (fmt_id != FORMAT_NONE).then(|| LibraryFormat::from_format_id(fmt_id));
-        maps.push(ScoredMapping {
-            tid,
-            is_fw,
-            status,
-            score: 0,
-            fragment_len,
-            read_len,
-            weight,
-            ref_pos,
-            fw_pos,
-            rc_pos,
-            format,
-            // SAM-output-only fields; not used by pass-2 inference.
-            r1_pos: -1,
-            r2_pos: -1,
-            r2_fw: false,
-            r1_score: 0,
-        });
+        maps.push(read_aln(r)?);
     }
-    Ok((key, maps))
+    Ok(Some((key, maps)))
+}
+
+/// Read one mapped fragment record (the inverse of [`write_record`]); errors on
+/// an unexpected end of file (the caller knows a record must be present).
+fn read_record<R: Read>(r: &mut R) -> Result<(u128, Vec<ScoredMapping>)> {
+    read_record_opt(r)?.context("unexpected EOF reading RAD record")
 }
 
 /// Read a full RAD file written by [`write_rad`] back into `(key, mappings)`
@@ -411,6 +429,187 @@ pub fn read_rad(path: &Path) -> Result<Vec<(u128, Vec<ScoredMapping>)>> {
     Ok(out)
 }
 
+/// Number of fragments held in memory per sort run. Run generation reads the
+/// store in blocks of this size, sorts each in memory, and spills it to a run
+/// file; the merge then streams. This bounds pass-2 peak memory to roughly one
+/// run (plus one front record per run), independent of total input size.
+pub const RUN_SIZE: usize = 4_000_000;
+
+/// Sequential record reader over a complete RAD file, hiding chunk framing:
+/// [`Self::next_record`] yields fragments one at a time across chunk boundaries.
+struct RadRecordReader {
+    r: BufReader<File>,
+    /// records left in the current chunk
+    in_chunk: u32,
+    /// `true` when the header said `num_chunks == 0` (read chunks until EOF)
+    streaming: bool,
+    /// chunks left to read when not streaming
+    chunks_left: u64,
+}
+
+impl RadRecordReader {
+    fn open(path: &Path) -> Result<Self> {
+        let f =
+            File::open(path).with_context(|| format!("opening RAD store {}", path.display()))?;
+        let mut r = BufReader::new(f);
+        let num_chunks = read_prelude(&mut r)?;
+        Ok(Self {
+            r,
+            in_chunk: 0,
+            streaming: num_chunks == 0,
+            chunks_left: num_chunks,
+        })
+    }
+
+    fn next_record(&mut self) -> Result<Option<(u128, Vec<ScoredMapping>)>> {
+        // Advance over chunk headers (and any empty chunks) until a record is due.
+        while self.in_chunk == 0 {
+            if self.streaming {
+                match read_u32_opt(&mut self.r)? {
+                    None => return Ok(None),
+                    Some(_nbytes) => self.in_chunk = read_u32(&mut self.r)?,
+                }
+            } else {
+                if self.chunks_left == 0 {
+                    return Ok(None);
+                }
+                self.chunks_left -= 1;
+                let _nbytes = read_u32(&mut self.r)?;
+                self.in_chunk = read_u32(&mut self.r)?;
+            }
+        }
+        self.in_chunk -= 1;
+        Ok(Some(read_record(&mut self.r)?))
+    }
+}
+
+/// Write a sorted run: just the concatenated records (no prelude), read back to
+/// EOF by [`RunFront`].
+fn write_run(path: &Path, frags: &[(u128, Vec<ScoredMapping>)]) -> Result<()> {
+    let f = File::create(path).with_context(|| format!("creating sort run {}", path.display()))?;
+    let mut w = BufWriter::new(f);
+    let mut body = Vec::new();
+    for (key, maps) in frags {
+        write_record(&mut body, *key, maps);
+    }
+    w.write_all(&body)?;
+    w.flush()?;
+    Ok(())
+}
+
+/// One sorted run during the merge: its reader plus the next (smallest-key)
+/// record not yet emitted.
+struct RunFront {
+    r: BufReader<File>,
+    front: Option<(u128, Vec<ScoredMapping>)>,
+}
+
+impl RunFront {
+    fn open(path: &Path) -> Result<Self> {
+        let f = File::open(path).with_context(|| format!("opening sort run {}", path.display()))?;
+        let mut r = BufReader::new(f);
+        let front = read_record_opt(&mut r)?;
+        Ok(Self { r, front })
+    }
+
+    fn advance(&mut self) -> Result<()> {
+        self.front = read_record_opt(&mut self.r)?;
+        Ok(())
+    }
+}
+
+/// External merge sort over a RAD mapping store, yielding fragments in ascending
+/// key order without holding the whole store in memory.
+///
+/// Construction spills the store into sorted runs of [`RUN_SIZE`] fragments each;
+/// iteration k-way merges them via a min-heap keyed by `(frag_key, run_index)`
+/// (the run index makes the order total and reproducible). The temporary run
+/// files are removed on drop. This is what lets pass 2 stay deterministic and
+/// memory-bounded on very large inputs.
+pub struct ExternalSort {
+    runs: Vec<RunFront>,
+    heap: BinaryHeap<Reverse<(u128, usize)>>,
+    run_paths: Vec<PathBuf>,
+}
+
+impl ExternalSort {
+    /// Spill `store` into sorted runs of `run_size` fragments under `tmp_dir`, and
+    /// prime the merge. `run_size` is clamped to at least 1.
+    pub fn new(store: &Path, run_size: usize, tmp_dir: &Path) -> Result<Self> {
+        let run_size = run_size.max(1);
+        let mut reader = RadRecordReader::open(store)?;
+        let mut run_paths: Vec<PathBuf> = Vec::new();
+
+        let spill = |block: &mut Vec<(u128, Vec<ScoredMapping>)>,
+                     run_paths: &mut Vec<PathBuf>|
+         -> Result<()> {
+            if block.is_empty() {
+                return Ok(());
+            }
+            // keys are 128-bit hashes (effectively unique), so an unstable sort
+            // gives the same total order as a stable one, faster.
+            block.sort_unstable_by_key(|(k, _)| *k);
+            let path = tmp_dir.join(format!("det_run_{}.rad", run_paths.len()));
+            write_run(&path, block)?;
+            run_paths.push(path);
+            block.clear();
+            Ok(())
+        };
+
+        let mut block: Vec<(u128, Vec<ScoredMapping>)> = Vec::with_capacity(run_size.min(1 << 16));
+        while let Some(rec) = reader.next_record()? {
+            block.push(rec);
+            if block.len() >= run_size {
+                spill(&mut block, &mut run_paths)?;
+            }
+        }
+        spill(&mut block, &mut run_paths)?;
+
+        let mut runs = Vec::with_capacity(run_paths.len());
+        let mut heap = BinaryHeap::with_capacity(run_paths.len());
+        for (i, path) in run_paths.iter().enumerate() {
+            let rf = RunFront::open(path)?;
+            if let Some((k, _)) = rf.front.as_ref() {
+                heap.push(Reverse((*k, i)));
+            }
+            runs.push(rf);
+        }
+        Ok(Self {
+            runs,
+            heap,
+            run_paths,
+        })
+    }
+}
+
+impl Iterator for ExternalSort {
+    type Item = Result<(u128, Vec<ScoredMapping>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let Reverse((_key, idx)) = self.heap.pop()?;
+        // The heap only holds runs whose `front` is `Some`, so this is present.
+        let rec = self.runs[idx]
+            .front
+            .take()
+            .expect("merge heap/front invariant");
+        if let Err(e) = self.runs[idx].advance() {
+            return Some(Err(e));
+        }
+        if let Some((k, _)) = self.runs[idx].front.as_ref() {
+            self.heap.push(Reverse((*k, idx)));
+        }
+        Some(Ok(rec))
+    }
+}
+
+impl Drop for ExternalSort {
+    fn drop(&mut self) {
+        for path in &self.run_paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,7 +617,7 @@ mod tests {
     fn sample_mapping(tid: u32, status: MateStatus, fmt: Option<LibraryFormat>) -> ScoredMapping {
         ScoredMapping {
             tid,
-            is_fw: tid % 2 == 0,
+            is_fw: (tid & 1) == 0,
             status,
             score: 0,
             fragment_len: 250 + tid as i32,
@@ -480,6 +679,42 @@ mod tests {
         let mut cur = std::io::Cursor::new(buf);
         let (_k, rmaps) = read_record(&mut cur).unwrap();
         assert_eq!(rmaps[0].format, None);
+    }
+
+    #[test]
+    fn external_sort_merges_runs_in_key_order() {
+        use std::io::Write as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store.rad");
+
+        let mk =
+            |key: u128, tid: u32| (key, vec![sample_mapping(tid, MateStatus::SingleEnd, None)]);
+        // Keys in scrambled order, split across two chunks (so the streaming
+        // reader crosses a chunk boundary too).
+        let chunk_a = vec![mk(50, 0), mk(10, 1), mk(30, 2)];
+        let chunk_b = vec![mk(20, 3), mk(40, 4), mk(5, 5), mk(25, 6)];
+        {
+            let mut f = std::fs::File::create(&store).unwrap();
+            write_prelude_parts(&mut f, false, &["a"], 0).unwrap(); // num_chunks = 0 -> stream
+            f.write_all(&serialize_chunk(&chunk_a)).unwrap();
+            f.write_all(&serialize_chunk(&chunk_b)).unwrap();
+            f.flush().unwrap();
+        }
+
+        // run_size = 2 over 7 records forces 4 runs, exercising the k-way merge.
+        let sorter = ExternalSort::new(&store, 2, tmp.path()).unwrap();
+        let got: Vec<u128> = sorter.map(|r| r.unwrap().0).collect();
+
+        let mut expected: Vec<u128> = chunk_a.iter().chain(&chunk_b).map(|(k, _)| *k).collect();
+        expected.sort_unstable();
+        assert_eq!(got, expected, "external sort must yield key-sorted output");
+
+        // Run files are cleaned up when the sorter drops.
+        let leftover = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().starts_with("det_run_"));
+        assert!(!leftover, "temporary run files were not removed");
     }
 
     #[test]

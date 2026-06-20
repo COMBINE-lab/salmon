@@ -152,6 +152,11 @@ pub struct QuantOptions {
     /// `-p N`. Default `false` keeps the historical inline, fully-parallel path
     /// (no fragment store, no extra overhead).
     pub deterministic: bool,
+    /// fragments per external-sort run in the deterministic pass-2 store
+    /// ([`rad::ExternalSort`]); `None` uses [`rad::RUN_SIZE`]. Lower values force
+    /// more runs (exercising the k-way merge) at the cost of more, smaller run
+    /// files; primarily a test knob.
+    pub det_run_size: Option<usize>,
     /// Optional shared progress counters. When `Some`, [`quantify`] reports
     /// processed/mapped fragment counts here as it runs so the caller can drive
     /// a live progress display. `None` (the default) disables sharing.
@@ -202,6 +207,7 @@ impl QuantOptions {
             skip_quant: false,
             num_pre_aux_model_samples: processor::NUM_PRE_BURNIN,
             deterministic: false,
+            det_run_size: None,
             progress: None,
         }
     }
@@ -490,8 +496,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             if let Some(w) = &rad_writer {
                 w.flush()?;
             }
-            let frags = rad::read_rad(&rad_path).context("reading RAD mapping store")?;
-            run_inference_serial(&shared, frags, INFERENCE_BATCH);
+            // External merge sort over the store: stream fragments in key order
+            // without loading the whole store into memory. Run files live next to
+            // the store and are cleaned up when the sorter drops.
+            let aux_dir = opts.output_dir.join("aux_info");
+            let run_size = opts.det_run_size.unwrap_or(rad::RUN_SIZE);
+            let sorter = rad::ExternalSort::new(&rad_path, run_size, &aux_dir)
+                .context("sorting RAD mapping store")?;
+            run_inference_serial(&shared, sorter, INFERENCE_BATCH)
+                .context("deterministic inference pass")?;
         }
     }
     // Drop the writer (closing the file handle), then remove the transient store.

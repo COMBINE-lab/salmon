@@ -345,6 +345,49 @@ fn single_end_counts_bit_identical_across_threads() {
     assert_eq!(p1, p8a, "single-end -p 1 and -p 8 differ (full precision)");
 }
 
+/// Determinism must hold when pass 2 streams through a multi-run external sort,
+/// not just a single in-memory run. Force a tiny run size (≈20 runs over the 20k
+/// multimapping fragments) so the k-way merge is exercised, and assert the result
+/// is byte-identical across thread counts (and to the heavier single-run guard
+/// above, which uses the same inputs).
+#[test]
+fn multi_run_external_sort_is_bit_identical_across_threads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2) = simulate_multimapping(tmp.path());
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let run = |threads: usize, run_size: Option<usize>| -> Vec<u64> {
+        let out = tmp.path().join(format!("mr_{threads}_{run_size:?}"));
+        let mut opts = QuantOptions::new(idx_dir.clone(), out);
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = "IU".to_string();
+        opts.num_threads = threads;
+        opts.seq_bias = true;
+        opts.gc_bias = true;
+        opts.num_pre_aux_model_samples = 50;
+        opts.deterministic = true;
+        opts.det_run_size = run_size;
+        let res = quantify(&opts).expect("quantify");
+        res.counts.iter().map(|c| c.to_bits()).collect()
+    };
+    // ~20 runs over 20k fragments at -p 1 and -p 8, plus a single-run reference.
+    let many_p1 = run(1, Some(1000));
+    let many_p8 = run(8, Some(1000));
+    let single = run(8, None);
+    assert_eq!(
+        many_p1, many_p8,
+        "multi-run external sort not deterministic across -p"
+    );
+    assert_eq!(
+        single, many_p1,
+        "multi-run merge result differs from single-run result"
+    );
+}
+
 #[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();

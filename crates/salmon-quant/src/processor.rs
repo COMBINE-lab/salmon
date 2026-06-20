@@ -750,19 +750,25 @@ fn merge_bias(proc: &QuantProcessor) {
 
 /// Run the per-fragment inference over the mapped fragments in a deterministic,
 /// key-sorted, single-threaded order. The parallel mapping pass only maps and
-/// buffers fragments; this pass replays the online posterior, FLD training, bias
-/// collection, and eq-class accumulation in a fixed order (sorted by a stable
-/// per-fragment key), so every order-dependent accumulation — the online masses,
-/// the FLD, and the observed bias models — is byte-identical regardless of how
-/// many threads mapped the reads. `batch_size` sets the mini-batch granularity
-/// for the forgetting-mass schedule and the FLD-snapshot refresh.
-pub(crate) fn run_inference_serial(
+/// stores fragments; this pass replays the online posterior, FLD training, bias
+/// collection, and eq-class accumulation in a fixed order, so every
+/// order-dependent accumulation — the online masses, the FLD, and the observed
+/// bias models — is byte-identical regardless of how many threads mapped the
+/// reads.
+///
+/// `frags` must already yield fragments in ascending key order (the RAD store is
+/// externally sorted by [`crate::rad::ExternalSort`], so the whole input never
+/// has to reside in memory at once). Each item is a `Result` so a read error in
+/// the streamed/merged store propagates out. `batch_size` sets the mini-batch
+/// granularity for the forgetting-mass schedule and the FLD-snapshot refresh.
+pub(crate) fn run_inference_serial<I>(
     sh: &Shared,
-    mut frags: Vec<(u128, Vec<ScoredMapping>)>,
+    frags: I,
     batch_size: usize,
-) {
-    frags.sort_by_key(|(key, _)| *key);
-
+) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = anyhow::Result<(u128, Vec<ScoredMapping>)>>,
+{
     let mut seqbias = sh.collect_seqbias.then(|| (SBModel::new(), SBModel::new()));
     let mut gcbias = sh
         .collect_gcbias
@@ -779,10 +785,24 @@ pub(crate) fn run_inference_serial(
     });
 
     let bs = batch_size.max(1);
-    for chunk in frags.chunks(bs) {
+    let mut iter = frags.into_iter();
+    // Pull the already-sorted stream one mini-batch at a time: holding only one
+    // batch keeps pass-2 memory bounded even for very large stores.
+    loop {
+        let mut batch: Vec<(u128, Vec<ScoredMapping>)> = Vec::with_capacity(bs);
+        for _ in 0..bs {
+            match iter.next() {
+                Some(item) => batch.push(item?),
+                None => break,
+            }
+        }
+        if batch.is_empty() {
+            break;
+        }
+        let last = batch.len() < bs;
         // one forgetting-mass timestep per minibatch (online inference)
         let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
-        for (key, maps) in chunk {
+        for (key, maps) in &batch {
             record(
                 sh,
                 *key,
@@ -795,6 +815,9 @@ pub(crate) fn run_inference_serial(
         }
         // refresh the FLD snapshot at the minibatch boundary (mirrors salmon)
         sh.fld.refresh_online();
+        if last {
+            break;
+        }
     }
 
     // Merge the collected bias models into the shared accumulators that the
@@ -816,6 +839,7 @@ pub(crate) fn run_inference_serial(
             a.combine(b);
         }
     }
+    Ok(())
 }
 
 impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
