@@ -350,6 +350,44 @@ fn writes_rad_output_readable_and_complete() {
 }
 
 #[test]
+fn writes_readable_bam() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, _truth) = simulate(tmp.path());
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let bam_path = tmp.path().join("mappings.bam");
+    let out = tmp.path().join("quant_bam");
+    let mut opts = QuantOptions::new(idx_dir, out);
+    opts.mates1 = vec![r1];
+    opts.mates2 = vec![r2];
+    opts.lib_type = "IU".to_string();
+    opts.num_threads = 1;
+    opts.write_bam = Some(bam_path.clone());
+    let res = quantify(&opts).expect("quantify");
+
+    // Round-trip: the BAM must parse, its header must list every reference, and
+    // it must contain records.
+    use noodles_bam as bam;
+    let mut reader = bam::io::Reader::new(std::fs::File::open(&bam_path).expect("open bam"));
+    let header = reader.read_header().expect("read bam header");
+    assert_eq!(
+        header.reference_sequences().len(),
+        res.names.len(),
+        "BAM header reference count mismatch"
+    );
+    let mut n = 0usize;
+    for record in reader.records() {
+        record.expect("valid BAM record");
+        n += 1;
+    }
+    assert!(n > 0, "no BAM records written");
+}
+
+#[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();
     let (fasta, r1, r2, truth) = simulate(tmp.path());

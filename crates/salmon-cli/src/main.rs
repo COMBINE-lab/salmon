@@ -399,6 +399,10 @@ struct QuantArgs {
     /// deleted once quantification finishes). Ignored without --deterministic.
     #[arg(long = "keepRad")]
     keep_rad: bool,
+    /// Write per-mapping BAM records to this file (same spoofed records as
+    /// `--writeMappings`, BGZF-compressed).
+    #[arg(long = "writeBam")]
+    write_bam: Option<PathBuf>,
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
@@ -1333,6 +1337,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.write_unmapped_names = args.write_unmapped_names;
     opts.write_mappings = args.write_mappings;
     opts.write_rad = args.write_rad;
+    opts.write_bam = args.write_bam;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
     opts.pos_bias = args.pos_bias;

@@ -25,8 +25,15 @@ tracing = { workspace = true }
 flate2 = { workspace = true }
 rayon = { workspace = true }
 jiff = "0.2"
+noodles-sam = "0.85"
+noodles-core = "0.20"
+noodles-bam = "0.90"
+noodles-bgzf = "0.47"
+bstr = "1.12.1"
 
 [dev-dependencies]
+noodles-bam = "0.90"
+noodles-sam = "0.85"
 tempfile = { workspace = true }
 # reading back RAD output in the end-to-end test
 libradicl = { workspace = true }

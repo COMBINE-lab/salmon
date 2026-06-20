@@ -139,6 +139,8 @@ pub(crate) struct Shared<'a> {
     /// [`Self::discrete_fld`]. Orientation-tagged so incompatible placements can be
     /// dropped once the library type is resolved at end of mapping.
     pub naive_eq: Option<&'a NaiveEqBuilder>,
+    /// when set, write per-mapping BAM records (`--writeBam`)
+    pub bam: Option<&'a crate::bam::BamWriter>,
 }
 
 /// Per-thread mapping processor.
@@ -160,6 +162,8 @@ pub(crate) struct QuantProcessor<'a> {
     /// per-thread RAD chunk buffer (flushed as one chunk per batch); `None`
     /// unless `--writeRad` is set
     pub rad_buf: Option<salmon_rad::FragmentChunkBuf>,
+    /// per-thread BAM record buffer (flushed to the shared writer per batch)
+    pub bam_buf: Vec<noodles_sam::alignment::record_buf::RecordBuf>,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -192,6 +196,7 @@ impl<'a> QuantProcessor<'a> {
             rad_buf: shared.rad.map(|rad| {
                 salmon_rad::FragmentChunkBuf::with_capacity_codec(64 * 1024, rad.codec())
             }),
+            bam_buf: Vec::new(),
         }
     }
 }
@@ -843,6 +848,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             unmapped,
             sam_buf,
             rad_buf,
+            bam_buf,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -931,6 +937,15 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     let _ = buf.write(&rec, rad.context());
                 }
             }
+            if sh.bam.is_some() && !maps.is_empty() {
+                bam_buf.extend(crate::bam::build_records(
+                    sh.salmon,
+                    r1.id(),
+                    s1.as_ref(),
+                    Some((r2.id(), s2.as_ref())),
+                    &maps,
+                ));
+            }
             if let Some(acc) = sh.discrete_fld {
                 record_discrete(&sh, &maps, acc);
             } else {
@@ -954,6 +969,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         self.shared.fld.refresh_online();
         flush_sam(self);
         flush_rad(self);
+        flush_bam(self);
         Ok(())
     }
 
@@ -962,6 +978,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         merge_unmapped(self);
         flush_sam(self);
         flush_rad(self);
+        flush_bam(self);
         Ok(())
     }
 }
@@ -981,6 +998,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             unmapped,
             sam_buf,
             rad_buf,
+            bam_buf,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -1041,6 +1059,15 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     let _ = buf.write(&radrec, rad.context());
                 }
             }
+            if sh.bam.is_some() && !maps.is_empty() {
+                bam_buf.extend(crate::bam::build_records(
+                    sh.salmon,
+                    rec.id(),
+                    s.as_ref(),
+                    None,
+                    &maps,
+                ));
+            }
             if let Some(acc) = sh.discrete_fld {
                 record_discrete(&sh, &maps, acc);
             } else {
@@ -1064,6 +1091,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         self.shared.fld.refresh_online();
         flush_sam(self);
         flush_rad(self);
+        flush_bam(self);
         Ok(())
     }
 
@@ -1072,6 +1100,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         merge_unmapped(self);
         flush_sam(self);
         flush_rad(self);
+        flush_bam(self);
         Ok(())
     }
 }
@@ -1127,6 +1156,16 @@ fn flush_rad(proc: &mut QuantProcessor) {
                 }
                 Err(e) => tracing::error!("failed to serialize RAD chunk: {e}"),
             }
+        }
+    }
+}
+
+/// Flush this thread's accumulated BAM records to the shared writer (under lock).
+fn flush_bam(proc: &mut QuantProcessor) {
+    if let Some(bw) = proc.shared.bam {
+        if !proc.bam_buf.is_empty() {
+            let _ = bw.write_records(&proc.bam_buf);
+            proc.bam_buf.clear();
         }
     }
 }

@@ -10,6 +10,7 @@
 //! Selective alignment is the default; set [`QuantOptions::sketch`] for the
 //! alignment-free pseudoalignment path.
 
+mod bam;
 mod output;
 mod processor;
 mod sam;
@@ -89,6 +90,9 @@ pub struct QuantOptions {
     /// baked values — and hence the downstream requant — byte-identical across
     /// thread counts.
     pub deterministic_fld: bool,
+    /// write per-mapping BAM records to this path (`--writeBam`); same spoofed
+    /// records as `--writeMappings`, BGZF-compressed
+    pub write_bam: Option<PathBuf>,
     /// enable sequence-specific bias correction (`--seqBias`)
     pub seq_bias: bool,
     /// enable fragment-GC bias correction (`--gcBias`)
@@ -188,6 +192,7 @@ impl QuantOptions {
             write_mappings: None,
             write_rad: None,
             deterministic_fld: false,
+            write_bam: None,
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
@@ -363,6 +368,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         }
         None => None,
     };
+    // BAM sink for `--writeBam` (header written here).
+    let bam_writer: Option<bam::BamWriter> = match &opts.write_bam {
+        Some(path) => {
+            let cmd = format!("salmon quant -i {}", opts.index_dir.display());
+            Some(bam::BamWriter::create(path, &salmon, &cmd).context("opening BAM output")?)
+        }
+        None => None,
+    };
     let nthreads = if opts.num_threads == 0 {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -523,6 +536,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             rad: rad_writer.as_ref(),
             discrete_fld: discrete_fld.as_ref(),
             naive_eq: naive_eq.as_ref(),
+            bam: bam_writer.as_ref(),
         };
         let mut proc = QuantProcessor::new(shared);
         tracing::info!(
@@ -561,6 +575,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     }
     if let Some(sw) = &sam_writer {
         sw.flush().context("flushing SAM output")?;
+    }
+    // BAM only carries mapping-pass records (no EM output), so finalize it here,
+    // right after the mapping scope closes.
+    if let Some(bw) = &bam_writer {
+        bw.finish().context("finalizing BAM output")?;
     }
     // NB: `rad_writer` is finalized *after* EM below, so the cached FLD and the
     // abundance estimates can be baked into the header (single-pass deterministic

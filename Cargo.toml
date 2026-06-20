@@ -42,16 +42,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # parallelism
 rayon = "1"
-crossbeam = "0.8"
 crossbeam-channel = "0.5"
 # concurrent map for equivalence classes
 scc = "2"
 dashmap = "6"
 # fast (non-DoS-resistant) hasher for hot per-read integer-keyed maps
 ahash = "0.8"
-# numerics
-nalgebra = "0.33"
-ndarray = "0.16"
 statrs = "0.18"
 # rng (PCG, matching salmon's pcg usage)
 rand = "0.8"
@@ -61,14 +57,11 @@ rand_distr = "0.4"
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 # compression
 flate2 = "1"
-zstd = "0.13"
 # logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # cli
 clap = { version = "4", features = ["derive"] }
-# hashing of reference sequences/names for index provenance
-sha2 = "0.10"
 # COMBINE-lab dependencies, from crates.io.
 cf1-rs = "0.5"
 piscem-rs = "0.6.2"
