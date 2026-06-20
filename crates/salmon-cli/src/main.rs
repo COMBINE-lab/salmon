@@ -568,6 +568,13 @@ struct QuantArgs {
     /// salmon's default is 1000000, this port's is 5000.)
     #[arg(long = "numPreAuxModelSamples", default_value_t = 5000)]
     num_pre_aux_model_samples: u64,
+    /// Produce byte-for-byte identical `quant.sf` regardless of thread count
+    /// (`-p`). Splits quantification into a parallel mapping pass and a
+    /// single-threaded, key-sorted inference pass, so every order-dependent
+    /// accumulation is reproducible. Costs some memory (mapped fragments are held
+    /// between passes) and serializes the inference phase; off by default.
+    #[arg(long = "deterministic")]
+    deterministic: bool,
     /// [accepted; not yet implemented] disable fragment-length-distribution
     /// concordance in the per-fragment probability.
     #[arg(long = "noFragLengthDist")]
@@ -893,6 +900,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.cond_gc_bins = args.conditional_gc_bins;
     opts.skip_quant = args.skip_quant;
     opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
+    opts.deterministic = args.deterministic;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;

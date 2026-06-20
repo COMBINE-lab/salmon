@@ -196,6 +196,7 @@ fn quant_is_byte_identical_across_thread_counts() {
         opts.mates2 = vec![r2.clone()];
         opts.lib_type = "IU".to_string();
         opts.num_threads = threads;
+        opts.deterministic = true;
         quantify(&opts).expect("quantify");
         std::fs::read_to_string(out.join("quant.sf")).unwrap()
     };
@@ -299,6 +300,9 @@ fn multimapping_counts_bit_identical_across_threads() {
         opts.gc_bias = true;
         // force the after-burn-in FLD path on small data
         opts.num_pre_aux_model_samples = 50;
+        // byte-for-byte reproducibility is opt-in (#1031 review): the two-pass,
+        // key-sorted inference path is what makes this bit-identical across `-p`.
+        opts.deterministic = true;
         let res = quantify(&opts).expect("quantify");
         res.counts.iter().map(|c| c.to_bits()).collect()
     };

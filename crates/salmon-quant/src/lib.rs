@@ -145,6 +145,12 @@ pub struct QuantOptions {
     /// online posterior (salmon's `--numPreAuxModelSamples`; salmon's default is
     /// 1,000,000, this port's prior hardcoded value is 5,000)
     pub num_pre_aux_model_samples: u64,
+    /// opt-in byte-for-byte reproducibility (`--deterministic`). When `true`,
+    /// quantification splits into a parallel mapping pass and a single-threaded,
+    /// key-sorted inference pass so `quant.sf` is byte-identical regardless of
+    /// `-p N`. Default `false` keeps the historical inline, fully-parallel path
+    /// (no fragment store, no extra overhead).
+    pub deterministic: bool,
     /// Optional shared progress counters. When `Some`, [`quantify`] reports
     /// processed/mapped fragment counts here as it runs so the caller can drive
     /// a live progress display. `None` (the default) disables sharing.
@@ -194,6 +200,7 @@ impl QuantOptions {
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
             num_pre_aux_model_samples: processor::NUM_PRE_BURNIN,
+            deterministic: false,
             progress: None,
         }
     }
@@ -401,8 +408,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     };
 
     // ---- parallel mapping pass (borrows the accumulators) -------------------
-    // Pass 1 maps reads in parallel and buffers each mapped fragment here; pass 2
-    // (`run_inference_serial`) replays the inference deterministically.
+    // The default path runs inference inline during this pass. With
+    // `--deterministic`, pass 1 instead buffers each mapped fragment into
+    // `frag_sink` and pass 2 (`run_inference_serial`) replays the inference in a
+    // fixed key-sorted order; the sink stays empty otherwise.
     let frag_sink: std::sync::Mutex<Vec<(u128, Vec<salmon_map::ScoredMapping>)>> =
         std::sync::Mutex::new(Vec::new());
     {
@@ -444,6 +453,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             num_below_threshold_vm: &num_below_threshold_vm,
             unmapped_names: unmapped_collector.as_ref(),
             sam: sam_writer.as_ref(),
+            deterministic: opts.deterministic,
             frag_sink: &frag_sink,
         };
         let mut proc = QuantProcessor::new(shared);
@@ -462,8 +472,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         }
         drop(proc);
         // ---- deterministic inference pass (single-threaded, key-sorted) ------
-        let frags = std::mem::take(&mut *frag_sink.lock().unwrap());
-        run_inference_serial(&shared, frags, INFERENCE_BATCH);
+        // Only with `--deterministic`; the default path already ran the inference
+        // inline during the parallel mapping pass.
+        if opts.deterministic {
+            let frags = std::mem::take(&mut *frag_sink.lock().unwrap());
+            run_inference_serial(&shared, frags, INFERENCE_BATCH);
+        }
     }
     {
         let p = num_processed.load(Ordering::Relaxed);

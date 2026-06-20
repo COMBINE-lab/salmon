@@ -1,13 +1,20 @@
-//! Two-pass reads-mode quantification core.
+//! Reads-mode quantification core, with two inference strategies.
 //!
-//! **Pass 1** (parallel, paraseq): each worker maps its reads, samples the
-//! library format, writes SAM/`--writeMappings`, and buffers every mapped
-//! fragment's `(key, mappings)` into [`Shared::frag_sink`]. No inference runs
-//! here. **Pass 2** ([`run_inference_serial`]): the buffered fragments are sorted
-//! by a stable per-fragment key and the online posterior, FLD training, bias
-//! collection, and equivalence-class accumulation are replayed single-threaded in
-//! that fixed order. Every order-dependent accumulation is therefore
-//! byte-identical regardless of how many threads mapped the reads.
+//! **Default (inline, fully parallel):** each worker maps its reads and runs the
+//! per-fragment inference ([`record`]) immediately, accumulating the online
+//! posterior, FLD training, bias models, and equivalence classes concurrently.
+//! This is the historical behaviour: fast, no fragment store, but the
+//! accumulation order (hence the last ULPs of `quant.sf`) depends on thread
+//! scheduling.
+//!
+//! **`--deterministic` (opt-in, two-pass):** pass 1 maps in parallel and only
+//! buffers every mapped fragment's `(key, mappings)` into [`Shared::frag_sink`];
+//! pass 2 ([`run_inference_serial`]) sorts the buffered fragments by a stable
+//! per-fragment key and replays the inference single-threaded in that fixed order.
+//! Every order-dependent accumulation is then byte-identical regardless of how
+//! many threads mapped the reads, at the cost of holding the mappings between
+//! passes and a single-threaded inference phase. Selected by
+//! [`Shared::deterministic`].
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -110,11 +117,17 @@ pub(crate) struct Shared<'a> {
     pub unmapped_names: Option<&'a Mutex<Vec<String>>>,
     /// when set, write per-mapping SAM records (`--writeMappings`)
     pub sam: Option<&'a crate::sam::SamWriter>,
-    /// Mapping-phase fragment sink. The parallel pass maps each fragment and
-    /// appends `(key, mappings)` here; the inference (online posterior, FLD
-    /// training, bias collection, eq-class accumulation) then runs in a
-    /// deterministic, key-sorted, single-threaded second pass, so the result is
-    /// byte-identical regardless of thread count (see [`run_inference_serial`]).
+    /// opt-in byte-for-byte reproducibility (`--deterministic`). When `true`, the
+    /// mapping pass only buffers fragments into `frag_sink` and the inference runs
+    /// in a deterministic key-sorted second pass ([`run_inference_serial`]); when
+    /// `false` (default) the inference runs inline during the parallel mapping pass
+    /// (no fragment store, no extra overhead), as before.
+    pub deterministic: bool,
+    /// Mapping-phase fragment sink for the deterministic second pass; appended to
+    /// only when `deterministic` is set. The parallel pass maps each fragment and
+    /// appends `(key, mappings)`; [`run_inference_serial`] then replays the
+    /// inference key-sorted and single-threaded, byte-identical across thread
+    /// counts.
     pub frag_sink: &'a Mutex<Vec<(u128, Vec<ScoredMapping>)>>,
 }
 
@@ -124,21 +137,54 @@ pub(crate) struct QuantProcessor<'a> {
     pub hs: Option<HitSearcher<'a>>,
     /// per-thread reusable sketch caches (avoids per-read MappingCache allocs)
     pub sketch_scratch: Option<salmon_map::SketchScratch>,
+    /// per-thread observed (fw, rc) sequence-bias models (inline path only)
+    pub seqbias: Option<(SBModel, SBModel)>,
+    /// per-thread observed fragment-GC model (inline path only)
+    pub gcbias: Option<GcFragModel>,
+    /// per-thread observed (5', 3') positional-bias models (inline path only)
+    pub posbias: Option<(Vec<SimplePosBias>, Vec<SimplePosBias>)>,
     /// per-thread collected unmapped-fragment names (merged in on_thread_complete)
     pub unmapped: Vec<String>,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
     /// per-thread buffer of mapped fragments `(key, mappings)`, drained into
-    /// `Shared::frag_sink` at thread completion for the deterministic second pass.
+    /// `Shared::frag_sink` at thread completion for the deterministic second pass
+    /// (used only when `Shared::deterministic`).
     pub frag_buf: Vec<(u128, Vec<ScoredMapping>)>,
 }
 
 impl<'a> QuantProcessor<'a> {
     pub fn new(shared: Shared<'a>) -> Self {
+        // Per-thread bias models for the inline (non-deterministic) path; the
+        // deterministic path collects bias in `run_inference_serial` instead.
+        let (seqbias, gcbias, posbias) = if shared.deterministic {
+            (None, None, None)
+        } else {
+            let seqbias = shared
+                .collect_seqbias
+                .then(|| (SBModel::new(), SBModel::new()));
+            let gcbias = shared
+                .collect_gcbias
+                .then(|| GcFragModel::new(shared.cond_gc_bins, shared.gc_bins));
+            let posbias = shared.collect_posbias.then(|| {
+                (
+                    (0..NUM_LENGTH_CLASSES)
+                        .map(|_| SimplePosBias::default())
+                        .collect(),
+                    (0..NUM_LENGTH_CLASSES)
+                        .map(|_| SimplePosBias::default())
+                        .collect(),
+                )
+            });
+            (seqbias, gcbias, posbias)
+        };
         Self {
             shared,
             hs: None,
             sketch_scratch: None,
+            seqbias,
+            gcbias,
+            posbias,
             unmapped: Vec::new(),
             sam_buf: String::new(),
             frag_buf: Vec::new(),
@@ -532,10 +578,17 @@ fn record(
     // differs and coarsening the range-factorized classes. The FLD term is only
     // applied once the auxiliary model is trained (after `pre_burnin` fragments),
     // matching salmon's `numPreAuxModelSamples` gating.
-    // Gate on the online inference's own progressive count (equal to the
-    // fragments processed so far in the deterministic pass), not the pre-counted
-    // total `num_processed`, so the burn-in window is honored in pass 2.
-    let use_aux = sh.online.map_or(0, |o| o.num_assigned()) >= sh.pre_burnin;
+    // Burn-in gate. The inline (default) path reads the shared `num_processed`
+    // counter as it did before, matching the non-deterministic behaviour. The
+    // deterministic pass instead gates on the online inference's own progressive
+    // count (the fragments replayed so far in key-sorted order), so the burn-in
+    // window is honored in that fixed order rather than against the pre-counted
+    // total.
+    let use_aux = if sh.deterministic {
+        sh.online.map_or(0, |o| o.num_assigned())
+    } else {
+        sh.num_processed.load(Ordering::Relaxed)
+    } >= sh.pre_burnin;
     // Per-mapping FLD log-probability via the shared `frag_log_prob` term — the
     // same one the online posterior uses, reading the same per-fragment snapshot
     // pair captured above (so the two paths share one consistent FLD view, as
@@ -671,6 +724,30 @@ fn merge_unmapped(proc: &mut QuantProcessor) {
     }
 }
 
+/// Merge this thread's observed bias models (sequence, GC, positional) into the
+/// shared accumulators. Inline (non-deterministic) path only; the deterministic
+/// pass collects bias directly into shared models in [`run_inference_serial`].
+fn merge_bias(proc: &QuantProcessor) {
+    if let (Some(local), Some(shared_mtx)) = (proc.seqbias.as_ref(), proc.shared.seqbias_obs) {
+        let mut g = shared_mtx.lock().unwrap();
+        g.0.combine_counts(&local.0);
+        g.1.combine_counts(&local.1);
+    }
+    if let (Some(local), Some(shared_mtx)) = (proc.gcbias.as_ref(), proc.shared.gcbias_obs) {
+        let mut g = shared_mtx.lock().unwrap();
+        g.combine_counts(local);
+    }
+    if let (Some(local), Some(shared_mtx)) = (proc.posbias.as_ref(), proc.shared.posbias_obs) {
+        let mut g = shared_mtx.lock().unwrap();
+        for (a, b) in g.0.iter_mut().zip(&local.0) {
+            a.combine(b);
+        }
+        for (a, b) in g.1.iter_mut().zip(&local.1) {
+            a.combine(b);
+        }
+    }
+}
+
 /// Run the per-fragment inference over the mapped fragments in a deterministic,
 /// key-sorted, single-threaded order. The parallel mapping pass only maps and
 /// buffers fragments; this pass replays the online posterior, FLD training, bias
@@ -750,10 +827,12 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             shared,
             hs,
             sketch_scratch,
+            seqbias,
+            gcbias,
+            posbias,
             unmapped,
             sam_buf,
             frag_buf,
-            ..
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -764,6 +843,14 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         if sh.sketch && sketch_scratch.is_none() {
             *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
         }
+        // One forgetting-mass timestep per mapped batch for the inline online
+        // posterior; the deterministic pass advances it per mini-batch in pass 2
+        // instead, so leave the schedule untouched here when buffering.
+        let log_fm = if sh.deterministic {
+            0.0
+        } else {
+            sh.online.map_or(0.0, |o| o.next_log_fm())
+        };
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();
@@ -818,28 +905,51 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     &maps,
                 );
             }
-            // Pass 1 only maps + buffers; the inference runs deterministically in
-            // pass 2 (see `run_inference_serial`).
             sh.num_processed.fetch_add(1, Ordering::Relaxed);
-            if !maps.is_empty() {
-                frag_buf.push((xxhash_rust::xxh3::xxh3_128(r1.id()), maps));
+            if maps.is_empty() {
+                continue;
+            }
+            let key = xxhash_rust::xxh3::xxh3_128(r1.id());
+            if sh.deterministic {
+                // Pass 1 only maps + buffers; the inference runs deterministically
+                // in pass 2 (see `run_inference_serial`).
+                frag_buf.push((key, maps));
+            } else {
+                // Inline (default): run the per-fragment inference now, in parallel.
+                record(
+                    &sh,
+                    key,
+                    &maps,
+                    log_fm,
+                    seqbias.as_mut(),
+                    gcbias.as_mut(),
+                    posbias.as_mut(),
+                );
             }
         }
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Pass 1 only maps; the FLD is trained in the deterministic pass 2.
+        // Inline path refreshes the FLD online snapshot at the mini-batch boundary
+        // (see `record`); the deterministic pass trains the FLD in pass 2 instead.
+        if !self.shared.deterministic {
+            self.shared.fld.refresh_online();
+        }
         flush_sam(self);
         Ok(())
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
-        // Hand this worker's mapped fragments to the shared sink for the
-        // deterministic inference pass (bias models are collected there, not here).
-        if !self.frag_buf.is_empty() {
-            let mut sink = self.shared.frag_sink.lock().unwrap();
-            sink.append(&mut self.frag_buf);
+        if self.shared.deterministic {
+            // Hand this worker's mapped fragments to the shared sink for the
+            // deterministic inference pass (bias models are collected there).
+            if !self.frag_buf.is_empty() {
+                let mut sink = self.shared.frag_sink.lock().unwrap();
+                sink.append(&mut self.frag_buf);
+            }
+        } else {
+            merge_bias(self);
         }
         merge_unmapped(self);
         flush_sam(self);
@@ -856,10 +966,12 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             shared,
             hs,
             sketch_scratch,
+            seqbias,
+            gcbias,
+            posbias,
             unmapped,
             sam_buf,
             frag_buf,
-            ..
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -870,6 +982,11 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         if sh.sketch && sketch_scratch.is_none() {
             *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
         }
+        let log_fm = if sh.deterministic {
+            0.0
+        } else {
+            sh.online.map_or(0.0, |o| o.next_log_fm())
+        };
         for rec in records {
             let s = rec.seq();
             let mut maps = if sh.sketch {
@@ -907,25 +1024,43 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 crate::sam::write_fragment(sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps);
             }
             sh.num_processed.fetch_add(1, Ordering::Relaxed);
-            if !maps.is_empty() {
-                frag_buf.push((xxhash_rust::xxh3::xxh3_128(rec.id()), maps));
+            if maps.is_empty() {
+                continue;
+            }
+            let key = xxhash_rust::xxh3::xxh3_128(rec.id());
+            if sh.deterministic {
+                frag_buf.push((key, maps));
+            } else {
+                record(
+                    &sh,
+                    key,
+                    &maps,
+                    log_fm,
+                    seqbias.as_mut(),
+                    gcbias.as_mut(),
+                    posbias.as_mut(),
+                );
             }
         }
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Pass 1 only maps; the FLD is trained in the deterministic pass 2.
+        if !self.shared.deterministic {
+            self.shared.fld.refresh_online();
+        }
         flush_sam(self);
         Ok(())
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
-        // Hand this worker's mapped fragments to the shared sink for the
-        // deterministic inference pass (bias models are collected there, not here).
-        if !self.frag_buf.is_empty() {
-            let mut sink = self.shared.frag_sink.lock().unwrap();
-            sink.append(&mut self.frag_buf);
+        if self.shared.deterministic {
+            if !self.frag_buf.is_empty() {
+                let mut sink = self.shared.frag_sink.lock().unwrap();
+                sink.append(&mut self.frag_buf);
+            }
+        } else {
+            merge_bias(self);
         }
         merge_unmapped(self);
         flush_sam(self);
