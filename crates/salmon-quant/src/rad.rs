@@ -328,9 +328,9 @@ fn skip_tag_section<R: Read>(r: &mut R) -> Result<()> {
     Ok(())
 }
 
-/// Read the prelude and return `num_chunks`.
-fn read_prelude<R: Read>(r: &mut R) -> Result<u64> {
-    let _is_paired = read_u8(r)?;
+/// Read the prelude and return `(is_paired, num_chunks)`.
+fn read_prelude<R: Read>(r: &mut R) -> Result<(bool, u64)> {
+    let is_paired = read_u8(r)? != 0;
     let ref_count = read_u64(r)?;
     for _ in 0..ref_count {
         let len = read_u16(r)? as usize;
@@ -341,7 +341,58 @@ fn read_prelude<R: Read>(r: &mut R) -> Result<u64> {
     skip_tag_section(r).context("reading RAD file tag section")?;
     skip_tag_section(r).context("reading RAD read tag section")?;
     skip_tag_section(r).context("reading RAD alignment tag section")?;
-    Ok(num_chunks)
+    Ok((is_paired, num_chunks))
+}
+
+/// The alignment-level tag names of salmon's own full-fidelity profile, in order.
+/// Used to recognize a RAD written by salmon (vs. e.g. a piscem bulk RAD).
+const SALMON_ALN_TAGS: [&str; 10] = [
+    "tid",
+    "weight",
+    "status",
+    "is_fw",
+    "fragment_len",
+    "read_len",
+    "ref_pos",
+    "fw_pos",
+    "rc_pos",
+    "format",
+];
+
+/// Read just the `is_paired` flag from a RAD file header (for quantification
+/// input, where there are no FASTQ mates to infer it from).
+pub fn read_is_paired(path: &Path) -> Result<bool> {
+    let f = File::open(path).with_context(|| format!("opening RAD file {}", path.display()))?;
+    let mut r = BufReader::new(f);
+    Ok(read_u8(&mut r)? != 0)
+}
+
+/// Verify the file carries salmon's own full-fidelity alignment-level tag schema,
+/// so [`read_record`] can decode it exactly. Returns an error for other RAD
+/// profiles (for example a piscem bulk RAD, whose reduced records this reader does
+/// not yet decode), rather than silently misreading them.
+pub fn verify_salmon_profile(path: &Path) -> Result<()> {
+    use libradicl::header::RadPrelude;
+    let f = File::open(path).with_context(|| format!("opening RAD file {}", path.display()))?;
+    let mut r = BufReader::new(f);
+    let prelude = RadPrelude::from_bytes(&mut r)
+        .with_context(|| format!("parsing RAD prelude of {}", path.display()))?;
+    let aln: Vec<&str> = prelude
+        .aln_tags
+        .tags
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    if aln != SALMON_ALN_TAGS {
+        bail!(
+            "RAD file {} does not use salmon's mapping-store profile (alignment tags = {:?}); \
+             only RAD written by salmon (e.g. via --writeRad) is supported as input so far. \
+             piscem bulk RAD input is a planned follow-up.",
+            path.display(),
+            aln
+        );
+    }
+    Ok(())
 }
 
 /// Read one alignment's tag values (the inverse of the per-mapping write in
@@ -404,7 +455,7 @@ fn read_record<R: Read>(r: &mut R) -> Result<(u128, Vec<ScoredMapping>)> {
 pub fn read_rad(path: &Path) -> Result<Vec<(u128, Vec<ScoredMapping>)>> {
     let f = File::open(path).with_context(|| format!("opening RAD file {}", path.display()))?;
     let mut r = BufReader::new(f);
-    let num_chunks = read_prelude(&mut r)?;
+    let (_is_paired, num_chunks) = read_prelude(&mut r)?;
     let mut out = Vec::new();
     let read_one_chunk = |r: &mut BufReader<File>, out: &mut Vec<_>| -> Result<()> {
         let nrec = read_u32(r)?;
@@ -452,7 +503,7 @@ impl RadRecordReader {
         let f =
             File::open(path).with_context(|| format!("opening RAD store {}", path.display()))?;
         let mut r = BufReader::new(f);
-        let num_chunks = read_prelude(&mut r)?;
+        let (_is_paired, num_chunks) = read_prelude(&mut r)?;
         Ok(Self {
             r,
             in_chunk: 0,

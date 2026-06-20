@@ -388,6 +388,55 @@ fn multi_run_external_sort_is_bit_identical_across_threads() {
     );
 }
 
+/// RAD input round trip: map once with `--writeRad` to persist the mapping store,
+/// then quantify from it with `--rad` (no reads). The decoupled quant must
+/// reproduce the byte-identical `quant.sf`, and it must be independent of the
+/// thread count used either to build the store or (irrelevant, serial) to read it.
+#[test]
+fn rad_input_reproduces_quant_from_written_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2) = simulate_multimapping(tmp.path());
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let store = tmp.path().join("mappings.rad");
+
+    // Map at -p 4, writing and keeping the RAD store.
+    let out_a = tmp.path().join("a");
+    let mut a = QuantOptions::new(idx_dir.clone(), out_a.clone());
+    a.mates1 = vec![r1.clone()];
+    a.mates2 = vec![r2.clone()];
+    a.lib_type = "IU".to_string();
+    a.num_threads = 4;
+    a.seq_bias = true;
+    a.gc_bias = true;
+    a.num_pre_aux_model_samples = 50;
+    a.write_rad = Some(store.clone());
+    quantify(&a).expect("quantify + writeRad");
+    assert!(store.exists(), "--writeRad did not keep the store");
+    let sf_a = std::fs::read_to_string(out_a.join("quant.sf")).unwrap();
+
+    // Re-quantify from the store alone (no reads), at a different thread count and
+    // matching inference settings.
+    let out_b = tmp.path().join("b");
+    let mut b = QuantOptions::new(idx_dir.clone(), out_b.clone());
+    b.lib_type = "IU".to_string();
+    b.num_threads = 8;
+    b.seq_bias = true;
+    b.gc_bias = true;
+    b.num_pre_aux_model_samples = 50;
+    b.rad_input = Some(store.clone());
+    quantify(&b).expect("quantify from --rad");
+    let sf_b = std::fs::read_to_string(out_b.join("quant.sf")).unwrap();
+
+    assert_eq!(
+        sf_a, sf_b,
+        "RAD-input quant differs from the store-producing run"
+    );
+}
+
 #[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();

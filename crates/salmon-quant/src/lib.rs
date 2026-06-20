@@ -157,6 +157,15 @@ pub struct QuantOptions {
     /// more runs (exercising the k-way merge) at the cost of more, smaller run
     /// files; primarily a test knob.
     pub det_run_size: Option<usize>,
+    /// write the mapping store to this path and keep it (`--writeRad`). Implies
+    /// the deterministic store is produced (pass 1 streams mappings to RAD);
+    /// the result can later be quantified with [`Self::rad_input`].
+    pub write_rad: Option<PathBuf>,
+    /// quantify from this RAD mapping store instead of mapping FASTQ reads
+    /// (`--rad`). Must be a RAD written by salmon (see [`Self::write_rad`]); the
+    /// index still supplies reference lengths/sequences for effective lengths and
+    /// bias correction. Mutually exclusive with read inputs.
+    pub rad_input: Option<PathBuf>,
     /// Optional shared progress counters. When `Some`, [`quantify`] reports
     /// processed/mapped fragment counts here as it runs so the caller can drive
     /// a live progress display. `None` (the default) disables sharing.
@@ -208,6 +217,8 @@ impl QuantOptions {
             num_pre_aux_model_samples: processor::NUM_PRE_BURNIN,
             deterministic: false,
             det_run_size: None,
+            write_rad: None,
+            rad_input: None,
             progress: None,
         }
     }
@@ -328,9 +339,23 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         opts.num_threads
     };
 
+    // RAD-format input (`--rad`): quantify from a salmon-written mapping store
+    // instead of FASTQ reads. Validate the profile up front and take paired-vs-
+    // single from the RAD header (there are no FASTQ mates to infer it from).
+    let rad_input = opts.rad_input.as_ref();
+    if let Some(path) = rad_input {
+        rad::verify_salmon_profile(path)
+            .with_context(|| format!("validating RAD input {}", path.display()))?;
+    }
+    let is_paired = match rad_input {
+        Some(path) => rad::read_is_paired(path)
+            .with_context(|| format!("reading RAD header {}", path.display()))?,
+        None => opts.is_paired(),
+    };
+
     // Auto-detect the library type when requested (`-l A`).
     let auto_detect = LibraryFormat::is_auto(&opts.lib_type);
-    let read_type = if opts.is_paired() {
+    let read_type = if is_paired {
         ReadType::PairedEnd
     } else {
         ReadType::SingleEnd
@@ -414,18 +439,33 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         ))
     };
 
-    // ---- parallel mapping pass (borrows the accumulators) -------------------
-    // The default path runs inference inline during this pass. With
-    // `--deterministic`, pass 1 instead streams each mapped fragment to a RAD
-    // mapping store and pass 2 (`run_inference_serial`) reads it back, sorts by
-    // key, and replays the inference in that fixed order; the store is absent
-    // otherwise. It is written under `aux_info/` and removed after pass 2.
-    let rad_path = opts.output_dir.join("aux_info").join("det_mappings.rad");
-    let rad_writer = if opts.deterministic {
-        std::fs::create_dir_all(opts.output_dir.join("aux_info"))
-            .context("creating aux_info for the RAD mapping store")?;
+    // ---- mapping / inference pass (borrows the accumulators) ----------------
+    // Three configurations:
+    //   * `--rad`: skip mapping; run the deterministic key-sorted inference over
+    //     the input store directly.
+    //   * FASTQ + `--deterministic`/`--writeRad`: map in parallel streaming each
+    //     fragment to a RAD store, then run the deterministic pass over it.
+    //   * FASTQ (default): map in parallel and run inference inline.
+    let aux_dir = opts.output_dir.join("aux_info");
+    let store_path = opts
+        .write_rad
+        .clone()
+        .unwrap_or_else(|| aux_dir.join("det_mappings.rad"));
+    // A store is produced when mapping AND (deterministic or keeping the RAD).
+    let make_store = rad_input.is_none() && (opts.deterministic || opts.write_rad.is_some());
+    // The serial key-sorted inference runs for a produced store or a RAD input.
+    let det_inference = make_store || rad_input.is_some();
+    if make_store || det_inference {
+        std::fs::create_dir_all(&aux_dir).context("creating aux_info")?;
+    }
+    if let Some(parent) = store_path.parent() {
+        if make_store {
+            std::fs::create_dir_all(parent).context("creating --writeRad directory")?;
+        }
+    }
+    let rad_writer = if make_store {
         Some(
-            rad::RadChunkWriter::create(&rad_path, &salmon, opts.is_paired())
+            rad::RadChunkWriter::create(&store_path, &salmon, is_paired)
                 .context("creating RAD mapping store")?,
         )
     } else {
@@ -458,7 +498,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             length_class: length_class.as_deref(),
             posbias_obs: posbias_obs.as_ref(),
             online: online.as_ref(),
-            paired_lib: opts.is_paired(),
+            paired_lib: is_paired,
             model_single_frag_prob: opts.model_single_frag_prob,
             no_frag_length_dist: opts.no_frag_length_dist,
             num_processed,
@@ -470,47 +510,54 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             num_below_threshold_vm: &num_below_threshold_vm,
             unmapped_names: unmapped_collector.as_ref(),
             sam: sam_writer.as_ref(),
-            deterministic: opts.deterministic,
+            deterministic: det_inference,
             rad: rad_writer.as_ref(),
         };
-        let mut proc = QuantProcessor::new(shared);
-        tracing::info!(
-            "mapping reads ({} mode, {nthreads} threads)",
-            if opts.sketch {
-                "sketch"
-            } else {
-                "selective-alignment"
-            }
-        );
-        if opts.is_paired() {
-            run_paired(&opts.mates1, &opts.mates2, &mut proc, nthreads)?;
-        } else {
-            run_single(&opts.unmated, &mut proc, nthreads)?;
-        }
-        drop(proc);
-        // ---- deterministic inference pass (single-threaded, key-sorted) ------
-        // Only with `--deterministic`; the default path already ran the inference
-        // inline during the parallel mapping pass. Flush the store, read it back,
-        // and replay the inference in key-sorted order.
-        if opts.deterministic {
-            if let Some(w) = &rad_writer {
-                w.flush()?;
-            }
-            // External merge sort over the store: stream fragments in key order
-            // without loading the whole store into memory. Run files live next to
-            // the store and are cleaned up when the sorter drops.
-            let aux_dir = opts.output_dir.join("aux_info");
-            let run_size = opts.det_run_size.unwrap_or(rad::RUN_SIZE);
-            let sorter = rad::ExternalSort::new(&rad_path, run_size, &aux_dir)
-                .context("sorting RAD mapping store")?;
+        let run_size = opts.det_run_size.unwrap_or(rad::RUN_SIZE);
+        if let Some(rad_path) = rad_input {
+            // ---- RAD input: quantify from the store, no mapping --------------
+            tracing::info!("quantifying from RAD store {}", rad_path.display());
+            let sorter = rad::ExternalSort::new(rad_path, run_size, &aux_dir)
+                .context("sorting RAD input")?;
             run_inference_serial(&shared, sorter, INFERENCE_BATCH)
-                .context("deterministic inference pass")?;
+                .context("RAD-input inference")?;
+            // the store carries only mapped fragments; report processed == mapped
+            num_processed.store(num_mapped.load(Ordering::Relaxed), Ordering::Relaxed);
+        } else {
+            let mut proc = QuantProcessor::new(shared);
+            tracing::info!(
+                "mapping reads ({} mode, {nthreads} threads)",
+                if opts.sketch {
+                    "sketch"
+                } else {
+                    "selective-alignment"
+                }
+            );
+            if is_paired {
+                run_paired(&opts.mates1, &opts.mates2, &mut proc, nthreads)?;
+            } else {
+                run_single(&opts.unmated, &mut proc, nthreads)?;
+            }
+            drop(proc);
+            // ---- deterministic inference pass (single-threaded, key-sorted) --
+            // The default (inline) path already ran the inference during mapping;
+            // here we flush the store and replay it in key-sorted order.
+            if det_inference {
+                if let Some(w) = &rad_writer {
+                    w.flush()?;
+                }
+                let sorter = rad::ExternalSort::new(&store_path, run_size, &aux_dir)
+                    .context("sorting RAD mapping store")?;
+                run_inference_serial(&shared, sorter, INFERENCE_BATCH)
+                    .context("deterministic inference pass")?;
+            }
         }
     }
-    // Drop the writer (closing the file handle), then remove the transient store.
+    // Drop the writer (closing the file handle), then remove the store unless the
+    // user asked to keep it (`--writeRad`). A `--rad` input is never removed.
     drop(rad_writer);
-    if opts.deterministic {
-        let _ = std::fs::remove_file(&rad_path);
+    if make_store && opts.write_rad.is_none() {
+        let _ = std::fs::remove_file(&store_path);
     }
     {
         let p = num_processed.load(Ordering::Relaxed);

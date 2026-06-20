@@ -575,6 +575,16 @@ struct QuantArgs {
     /// between passes) and serializes the inference phase; off by default.
     #[arg(long = "deterministic")]
     deterministic: bool,
+    /// Write the mapping store to this path (RAD format) and keep it. Implies the
+    /// deterministic store is produced; the result can later be re-quantified with
+    /// `--rad` (salmon map -> RAD -> salmon quant), avoiding re-mapping.
+    #[arg(long = "writeRad", value_name = "FILE")]
+    write_rad: Option<PathBuf>,
+    /// Quantify from a RAD mapping store (written by `--writeRad`) instead of
+    /// mapping FASTQ reads. The index (`-i`) still supplies reference
+    /// lengths/sequences for effective lengths and bias correction.
+    #[arg(long = "rad", value_name = "FILE")]
+    rad: Option<PathBuf>,
     /// [accepted; not yet implemented] disable fragment-length-distribution
     /// concordance in the per-fragment probability.
     #[arg(long = "noFragLengthDist")]
@@ -836,10 +846,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Reads (selective-alignment / pseudoalignment) mode.
+    // Reads (selective-alignment / pseudoalignment) mode, or RAD-store input.
     anyhow::ensure!(
-        !args.mates1.is_empty() || !args.unmated.is_empty(),
-        "no reads provided: pass -1/-2 (paired), -r (single-end), or -a (BAM)"
+        !args.mates1.is_empty() || !args.unmated.is_empty() || args.rad.is_some(),
+        "no input provided: pass -1/-2 (paired), -r (single-end), -a (BAM), or --rad (RAD store)"
+    );
+    anyhow::ensure!(
+        args.rad.is_none() || (args.mates1.is_empty() && args.unmated.is_empty()),
+        "--rad cannot be combined with read inputs (-1/-2/-r)"
     );
     anyhow::ensure!(
         args.mates1.len() == args.mates2.len(),
@@ -901,6 +915,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.skip_quant = args.skip_quant;
     opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
     opts.deterministic = args.deterministic;
+    opts.write_rad = args.write_rad.clone();
+    opts.rad_input = args.rad.clone();
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;
