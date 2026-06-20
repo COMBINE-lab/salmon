@@ -365,19 +365,10 @@ fn record(
     if maps.is_empty() {
         return;
     }
-    sh.num_mapped.fetch_add(1, Ordering::Relaxed);
-
-    // Classify the fragment as orphan when its representative mapping has only
-    // one mate of a pair placed (PairedEndLeft / PairedEndRight). Single-end
-    // libraries never count as orphan here.
-    if matches!(
-        maps[0].status,
-        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-    ) {
-        sh.num_orphan.fetch_add(1, Ordering::Relaxed);
-    }
 
     // Sample the observed library format for auto-detection (auto mode only).
+    // Sampled from the raw mappings, before the strand-compatibility filter
+    // below, so detection sees the true observed orientation/strand.
     if let Some(det) = sh.detector {
         if det.is_active() {
             if let Some(m) = maps
@@ -414,7 +405,26 @@ fn record(
         })
         .collect();
     if compat.is_empty() {
-        return; // no compatible mapping -> fragment is unassigned
+        return; // no compatible mapping -> fragment is unassigned (not mapped)
+    }
+
+    // The fragment has at least one strand-compatible mapping, so it contributes
+    // mass and counts as mapped. Count it *after* the compatibility filter above:
+    // counting on any mapping (before the filter) over-reported `num_mapped` /
+    // `percent_mapped` / `num_compatible_fragments` on stranded libraries, because
+    // a fragment whose every mapping was strand-incompatible is dropped here yet
+    // quantifies as nothing — which also broke the invariant `Σ NumReads ==
+    // num_mapped`. C++ salmon likewise counts a fragment as mapped only once it
+    // has a compatible mapping.
+    sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+    // Classify the fragment as orphan when its best compatible mapping has only
+    // one mate of a pair placed (PairedEndLeft / PairedEndRight). Single-end
+    // libraries never count as orphan here.
+    if matches!(
+        compat[0].0.status,
+        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+    ) {
+        sh.num_orphan.fetch_add(1, Ordering::Relaxed);
     }
 
     // Capture ONE immutable FLD snapshot pair (PMF + CMF) for this fragment — a
