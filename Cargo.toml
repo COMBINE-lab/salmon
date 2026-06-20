@@ -70,6 +70,9 @@ sha2 = "0.10"
 # COMBINE-lab dependencies, from crates.io.
 cf1-rs = "0.5"
 piscem-rs = "0.6.0"
+# RAD-format mapping store (deterministic two-pass path; the format used by
+# piscem / piscem-infer / alevin-fry, and the groundwork for RAD-format input).
+libradicl = "0.10"
 
 # dev / test helpers
 tempfile = "3"

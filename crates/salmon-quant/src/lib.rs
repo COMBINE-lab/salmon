@@ -12,6 +12,7 @@
 
 mod output;
 mod processor;
+pub mod rad;
 mod sam;
 
 use std::path::{Path, PathBuf};

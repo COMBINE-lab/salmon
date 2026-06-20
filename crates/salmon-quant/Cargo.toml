@@ -16,6 +16,7 @@ salmon-model = { workspace = true }
 salmon-eqclass = { workspace = true }
 salmon-infer = { workspace = true }
 piscem-rs = { workspace = true }
+libradicl = { workspace = true }
 paraseq = "0.4"
 xxhash-rust = { workspace = true }
 anyhow = { workspace = true }
