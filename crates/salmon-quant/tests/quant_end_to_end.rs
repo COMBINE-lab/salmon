@@ -210,6 +210,105 @@ fn quant_is_byte_identical_across_thread_counts() {
     assert_eq!(p1, p4a, "-p 1 and -p 4 differ");
 }
 
+fn simulate_multimapping(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let backbone = gen_seq(1500, 99);
+    let snp = |seed: u64, n: usize| {
+        let mut s = backbone.clone();
+        let mut x = seed;
+        for _ in 0..n {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let pos = (x >> 33) as usize % s.len();
+            s[pos] = match s[pos] {
+                b'A' => b'C',
+                b'C' => b'G',
+                b'G' => b'T',
+                _ => b'A',
+            };
+        }
+        s
+    };
+    let txs = [
+        ("d0", backbone.clone()),
+        ("d1", snp(1, 6)),
+        ("d2", snp(2, 6)),
+    ];
+    let fasta = dir.join("multi.fa");
+    let mut fa = std::fs::File::create(&fasta).unwrap();
+    for (name, seq) in &txs {
+        writeln!(fa, ">{name}").unwrap();
+        fa.write_all(seq).unwrap();
+        writeln!(fa).unwrap();
+    }
+    drop(fa);
+    let r1p = dir.join("m1.fq");
+    let r2p = dir.join("m2.fq");
+    let mut w = FastqWriters {
+        r1: std::io::BufWriter::new(std::fs::File::create(&r1p).unwrap()),
+        r2: std::io::BufWriter::new(std::fs::File::create(&r2p).unwrap()),
+    };
+    let mut rng = 0x0BEE_F00Du64;
+    let mut next = || {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        rng >> 33
+    };
+    // Enough fragments to span multiple paraseq batches / worker threads (so the
+    // multi-threaded path is actually exercised).
+    for id in 0..20000 {
+        let frag = 200 + (next() % 100) as usize;
+        let max_start = backbone.len() - frag;
+        let pos = (next() as usize) % (max_start + 1);
+        let s1 = backbone[pos..pos + READ_LEN].to_vec();
+        let s2 = revcomp(&backbone[pos + frag - READ_LEN..pos + frag]);
+        w.write_pair(id, &s1, &s2);
+    }
+    w.r1.flush().unwrap();
+    w.r2.flush().unwrap();
+    (fasta, r1p, r2p)
+}
+
+/// Strongest end-to-end determinism guard: compares the **full-precision** `f64`
+/// abundances (`res.counts`, not the truncated `quant.sf` text) across thread
+/// counts, under the hardest conditions for thread-order sensitivity — many
+/// multimapping fragments (near-duplicate transcripts -> fractional eq-class
+/// weights), `--seqBias --gcBias` on (online masses + bias models), and the
+/// after-burn-in FLD path forced on. With stages 1 (#1027), 2a (#1028) and 2b
+/// (#1030) this is bit-identical; the residual online-mass differences are far
+/// too small to flip the per-fragment-seeded FLD acceptance or the binned bias
+/// models.
+#[test]
+fn multimapping_counts_bit_identical_across_threads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2) = simulate_multimapping(tmp.path());
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let run = |threads: usize| -> Vec<u64> {
+        let out = tmp.path().join(format!("mm_{threads}"));
+        let mut opts = QuantOptions::new(idx_dir.clone(), out);
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = "IU".to_string();
+        opts.num_threads = threads;
+        opts.seq_bias = true;
+        opts.gc_bias = true;
+        // force the after-burn-in FLD path on small data
+        opts.num_pre_aux_model_samples = 50;
+        let res = quantify(&opts).expect("quantify");
+        res.counts.iter().map(|c| c.to_bits()).collect()
+    };
+    let p1 = run(1);
+    let p8a = run(8);
+    let p8b = run(8);
+    assert_eq!(p8a, p8b, "two -p 8 runs differ (full precision)");
+    assert_eq!(p1, p8a, "-p 1 and -p 8 differ (full precision)");
+}
+
 #[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();
