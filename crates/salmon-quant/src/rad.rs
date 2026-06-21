@@ -42,11 +42,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
-use libradicl::rad_types::{RadFloatId, RadIntId, RadType, TagDesc, TagSection, TagSectionLabel};
+use libradicl::header::RadPrelude;
+use libradicl::rad_types::{
+    MappedFragmentOrientation, MappingType, RadFloatId, RadIntId, RadType, TagDesc, TagSection,
+    TagSectionLabel,
+};
+use libradicl::record::{
+    MappedRecord, PiscemBulkReadRecord, PiscemBulkRecordContext, RecordContext,
+};
 
-use salmon_core::{LibraryFormat, MateStatus};
+use salmon_core::{LibraryFormat, MateStatus, RefProvider};
 use salmon_index::SalmonIndex;
-use salmon_map::ScoredMapping;
+use salmon_map::{filter_sketch_decoys, ScoreConfig, ScoredMapping};
 
 /// Sentinel `format` tag value standing for `ScoredMapping::format == None`
 /// (no library format determinable). Library `format_id`s are small, so the top
@@ -367,12 +374,24 @@ pub fn read_is_paired(path: &Path) -> Result<bool> {
     Ok(read_u8(&mut r)? != 0)
 }
 
-/// Verify the file carries salmon's own full-fidelity alignment-level tag schema,
-/// so [`read_record`] can decode it exactly. Returns an error for other RAD
-/// profiles (for example a piscem bulk RAD, whose reduced records this reader does
-/// not yet decode), rather than silently misreading them.
-pub fn verify_salmon_profile(path: &Path) -> Result<()> {
-    use libradicl::header::RadPrelude;
+/// Which RAD profile a `--rad` input file uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadProfile {
+    /// salmon's own full-fidelity mapping store (written by `--writeRad`): the
+    /// 10-tag [`SALMON_ALN_TAGS`] schema, decoded by [`read_record`].
+    Salmon,
+    /// piscem's bulk/sketch-mode RAD (`piscem map`): reduced records (ref,
+    /// orientation, position, fragment length) with no per-mapping score,
+    /// decoded via `libradicl`'s [`PiscemBulkReadRecord`].
+    PiscemBulk,
+}
+
+/// Inspect a RAD file's prelude and decide which profile it uses, so the right
+/// reader can decode it. Salmon's own store is recognized by its full
+/// alignment-tag schema; a piscem bulk RAD by its `frag_map_type` read-level tag
+/// (the signature `libradicl`'s [`PiscemBulkRecordContext`] keys off). Any other
+/// shape is rejected with an explanatory error rather than silently misread.
+pub fn detect_profile(path: &Path) -> Result<RadProfile> {
     let f = File::open(path).with_context(|| format!("opening RAD file {}", path.display()))?;
     let mut r = BufReader::new(f);
     let prelude = RadPrelude::from_bytes(&mut r)
@@ -383,16 +402,23 @@ pub fn verify_salmon_profile(path: &Path) -> Result<()> {
         .iter()
         .map(|t| t.name.as_str())
         .collect();
-    if aln != SALMON_ALN_TAGS {
-        bail!(
-            "RAD file {} does not use salmon's mapping-store profile (alignment tags = {:?}); \
-             only RAD written by salmon (e.g. via --writeRad) is supported as input so far. \
-             piscem bulk RAD input is a planned follow-up.",
-            path.display(),
-            aln
-        );
+    if aln == SALMON_ALN_TAGS {
+        return Ok(RadProfile::Salmon);
     }
-    Ok(())
+    if prelude
+        .read_tags
+        .tags
+        .iter()
+        .any(|t| t.name == "frag_map_type")
+    {
+        return Ok(RadProfile::PiscemBulk);
+    }
+    bail!(
+        "RAD file {} uses an unrecognized profile (alignment tags = {:?}); supported inputs are a \
+         salmon mapping store (written by --writeRad) or a piscem bulk/sketch-mode RAD.",
+        path.display(),
+        aln
+    );
 }
 
 /// Read one alignment's tag values (the inverse of the per-mapping write in
@@ -658,6 +684,207 @@ impl Drop for ExternalSort {
         for path in &self.run_paths {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// piscem bulk/sketch-mode RAD input (`piscem map` -> `salmon quant`).
+//
+// A piscem bulk RAD carries the canonical reduced record (ref | orientation,
+// position, fragment length) and no per-mapping alignment score. We decode it
+// with `libradicl`'s own `PiscemBulkReadRecord` reader (so the format matches
+// piscem by construction, no bespoke parser) and turn each record into the same
+// uniform-weight `ScoredMapping`s salmon's native sketch path produces, then drop
+// decoy references per fragment exactly as the inline sketch path does. Records
+// carry no read-id hash, so the deterministic key-sorted replay does not apply;
+// fragments are keyed by their sequential file index (deterministic for a given
+// piscem run) and consumed in file order.
+// ---------------------------------------------------------------------------
+
+/// Map a piscem `frag_map_type` to salmon's [`MateStatus`]; `None` for an
+/// unmapped record (which carries no placements).
+fn status_from_frag_type(frag_type: u8) -> Option<MateStatus> {
+    match MappingType::from_u8(frag_type) {
+        MappingType::SingleMapped => Some(MateStatus::SingleEnd),
+        MappingType::MappedFirstOrphan => Some(MateStatus::PairedEndLeft),
+        MappingType::MappedSecondOrphan => Some(MateStatus::PairedEndRight),
+        MappingType::MappedPair => Some(MateStatus::PairedEndPaired),
+        MappingType::Unmapped => None,
+    }
+}
+
+/// read-1 (or the single/orphan read) maps forward.
+fn dir_read1_fw(d: MappedFragmentOrientation) -> bool {
+    use MappedFragmentOrientation::*;
+    matches!(d, Forward | ForwardForward | ForwardReverse)
+}
+
+/// read-2 maps forward (only meaningful for a proper pair).
+fn dir_read2_fw(d: MappedFragmentOrientation) -> bool {
+    use MappedFragmentOrientation::*;
+    matches!(d, ForwardForward | ReverseForward)
+}
+
+/// Turn one decoded piscem bulk record into salmon equivalence-class members.
+/// Mirrors the position/length derivation of the native sketch path
+/// ([`salmon_map::map_read_pair_sketch`]): uniform weight, no score, and the
+/// orientation-aware 5'/3' positions the bias models and ambiguous-fragment FLD
+/// term read.
+fn piscem_record_to_mappings(rec: &PiscemBulkReadRecord) -> Vec<ScoredMapping> {
+    let Some(status) = status_from_frag_type(rec.frag_type) else {
+        return Vec::new();
+    };
+    let n = rec.refs.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let tid = rec.refs[i];
+        let dir = rec.dirs[i];
+        let pos = rec.positions[i] as i32;
+        // piscem stores the template length for a proper pair, and the read
+        // length for a single/orphan mapping, in the same `frag_length` field.
+        let flen = rec.frag_lengths[i] as i32;
+        let is_fw = dir_read1_fw(dir);
+        let (fragment_len, read_len, ref_pos, fw_pos, rc_pos, r2_fw) = match status {
+            MateStatus::PairedEndPaired => {
+                let rc = if flen > 0 { pos + flen - 1 } else { pos };
+                (flen, 0, pos, pos, rc, dir_read2_fw(dir))
+            }
+            // single-end or orphan: no template. ref_pos is the orientation-aware
+            // 5' end; fw_pos/rc_pos carry the leftmost on the mate's own strand.
+            _ => {
+                let r5 = if is_fw { pos } else { pos + flen };
+                let fw = if is_fw { pos } else { -1 };
+                let rc = if is_fw { -1 } else { pos };
+                (0, flen, r5, fw, rc, false)
+            }
+        };
+        out.push(ScoredMapping {
+            tid,
+            is_fw,
+            status,
+            score: 0,
+            fragment_len,
+            read_len,
+            weight: 1.0,
+            ref_pos,
+            fw_pos,
+            rc_pos,
+            // sketch mode determines no library format (matches native sketch).
+            format: None,
+            // SAM-output-only fields are not reconstructable from a bulk record
+            // and are unused by inference.
+            r1_pos: -1,
+            r2_pos: -1,
+            r2_fw,
+            r1_score: 0,
+        });
+    }
+    out
+}
+
+/// Streaming reader over a piscem bulk/sketch-mode RAD file, yielding each
+/// fragment as `(key, mappings)` ready for `run_inference_serial`. Decoy
+/// references are removed per fragment via [`filter_sketch_decoys`] when the
+/// index has decoys; decoy-dominated / unmapped fragments are skipped.
+pub struct PiscemRadReader<'a, R: RefProvider> {
+    r: BufReader<File>,
+    ctx: PiscemBulkRecordContext,
+    refs: &'a R,
+    score_cfg: ScoreConfig,
+    has_decoys: bool,
+    /// `true` when the header said `num_chunks == 0` (read chunks until EOF)
+    streaming: bool,
+    /// chunks left to read when not streaming
+    chunks_left: u64,
+    /// records left in the current chunk
+    in_chunk: u32,
+    /// sequential key assigned to the next fragment
+    next_key: u128,
+}
+
+impl<'a, R: RefProvider> PiscemRadReader<'a, R> {
+    /// Open `path`, parse its (canonical) prelude, and prime the chunk stream.
+    /// `score_cfg` and `has_decoys` drive the same decoy filtering salmon applies
+    /// to its native sketch mappings.
+    pub fn open(
+        path: &Path,
+        refs: &'a R,
+        score_cfg: ScoreConfig,
+        has_decoys: bool,
+    ) -> Result<Self> {
+        let f =
+            File::open(path).with_context(|| format!("opening RAD input {}", path.display()))?;
+        let mut r = BufReader::new(f);
+        let prelude = RadPrelude::from_bytes(&mut r)
+            .with_context(|| format!("parsing RAD prelude of {}", path.display()))?;
+        // `RadPrelude::from_bytes` stops after the tag *descriptors*; the
+        // file-level tag *values* (e.g. piscem's `ref_lengths` array) sit between
+        // the prelude and the first chunk, so consume them to reach the records.
+        let _file_tag_values = prelude
+            .file_tags
+            .try_parse_tags_from_bytes(&mut r)
+            .context("reading piscem RAD file-level tag values")?;
+        let ctx = PiscemBulkRecordContext::get_context_from_tag_section(
+            &prelude.file_tags,
+            &prelude.read_tags,
+            &prelude.aln_tags,
+        )
+        .context("piscem bulk RAD requires a 'frag_map_type' read-level tag")?;
+        let num_chunks = prelude.hdr.num_chunks;
+        Ok(Self {
+            r,
+            ctx,
+            refs,
+            score_cfg,
+            has_decoys,
+            streaming: num_chunks == 0,
+            chunks_left: num_chunks,
+            in_chunk: 0,
+            next_key: 0,
+        })
+    }
+
+    fn next_inner(&mut self) -> Result<Option<(u128, Vec<ScoredMapping>)>> {
+        loop {
+            // Advance over chunk headers (and any empty chunks) until a record is
+            // due, or stop at end of input.
+            while self.in_chunk == 0 {
+                if self.streaming {
+                    match read_u32_opt(&mut self.r)? {
+                        None => return Ok(None),
+                        Some(_nbytes) => self.in_chunk = read_u32(&mut self.r)?,
+                    }
+                } else {
+                    if self.chunks_left == 0 {
+                        return Ok(None);
+                    }
+                    self.chunks_left -= 1;
+                    let _nbytes = read_u32(&mut self.r)?;
+                    self.in_chunk = read_u32(&mut self.r)?;
+                }
+            }
+            self.in_chunk -= 1;
+            let rec = PiscemBulkReadRecord::from_bytes_with_context(&mut self.r, &self.ctx);
+            let key = self.next_key;
+            self.next_key += 1;
+            let mut maps = piscem_record_to_mappings(&rec);
+            if self.has_decoys {
+                filter_sketch_decoys(&mut maps, self.refs, &self.score_cfg);
+            }
+            // Skip decoy-dominated / unmapped fragments (no transcript placement).
+            if maps.is_empty() {
+                continue;
+            }
+            return Ok(Some((key, maps)));
+        }
+    }
+}
+
+impl<'a, R: RefProvider> Iterator for PiscemRadReader<'a, R> {
+    type Item = Result<(u128, Vec<ScoredMapping>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_inner().transpose()
     }
 }
 

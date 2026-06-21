@@ -474,3 +474,137 @@ fn pseudoalignment_quantification_tracks_truth() {
         );
     }
 }
+
+/// Hand-write a piscem bulk/sketch-mode RAD file (`piscem map` profile) holding
+/// `records`, each `(frag_map_type, [(orientation_2bit, ref_id, pos, frag_len)])`.
+///
+/// The prelude (header + the canonical piscem tag sections, including a
+/// `ref_lengths` file tag whose *values* sit between the prelude and the chunk)
+/// is written via `libradicl` so it is byte-for-byte the format piscem produces.
+/// The chunk records are written by hand because `libradicl`'s record *writer*
+/// encodes the orientation with a 3-bit scheme that its own reader
+/// (`from_u32_paired_status`, 2 bits) does not round-trip; piscem itself writes
+/// the 2-bit code, which is what we emit here so the file decodes faithfully.
+fn write_piscem_rad(
+    path: &Path,
+    ref_names: &[&str],
+    ref_lens: &[u32],
+    records: &[(u8, Vec<(u32, u32, u32, u16)>)],
+) {
+    use libradicl::header::{RadHeader, RadPrelude};
+    use libradicl::rad_types::{
+        RadAtomicId, RadIntId, RadType, TagDesc, TagMap, TagSection, TagSectionLabel, TagValue,
+    };
+
+    let int_tag = |name: &str, id| TagDesc {
+        name: name.to_string(),
+        typeid: RadType::Int(id),
+    };
+
+    let mut file_tags = TagSection::new_with_label(TagSectionLabel::FileTags);
+    file_tags.add_tag_desc(TagDesc {
+        name: "ref_lengths".to_string(),
+        typeid: RadType::Array(RadIntId::U32, RadAtomicId::Int(RadIntId::U32)),
+    });
+    let mut read_tags = TagSection::new_with_label(TagSectionLabel::ReadTags);
+    read_tags.add_tag_desc(int_tag("frag_map_type", RadIntId::U8));
+    let mut aln_tags = TagSection::new_with_label(TagSectionLabel::AlignmentTags);
+    aln_tags.add_tag_desc(int_tag("compressed_ori_ref", RadIntId::U32));
+    aln_tags.add_tag_desc(int_tag("frag_map_type", RadIntId::U32));
+    aln_tags.add_tag_desc(int_tag("frag_len", RadIntId::U16));
+
+    let prelude = RadPrelude {
+        hdr: RadHeader {
+            is_paired: 1,
+            ref_count: ref_names.len() as u64,
+            ref_names: ref_names.iter().map(|s| s.to_string()).collect(),
+            num_chunks: 1,
+        },
+        file_tags,
+        read_tags,
+        aln_tags,
+    };
+
+    let mut buf: Vec<u8> = Vec::new();
+    prelude.write(&mut buf).unwrap();
+    // file-level tag *values*: the ref_lengths array.
+    let mut file_tag_map = TagMap::with_keyset(&prelude.file_tags.tags);
+    file_tag_map.add(TagValue::ArrayU32(ref_lens.to_vec()));
+    file_tag_map.write_values(&mut buf).unwrap();
+
+    // one chunk: nbytes (incl. its 8-byte header), nrec, then the records.
+    let mut body: Vec<u8> = Vec::new();
+    for (frag_type, alns) in records {
+        body.extend_from_slice(&(alns.len() as u32).to_le_bytes());
+        body.push(*frag_type);
+        for (ori, ref_id, pos, flen) in alns {
+            let packed: u32 = (ori << 30) | ref_id;
+            body.extend_from_slice(&packed.to_le_bytes());
+            body.extend_from_slice(&pos.to_le_bytes());
+            body.extend_from_slice(&flen.to_le_bytes());
+        }
+    }
+    let nbytes = (body.len() + 8) as u32;
+    buf.extend_from_slice(&nbytes.to_le_bytes());
+    buf.extend_from_slice(&(records.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&body);
+
+    std::fs::write(path, buf).unwrap();
+}
+
+/// End-to-end `salmon quant --rad` over a piscem bulk/sketch-mode RAD: build an
+/// index, synthesize a piscem RAD whose fragments map uniquely to known
+/// transcripts, quantify, and confirm mass is conserved and assigned exactly.
+#[test]
+fn piscem_rad_input_quantifies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, _r1, _r2) = simulate_multimapping(tmp.path());
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    // Proper-pair, forward-reverse (orientation code 2), one alignment per record,
+    // each mapping a fragment uniquely to one transcript (tids 0/1/2).
+    const MAPPED_PAIR: u8 = 4; // libradicl MappingType::MappedPair
+    const FR: u32 = 2; // from_u32_paired_status(2, MappedPair) = ForwardReverse
+    let per_tid = [120usize, 60, 20];
+    let total: usize = per_tid.iter().sum();
+    let mut records: Vec<(u8, Vec<(u32, u32, u32, u16)>)> = Vec::new();
+    for (tid, &n) in per_tid.iter().enumerate() {
+        for _ in 0..n {
+            records.push((MAPPED_PAIR, vec![(FR, tid as u32, 100, 250)]));
+        }
+    }
+
+    let rad = tmp.path().join("piscem.rad");
+    write_piscem_rad(&rad, &["d0", "d1", "d2"], &[1500, 1500, 1500], &records);
+
+    let out = tmp.path().join("piscem_quant");
+    let mut opts = QuantOptions::new(idx_dir, out.clone());
+    opts.lib_type = "IU".to_string();
+    opts.num_threads = 1;
+    opts.rad_input = Some(rad);
+    let res = quantify(&opts).expect("quantify from piscem --rad");
+
+    // Every fragment in the store is a mapped fragment.
+    assert_eq!(res.num_mapped, total as u64, "num_mapped");
+    // Read mass is conserved (unique assignment => no mass lost or invented).
+    let total_counts: f64 = res.counts.iter().sum();
+    assert!(
+        (total_counts - total as f64).abs() < 0.5,
+        "total counts {total_counts} vs {total}"
+    );
+    // Each fragment was assigned to exactly its transcript: the three nonzero
+    // counts match the placement multiset regardless of transcript ordering.
+    let mut got: Vec<f64> = res.counts.iter().copied().filter(|c| *c > 0.5).collect();
+    got.sort_by(|a, b| b.partial_cmp(a).unwrap());
+    let mut want: Vec<f64> = per_tid.iter().map(|&n| n as f64).collect();
+    want.sort_by(|a, b| b.partial_cmp(a).unwrap());
+    assert_eq!(got.len(), want.len(), "expected exactly 3 expressed txps");
+    for (g, w) in got.iter().zip(&want) {
+        assert!((g - w).abs() < 0.5, "count {g} vs expected {w}");
+    }
+    // quant.sf was written.
+    assert!(out.join("quant.sf").exists(), "quant.sf not written");
+}

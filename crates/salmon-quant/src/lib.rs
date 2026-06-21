@@ -343,10 +343,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // instead of FASTQ reads. Validate the profile up front and take paired-vs-
     // single from the RAD header (there are no FASTQ mates to infer it from).
     let rad_input = opts.rad_input.as_ref();
-    if let Some(path) = rad_input {
-        rad::verify_salmon_profile(path)
-            .with_context(|| format!("validating RAD input {}", path.display()))?;
-    }
+    let rad_profile = match rad_input {
+        Some(path) => Some(
+            rad::detect_profile(path)
+                .with_context(|| format!("validating RAD input {}", path.display()))?,
+        ),
+        None => None,
+    };
     let is_paired = match rad_input {
         Some(path) => rad::read_is_paired(path)
             .with_context(|| format!("reading RAD header {}", path.display()))?,
@@ -517,10 +520,29 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         if let Some(rad_path) = rad_input {
             // ---- RAD input: quantify from the store, no mapping --------------
             tracing::info!("quantifying from RAD store {}", rad_path.display());
-            let sorter = rad::ExternalSort::new(rad_path, run_size, &aux_dir)
-                .context("sorting RAD input")?;
-            run_inference_serial(&shared, sorter, INFERENCE_BATCH)
-                .context("RAD-input inference")?;
+            match rad_profile.expect("rad profile detected for rad input") {
+                rad::RadProfile::Salmon => {
+                    // salmon's own store: deterministic, key-sorted replay.
+                    let sorter = rad::ExternalSort::new(rad_path, run_size, &aux_dir)
+                        .context("sorting RAD input")?;
+                    run_inference_serial(&shared, sorter, INFERENCE_BATCH)
+                        .context("RAD-input inference")?;
+                }
+                rad::RadProfile::PiscemBulk => {
+                    // piscem map output: stream in file order as uniform-weight
+                    // (sketch) mappings; no read-id key to sort on.
+                    let has_decoys = salmon.info().num_decoys > 0;
+                    let reader = rad::PiscemRadReader::open(
+                        rad_path,
+                        &salmon,
+                        opts.map_config.score.clone(),
+                        has_decoys,
+                    )
+                    .context("opening piscem RAD input")?;
+                    run_inference_serial(&shared, reader, INFERENCE_BATCH)
+                        .context("piscem RAD-input inference")?;
+                }
+            }
             // the store carries only mapped fragments; report processed == mapped
             num_processed.store(num_mapped.load(Ordering::Relaxed), Ordering::Relaxed);
         } else {

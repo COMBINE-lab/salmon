@@ -29,6 +29,7 @@ jiff = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+libradicl = { workspace = true }
 
 [lints]
 workspace = true

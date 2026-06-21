@@ -580,9 +580,11 @@ struct QuantArgs {
     /// `--rad` (salmon map -> RAD -> salmon quant), avoiding re-mapping.
     #[arg(long = "writeRad", value_name = "FILE")]
     write_rad: Option<PathBuf>,
-    /// Quantify from a RAD mapping store (written by `--writeRad`) instead of
-    /// mapping FASTQ reads. The index (`-i`) still supplies reference
-    /// lengths/sequences for effective lengths and bias correction.
+    /// Quantify from a RAD file instead of mapping FASTQ reads: either a salmon
+    /// mapping store (written by `--writeRad`) or a piscem bulk/sketch-mode RAD
+    /// (`piscem map` output), auto-detected from the file. The index (`-i`) still
+    /// supplies reference lengths/sequences for effective lengths and bias
+    /// correction.
     #[arg(long = "rad", value_name = "FILE")]
     rad: Option<PathBuf>,
     /// [accepted; not yet implemented] disable fragment-length-distribution
