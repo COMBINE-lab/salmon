@@ -1,75 +1,157 @@
-name: Release
+name: Release (C++)
+
+# C++ salmon (the 1.x line) is released from the `cpp` branch, independently of
+# the Rust line (2.x+) which is released from `master` via cargo-dist.
+#
+# WHY THIS IS SELF-CONTAINED (and not workflow_run-based like before): `push`
+# (tag) events run the workflow files that exist *in the tagged commit's tree*.
+# A `v1.*` tag points at a `cpp` commit, whose tree contains THIS workflow but
+# not master's cargo-dist `release.yml` — so tagging a C++ release never triggers
+# the Rust release pipeline (verified: no v1.x tag has ever started a cargo-dist
+# run). Conversely, `workflow_run`/`schedule` triggers only ever use the DEFAULT
+# branch's (master's) workflow definitions, which is why the previous
+# workflow_run-based release.yml was dead on `cpp`.
+#
+# The 1.x (C++) vs 2.x+ (Rust) version-line split is the clean separator: this
+# workflow only fires on `v1.*` tags. To cut a release: push a `v1.Y.Z` tag on
+# `cpp`, or run this workflow via "Run workflow" (workflow_dispatch) from `cpp`
+# with the tag as input.
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  push:
+    tags:
+      - "v1.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create/publish (e.g. v1.12.1). Dispatch from the cpp branch."
+        required: true
+        type: string
 
 permissions:
   contents: write
-  actions: read
 
 jobs:
-  release:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master' }}
+  build:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target_id: linux-x86_64
+            build_parallel: 2
+          - os: ubuntu-24.04-arm
+            target_id: linux-aarch64
+            build_parallel: 2
+          - os: macos-15-intel
+            target_id: macos-x86_64
+            build_parallel: 3
+          - os: macos-14
+            target_id: macos-arm64
+            build_parallel: 3
+    steps:
+      # Default checkout ref is the triggering ref: the tagged commit for a tag
+      # push, or the dispatched branch (cpp) for workflow_dispatch — both correct.
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            git \
+            curl \
+            libcurl4-openssl-dev \
+            libbz2-dev \
+            liblzma-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-rel \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSALMON_ENABLE_TESTS=ON \
+            -DSALMON_USE_SYSTEM_DEPS=OFF \
+            -DSALMON_FETCH_MISSING_DEPS=ON \
+            -DSALMON_BOOST_USE_STATIC_LIBS=ON
+
+      - name: Build
+        run: cmake --build build-rel --target salmon unitTests --parallel ${{ matrix.build_parallel }}
+
+      - name: Run Unit Tests
+        run: ./build-rel/src/unitTests
+
+      - name: CLI Smoke (also confirms the reported version)
+        run: ./build-rel/src/salmon --version
+
+      - name: Package Binary Artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg_dir="release/salmon-${{ matrix.target_id }}"
+          mkdir -p "$pkg_dir/bin"
+          cp build-rel/src/salmon "$pkg_dir/bin/"
+          cp LICENSE "$pkg_dir/"
+          cp README.md "$pkg_dir/"
+          tar -C release -czf "salmon-${{ matrix.target_id }}.tar.gz" "salmon-${{ matrix.target_id }}"
+          shasum -a 256 "salmon-${{ matrix.target_id }}.tar.gz" > "salmon-${{ matrix.target_id }}.tar.gz.sha256"
+
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: salmon-${{ matrix.target_id }}
+          path: |
+            salmon-${{ matrix.target_id }}.tar.gz
+            salmon-${{ matrix.target_id }}.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Determine Release Tag From Commit Message
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
         id: tag
         shell: bash
         run: |
           set -euo pipefail
-          msg="$(jq -r '.workflow_run.head_commit.message // ""' "$GITHUB_EVENT_PATH")"
-          if [[ "$msg" =~ \[release[[:space:]]+v?([0-9]+\.[0-9]+\.[0-9]+)\] ]]; then
-            echo "release_tag=v${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "No [release vX.Y.Z] token found; skipping release."
-            echo "release_tag=" >> "$GITHUB_OUTPUT"
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout Repository
-        if: ${{ steps.tag.outputs.should_release == 'true' }}
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Configure Git Identity
-        if: ${{ steps.tag.outputs.should_release == 'true' }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Download CI Artifacts
-        if: ${{ steps.tag.outputs.should_release == 'true' }}
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
           path: release-assets
           merge-multiple: true
 
-      - name: Create and Push Tag
-        if: ${{ steps.tag.outputs.should_release == 'true' }}
-        env:
-          RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
-          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -euo pipefail
-          git fetch --tags
-          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
-            echo "Tag ${RELEASE_TAG} already exists"
-          else
-            git tag -a "${RELEASE_TAG}" "${RELEASE_SHA}" -m "Release ${RELEASE_TAG}"
-            git push origin "${RELEASE_TAG}"
-          fi
-
-      - name: Create GitHub Release
-        if: ${{ steps.tag.outputs.should_release == 'true' }}
+      - name: Create GitHub Release (C++ 1.x — NOT marked latest)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          # On manual dispatch the tag may not exist yet; the action creates it
+          # at this commit (which, dispatched from cpp, is a cpp commit).
+          target_commitish: ${{ github.sha }}
+          name: "salmon ${{ steps.tag.outputs.tag }} (C++ / legacy 1.x line)"
+          # CRITICAL: never steal the "Latest" badge from the Rust 2.x line.
+          make_latest: "false"
+          prerelease: false
           generate_release_notes: true
-          files: release-assets/*.tar.gz
+          body: |
+            > ℹ️ **This is the legacy C++ salmon (1.x) line.**
+            > For bulk RNA-seq quantification we recommend **salmon 2.x** (the Rust
+            > rewrite) — the actively developed, default version. See the
+            > [latest release](https://github.com/COMBINE-lab/salmon/releases/latest).
+            > Use a 1.x release only if you specifically need the original C++
+            > implementation.
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*.tar.gz.sha256
