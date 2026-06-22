@@ -6,6 +6,15 @@
 Welcome to Salmon's documentation!
 =============================================
 
+.. important::
+
+   This documentation covers the **legacy C++ salmon (the 1.x line)**. For bulk
+   RNA-seq quantification we now recommend **salmon 2.x**, the Rust rewrite and
+   actively developed default version (same algorithms and output). See the
+   `latest release <https://github.com/COMBINE-lab/salmon/releases/latest>`_ for
+   downloads. Use the 1.x C++ line only if you specifically need the original C++
+   implementation.
+
 Contents:
 
 .. toctree::

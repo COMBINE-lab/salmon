@@ -1,4 +1,12 @@
 > [!IMPORTANT]
+> **This is the legacy C++ salmon (the 1.x line).**
+> For bulk RNA-seq quantification we now recommend **salmon 2.x** — the Rust
+> rewrite, which is the actively developed, default version (same algorithms and
+> output). See the [latest release](https://github.com/COMBINE-lab/salmon/releases/latest)
+> for downloads. Continue with this 1.x C++ line only if you specifically need
+> the original C++ implementation.
+
+> [!IMPORTANT]
 > `salmon alevin` has been removed from this modernization branch.
 > For single-cell analysis, use [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/).
 > If you need the legacy `alevin` workflow, use Salmon `v1.10.2` (the last pre-removal release in this line):
