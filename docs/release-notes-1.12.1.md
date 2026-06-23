@@ -1,8 +1,13 @@
 # salmon 1.12.1
 
-A focused reproducibility / correctness patch on top of 1.12.0 addressing the
-lopsided splitting of duplicate (and other low-abundance, non-identifiable)
-transcripts reported in issues #1008 and #1011.
+A reproducibility, correctness, and decoy-mapping patch on top of 1.12.0. It
+resolves the lopsided splitting of duplicate (and other low-abundance,
+non-identifiable) transcripts reported in issues #1008 and #1011, fixes the
+`--writeMappings` + `--gcBias` crash (#1010), corrects several selective-alignment
+and decoy-attribution behaviors (with two new flags, `--allowDecoyOrphans` and
+`--orphansRequireUnmappedMate`), and enforces `maxReadOcc` in selective-alignment
+mode (default raised to 250). All bug fixes track the Rust salmon (2.x) port,
+which several of them are backported from.
 
 ## What changed
 
@@ -37,8 +42,9 @@ uniform seed is already symmetric and needs no equalization.
 
 ### Selective-alignment mapping fixes (pufferfish)
 
-Two mapping-side correctness fixes backported from the Rust salmon port (pinned
-pufferfish commit `17e1ccf`):
+Mapping-side correctness fixes backported from the Rust salmon port. The pufferfish
+dependency pin is advanced to `1c78859` over the course of this release; the fixes
+below are part of it.
 
 - **Inclusive concordant fragment-length bound.** `joinReadsAndFilter` filtered
   concordant pairs with a strict `fragmentLen < maxFragmentLength`, which dropped
@@ -56,6 +62,48 @@ pufferfish commit `17e1ccf`):
   (`PAIRED_END_LEFT`/`RIGHT`) instead of discarding the whole fragment, so a
   strong mate is not lost because its partner is error-laden or mis-oriented —
   matching the Rust port's `m1`/`m2` orphan emission.
+
+- **Decoy/transcript equal-footing seed chaining.** `fillMemCollection` counted
+  MEM hits over non-decoy references only, so a mate that maps *only* to a decoy
+  (e.g. the intronic mate of a genomic/pre-mRNA fragment) got no chains
+  (`findOptChain` early-returns when `maxHits == 0`) and could never form the
+  concordant decoy pair its exonic mate belongs to — leaking the genomic fragment
+  as a spurious transcript orphan. MEM hits are now counted over **all** references
+  (transcript and decoy). On the SRR1039508 3M subset against a GRCh38 decoy index
+  this brings C++ decoy attribution in line with the Rust port (93.74% / 154,800
+  decoy fragments vs Rust 93.75% / 154,284; previously 94.02% / 42,044).
+
+### Decoy-orphan recovery: `--allowDecoyOrphans`
+
+When a fragment maps concordantly to a decoy but one mate also maps to a
+transcript, salmon discards it as decoy-dominated by default. The new
+**`--allowDecoyOrphans`** flag (default **off**) keeps the transcript placement
+instead, matching the Rust port's flag of the same name. Decoy domination is
+enforced at several stages, each relaxed under the flag: `updateRefMappings` keeps
+tracking a non-decoy hit below the decoy cutoff; `filterAndCollectAlignments` gates
+non-decoy hits on the best non-decoy score (rather than `decoyThresh * bestDecoyScore`)
+so a single-mate transcript orphan is not filtered out (the `estAlnProb`/`minAlnProb`
+relative filter still prunes them); and the consumer keeps the fragment when a
+transcript placement exists. On the full SRR1039508 GRCh38-decoy run this maps
+94.36% with the flag vs 93.69% default, closely tracking Rust (94.81% / 93.69%).
+**The default path is unchanged.**
+
+### `maxReadOcc` is now enforced in selective-alignment mode (default 250); `--orphansRequireUnmappedMate`
+
+`maxReadOcc` was effectively a **no-op** in selective-alignment mode: the
+too-many-hits test was computed on the *pre-alignment* candidate set, but the
+discard cleared an already-empty alignment group while the read stayed aligned
+from the untouched hit list, so no cap was applied. It is now applied **after
+alignment**, on the number of distinct aligned non-decoy targets (matching the Rust
+port's `maps.len()` semantics). Capping the pre-alignment candidate count instead
+would over-drop gene-family reads that *seed* hundreds of transcripts but *align*
+to only a few dozen. The default is raised **200 → 250** (a mild relaxation now
+that the cap actually bites). Verified live: `--maxReadOcc 1` now reduces to
+uniquely-aligned reads.
+
+Also new: **`--orphansRequireUnmappedMate`** (default **off**) emits a single-mate
+(orphan) mapping only when the read's mate is *entirely unmapped*, rather than the
+union of both mates' orphans when a pair has no concordant mapping.
 
 ### `--writeMappings` + `--gcBias` out-of-bounds crash (#1010)
 
@@ -83,6 +131,17 @@ This release closes the hazard at every link:
 These changes are defensive in depth and produce identical bias models and
 `quant.sf`/SAM output on non-pathological inputs; together they make the
 `gcDesc` out-of-bounds access unreachable.
+
+The fix was verified directly: driving the pre-fix `gcDesc` with the exact
+malformed windows the hazard produces flags an out-of-bounds `GCCount_` read
+(bytes before/after the allocation) under valgrind, while the guarded version
+returns an invalid descriptor with no out-of-bounds access. Because the bad index
+is usually only a few elements past the array, the read typically lands on a mapped
+heap page and returns garbage (silently corrupting the GC-bias model) — it only
+**segfaults** when the index happens to fall on an unmapped page, which is why the
+crash is data- and layout-dependent. The entry guard costs ~0.3 ns per call
+(unmeasurable end-to-end), so it is kept as a permanent backstop at the faulting
+site.
 
 ## Known limitation: residual run-to-run variability (the FLD-feedback path)
 
