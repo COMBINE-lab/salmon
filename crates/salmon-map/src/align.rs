@@ -129,6 +129,29 @@ pub fn align_chain(
         revcomp(read)
     };
     let qlen = query.len() as i32;
+
+    // Invariant boundary: every MEM must lie within the read and the reference.
+    // Seeding guarantees this; a violation is an upstream bug. We `debug_assert`
+    // so it surfaces loudly in tests/dev (rather than being silently masked —
+    // this is how issue #1038, a contig-overshoot in piscem-rs's skip search,
+    // was found), and degrade to "skip candidate" in release so a future
+    // coordinate bug can never turn into an out-of-bounds slice panic.
+    let reflen_i = ref_seq.len() as i32;
+    let out_of_bounds = chain.mems.iter().any(|m| {
+        m.read_start < 0
+            || m.ref_start < 0
+            || m.len <= 0
+            || m.read_end() > qlen
+            || m.ref_end() > reflen_i
+    });
+    debug_assert!(
+        !out_of_bounds,
+        "align_chain: chain MEM outside read/reference bounds (qlen={qlen} reflen={reflen_i}) — upstream seeding bug"
+    );
+    if out_of_bounds {
+        return None;
+    }
+
     let diag_origin = chain.ref_start() - chain.read_start();
     let win_start = diag_origin.max(0);
 
