@@ -108,6 +108,8 @@ pub(crate) struct Shared<'a> {
     pub unmapped_names: Option<&'a Mutex<Vec<String>>>,
     /// when set, write per-mapping SAM records (`--writeMappings`)
     pub sam: Option<&'a crate::sam::SamWriter>,
+    /// when set, write per-fragment mappings to a RAD file (`--writeRad`)
+    pub rad: Option<&'a salmon_rad::RadOutputWriter>,
 }
 
 /// Per-thread mapping processor.
@@ -126,6 +128,9 @@ pub(crate) struct QuantProcessor<'a> {
     pub unmapped: Vec<String>,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
+    /// per-thread RAD chunk buffer (flushed as one chunk per batch); `None`
+    /// unless `--writeRad` is set
+    pub rad_buf: Option<salmon_rad::FragmentChunkBuf>,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -155,6 +160,9 @@ impl<'a> QuantProcessor<'a> {
             posbias,
             unmapped: Vec::new(),
             sam_buf: String::new(),
+            rad_buf: shared
+                .rad
+                .map(|_| salmon_rad::FragmentChunkBuf::with_capacity(64 * 1024)),
         }
     }
 }
@@ -695,6 +703,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             posbias,
             unmapped,
             sam_buf,
+            rad_buf,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -761,6 +770,12 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     &maps,
                 );
             }
+            if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
+                if !maps.is_empty() {
+                    let rec = build_rad_record(&maps, r1.id());
+                    let _ = buf.write(&rec, rad.context());
+                }
+            }
             record(
                 &sh,
                 &maps,
@@ -779,6 +794,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // final FLD cache is taken; amortized over the whole batch.
         self.shared.fld.refresh_online();
         flush_sam(self);
+        flush_rad(self);
         Ok(())
     }
 
@@ -786,6 +802,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         merge_bias(self);
         merge_unmapped(self);
         flush_sam(self);
+        flush_rad(self);
         Ok(())
     }
 }
@@ -804,6 +821,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             posbias,
             unmapped,
             sam_buf,
+            rad_buf,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -851,6 +869,12 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if sh.sam.is_some() && !maps.is_empty() {
                 crate::sam::write_fragment(sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps);
             }
+            if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
+                if !maps.is_empty() {
+                    let radrec = build_rad_record(&maps, rec.id());
+                    let _ = buf.write(&radrec, rad.context());
+                }
+            }
             record(
                 &sh,
                 &maps,
@@ -869,6 +893,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // final FLD cache is taken; amortized over the whole batch.
         self.shared.fld.refresh_online();
         flush_sam(self);
+        flush_rad(self);
         Ok(())
     }
 
@@ -876,6 +901,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         merge_bias(self);
         merge_unmapped(self);
         flush_sam(self);
+        flush_rad(self);
         Ok(())
     }
 }
@@ -886,6 +912,46 @@ fn flush_sam(proc: &mut QuantProcessor) {
         if !proc.sam_buf.is_empty() {
             let _ = sw.write_block(&proc.sam_buf);
             proc.sam_buf.clear();
+        }
+    }
+}
+
+/// Build a salmon RAD record for one fragment's finalized, decoy-filtered
+/// mappings. The read-name hash uses the trimmed id (stable regardless of FASTQ
+/// comment fields). `frag_len`/`mate_fw` follow piscem's bulk convention: a real
+/// fragment length and the mate strand for proper pairs, the unpaired sentinel
+/// otherwise. `score` is recorded for the selective-alignment profile and
+/// ignored when writing the sketch profile.
+fn build_rad_record(maps: &[ScoredMapping], id: &[u8]) -> salmon_rad::SalmonBulkRecord {
+    let name_hash = salmon_rad::name_hash(salmon_rad::trim_read_name(id));
+    let frag_type = salmon_rad::frag_map_type::fragment_level(maps.iter().map(|m| m.status));
+    let hits = maps
+        .iter()
+        .map(|m| {
+            let paired = m.status == MateStatus::PairedEndPaired;
+            salmon_rad::RadHit {
+                tid: m.tid,
+                is_fw: m.is_fw,
+                mate_fw: paired && m.r2_fw,
+                pos: m.ref_pos.max(0) as u32,
+                frag_len: if paired {
+                    m.fragment_len.clamp(0, u16::MAX as i32) as u16
+                } else {
+                    salmon_rad::FRAG_LEN_UNPAIRED
+                },
+                score: m.score,
+            }
+        })
+        .collect();
+    salmon_rad::SalmonBulkRecord::new(frag_type, name_hash, hits)
+}
+
+/// Flush this thread's accumulated RAD records as one chunk to the shared writer.
+fn flush_rad(proc: &mut QuantProcessor) {
+    if let (Some(rad), Some(buf)) = (proc.shared.rad, proc.rad_buf.as_mut()) {
+        if buf.nrec() > 0 {
+            let bytes = buf.take_bytes();
+            let _ = rad.append_chunk_bytes(&bytes);
         }
     }
 }

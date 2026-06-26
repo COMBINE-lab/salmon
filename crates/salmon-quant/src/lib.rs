@@ -82,6 +82,10 @@ pub struct QuantOptions {
     /// write per-mapping SAM records to this path (`--writeMappings`); spoofed
     /// CIGAR (`<readLen>M` + end soft-clips), matching salmon's standard output
     pub write_mappings: Option<PathBuf>,
+    /// write per-fragment mappings to this RAD file (`--writeRad`); sketch or
+    /// selective-alignment profile is chosen from `sketch`. Quantification still
+    /// runs; combine with `skip_quant` to map only.
+    pub write_rad: Option<PathBuf>,
     /// enable sequence-specific bias correction (`--seqBias`)
     pub seq_bias: bool,
     /// enable fragment-GC bias correction (`--gcBias`)
@@ -168,6 +172,7 @@ impl QuantOptions {
             dump_eq_weights: false,
             write_unmapped_names: false,
             write_mappings: None,
+            write_rad: None,
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
@@ -306,6 +311,24 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         }
         None => None,
     };
+    // RAD sink for `--writeRad` (prelude + file tags written here). Sketch vs
+    // selective-alignment profile follows the mapping mode salmon is already in.
+    let rad_writer: Option<salmon_rad::RadOutputWriter> = match &opts.write_rad {
+        Some(path) => {
+            let names: Vec<&str> = (0..num_refs).map(|t| salmon.ref_name(t)).collect();
+            let lens: Vec<u32> = (0..num_refs).map(|t| salmon.ref_len(t) as u32).collect();
+            let profile = if opts.sketch {
+                salmon_rad::RadProfile::Sketch
+            } else {
+                salmon_rad::RadProfile::SelectiveAlignment
+            };
+            Some(
+                salmon_rad::RadOutputWriter::create(path, &names, &lens, opts.is_paired(), profile)
+                    .context("opening RAD output")?,
+            )
+        }
+        None => None,
+    };
     let nthreads = if opts.num_threads == 0 {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -440,6 +463,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             num_below_threshold_vm: &num_below_threshold_vm,
             unmapped_names: unmapped_collector.as_ref(),
             sam: sam_writer.as_ref(),
+            rad: rad_writer.as_ref(),
         };
         let mut proc = QuantProcessor::new(shared);
         tracing::info!(
@@ -468,6 +492,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     }
     if let Some(sw) = &sam_writer {
         sw.flush().context("flushing SAM output")?;
+    }
+    // Finalize RAD output (backpatch num_chunks). The mapping pass scope above
+    // has closed, so all worker references to `rad_writer` are dropped.
+    if let Some(rw) = rad_writer {
+        rw.finalize().context("finalizing RAD output")?;
     }
 
     // Write aux_info/unmapped_names.txt ("<name> <status>" per line; the port maps

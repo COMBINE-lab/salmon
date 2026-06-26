@@ -348,6 +348,12 @@ struct QuantArgs {
     /// standard `--writeMappings`).
     #[arg(short = 'z', long = "writeMappings")]
     write_mappings: Option<PathBuf>,
+    /// Write per-fragment mappings to a RAD file at this path. Sketch or
+    /// selective-alignment profile is chosen automatically from the mapping
+    /// mode. Quantification still runs; add --skipQuant to map only. The file is
+    /// piscem map-bulk compatible and can be re-quantified with `--rad`.
+    #[arg(long = "writeRad")]
+    write_rad: Option<PathBuf>,
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
@@ -882,6 +888,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.dump_eq_weights = args.dump_eq_weights;
     opts.write_unmapped_names = args.write_unmapped_names;
     opts.write_mappings = args.write_mappings;
+    opts.write_rad = args.write_rad;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
     opts.pos_bias = args.pos_bias;

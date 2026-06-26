@@ -250,6 +250,105 @@ fn stranded_num_mapped_matches_quantified_mass() {
     mass_conserved(&res_isr);
 }
 
+/// Read back a salmon RAD file: detected profile, ref names, and all records.
+fn read_rad(
+    path: &Path,
+) -> (
+    salmon_rad::RadInputProfile,
+    Vec<String>,
+    Vec<salmon_rad::SalmonBulkRecord>,
+) {
+    use libradicl::chunk::Chunk;
+    use libradicl::header::RadPrelude;
+    use std::io::{Cursor, Read};
+
+    let mut data = Vec::new();
+    std::fs::File::open(path)
+        .unwrap()
+        .read_to_end(&mut data)
+        .unwrap();
+    let mut rc = Cursor::new(data);
+    let prelude = RadPrelude::from_bytes(&mut rc).unwrap();
+    let profile = salmon_rad::detect_input_profile(&prelude).unwrap();
+    let _ = prelude.file_tags.parse_tags_from_bytes(&mut rc).unwrap();
+    let ctx: salmon_rad::SalmonBulkContext = prelude.get_record_context().unwrap();
+    let mut recs = Vec::new();
+    for _ in 0..prelude.hdr.num_chunks {
+        let chunk = Chunk::<salmon_rad::SalmonBulkRecord>::from_bytes(&mut rc, &ctx);
+        recs.extend(chunk.reads);
+    }
+    (profile, prelude.hdr.ref_names, recs)
+}
+
+/// `--writeRad` produces a readable RAD file: one record per mapped fragment,
+/// ref table matches quant.sf, every hit references a valid transcript, and the
+/// profile (sketch vs selective-alignment, the latter carrying scores) round-
+/// trips. Runs multi-threaded to exercise the concurrent chunk writer.
+#[test]
+fn writes_rad_output_readable_and_complete() {
+    use salmon_rad::{RadInputProfile, RadProfile};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, _truth) = simulate(tmp.path());
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    // (sketch?, expected profile)
+    let cases = [
+        (true, RadInputProfile::Salmon(RadProfile::Sketch)),
+        (
+            false,
+            RadInputProfile::Salmon(RadProfile::SelectiveAlignment),
+        ),
+    ];
+    for (sketch, expected_profile) in cases {
+        let tag = if sketch { "sketch" } else { "sa" };
+        let out = tmp.path().join(format!("quant_rad_{tag}"));
+        let rad_path = tmp.path().join(format!("maps_{tag}.rad"));
+        let mut opts = QuantOptions::new(idx_dir.clone(), out);
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = "IU".to_string();
+        opts.num_threads = 4; // exercise the concurrent writer
+        opts.sketch = sketch;
+        opts.write_rad = Some(rad_path.clone());
+
+        let res = quantify(&opts).expect("quantify with --writeRad");
+        let (profile, ref_names, recs) = read_rad(&rad_path);
+
+        assert_eq!(profile, expected_profile, "{tag}: profile detection");
+        // one record per mapped fragment
+        assert_eq!(
+            recs.len() as u64,
+            res.num_mapped,
+            "{tag}: RAD record count must equal num_mapped"
+        );
+        // RAD reference table matches quant.sf order
+        assert_eq!(ref_names, res.names, "{tag}: ref names/order");
+        // every hit references a valid (non-out-of-range) transcript
+        for r in &recs {
+            assert!(!r.hits.is_empty(), "{tag}: mapped fragment must have hits");
+            for h in &r.hits {
+                assert!((h.tid as usize) < res.names.len(), "{tag}: tid in range");
+            }
+        }
+        // SA records carry a (nontrivial) score; sketch records do not persist one.
+        if !sketch {
+            assert!(
+                recs.iter().flat_map(|r| &r.hits).any(|h| h.score != 0),
+                "SA RAD should carry nonzero alignment scores"
+            );
+        } else {
+            assert!(
+                recs.iter().flat_map(|r| &r.hits).all(|h| h.score == 0),
+                "sketch RAD should not persist scores"
+            );
+        }
+    }
+}
+
 #[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();

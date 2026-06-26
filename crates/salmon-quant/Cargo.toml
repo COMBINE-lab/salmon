@@ -15,6 +15,7 @@ salmon-map = { workspace = true }
 salmon-model = { workspace = true }
 salmon-eqclass = { workspace = true }
 salmon-infer = { workspace = true }
+salmon-rad = { workspace = true }
 piscem-rs = { workspace = true }
 paraseq = "0.4"
 anyhow = { workspace = true }
@@ -27,6 +28,8 @@ jiff = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# reading back RAD output in the end-to-end test
+libradicl = { workspace = true }
 
 [lints]
 workspace = true
