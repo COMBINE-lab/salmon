@@ -2486,8 +2486,10 @@ version = "2.1.2"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
+ "crossbeam-queue",
  "flate2",
  "jiff",
+ "libradicl",
  "noodles-bam 0.90.0",
  "noodles-bgzf 0.47.0",
  "noodles-sam 0.85.0",
@@ -2496,6 +2498,7 @@ dependencies = [
  "salmon-eqclass",
  "salmon-infer",
  "salmon-model",
+ "salmon-rad",
  "serde",
  "serde_json",
  "tempfile",

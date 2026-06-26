@@ -17,7 +17,7 @@ use clap::{Args, Parser, Subcommand};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use salmon_align::{quantify_alignments, AlignQuantOptions};
+use salmon_align::{quantify_alignments, quantify_rad, AlignQuantOptions};
 use salmon_index::{build as build_index, IndexBuildOptions};
 use salmon_quant::{quantify, ProgressCounters, QuantOptions};
 
@@ -275,11 +275,19 @@ struct IndexArgs {
 #[derive(Args)]
 struct QuantArgs {
     /// Salmon index directory (reads mode).
-    #[arg(short = 'i', long = "index", required_unless_present = "alignments")]
+    #[arg(
+        short = 'i',
+        long = "index",
+        required_unless_present_any = ["alignments", "rad"]
+    )]
     index: Option<PathBuf>,
     /// Alignment-based mode: a BAM of reads aligned to the transcriptome.
     #[arg(short = 'a', long = "alignments")]
     alignments: Option<PathBuf>,
+    /// RAD-input mode: a RAD file of mappings (from `salmon quant --writeRad` or
+    /// `piscem map-bulk`) to quantify directly, in parallel.
+    #[arg(long = "rad", conflicts_with_all = ["alignments", "mates1", "mates2", "unmated"])]
+    rad: Option<PathBuf>,
     /// Transcriptome FASTA (alignment mode `-a`): enables the alignment error model.
     #[arg(short = 't', long = "targets")]
     targets: Option<PathBuf>,
@@ -862,10 +870,58 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         return Ok(());
     }
 
+    // RAD-input mode: quantify directly from a RAD file of mappings, in parallel.
+    if let Some(rad_path) = args.rad {
+        // The RAD reuses alignment mode's inference/output; AlignQuantOptions
+        // carries the relevant knobs (lib type, EM/VBEM, score-exp, FLD prior,
+        // bootstrap/Gibbs). `bam` is unused by the RAD path.
+        let mut opts = AlignQuantOptions::new(rad_path.clone(), args.output);
+        opts.lib_type = args.lib_type;
+        opts.em.use_vbem = use_vbem;
+        opts.range_factorization_bins = range_factorization_bins;
+        opts.score_exp = args.score_exp;
+        opts.incompat_prior = args.incompat_prior;
+        opts.em.vb_prior = args.vb_prior;
+        opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+        opts.sig_digits = args.sig_digits;
+        opts.fld_mean = args.fld_mean;
+        opts.fld_sd = args.fld_sd;
+        opts.fld_max = args.fld_max;
+        opts.skip_quant = args.skip_quant;
+        opts.num_bootstraps = args.num_bootstraps;
+        opts.num_gibbs_samples = args.num_gibbs_samples;
+        opts.thinning_factor = args.thinning_factor;
+        let res = quantify_rad(&opts, &rad_path).context("RAD-input quantification failed")?;
+        let pct = if res.num_processed > 0 {
+            100.0 * res.num_mapped as f64 / res.num_processed as f64
+        } else {
+            0.0
+        };
+        tracing::info!(
+            "{} fragments from RAD, {} quantified ({:.2}%); {} equivalence classes",
+            res.num_processed,
+            res.num_mapped,
+            pct,
+            res.num_eq_classes
+        );
+        if let Some(gm) = &gene_map {
+            write_gene_level(
+                &out_dir,
+                gm,
+                &res.names,
+                &res.lengths,
+                &res.eff_lengths,
+                &res.tpm,
+                &res.counts,
+            )?;
+        }
+        return Ok(());
+    }
+
     // Reads (selective-alignment / pseudoalignment) mode.
     anyhow::ensure!(
         !args.mates1.is_empty() || !args.unmated.is_empty(),
-        "no reads provided: pass -1/-2 (paired), -r (single-end), or -a (BAM)"
+        "no reads provided: pass -1/-2 (paired), -r (single-end), -a (BAM), or --rad (RAD)"
     );
     anyhow::ensure!(
         args.mates1.len() == args.mates2.len(),

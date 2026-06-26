@@ -14,6 +14,9 @@
 //! position-binned alignment error model is a later refinement).
 
 mod error_model;
+mod rad;
+
+pub use rad::quantify_rad;
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
