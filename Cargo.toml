@@ -10,6 +10,7 @@ members = [
     "crates/salmon-quant",
     "crates/salmon-cli",
     "crates/salmon-align",
+    "crates/salmon-rad",
 ]
 
 [workspace.package]
@@ -32,6 +33,7 @@ salmon-infer = { path = "crates/salmon-infer", version = "2.1.2" }
 salmon-map = { path = "crates/salmon-map", version = "2.1.2" }
 salmon-align = { path = "crates/salmon-align", version = "2.1.2" }
 salmon-quant = { path = "crates/salmon-quant", version = "2.1.2" }
+salmon-rad = { path = "crates/salmon-rad", version = "2.1.2" }
 # error handling
 thiserror = "2"
 anyhow = "1"
@@ -70,6 +72,10 @@ sha2 = "0.10"
 # COMBINE-lab dependencies, from crates.io.
 cf1-rs = "0.5"
 piscem-rs = "0.6.1"
+# RAD-format I/O. 0.13 is on crates.io; for local development against the
+# `develop` branch we own, the dev-only [patch.crates-io] below redirects this
+# to the sibling checkout (remove the patch before `cargo publish`).
+libradicl = "0.13"
 
 # dev / test helpers
 tempfile = "3"
@@ -104,3 +110,10 @@ lto = "thin"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Dev-only: build against the local `develop` checkout of libradicl (a sibling of
+# this repo), so we can iterate on RAD support and the libradicl crate together.
+# REMOVE this patch before `cargo publish` / release; the `libradicl = "0.13"`
+# crates.io dependency above is what ships.
+[patch.crates-io]
+libradicl = { path = "../libradicl/libradicl" }
