@@ -131,8 +131,22 @@ pub fn finalize_mappings_counted(
     raw: Vec<RawMapping>,
     cfg: &ScoreConfig,
 ) -> (Vec<ScoredMapping>, bool, u32) {
+    let mut out = Vec::new();
+    let (decoy_dominated, num_below) = finalize_mappings_counted_into(&mut out, raw, cfg);
+    (out, decoy_dominated, num_below)
+}
+
+/// Like [`finalize_mappings_counted`] but writes into a caller-provided buffer
+/// (cleared first), so a per-thread `Vec` can be reused across reads instead of
+/// allocating a fresh result each time. Returns `(decoy_dominated, num_below)`.
+pub fn finalize_mappings_counted_into(
+    out: &mut Vec<ScoredMapping>,
+    raw: Vec<RawMapping>,
+    cfg: &ScoreConfig,
+) -> (bool, u32) {
+    out.clear();
     if raw.is_empty() {
-        return (Vec::new(), false, 0);
+        return (false, 0);
     }
 
     // One mapping per transcript: keep the highest score.
@@ -156,7 +170,7 @@ pub fn finalize_mappings_counted(
     let had_decoy = best_per_tid.values().any(|m| m.is_decoy);
     let Some(best_valid) = best_valid else {
         // only decoy mappings -> dropped, dominated by a decoy
-        return (Vec::new(), true, 0);
+        return (true, 0);
     };
     let best_decoy = best_per_tid
         .values()
@@ -169,51 +183,47 @@ pub fn finalize_mappings_counted(
     // unless `--allowDecoyOrphans` asks us to keep the transcript placement(s).
     if let Some(bd) = best_decoy {
         if (best_valid as f64) < cfg.decoy_thresh * (bd as f64) && !cfg.allow_decoy_orphans {
-            return (Vec::new(), true, 0);
+            return (true, 0);
         }
     }
     let _ = had_decoy;
 
     let mut num_below = 0u32;
-    let mut out: Vec<ScoredMapping> = best_per_tid
-        .into_values()
-        .filter(|m| !m.is_decoy)
-        .filter_map(|m| {
-            let weight = if cfg.hard_filter {
-                if m.score == best_valid {
-                    1.0
-                } else {
-                    num_below += 1;
-                    return None;
-                }
+    for m in best_per_tid.into_values().filter(|m| !m.is_decoy) {
+        let weight = if cfg.hard_filter {
+            if m.score == best_valid {
+                1.0
             } else {
-                (-cfg.score_exp * (best_valid - m.score) as f64).exp()
-            };
-            if weight < cfg.min_aln_prob {
                 num_below += 1;
-                return None;
+                continue;
             }
-            Some(ScoredMapping {
-                tid: m.tid,
-                is_fw: m.is_fw,
-                status: m.status,
-                score: m.score,
-                fragment_len: m.fragment_len,
-                read_len: m.read_len,
-                weight,
-                ref_pos: m.ref_pos,
-                fw_pos: m.fw_pos,
-                rc_pos: m.rc_pos,
-                format: m.format,
-                r1_pos: m.r1_pos,
-                r2_pos: m.r2_pos,
-                r2_fw: m.r2_fw,
-                r1_score: m.r1_score,
-            })
-        })
-        .collect();
+        } else {
+            (-cfg.score_exp * (best_valid - m.score) as f64).exp()
+        };
+        if weight < cfg.min_aln_prob {
+            num_below += 1;
+            continue;
+        }
+        out.push(ScoredMapping {
+            tid: m.tid,
+            is_fw: m.is_fw,
+            status: m.status,
+            score: m.score,
+            fragment_len: m.fragment_len,
+            read_len: m.read_len,
+            weight,
+            ref_pos: m.ref_pos,
+            fw_pos: m.fw_pos,
+            rc_pos: m.rc_pos,
+            format: m.format,
+            r1_pos: m.r1_pos,
+            r2_pos: m.r2_pos,
+            r2_fw: m.r2_fw,
+            r1_score: m.r1_score,
+        });
+    }
     out.sort_by_key(|m| m.tid);
-    (out, false, num_below)
+    (false, num_below)
 }
 
 /// Apply decoy filtering to sketch-mode mappings, consistent with the decoy

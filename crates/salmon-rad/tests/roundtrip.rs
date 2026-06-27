@@ -7,7 +7,7 @@ use libradicl::header::RadPrelude;
 use libradicl::rad_types::TagValue;
 
 use salmon_rad::{
-    detect_input_profile, frag_map_type, name_hash, FragmentChunkBuf, RadHit, RadInputProfile,
+    detect_input_profile, frag_map_type, ChunkCodec, FragmentChunkBuf, RadHit, RadInputProfile,
     RadOutputWriter, RadProfile, SalmonBulkContext, SalmonBulkRecord, FRAG_LEN_UNPAIRED,
 };
 
@@ -16,7 +16,6 @@ fn sample_records(profile: RadProfile) -> Vec<SalmonBulkRecord> {
     vec![
         SalmonBulkRecord::new(
             frag_map_type::MAPPED_PAIR,
-            name_hash(b"read0"),
             vec![
                 RadHit {
                     tid: 0,
@@ -38,7 +37,6 @@ fn sample_records(profile: RadProfile) -> Vec<SalmonBulkRecord> {
         ),
         SalmonBulkRecord::new(
             frag_map_type::LEFT_ORPHAN,
-            name_hash(b"read1"),
             vec![RadHit {
                 tid: 1,
                 is_fw: true,
@@ -52,15 +50,24 @@ fn sample_records(profile: RadProfile) -> Vec<SalmonBulkRecord> {
 }
 
 fn write_file(path: &std::path::Path, profile: RadProfile, recs: &[SalmonBulkRecord]) {
+    write_file_codec(path, profile, recs, ChunkCodec::None);
+}
+
+fn write_file_codec(
+    path: &std::path::Path,
+    profile: RadProfile,
+    recs: &[SalmonBulkRecord],
+    codec: ChunkCodec,
+) {
     let names = ["t0", "t1", "t2"];
     let lens = [100u32, 200, 300];
-    let w = RadOutputWriter::create(path, &names, &lens, true, profile).unwrap();
+    let w = RadOutputWriter::create(path, &names, &lens, true, profile, 1024, codec).unwrap();
     let ctx: SalmonBulkContext = *w.context();
-    let mut cb = FragmentChunkBuf::with_capacity(1024);
+    let mut cb = FragmentChunkBuf::with_capacity_codec(1024, codec);
     for r in recs {
         cb.write(r, &ctx).unwrap();
     }
-    w.append_chunk_bytes(&cb.take_bytes()).unwrap();
+    w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
     w.finalize().unwrap();
 }
 
@@ -118,6 +125,36 @@ fn sketch_roundtrip() {
     );
 }
 
+/// The `chunk_codec` file tag is absent for uncompressed output (so pre-feature
+/// readers are unaffected) and carries the codec id (1=lz4, 2=zstd) otherwise.
+#[test]
+fn chunk_codec_tag_advertised() {
+    use libradicl::CHUNK_CODEC_TAG;
+    let recs = sample_records(RadProfile::Sketch);
+    for (codec, expect) in [
+        (ChunkCodec::None, None),
+        (ChunkCodec::Lz4, Some(1u8)),
+        (ChunkCodec::Zstd, Some(2u8)),
+    ] {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        write_file_codec(tmp.path(), RadProfile::Sketch, &recs, codec);
+        // Parse only the prelude + file-tag values (the chunks may be compressed).
+        let mut data = Vec::new();
+        std::fs::File::open(tmp.path())
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
+        let mut rc = Cursor::new(data);
+        let prelude = RadPrelude::from_bytes(&mut rc).unwrap();
+        let ftm = prelude.file_tags.parse_tags_from_bytes(&mut rc).unwrap();
+        match (ftm.get(CHUNK_CODEC_TAG), expect) {
+            (None, None) => {}
+            (Some(TagValue::U8(v)), Some(e)) => assert_eq!(*v, e, "codec {codec:?}"),
+            (got, _) => panic!("codec {codec:?}: unexpected chunk_codec tag {got:?}"),
+        }
+    }
+}
+
 #[test]
 fn sa_roundtrip_carries_scores() {
     check_roundtrip(
@@ -138,7 +175,16 @@ fn concurrent_writer_counts_chunks() {
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let names = ["t0", "t1", "t2"];
     let lens = [100u32, 200, 300];
-    let w = RadOutputWriter::create(tmp.path(), &names, &lens, true, RadProfile::Sketch).unwrap();
+    let w = RadOutputWriter::create(
+        tmp.path(),
+        &names,
+        &lens,
+        true,
+        RadProfile::Sketch,
+        1024,
+        ChunkCodec::None,
+    )
+    .unwrap();
     let ctx: SalmonBulkContext = *w.context();
 
     std::thread::scope(|s| {
@@ -148,7 +194,6 @@ fn concurrent_writer_counts_chunks() {
                 let mut cb = FragmentChunkBuf::with_capacity(256);
                 let rec = SalmonBulkRecord::new(
                     frag_map_type::SINGLE,
-                    name_hash(format!("read{t}").as_bytes()),
                     vec![RadHit {
                         tid: t,
                         is_fw: true,
@@ -159,7 +204,7 @@ fn concurrent_writer_counts_chunks() {
                     }],
                 );
                 cb.write(&rec, &ctx).unwrap();
-                w.append_chunk_bytes(&cb.take_bytes()).unwrap();
+                w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
             });
         }
     });

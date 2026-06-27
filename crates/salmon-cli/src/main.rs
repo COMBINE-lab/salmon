@@ -19,7 +19,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use salmon_align::{quantify_alignments, quantify_rad, AlignQuantOptions};
 use salmon_index::{build as build_index, IndexBuildOptions};
-use salmon_quant::{quantify, ProgressCounters, QuantOptions};
+use salmon_quant::{quantify, ChunkCodec, ProgressCounters, QuantOptions};
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -231,7 +231,7 @@ struct IndexArgs {
     /// K-mer length (odd, ≤ 31 recommended).
     #[arg(short = 'k', long = "kmerLen", default_value_t = 31)]
     kmer_len: usize,
-    /// Minimizer length (0 = auto).
+    /// Minimizer length (0 = auto; 19 for the default k=31).
     #[arg(short = 'm', long = "minimizerLen", default_value_t = 0)]
     minimizer_len: usize,
     /// Worker threads (0 = all cores).
@@ -362,6 +362,18 @@ struct QuantArgs {
     /// piscem map-bulk compatible and can be re-quantified with `--rad`.
     #[arg(long = "writeRad")]
     write_rad: Option<PathBuf>,
+    /// Deterministic quantification (reads/FASTQ input): map once to an
+    /// intermediate RAD, then quantify from it with a fixed fragment-length
+    /// distribution, so the result is byte-identical across runs and thread
+    /// counts. Avoids a second mapping pass. The intermediate RAD is written under
+    /// the output directory and deleted on success unless --keepRad (or use
+    /// --writeRad PATH to choose its location and keep it).
+    #[arg(long = "deterministic")]
+    deterministic: bool,
+    /// Keep the intermediate RAD produced by --deterministic (by default it is
+    /// deleted once quantification finishes). Ignored without --deterministic.
+    #[arg(long = "keepRad")]
+    keep_rad: bool,
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
@@ -371,6 +383,21 @@ struct QuantArgs {
     /// Enable positional bias correction.
     #[arg(long = "posBias")]
     pos_bias: bool,
+    /// EM iterations for the preliminary abundance estimate that weights bias
+    /// model collection (expert; rough on purpose to avoid overfitting).
+    #[arg(long = "biasSeedEMIters", default_value_t = 11, hide = true)]
+    bias_seed_em_iters: u32,
+    /// Dump observed+expected seq/GC/positional bias models to
+    /// `bias_models.txt` (debugging / parity).
+    #[arg(long = "dumpBiasModels", hide = true)]
+    dump_bias_models: bool,
+    /// Compression codec for RAD output (`--writeRad` and the `--deterministic`
+    /// intermediate): `lz4` (default), `zstd` (better ratio), or `none`.
+    #[arg(long = "radCompress", default_value = "lz4", value_parser = ["lz4", "zstd", "none"])]
+    rad_compress: String,
+    /// Write uncompressed RAD chunks (overrides --radCompress).
+    #[arg(long = "noCompressRad")]
+    no_compress_rad: bool,
     /// Number of bootstrap replicates for posterior uncertainty.
     #[arg(long = "numBootstraps", default_value_t = 0)]
     num_bootstraps: u32,
@@ -702,6 +729,119 @@ fn write_gene_level(
     Ok(())
 }
 
+/// Deterministic reads-mode quantification: map the FASTQ once to an
+/// intermediate RAD (baking a fixed, order-independent FLD and the resolved
+/// library format), then quantify from that RAD via [`quantify_rad`]. Because the
+/// FLD is fixed before equivalence-class assembly, the result is byte-identical
+/// across runs and thread counts. Re-reading the RAD is cheap, so this avoids a
+/// second *mapping* pass; bias correction (which needs the reference) requires
+/// `-t`, and the requant derives its own abundances from the RAD.
+fn run_deterministic(
+    mut map_opts: QuantOptions,
+    rad_out: Option<PathBuf>,
+    keep_rad: bool,
+    bias_targets: Option<PathBuf>,
+    gene_map: Option<&std::path::Path>,
+    out_dir: &std::path::Path,
+) -> Result<()> {
+    let bias_on = map_opts.seq_bias || map_opts.gc_bias || map_opts.pos_bias;
+    if bias_on && bias_targets.is_none() {
+        anyhow::bail!(
+            "--deterministic with bias correction (--seqBias/--gcBias/--posBias) requires \
+             -t/--targets (the transcript FASTA) for the requant pass: the intermediate RAD \
+             carries fragment positions but no sequence"
+        );
+    }
+    // An explicit `--writeRad PATH` is honoured (and kept — it was a requested
+    // output); otherwise a temp under the output directory, removed on success
+    // unless `--keepRad`.
+    let explicit = rad_out.is_some();
+    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("intermediate_mappings.rad"));
+    // The RAD writer opens its file before the mapping pass, so the output
+    // directory (where the default intermediate lives) must exist first.
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+
+    // Phase 1 — map once, write the RAD (bakes the deterministic FLD + resolved
+    // library format), skipping the online EM: quantification happens in phase 2.
+    map_opts.write_rad = Some(rad_path.clone());
+    map_opts.skip_quant = true;
+    // Derive the FLD + library format order-independently during this pass and
+    // bake them (see `QuantOptions::deterministic_fld`), so phase 2 is a single
+    // pass and the whole result is byte-identical across thread counts.
+    map_opts.deterministic_fld = true;
+    let map_res = quantify(&map_opts).context("deterministic mapping pass failed")?;
+    let pct = if map_res.num_processed > 0 {
+        100.0 * map_res.num_mapped as f64 / map_res.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "deterministic: mapped {} / {} fragments ({:.2}%); quantifying from intermediate RAD",
+        map_res.num_mapped,
+        map_res.num_processed,
+        pct
+    );
+
+    // Phase 2 — deterministic quant from the RAD (fixed baked FLD + library
+    // format ⇒ order-independent eq-classes + EM). Mirrors the `--rad` knob wiring.
+    let mut q = AlignQuantOptions::new(rad_path.clone(), out_dir.to_path_buf());
+    q.lib_type = map_opts.lib_type.clone();
+    q.em = map_opts.em.clone();
+    q.range_factorization_bins = map_opts.range_factorization_bins;
+    q.transcripts = bias_targets;
+    q.seq_bias = map_opts.seq_bias;
+    q.gc_bias = map_opts.gc_bias;
+    q.pos_bias = map_opts.pos_bias;
+    q.bias_seed_em_iters = map_opts.bias_seed_em_iters;
+    q.score_exp = map_opts.map_config.score.score_exp;
+    q.incompat_prior = map_opts.incompat_prior;
+    q.sig_digits = map_opts.sig_digits;
+    q.fld_mean = map_opts.fld_mean;
+    q.fld_sd = map_opts.fld_sd;
+    q.fld_max = map_opts.fld_max;
+    q.gc_bins = map_opts.gc_bins;
+    q.cond_gc_bins = map_opts.cond_gc_bins;
+    q.num_bootstraps = map_opts.num_bootstraps;
+    q.num_gibbs_samples = map_opts.num_gibbs_samples;
+    q.thinning_factor = map_opts.thinning_factor;
+    let res = quantify_rad(&q, &rad_path).context("deterministic requant pass failed")?;
+    let pct2 = if res.num_processed > 0 {
+        100.0 * res.num_mapped as f64 / res.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "{} fragments from intermediate RAD, {} quantified ({:.2}%); {} equivalence classes",
+        res.num_processed,
+        res.num_mapped,
+        pct2,
+        res.num_eq_classes
+    );
+    if let Some(gm) = gene_map {
+        write_gene_level(
+            out_dir,
+            gm,
+            &res.names,
+            &res.lengths,
+            &res.eff_lengths,
+            &res.tpm,
+            &res.counts,
+        )?;
+    }
+    // Remove the intermediate unless kept (an explicit --writeRad path is always
+    // kept).
+    if explicit || keep_rad {
+        tracing::info!("kept intermediate RAD at {}", rad_path.display());
+    } else if let Err(e) = std::fs::remove_file(&rad_path) {
+        tracing::warn!(
+            "could not remove intermediate RAD {}: {e}",
+            rad_path.display()
+        );
+    }
+    Ok(())
+}
+
 fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.ont {
         long_read_redirect();
@@ -787,6 +927,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.seq_bias = args.seq_bias;
         opts.gc_bias = args.gc_bias;
         opts.pos_bias = args.pos_bias;
+        opts.bias_seed_em_iters = args.bias_seed_em_iters;
         opts.incompat_prior = args.incompat_prior;
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
@@ -879,6 +1020,13 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.lib_type = args.lib_type;
         opts.em.use_vbem = use_vbem;
         opts.range_factorization_bins = range_factorization_bins;
+        // Bias correction from RAD: seq/GC use the reference at each fragment's
+        // recorded position (the transcriptome `-t`), positional uses only the RAD.
+        opts.transcripts = args.targets;
+        opts.seq_bias = args.seq_bias;
+        opts.gc_bias = args.gc_bias;
+        opts.pos_bias = args.pos_bias;
+        opts.bias_seed_em_iters = args.bias_seed_em_iters;
         opts.score_exp = args.score_exp;
         opts.incompat_prior = args.incompat_prior;
         opts.em.vb_prior = args.vb_prior;
@@ -948,6 +1096,23 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
     opts.pos_bias = args.pos_bias;
+    opts.bias_seed_em_iters = args.bias_seed_em_iters;
+    opts.dump_bias_models = args.dump_bias_models;
+    // RAD chunk compression (only consumed when a RAD is actually written:
+    // --writeRad output or the --deterministic intermediate). --noCompressRad
+    // overrides --radCompress.
+    opts.rad_codec = if args.no_compress_rad {
+        ChunkCodec::None
+    } else {
+        match args.rad_compress.as_str() {
+            "none" => ChunkCodec::None,
+            "lz4" => ChunkCodec::Lz4,
+            "zstd" => ChunkCodec::Zstd,
+            other => {
+                anyhow::bail!("unknown --radCompress codec '{other}' (expected lz4|zstd|none)")
+            }
+        }
+    };
     opts.num_bootstraps = args.num_bootstraps;
     opts.num_gibbs_samples = args.num_gibbs_samples;
     opts.thinning_factor = args.thinning_factor;
@@ -1001,6 +1166,20 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.fld_sd = args.fld_sd;
     opts.fld_max = args.fld_max;
     opts.forgetting_factor = args.forgetting_factor;
+
+    // Deterministic mode: map once to an intermediate RAD, then quantify from it
+    // with a fixed FLD (byte-identical output, no second mapping pass).
+    if args.deterministic {
+        let rad_out = opts.write_rad.take(); // honour an explicit --writeRad path
+        return run_deterministic(
+            opts,
+            rad_out,
+            args.keep_rad,
+            args.targets.clone(),
+            gene_map.as_deref(),
+            &out_dir,
+        );
+    }
 
     // Live mapping spinner on an interactive terminal (unless --quiet/--no-progress).
     let progress = Arc::new(ProgressCounters::default());

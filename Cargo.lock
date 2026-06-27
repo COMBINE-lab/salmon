@@ -1415,7 +1415,9 @@ dependencies = [
 
 [[package]]
 name = "libradicl"
-version = "0.13.0"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e7c85dc1bc73fa759b809844aedfcc4c9ec817f68a909e37972835d3d6dc5a5"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1427,17 +1429,21 @@ dependencies = [
  "derivative",
  "itertools 0.14.0",
  "libradicl-macros",
+ "lz4_flex",
  "noodles",
  "num",
  "scroll",
  "serde",
  "smallvec",
  "snap",
+ "zstd",
 ]
 
 [[package]]
 name = "libradicl-macros"
-version = "0.13.0"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88221065c73fca4dec65e9905ac9c6978293dd88864b4e94e2b618f4bd18124b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1464,6 +1470,15 @@ name = "log"
 version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+
+[[package]]
+name = "lz4_flex"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b8c72594ac26bfd34f2d99dfced2edfaddfe8a476e3ff2ca0eb293d925c4f83"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "mach2"
@@ -2631,7 +2646,6 @@ dependencies = [
  "libradicl",
  "salmon-core",
  "tempfile",
- "xxhash-rust",
 ]
 
 [[package]]
@@ -2883,6 +2897,12 @@ dependencies = [
  "psm",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "statrs"
@@ -3204,6 +3224,16 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "twox-hash"
+version = "1.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
+dependencies = [
+ "cfg-if",
+ "static_assertions",
 ]
 
 [[package]]

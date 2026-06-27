@@ -1,9 +1,8 @@
 //! The salmon bulk RAD record and its parsing context.
 //!
 //! The per-hit `(compressed_ori_ref, pos, frag_len)` triple is byte-identical to
-//! piscem's `bulk_with_pos`; salmon adds a read-level `frag_name_hash` (after
-//! `frag_map_type`) and, for the selective-alignment profile, a per-hit
-//! `alignment_score`.
+//! piscem's `bulk_with_pos`; for the selective-alignment profile salmon adds a
+//! per-hit `alignment_score`.
 //!
 //! On-disk record layout (little-endian), matching the order of the read- and
 //! alignment-level [`TagSection`](libradicl::rad_types::TagSection)s in
@@ -11,7 +10,6 @@
 //! ```text
 //! na: u32
 //! frag_map_type: u8           (read tag)
-//! frag_name_hash: u128        (read tag)
 //! per alignment (na times):
 //!   compressed_ori_ref: u32   (aln tag)
 //!   pos: u32                  (aln tag)
@@ -36,16 +34,14 @@ pub struct SalmonBulkContext {
 
 impl RecordContext for SalmonBulkContext {
     fn get_context_from_tag_section(
-        _ft: &TagSection,
-        rt: &TagSection,
+        ft: &TagSection,
+        _rt: &TagSection,
         at: &TagSection,
     ) -> anyhow::Result<Self> {
-        // salmon RAD must carry the read-name hash; require it so we don't
-        // silently mis-read a foreign RAD as salmon's.
-        if !rt.has_tag("frag_name_hash") {
-            anyhow::bail!(
-                "salmon bulk record context requires a \"frag_name_hash\" read-level tag"
-            );
+        // salmon RAD is identified by its `rad_type` file tag (piscem uses
+        // `known_rad_type`); require it so we don't mis-read a foreign RAD.
+        if !ft.has_tag("rad_type") {
+            anyhow::bail!("salmon bulk record context requires a \"rad_type\" file-level tag");
         }
         let profile = if at.has_tag("alignment_score") {
             RadProfile::SelectiveAlignment
@@ -60,19 +56,17 @@ impl RecordContext for SalmonBulkContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SalmonBulkRecord {
     pub frag_type: u8,
-    pub name_hash: u128,
     pub hits: Vec<RadHit>,
     // cached transcript ids, to satisfy `MappedRecord::refs() -> &[u32]`.
     refs: Vec<u32>,
 }
 
 impl SalmonBulkRecord {
-    /// Build a record from a fragment's `frag_type`, read-name hash, and hits.
-    pub fn new(frag_type: u8, name_hash: u128, hits: Vec<RadHit>) -> Self {
+    /// Build a record from a fragment's `frag_type` and hits.
+    pub fn new(frag_type: u8, hits: Vec<RadHit>) -> Self {
         let refs = hits.iter().map(|h| h.tid).collect();
         Self {
             frag_type,
-            name_hash,
             hits,
             refs,
         }
@@ -90,14 +84,11 @@ impl MappedRecord for SalmonBulkRecord {
         let mut u32b = [0u8; 4];
         let mut u16b = [0u8; 2];
         let mut u8b = [0u8; 1];
-        let mut u128b = [0u8; 16];
 
         reader.read_exact(&mut u32b).unwrap();
         let na = u32::from_le_bytes(u32b) as usize;
         reader.read_exact(&mut u8b).unwrap();
         let frag_type = u8b[0];
-        reader.read_exact(&mut u128b).unwrap();
-        let name_hash = u128::from_le_bytes(u128b);
 
         let mut hits = Vec::with_capacity(na);
         for _ in 0..na {
@@ -122,13 +113,12 @@ impl MappedRecord for SalmonBulkRecord {
                 score,
             });
         }
-        Self::new(frag_type, name_hash, hits)
+        Self::new(frag_type, hits)
     }
 
     fn write<W: Write>(&self, writer: &mut W, ctx: &Self::ParsingContext) -> anyhow::Result<()> {
         writer.write_all(&(self.hits.len() as u32).to_le_bytes())?;
         writer.write_all(&self.frag_type.to_le_bytes())?;
-        writer.write_all(&self.name_hash.to_le_bytes())?;
         for h in &self.hits {
             writer.write_all(&h.compressed_ori_ref().to_le_bytes())?;
             writer.write_all(&h.pos.to_le_bytes())?;

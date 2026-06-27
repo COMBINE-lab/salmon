@@ -72,10 +72,9 @@ sha2 = "0.10"
 # COMBINE-lab dependencies, from crates.io.
 cf1-rs = "0.5"
 piscem-rs = "0.6.1"
-# RAD-format I/O. 0.13 is on crates.io; for local development against the
-# `develop` branch we own, the dev-only [patch.crates-io] below redirects this
-# to the sibling checkout (remove the patch before `cargo publish`).
-libradicl = "0.13"
+# RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
+# feature enables zstd-compressed RAD chunks (lz4 is always available).
+libradicl = { version = "0.14", features = ["zstd"] }
 
 # dev / test helpers
 tempfile = "3"
@@ -110,10 +109,3 @@ lto = "thin"
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-# Dev-only: build against the local `develop` checkout of libradicl (a sibling of
-# this repo), so we can iterate on RAD support and the libradicl crate together.
-# REMOVE this patch before `cargo publish` / release; the `libradicl = "0.13"`
-# crates.io dependency above is what ships.
-[patch.crates-io]
-libradicl = { path = "../libradicl/libradicl" }

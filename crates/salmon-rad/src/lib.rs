@@ -9,10 +9,9 @@
 //!     score so the placements can be re-weighted on requant exactly like
 //!     internal selective alignments.
 //!
-//! Both profiles additionally carry a read-level tag — a deterministic, seeded
-//! `xxh3` hash of the read name — so a future opt-in determinism feature can
-//! induce a fixed input order by sorting on it. Emitting the tag has no
-//! behavioral effect on its own.
+//! Determinism is achieved structurally (a fixed FLD before order-independent
+//! equivalence-class assembly), so no per-read name hash is stored; a salmon RAD
+//! is identified instead by its `rad_type` file tag.
 //!
 //! The per-hit `(compressed_ori_ref, pos, frag_len)` triple is byte-identical to
 //! piscem's `bulk_with_pos` layout (`tid` in the low 30 bits, `is_fw` in bit 31,
@@ -26,6 +25,9 @@ pub mod record;
 pub mod schema;
 pub mod writer;
 
+/// Re-exported so consumers can select a RAD chunk compression codec without a
+/// direct libradicl dependency.
+pub use libradicl::ChunkCodec;
 pub use record::{SalmonBulkContext, SalmonBulkRecord};
 pub use writer::{FragmentChunkBuf, RadOutputWriter};
 
@@ -36,7 +38,7 @@ pub enum RadInputProfile {
     /// piscem `map-bulk` (`bulk_with_pos`): `frag_map_type` read tag + the
     /// `(compressed_ori_ref, pos, frag_len)` aln triple, no scores.
     PiscemBulk,
-    /// salmon-written RAD (carries the `frag_name_hash` read tag); the inner
+    /// salmon-written RAD (carries the `rad_type` file tag); the inner
     /// [`RadProfile`] distinguishes sketch vs. selective-alignment.
     Salmon(RadProfile),
 }
@@ -44,16 +46,19 @@ pub enum RadInputProfile {
 /// Detect the input profile of a RAD file from its prelude's tag signature.
 ///
 /// libradicl has no single "kind" field, so detection is by which tags are
-/// present: salmon RAD is identified by the `frag_name_hash` read tag (and
+/// present: salmon RAD is identified by the `rad_type` file tag (and
 /// selective-alignment by the `alignment_score` aln tag); a piscem bulk file is
 /// identified by `frag_map_type` + the `compressed_ori_ref`/`pos`/`frag_len`
 /// alignment triple.
 pub fn detect_input_profile(
     prelude: &libradicl::header::RadPrelude,
 ) -> anyhow::Result<RadInputProfile> {
+    let ft = &prelude.file_tags;
     let rt = &prelude.read_tags;
     let at = &prelude.aln_tags;
-    if rt.has_tag("frag_name_hash") {
+    // salmon RAD is identified by its `rad_type` file tag; piscem uses a
+    // differently-named `known_rad_type` tag, so this cleanly distinguishes them.
+    if ft.has_tag("rad_type") {
         let p = if at.has_tag("alignment_score") {
             RadProfile::SelectiveAlignment
         } else {
@@ -69,7 +74,7 @@ pub fn detect_input_profile(
         return Ok(RadInputProfile::PiscemBulk);
     }
     anyhow::bail!(
-        "unrecognized RAD profile: expected a salmon RAD (with a `frag_name_hash` read tag) \
+        "unrecognized RAD profile: expected a salmon RAD (with a `rad_type` file tag) \
          or a piscem bulk RAD (with `frag_map_type` + `compressed_ori_ref`/`pos`/`frag_len`)"
     )
 }
@@ -110,9 +115,27 @@ pub const TID_MASK: u32 = 0x3FFF_FFFF;
 /// piscem.
 pub const FRAG_LEN_UNPAIRED: u16 = u16::MAX;
 
-/// Seed for the read-name hash tag. Fixed so the hash is reproducible across
-/// runs/machines; recorded in `meta_info.json` as `rad_hash_seed`. ("SalmonRD")
-pub const SALMON_RAD_HASH_SEED: u64 = 0x5361_6c6d_6f6e_5244;
+/// File-tag name: a `u8` bitfield recording which reserved values were actually
+/// baked at finalize ([`BAKED_FLD`] / [`BAKED_ABUND`]); `0` ⇒ none (placeholders).
+pub const BAKED_FLAGS_TAG: &str = "baked_flags";
+/// File-tag name: the fragment-length distribution as a log-PMF over raw lengths
+/// `[0, fld_len)`, baked at write time so a reader can quantify in a single pass
+/// with exact FLD parity instead of deriving it.
+pub const FRAG_LENGTH_DIST_TAG: &str = "frag_length_dist";
+/// File-tag name: initial per-reference abundance estimates (one `f64` each),
+/// baked when the write run quantified; a prior for future bias-aware requant.
+pub const INITIAL_ABUNDANCES_TAG: &str = "initial_abundances";
+/// File-tag name: the resolved library format as a `u8` `format_id`
+/// ([`salmon_core::LibraryFormat::format_id`]), baked so a reader can apply
+/// concordance filtering under `-l A` without re-inferring the type (the write
+/// run already detected it). Absent ⇒ the reader auto-detects from the RAD.
+pub const LIBRARY_FORMAT_TAG: &str = "library_format";
+/// [`BAKED_FLAGS_TAG`] bit: a fragment-length distribution is present.
+pub const BAKED_FLD: u8 = 0x01;
+/// [`BAKED_FLAGS_TAG`] bit: initial abundance estimates are present.
+pub const BAKED_ABUND: u8 = 0x02;
+/// [`BAKED_FLAGS_TAG`] bit: a resolved library format is present.
+pub const BAKED_LIBFMT: u8 = 0x04;
 
 /// piscem `frag_map_type` (a.k.a. `MappingType`) code for an unmapped fragment.
 pub const FRAG_MAP_TYPE_UNMAPPED: u8 = 0;
@@ -202,25 +225,6 @@ pub mod frag_map_type {
     }
 }
 
-/// The seeded `xxh3`-128 hash of a read name, used as the `frag_name_hash`
-/// read-level tag. `name` should be the read id trimmed at the first ASCII
-/// whitespace (the same slice salmon uses elsewhere); raw bytes are hashed, no
-/// UTF-8 decoding.
-#[inline]
-pub fn name_hash(name: &[u8]) -> u128 {
-    xxhash_rust::xxh3::xxh3_128_with_seed(name, SALMON_RAD_HASH_SEED)
-}
-
-/// Trim a read id at the first ASCII whitespace, matching salmon's read-name
-/// handling (so the hash is stable regardless of FASTQ comment fields).
-#[inline]
-pub fn trim_read_name(id: &[u8]) -> &[u8] {
-    match id.iter().position(|b| b.is_ascii_whitespace()) {
-        Some(i) => &id[..i],
-        None => id,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,22 +247,6 @@ mod tests {
             let v = h.compressed_ori_ref();
             assert_eq!(RadHit::decode_ori_ref(v), (tid, fw, mfw));
         }
-    }
-
-    #[test]
-    fn name_hash_is_seeded_and_trimmed() {
-        let full = b"READ_42 1:N:0:ACGT";
-        let trimmed = trim_read_name(full);
-        assert_eq!(trimmed, b"READ_42");
-        assert_eq!(
-            name_hash(trimmed),
-            xxhash_rust::xxh3::xxh3_128_with_seed(b"READ_42", SALMON_RAD_HASH_SEED)
-        );
-        // stable + distinct from the unseeded hash
-        assert_ne!(
-            name_hash(b"READ_42"),
-            xxhash_rust::xxh3::xxh3_128(b"READ_42")
-        );
     }
 
     #[test]

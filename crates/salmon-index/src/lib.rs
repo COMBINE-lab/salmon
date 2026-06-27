@@ -57,8 +57,15 @@ pub const INDEX_FORMAT_VERSION: u32 = 1;
 pub const MIN_READABLE_INDEX_VERSION: u32 = 1;
 
 /// Default minimizer length for a given k (used when `m == 0`).
+///
+/// Matches piscem's default minimizer length of 19 for the standard k = 31.
+/// Falls back to `k/2 + 1` for small k, where 19 would be invalid (m must be < k).
 fn default_minimizer_len(k: usize) -> usize {
-    (k / 2) + 1
+    if k > 19 {
+        19
+    } else {
+        (k / 2) + 1
+    }
 }
 
 /// Resolve a thread count, mapping `0` to all available cores.
@@ -872,15 +879,33 @@ fn remove_cdbg_intermediates(cdbg_prefix: &Path) {
 pub struct SalmonIndex {
     inner: ReferenceIndex,
     info: IndexInfo,
-    /// concatenated reference sequences (forward strand), transcript-id order
+    /// concatenated reference sequences (forward strand), transcript-id order.
+    /// Empty when the index was loaded with `load_refseq == false` (sketch mode
+    /// without sequence-dependent bias correction): the raw nucleotides are only
+    /// needed for selective-alignment extension and seq/GC bias, so skipping the
+    /// read avoids holding a multi-GB decoy genome resident.
     refseq: Vec<u8>,
-    /// offsets into `refseq` (`num_refs + 1` entries)
+    /// offsets into `refseq` (`num_refs + 1` entries); empty iff `!refseq_loaded`
     ref_offsets: Vec<u64>,
+    /// whether the reference sequence bytes were loaded
+    refseq_loaded: bool,
 }
 
 impl SalmonIndex {
-    /// Load a salmon index from a directory produced by [`build`].
+    /// Load a salmon index from a directory produced by [`build`], including the
+    /// reference sequence bytes (needed for selective alignment and seq/GC bias).
     pub fn load(dir: impl AsRef<Path>) -> Result<Self> {
+        Self::load_with_opts(dir, true)
+    }
+
+    /// Load a salmon index, optionally skipping the reference sequence bytes.
+    ///
+    /// Pass `load_refseq == false` when neither selective-alignment extension nor
+    /// seq/GC bias correction will run (e.g. `--sketch` without `--seqBias`/
+    /// `--gcBias`): [`ref_seq`](Self::ref_seq) / [`refseq_concat`](Self::refseq_concat)
+    /// then must not be called, but the index loads without the (potentially
+    /// multi-GB, with a genome decoy) reference sequence resident.
+    pub fn load_with_opts(dir: impl AsRef<Path>, load_refseq: bool) -> Result<Self> {
         let dir = dir.as_ref();
         // Guard: a C++ salmon (pufferfish) index is not readable by salmon 2.0 —
         // the index format changed. Detect it (no sshash `index.ssi`, but
@@ -923,22 +948,41 @@ impl SalmonIndex {
         // Load the EC table when the index has one (enables pseudoalignment-only mode).
         let inner = ReferenceIndex::load(&index_prefix, info.has_ec_table, false)
             .with_context(|| format!("loading piscem index at {}", index_prefix.display()))?;
-        let refseq = std::fs::read(dir.join(REFSEQ_FILE))
-            .with_context(|| format!("reading {REFSEQ_FILE}"))?;
-        let ref_offsets: Vec<u64> = serde_json::from_slice(
-            &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
-                .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
-        )?;
+        let (refseq, ref_offsets) = if load_refseq {
+            let refseq = std::fs::read(dir.join(REFSEQ_FILE))
+                .with_context(|| format!("reading {REFSEQ_FILE}"))?;
+            let ref_offsets: Vec<u64> = serde_json::from_slice(
+                &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
+                    .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
+            )?;
+            (refseq, ref_offsets)
+        } else {
+            (Vec::new(), Vec::new())
+        };
         Ok(Self {
             inner,
             info,
             refseq,
             ref_offsets,
+            refseq_loaded: load_refseq,
         })
     }
 
+    /// Whether the reference sequence bytes were loaded (see [`load_with_opts`](Self::load_with_opts)).
+    pub fn refseq_loaded(&self) -> bool {
+        self.refseq_loaded
+    }
+
     /// Forward-strand sequence of reference `tid`.
+    ///
+    /// Panics if the index was loaded without the reference sequence
+    /// (`load_refseq == false`); callers in sketch-without-bias mode must not
+    /// reach the alignment/bias paths that call this.
     pub fn ref_seq(&self, tid: u32) -> &[u8] {
+        debug_assert!(
+            self.refseq_loaded,
+            "ref_seq called on an index loaded without reference sequence"
+        );
         let s = self.ref_offsets[tid as usize] as usize;
         let e = self.ref_offsets[tid as usize + 1] as usize;
         &self.refseq[s..e]
@@ -946,7 +990,8 @@ impl SalmonIndex {
 
     /// The concatenated forward-strand reference sequences (all transcripts).
     /// Indexed by [`ref_offsets`](Self::ref_offsets); used to build the
-    /// reduced-memory GC rank bitvector.
+    /// reduced-memory GC rank bitvector. Empty if loaded without the reference
+    /// sequence (`load_refseq == false`).
     pub fn refseq_concat(&self) -> &[u8] {
         &self.refseq
     }

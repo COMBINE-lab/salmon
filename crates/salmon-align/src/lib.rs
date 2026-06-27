@@ -65,6 +65,9 @@ pub struct AlignQuantOptions {
     pub gc_bias: bool,
     /// enable positional bias correction (`--posBias`)
     pub pos_bias: bool,
+    /// EM iterations for the rough abundance seed that weights bias collection
+    /// when no baked prior is present (`--biasSeedEMIters`, hidden); default 11.
+    pub bias_seed_em_iters: u32,
     /// weight multiplier for orientation-incompatible alignments; `0` drops them
     /// (salmon's default `ignoreIncompat` behavior)
     pub incompat_prior: f64,
@@ -132,6 +135,7 @@ impl AlignQuantOptions {
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
+            bias_seed_em_iters: 11,
             incompat_prior: 0.0,
             fld_mean: 250.0,
             fld_sd: 25.0,
@@ -1266,6 +1270,151 @@ fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
     so_coord && !go_query
 }
 
+/// Build expected bias models from the collected seq/GC/positional observations
+/// plus abundance estimates, fold them into bias-corrected **effective lengths**
+/// (mutating `eff_lengths` in place), and return the [`BiasDump`] for output.
+///
+/// Shared by alignment mode and RAD mode: both collect the same per-fragment
+/// observations (weighted by abundance-aware posteriors) and then correct
+/// effective lengths identically — only the *source* of the observations and
+/// abundances differs (online posteriors for BAM; fixed baked/derived abundances
+/// for RAD). The caller runs the subsequent re-EM with the corrected lengths.
+#[allow(clippy::too_many_arguments)]
+fn apply_bias_correction(
+    num_refs: usize,
+    ref_bytes: &[Vec<u8>],
+    gc_store: &salmon_model::GcStore<'_>,
+    lengths: &[u32],
+    length_class: Option<&[usize]>,
+    length_quantiles: Option<&[u32]>,
+    fld: &FragmentLengthDistribution,
+    alphas: &[f64],
+    eff_lengths: &mut [f64],
+    seq_obs: Option<(salmon_model::SBModel, salmon_model::SBModel)>,
+    gc_obs: Option<salmon_model::GcFragModel>,
+    pos_obs: Option<(
+        Vec<salmon_model::SimplePosBias>,
+        Vec<salmon_model::SimplePosBias>,
+    )>,
+    seq_bias: bool,
+    cond_gc_bins: usize,
+    gc_bins: usize,
+    bias_speed_samp: usize,
+    no_bias_length_threshold: bool,
+) -> salmon_model::dumps::BiasDump {
+    use salmon_model::seqbias::CONTEXT_LENGTH;
+    let mut bias_dump = salmon_model::dumps::BiasDump::default();
+    let log_pmf = fld.log_pmf();
+    let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
+    let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
+    let k = if seq_bias { CONTEXT_LENGTH } else { 1 };
+    let refseq_of = |t: usize| ref_bytes[t].as_slice();
+
+    let seq = seq_obs.map(|(mut of, mut or)| {
+        of.normalize();
+        or.normalize();
+        let (ef, er) =
+            salmon_model::build_expected(num_refs, refseq_of, alphas, eff_lengths, &fld_cdf);
+        (of, or, ef, er)
+    });
+    if let Some((of, or, ef, er)) = seq.as_ref() {
+        bias_dump.obs5_seq = of.dump().to_vec();
+        bias_dump.obs3_seq = or.dump().to_vec();
+        bias_dump.exp5_seq = ef.dump().to_vec();
+        bias_dump.exp3_seq = er.dump().to_vec();
+    }
+    let gc_ratio_model = if let Some(mut obs) = gc_obs {
+        let mut exp = salmon_model::build_expected_gc(
+            num_refs,
+            refseq_of,
+            |t| gc_store.view(t),
+            alphas,
+            eff_lengths,
+            &fld_cdf,
+            fld_low,
+            fld_high,
+            cond_gc_bins,
+            gc_bins,
+            k,
+            bias_speed_samp,
+        );
+        obs.normalize();
+        exp.normalize();
+        bias_dump.obs_gc = obs.dump().to_vec();
+        bias_dump.exp_gc = exp.dump().to_vec();
+        Some(salmon_model::gc_ratio(
+            &mut obs,
+            &mut exp,
+            salmon_model::gcbias::GC_MAX_RATIO,
+        ))
+    } else {
+        None
+    };
+    let pos_models = pos_obs.map(|(mut of, mut or)| {
+        for x in of.iter_mut().chain(or.iter_mut()) {
+            x.finalize();
+        }
+        let (ef, er) = salmon_model::build_expected_pos(
+            num_refs,
+            |t| lengths[t] as usize,
+            alphas,
+            eff_lengths,
+            &fld_cdf,
+            length_quantiles.expect("positional bias requires length quantiles"),
+            k,
+        );
+        (of, or, ef, er)
+    });
+    if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
+        let masses =
+            |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
+        bias_dump.obs5_pos = masses(ofw);
+        bias_dump.obs3_pos = masses(orc);
+        bias_dump.exp5_pos = masses(efw);
+        bias_dump.exp3_pos = masses(erc);
+    }
+
+    for tid in 0..num_refs {
+        if alphas[tid] < 1e-8 {
+            continue;
+        }
+        let s = ref_bytes[tid].as_slice();
+        let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
+            pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
+                let lc = length_class.expect("positional bias requires length classes")[tid];
+                let rl = s.len();
+                let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
+                let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
+                ofw[lc].project_weights(&mut o5);
+                efw[lc].project_weights(&mut e5);
+                orc[lc].project_weights(&mut o3);
+                erc[lc].project_weights(&mut e3);
+                (
+                    salmon_model::positional_factor(&o5, &e5),
+                    salmon_model::positional_factor(&o3, &e3),
+                )
+            });
+        let bias = salmon_model::BiasInputs {
+            seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
+            gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
+            pos: pos_vecs
+                .as_ref()
+                .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
+        };
+        eff_lengths[tid] = salmon_model::corrected_effective_length_full(
+            s,
+            &fld_cdf,
+            fld_low,
+            fld_high,
+            &bias,
+            eff_lengths[tid],
+            bias_speed_samp,
+            no_bias_length_threshold,
+        );
+    }
+    bias_dump
+}
+
 /// Run alignment-based quantification end-to-end.
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
     let start_time = asctime_now();
@@ -1328,7 +1477,6 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     // Per-transcript inputs the bias collection needs (the observed bias models
     // themselves are accumulated per-worker inside the pass).
-    use salmon_model::seqbias::CONTEXT_LENGTH;
     // GC cumulative-count backing: one rank bitvector over the concatenated
     // references (salmon's `--reduceGCMemory`, now the default — faster and ~2x
     // leaner than dense per-transcript prefixes, identical results). `gc_store`
@@ -1494,122 +1642,28 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         )
     };
 
-    // ---- bias-corrected effective lengths (shared with reads mode) ----------
+    // ---- bias-corrected effective lengths (shared with RAD mode) ------------
     let mut bias_dump = salmon_model::dumps::BiasDump::default();
     if bias_on && !opts.skip_quant {
-        let log_pmf = fld.log_pmf();
-        let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
-        let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
-        let k = if opts.seq_bias { CONTEXT_LENGTH } else { 1 };
-        let refseq_of = |t: usize| ref_bytes[t].as_slice();
-
-        let seq = seq_obs.map(|(mut of, mut or)| {
-            of.normalize();
-            or.normalize();
-            let (ef, er) = salmon_model::build_expected(
-                num_refs,
-                refseq_of,
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-            );
-            (of, or, ef, er)
-        });
-        if let Some((of, or, ef, er)) = seq.as_ref() {
-            bias_dump.obs5_seq = of.dump().to_vec();
-            bias_dump.obs3_seq = or.dump().to_vec();
-            bias_dump.exp5_seq = ef.dump().to_vec();
-            bias_dump.exp3_seq = er.dump().to_vec();
-        }
-        let gc_ratio_model = if let Some(mut obs) = gc_obs {
-            let mut exp = salmon_model::build_expected_gc(
-                num_refs,
-                refseq_of,
-                |t| gc_store.view(t),
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-                fld_low,
-                fld_high,
-                opts.cond_gc_bins,
-                opts.gc_bins,
-                k,
-                opts.bias_speed_samp,
-            );
-            obs.normalize();
-            exp.normalize();
-            bias_dump.obs_gc = obs.dump().to_vec();
-            bias_dump.exp_gc = exp.dump().to_vec();
-            Some(salmon_model::gc_ratio(
-                &mut obs,
-                &mut exp,
-                salmon_model::gcbias::GC_MAX_RATIO,
-            ))
-        } else {
-            None
-        };
-        let pos_models = pos_obs.map(|(mut of, mut or)| {
-            for x in of.iter_mut().chain(or.iter_mut()) {
-                x.finalize();
-            }
-            let (ef, er) = salmon_model::build_expected_pos(
-                num_refs,
-                |t| lengths[t] as usize,
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-                length_quantiles.as_ref().unwrap(),
-                k,
-            );
-            (of, or, ef, er)
-        });
-        if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
-            let masses =
-                |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
-            bias_dump.obs5_pos = masses(ofw);
-            bias_dump.obs3_pos = masses(orc);
-            bias_dump.exp5_pos = masses(efw);
-            bias_dump.exp3_pos = masses(erc);
-        }
-
-        for tid in 0..num_refs {
-            if em.alphas[tid] < 1e-8 {
-                continue;
-            }
-            let s = ref_bytes[tid].as_slice();
-            let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
-                pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
-                    let lc = length_class.as_ref().unwrap()[tid];
-                    let rl = s.len();
-                    let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
-                    let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
-                    ofw[lc].project_weights(&mut o5);
-                    efw[lc].project_weights(&mut e5);
-                    orc[lc].project_weights(&mut o3);
-                    erc[lc].project_weights(&mut e3);
-                    (
-                        salmon_model::positional_factor(&o5, &e5),
-                        salmon_model::positional_factor(&o3, &e3),
-                    )
-                });
-            let bias = salmon_model::BiasInputs {
-                seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
-                gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
-                pos: pos_vecs
-                    .as_ref()
-                    .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
-            };
-            eff_lengths[tid] = salmon_model::corrected_effective_length_full(
-                s,
-                &fld_cdf,
-                fld_low,
-                fld_high,
-                &bias,
-                eff_lengths[tid],
-                opts.bias_speed_samp,
-                opts.no_bias_length_threshold,
-            );
-        }
+        bias_dump = apply_bias_correction(
+            num_refs,
+            &ref_bytes,
+            &gc_store,
+            &lengths,
+            length_class.as_deref(),
+            length_quantiles.as_deref(),
+            &fld,
+            &em.alphas,
+            &mut eff_lengths,
+            seq_obs,
+            gc_obs,
+            pos_obs,
+            opts.seq_bias,
+            opts.cond_gc_bins,
+            opts.gc_bins,
+            opts.bias_speed_samp,
+            opts.no_bias_length_threshold,
+        );
         collapsed.update_eff_lengths(&eff_lengths);
         em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
     }

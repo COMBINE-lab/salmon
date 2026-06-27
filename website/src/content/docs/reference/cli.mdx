@@ -30,7 +30,7 @@ Build a reusable index from one or more transcriptome FASTA files.
 | `-t, --transcripts <FASTA>…` | Transcript FASTA file(s). **Required.** |
 | `-i, --index <DIR>` | Output index directory. **Required.** |
 | `-k, --kmerLen <N>` | K-mer length (odd, ≤ 31 recommended). Default `31`. |
-| `-m, --minimizerLen <N>` | Minimizer length (`0` = auto). Default `0`. |
+| `-m, --minimizerLen <N>` | Minimizer length (`0` = auto → 19 for the default k=31). Default `0`. |
 | `-p, --threads <N>` | Worker threads (`0` = all cores). Default `0`. |
 | `-d, --decoys <FILE>` | File of decoy sequence names (one per line; decoy records must come last in the FASTA). |
 | `--keepDuplicates` | Retain exact-duplicate transcript sequences instead of collapsing them. |

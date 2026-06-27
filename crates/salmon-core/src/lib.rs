@@ -18,7 +18,7 @@ pub mod refprovider;
 pub mod transcript;
 
 pub use atomic::AtomicF64;
-pub use libtype::{compatible_paired, compatible_single, is_compatible};
+pub use libtype::{compatible_paired, compatible_single, is_compatible, observed_paired_format};
 pub use progress::ProgressCounters;
 pub use refprovider::RefProvider;
 

@@ -6,22 +6,50 @@ use std::path::Path;
 
 use salmon_align::{quantify_rad, AlignQuantOptions};
 use salmon_rad::{
-    frag_map_type, name_hash, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile,
-    SalmonBulkContext, FRAG_LEN_UNPAIRED,
+    frag_map_type, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile, SalmonBulkContext,
+    FRAG_LEN_UNPAIRED,
 };
 
 /// Write a salmon RAD file. Each fragment is a list of `(tid, frag_len)` hits;
-/// `frag_len == None` marks an orphan/single-end placement.
+/// `frag_len == None` marks an orphan/single-end placement. If `baked_log_pmf` is
+/// `Some`, it is baked into the header (so the reader uses it instead of deriving
+/// the FLD from unique fragments).
 fn write_rad(
     path: &Path,
     ref_names: &[&str],
     ref_lengths: &[u32],
     profile: RadProfile,
     fragments: &[Vec<(u32, Option<u16>, i32)>],
+    baked_log_pmf: Option<&[f64]>,
 ) {
-    let w = RadOutputWriter::create(path, ref_names, ref_lengths, true, profile).unwrap();
+    write_rad_codec(
+        path,
+        ref_names,
+        ref_lengths,
+        profile,
+        fragments,
+        baked_log_pmf,
+        salmon_rad::ChunkCodec::None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_rad_codec(
+    path: &Path,
+    ref_names: &[&str],
+    ref_lengths: &[u32],
+    profile: RadProfile,
+    fragments: &[Vec<(u32, Option<u16>, i32)>],
+    baked_log_pmf: Option<&[f64]>,
+    codec: salmon_rad::ChunkCodec,
+) {
+    let mut w =
+        RadOutputWriter::create(path, ref_names, ref_lengths, true, profile, 1024, codec).unwrap();
+    if let Some(pmf) = baked_log_pmf {
+        w.set_frag_length_dist(pmf);
+    }
     let ctx: SalmonBulkContext = *w.context();
-    let mut cb = FragmentChunkBuf::with_capacity(4096);
+    let mut cb = FragmentChunkBuf::with_capacity_codec(4096, codec);
     for (i, hits) in fragments.iter().enumerate() {
         let proper = hits.iter().all(|(_, fl, _)| fl.is_some());
         let frag_type = if proper {
@@ -42,19 +70,15 @@ fn write_rad(
                 score,
             })
             .collect();
-        let rec = salmon_rad::SalmonBulkRecord::new(
-            frag_type,
-            name_hash(format!("frag{i}").as_bytes()),
-            rad_hits,
-        );
+        let rec = salmon_rad::SalmonBulkRecord::new(frag_type, rad_hits);
         cb.write(&rec, &ctx).unwrap();
         // emit multiple chunks (real output flushes one chunk per minibatch)
         if cb.nrec() >= 64 {
-            w.append_chunk_bytes(&cb.take_bytes()).unwrap();
+            w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
         }
     }
     if cb.nrec() > 0 {
-        w.append_chunk_bytes(&cb.take_bytes()).unwrap();
+        w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
     }
     w.finalize().unwrap();
 }
@@ -81,7 +105,7 @@ fn unique_mappings_recover_exact_counts() {
             frags.push(vec![(tid, Some(200), 0)]);
         }
     }
-    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags);
+    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags, None);
 
     let out = tmp.path().join("quant");
     std::fs::create_dir_all(&out).unwrap();
@@ -122,7 +146,7 @@ fn multimapping_resolves_toward_higher_abundance() {
     for _ in 0..100 {
         frags.push(vec![(0, Some(200), 0), (1, Some(200), 0)]); // ambiguous t0/t1
     }
-    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags);
+    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags, None);
 
     let out = tmp.path().join("quant");
     std::fs::create_dir_all(&out).unwrap();
@@ -139,6 +163,47 @@ fn multimapping_resolves_toward_higher_abundance() {
         "t0 = {}",
         res.counts[0]
     );
+}
+
+/// Chunk compression is transparent + lossless: quantifying an lz4- or
+/// zstd-compressed RAD must yield exactly the same counts as the uncompressed
+/// RAD (the reader decompresses chunks in its reader thread). This exercises the
+/// full `quantify_rad` -> `ParallelRadReader` decompression path.
+#[test]
+fn compressed_rad_quantifies_identically() {
+    use salmon_rad::ChunkCodec;
+    let names = ["t0", "t1", "t2"];
+    let lens = [1000u32, 1000, 1000];
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for (tid, n) in [(0u32, 120), (1, 250), (2, 70)] {
+        for _ in 0..n {
+            frags.push(vec![(tid, Some(200), 0)]);
+        }
+    }
+    // a few ambiguous fragments so the EM (not just unique counts) is exercised
+    for _ in 0..60 {
+        frags.push(vec![(0, Some(200), 0), (1, Some(200), 0)]);
+    }
+
+    let quant_with = |codec: ChunkCodec| -> Vec<f64> {
+        let tmp = tempfile::tempdir().unwrap();
+        let rad = tmp.path().join("maps.rad");
+        write_rad_codec(&rad, &names, &lens, RadProfile::Sketch, &frags, None, codec);
+        let out = tmp.path().join("q");
+        std::fs::create_dir_all(&out).unwrap();
+        quantify_rad(&opts_for(&out), &rad)
+            .expect("quantify_rad")
+            .counts
+    };
+
+    let base = quant_with(ChunkCodec::None);
+    for codec in [ChunkCodec::Lz4, ChunkCodec::Zstd] {
+        let got = quant_with(codec);
+        assert_eq!(
+            got, base,
+            "codec {codec:?} must give identical counts to uncompressed"
+        );
+    }
 }
 
 /// Hand-write a piscem `map-bulk`-style RAD (read tag `frag_map_type`, alignment
@@ -251,7 +316,7 @@ fn thread_count_invariant() {
     for _ in 0..50 {
         frags.push(vec![(0, Some(200), 0), (2, Some(200), 0)]);
     }
-    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags);
+    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags, None);
 
     let run = |threads: usize| -> Vec<f64> {
         let out = tmp.path().join(format!("quant_{threads}"));
@@ -265,10 +330,254 @@ fn thread_count_invariant() {
 
     let c1 = run(1);
     let c8 = run(8);
+    let c1b = run(1);
     assert_eq!(c1.len(), c8.len());
-    for (a, b) in c1.iter().zip(c8.iter()) {
-        // collapsed equivalence classes are independent of chunk/worker order, so
-        // the EM result must match regardless of thread count.
-        assert!((a - b).abs() < 1e-6, "thread variance: {c1:?} vs {c8:?}");
+    // Quantification is fully deterministic: the FLD is fixed before eq-class
+    // assembly (no online phase, no RNG), collapsed classes are order-independent,
+    // and EM runs from a uniform start — so the result is bit-identical regardless
+    // of thread count, and reproducible run-to-run.
+    assert_eq!(
+        c1, c8,
+        "result differs across thread counts (non-deterministic)"
+    );
+    assert_eq!(
+        c1, c1b,
+        "result differs across repeated single-threaded runs"
+    );
+}
+
+/// A salmon RAD that bakes its FLD into the header must use that FLD, not derive
+/// one. The records imply fragment length 200, but we bake a distribution peaked
+/// at 500; if the baked FLD is used, the reported mean is ~500 (not ~200).
+#[test]
+fn baked_fld_is_used_not_derived() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let names = ["t0", "t1"];
+    let lens = [4000u32, 4000];
+
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for (tid, n) in [(0u32, 200), (1, 300)] {
+        for _ in 0..n {
+            frags.push(vec![(tid, Some(200), 0)]); // implied length 200
+        }
     }
+    // Baked log-PMF: an (unnormalized) Gaussian centered at 500 (from_log_pmf
+    // normalizes). Reserved slot length is 1024 (see `write_rad`).
+    let baked: Vec<f64> = (0..1024)
+        .map(|l| {
+            let d = (l as f64 - 500.0) / 20.0;
+            -0.5 * d * d
+        })
+        .collect();
+    write_rad(
+        &rad,
+        &names,
+        &lens,
+        RadProfile::Sketch,
+        &frags,
+        Some(&baked),
+    );
+
+    let out = tmp.path().join("quant");
+    std::fs::create_dir_all(&out).unwrap();
+    let res = quantify_rad(&opts_for(&out), &rad).expect("quantify_rad");
+
+    // counts are still exact (FLD doesn't affect unique mappings)…
+    assert!(
+        (res.counts[0] - 200.0).abs() < 1.0,
+        "t0 = {}",
+        res.counts[0]
+    );
+    assert!(
+        (res.counts[1] - 300.0).abs() < 1.0,
+        "t1 = {}",
+        res.counts[1]
+    );
+    // …but the FLD must be the baked one (mean ~500), proving it was not derived
+    // from the records' implied length of 200.
+    assert!(
+        (res.frag_len_mean - 500.0).abs() < 20.0,
+        "expected baked FLD mean ~500, got {}",
+        res.frag_len_mean
+    );
+}
+
+/// Under auto (`-l A`) library type, the derived FLD must be built from the
+/// majority-orientation unique fragments. Here 300 opposite-strand pairs imply
+/// length 200 and 60 same-strand pairs imply length 800; the FLD must reflect the
+/// majority (≈200), excluding the minority bucket's 800s.
+#[test]
+fn auto_orientation_derives_fld_from_majority_bucket() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let names = ["t0", "t1"];
+    let lens = [4000u32, 4000];
+
+    let w = RadOutputWriter::create(
+        &rad,
+        &names,
+        &lens,
+        true,
+        RadProfile::Sketch,
+        1024,
+        salmon_rad::ChunkCodec::None,
+    )
+    .unwrap();
+    let ctx: SalmonBulkContext = *w.context();
+    let mut cb = FragmentChunkBuf::with_capacity(4096);
+    let mut emit = |i: usize, tid: u32, fl: u16, is_fw: bool, mate_fw: bool| {
+        let rec = salmon_rad::SalmonBulkRecord::new(
+            frag_map_type::MAPPED_PAIR,
+            vec![RadHit {
+                tid,
+                is_fw,
+                mate_fw,
+                pos: 0,
+                frag_len: fl,
+                score: 0,
+            }],
+        );
+        cb.write(&rec, &ctx).unwrap();
+    };
+    let mut i = 0;
+    for _ in 0..300 {
+        emit(i, 0, 200, true, false); // opposite-strand (inward), length 200
+        i += 1;
+    }
+    for _ in 0..60 {
+        emit(i, 1, 800, true, true); // same-strand, length 800 (minority)
+        i += 1;
+    }
+    w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
+    w.finalize().unwrap();
+
+    // `-l A`: the format is auto-detected from the RAD (order-independent tally of
+    // unique pairs). All 360 read-1s are forward and 300/360 are inward, so this
+    // resolves to ISF — and the 60 same-strand (non-inward) pairs are then dropped
+    // as strand-incompatible (default `incompat_prior` = 0 ⇒ ignore), leaving 300
+    // mapped. The FLD is still derived only from the majority (opposite-strand)
+    // bucket, so its mean is ~200, not contaminated by the minority's 800s.
+    let mut o = AlignQuantOptions::new(tmp.path().join("unused.rad"), tmp.path().to_path_buf());
+    o.lib_type = "A".to_string();
+    o.fld_mean = 250.0;
+    o.fld_sd = 25.0;
+    let out = tmp.path().join("quant");
+    std::fs::create_dir_all(&out).unwrap();
+    let res = quantify_rad(&o, &rad).expect("quantify_rad");
+
+    assert_eq!(
+        res.num_mapped, 300,
+        "auto-detected ISF should filter the 60 same-strand minority"
+    );
+    assert!(
+        (res.frag_len_mean - 200.0).abs() < 15.0,
+        "expected FLD mean ~200 from the majority bucket, got {} (minority 800s leaked in?)",
+        res.frag_len_mean
+    );
+}
+
+/// A `library_format` baked into the header is authoritative under `-l A`: even
+/// though these records (all inward, read-1 forward) would auto-detect as ISF, a
+/// baked ISR makes every placement strand-incompatible, so all are filtered out.
+/// Proves the reader consults the baked format rather than re-inferring.
+#[test]
+fn baked_library_format_is_authoritative_under_auto() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let names = ["t0"];
+    let lens = [4000u32];
+
+    let mut w = RadOutputWriter::create(
+        &rad,
+        &names,
+        &lens,
+        true,
+        RadProfile::Sketch,
+        1024,
+        salmon_rad::ChunkCodec::None,
+    )
+    .unwrap();
+    let ctx: SalmonBulkContext = *w.context();
+    let mut cb = FragmentChunkBuf::with_capacity(4096);
+    for _ in 0..200 {
+        let rec = salmon_rad::SalmonBulkRecord::new(
+            frag_map_type::MAPPED_PAIR,
+            vec![RadHit {
+                tid: 0,
+                is_fw: true,
+                mate_fw: false, // inward, read-1 forward ⇒ would auto-detect ISF
+                pos: 0,
+                frag_len: 200,
+                score: 0,
+            }],
+        );
+        cb.write(&rec, &ctx).unwrap();
+    }
+    w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
+    // Bake ISR (format_id 2) — read-1 antisense, the opposite strandedness of what
+    // these records imply.
+    w.set_library_format(2);
+    w.finalize().unwrap();
+
+    let mut o = AlignQuantOptions::new(tmp.path().join("unused.rad"), tmp.path().to_path_buf());
+    o.lib_type = "A".to_string();
+    let res = quantify_rad(&o, &rad).expect("quantify_rad");
+
+    // Baked ISR ⇒ the ISF-observed inward/forward pairs are strand-incompatible and
+    // (default `incompat_prior` = 0) dropped — so nothing maps.
+    assert_eq!(
+        res.num_mapped, 0,
+        "baked ISR must be applied (rejecting ISF-observed pairs), not re-inferred as ISF"
+    );
+}
+
+/// Positional bias with `--rad`: exercise the full bias path — collection pass,
+/// abundance-aware posterior, expected-pos models, corrected effective lengths,
+/// re-EM — and confirm it runs, conserves mass, and populates the positional bias
+/// dump. (`-t` is required for any `--rad` bias model, as in reads mode.)
+#[test]
+fn pos_bias_rad_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let names = ["t0", "t1", "t2"];
+    let lens = [3000u32, 3000, 3000];
+    // a transcriptome FASTA matching the references (sequence content is
+    // irrelevant to positional bias, but `-t` is required and lengths must match).
+    let fa = tmp.path().join("txome.fa");
+    {
+        use std::io::Write as _;
+        let mut f = std::fs::File::create(&fa).unwrap();
+        for (i, &l) in lens.iter().enumerate() {
+            let seq: String = (0..l).map(|j| b"ACGT"[(j as usize) % 4] as char).collect();
+            writeln!(f, ">{}\n{}", names[i], seq).unwrap();
+        }
+    }
+    // unique proper pairs spread across each transcript (varied positions feed the
+    // positional model); a few multimappers exercise the abundance-aware posterior.
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for (tid, n) in [(0u32, 200), (1, 150), (2, 250)] {
+        for _ in 0..n {
+            frags.push(vec![(tid, Some(200), 0)]);
+        }
+    }
+    for _ in 0..40 {
+        frags.push(vec![(0, Some(200), 0), (2, Some(200), 0)]);
+    }
+    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags, None);
+
+    let mut o = opts_for(&tmp.path().join("quant"));
+    o.pos_bias = true;
+    o.transcripts = Some(fa);
+    std::fs::create_dir_all(&o.output_dir).unwrap();
+    let res = quantify_rad(&o, &rad).expect("quantify_rad --posBias");
+
+    // mass conserved, and the positional bias model was populated.
+    let sum: f64 = res.counts.iter().sum();
+    assert!((sum - 640.0).abs() < 1.0, "Σcounts = {sum}");
+    assert_eq!(res.num_mapped, 640);
+    assert!(
+        !res.bias_dump.obs5_pos.is_empty() && !res.bias_dump.exp5_pos.is_empty(),
+        "positional bias dump should be populated"
+    );
 }

@@ -55,9 +55,37 @@ pub fn map_single_read_sketch<'idx>(
     max_hit_occ: usize,
     max_read_occ: usize,
 ) -> Vec<ScoredMapping> {
+    let mut result = Vec::new();
+    map_single_read_sketch_into(
+        &mut result,
+        index,
+        hs,
+        scratch,
+        read,
+        strat,
+        max_hit_occ,
+        max_read_occ,
+    );
+    result
+}
+
+/// [`map_single_read_sketch`] writing into a caller-provided buffer (cleared
+/// first), for per-thread `Vec` reuse across reads.
+#[allow(clippy::too_many_arguments)]
+pub fn map_single_read_sketch_into<'idx>(
+    result: &mut Vec<ScoredMapping>,
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    scratch: &mut SketchScratch,
+    read: &[u8],
+    strat: SkippingStrategy,
+    max_hit_occ: usize,
+    max_read_occ: usize,
+) {
+    result.clear();
     let k = index.k();
     if read.len() < k {
-        return Vec::new();
+        return;
     }
     dispatch_on_k!(k, K => {
         let mut query = PiscemStreamingQuery::<K>::new(index.dict());
@@ -72,7 +100,7 @@ pub fn map_single_read_sketch<'idx>(
             read, cache, hs, &mut query, index, &mut poison, strat,
         );
         let rl = read.len() as i32;
-        cache
+        result.extend(cache
             .accepted_hits
             .iter()
             .map(|h| ScoredMapping {
@@ -95,8 +123,7 @@ pub fn map_single_read_sketch<'idx>(
                 r2_pos: -1,
                 r2_fw: false,
                 r1_score: h.score as i32,
-            })
-            .collect::<Vec<_>>()
+            }));
     })
 }
 
@@ -135,9 +162,47 @@ pub fn map_read_pair_sketch<'idx, R: RefProvider>(
     refs: &R,
     allow_decoy_orphans: bool,
 ) -> Vec<ScoredMapping> {
+    let mut result = Vec::new();
+    map_read_pair_sketch_into(
+        &mut result,
+        index,
+        hs,
+        scratch,
+        r1,
+        r2,
+        strict_orphan,
+        allow_dovetail,
+        strat,
+        max_hit_occ,
+        max_read_occ,
+        refs,
+        allow_decoy_orphans,
+    );
+    result
+}
+
+/// [`map_read_pair_sketch`] writing into a caller-provided buffer (cleared
+/// first), so a per-thread `Vec` can be reused across reads.
+#[allow(clippy::too_many_arguments)]
+pub fn map_read_pair_sketch_into<'idx, R: RefProvider>(
+    result: &mut Vec<ScoredMapping>,
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    scratch: &mut SketchScratch,
+    r1: &[u8],
+    r2: &[u8],
+    strict_orphan: bool,
+    allow_dovetail: bool,
+    strat: SkippingStrategy,
+    max_hit_occ: usize,
+    max_read_occ: usize,
+    refs: &R,
+    allow_decoy_orphans: bool,
+) {
+    result.clear();
     let k = index.k();
     if r1.len() < k && r2.len() < k {
-        return Vec::new();
+        return;
     }
     // Fragment-length lower bound for the pair merge. Default -32 (piscem's
     // small-dovetail tolerance). With `--allowDovetail`, admit genuine dovetails
@@ -207,9 +272,9 @@ pub fn map_read_pair_sketch<'idx, R: RefProvider>(
         };
         let (r1l, r2l) = (r1.len() as i32, r2.len() as i32);
         match status {
-            None => Vec::new(),
-            Some(status) => out
-                .accepted_hits
+            None => {}
+            Some(status) => result.extend(
+                out.accepted_hits
                 .iter()
                 .map(|h| {
                     // piscem's SimpleHit gives read1's leftmost in `pos` and
@@ -263,8 +328,8 @@ pub fn map_read_pair_sketch<'idx, R: RefProvider>(
                         r2_fw,
                         r1_score: h.score as i32,
                     }
-                })
-                .collect::<Vec<_>>(),
+                }),
+            ),
         }
     })
 }

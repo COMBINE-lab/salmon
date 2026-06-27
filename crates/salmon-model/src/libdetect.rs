@@ -114,79 +114,94 @@ impl LibraryTypeDetector {
     /// counts (no state change). Falls back to inward/unstranded when there are
     /// no usable samples.
     fn infer_format(&self) -> LibraryFormat {
-        let count = |id: u8| self.counts[id as usize].load(Ordering::Relaxed);
+        let counts: Vec<u64> = self
+            .counts
+            .iter()
+            .map(|c| c.load(Ordering::Relaxed))
+            .collect();
+        infer_format_from_counts(&counts, self.read_type)
+    }
+}
 
-        match self.read_type {
-            ReadType::SingleEnd => {
-                let mut nf = 0u64;
-                let mut nr = 0u64;
-                for id in 0..=LibraryFormat::MAX_FORMAT_ID {
-                    let f = LibraryFormat::from_format_id(id);
-                    let c = count(id);
-                    nf += if f.strandedness == ReadStrandedness::S {
-                        c
-                    } else {
-                        0
-                    };
-                    nr += if f.strandedness == ReadStrandedness::A {
-                        c
-                    } else {
-                        0
-                    };
-                }
-                let strandedness = if nf + nr == 0 {
-                    ReadStrandedness::U
+/// Pure inference of the most likely library format from per-format counts
+/// (indexed by [`LibraryFormat::format_id`]), applying salmon's orientation and
+/// strandedness thresholds. Order-independent — used both by the prefix-sampling
+/// [`LibraryTypeDetector`] and by RAD auto-detection, which tallies *all* unique
+/// fragments rather than a thread-order-dependent prefix. Falls back to
+/// inward/unstranded when there are no usable samples.
+pub fn infer_format_from_counts(counts: &[u64], read_type: ReadType) -> LibraryFormat {
+    let count = |id: u8| counts[id as usize];
+
+    match read_type {
+        ReadType::SingleEnd => {
+            let mut nf = 0u64;
+            let mut nr = 0u64;
+            for id in 0..=LibraryFormat::MAX_FORMAT_ID {
+                let f = LibraryFormat::from_format_id(id);
+                let c = count(id);
+                nf += if f.strandedness == ReadStrandedness::S {
+                    c
                 } else {
-                    // Single-end uses the matching (S/A) encoding, like a
-                    // paired "same"-orientation library.
-                    strandedness_from_fw_ratio(nf as f64 / (nf + nr) as f64, true)
+                    0
                 };
-                LibraryFormat::new(ReadType::SingleEnd, ReadOrientation::None, strandedness)
-            }
-            ReadType::PairedEnd => {
-                let (mut nsf, mut nsr) = (0u64, 0u64);
-                let (mut ninward, mut noutward, mut nsame) = (0u64, 0u64, 0u64);
-                for id in 0..=LibraryFormat::MAX_FORMAT_ID {
-                    let f = LibraryFormat::from_format_id(id);
-                    let c = count(id);
-                    nsf += matches!(f.strandedness, ReadStrandedness::S | ReadStrandedness::SA)
-                        .then_some(c)
-                        .unwrap_or(0);
-                    nsr += matches!(f.strandedness, ReadStrandedness::A | ReadStrandedness::AS)
-                        .then_some(c)
-                        .unwrap_or(0);
-                    match f.orientation {
-                        ReadOrientation::Toward => ninward += c,
-                        ReadOrientation::Away => noutward += c,
-                        ReadOrientation::Same => nsame += c,
-                        ReadOrientation::None => {}
-                    }
-                }
-
-                let num_orient = ninward + noutward + nsame;
-                if num_orient > 0 && (nsf + nsr) > 0 {
-                    let ratio_in = ninward as f64 / num_orient as f64;
-                    let ratio_out = noutward as f64 / num_orient as f64;
-                    let ratio_same = nsame as f64 / num_orient as f64;
-
-                    let (orientation, same) = if ratio_in >= ratio_out && ratio_in >= ratio_same {
-                        (ReadOrientation::Toward, false)
-                    } else if ratio_out >= ratio_in && ratio_out >= ratio_same {
-                        (ReadOrientation::Away, false)
-                    } else {
-                        (ReadOrientation::Same, true)
-                    };
-
-                    let ratio_fw = nsf as f64 / (nsf + nsr) as f64;
-                    let strandedness = strandedness_from_fw_ratio(ratio_fw, same);
-                    LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)
+                nr += if f.strandedness == ReadStrandedness::A {
+                    c
                 } else {
-                    LibraryFormat::new(
-                        ReadType::PairedEnd,
-                        ReadOrientation::Toward,
-                        ReadStrandedness::U,
-                    )
+                    0
+                };
+            }
+            let strandedness = if nf + nr == 0 {
+                ReadStrandedness::U
+            } else {
+                // Single-end uses the matching (S/A) encoding, like a
+                // paired "same"-orientation library.
+                strandedness_from_fw_ratio(nf as f64 / (nf + nr) as f64, true)
+            };
+            LibraryFormat::new(ReadType::SingleEnd, ReadOrientation::None, strandedness)
+        }
+        ReadType::PairedEnd => {
+            let (mut nsf, mut nsr) = (0u64, 0u64);
+            let (mut ninward, mut noutward, mut nsame) = (0u64, 0u64, 0u64);
+            for id in 0..=LibraryFormat::MAX_FORMAT_ID {
+                let f = LibraryFormat::from_format_id(id);
+                let c = count(id);
+                nsf += matches!(f.strandedness, ReadStrandedness::S | ReadStrandedness::SA)
+                    .then_some(c)
+                    .unwrap_or(0);
+                nsr += matches!(f.strandedness, ReadStrandedness::A | ReadStrandedness::AS)
+                    .then_some(c)
+                    .unwrap_or(0);
+                match f.orientation {
+                    ReadOrientation::Toward => ninward += c,
+                    ReadOrientation::Away => noutward += c,
+                    ReadOrientation::Same => nsame += c,
+                    ReadOrientation::None => {}
                 }
+            }
+
+            let num_orient = ninward + noutward + nsame;
+            if num_orient > 0 && (nsf + nsr) > 0 {
+                let ratio_in = ninward as f64 / num_orient as f64;
+                let ratio_out = noutward as f64 / num_orient as f64;
+                let ratio_same = nsame as f64 / num_orient as f64;
+
+                let (orientation, same) = if ratio_in >= ratio_out && ratio_in >= ratio_same {
+                    (ReadOrientation::Toward, false)
+                } else if ratio_out >= ratio_in && ratio_out >= ratio_same {
+                    (ReadOrientation::Away, false)
+                } else {
+                    (ReadOrientation::Same, true)
+                };
+
+                let ratio_fw = nsf as f64 / (nsf + nsr) as f64;
+                let strandedness = strandedness_from_fw_ratio(ratio_fw, same);
+                LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)
+            } else {
+                LibraryFormat::new(
+                    ReadType::PairedEnd,
+                    ReadOrientation::Toward,
+                    ReadStrandedness::U,
+                )
             }
         }
     }

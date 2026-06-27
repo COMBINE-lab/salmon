@@ -16,12 +16,14 @@ pub mod spline;
 pub use bias::{
     build_expected_pos, corrected_effective_length_full, positional_factor, BiasInputs,
 };
-pub use fld::{ambig_frag_log_prob, smoothed_effective_length, FragmentLengthDistribution};
+pub use fld::{
+    ambig_frag_log_prob, smoothed_effective_length, DiscreteFld, FragmentLengthDistribution,
+};
 pub use gcbias::{
     build_expected_gc, gc_corrected_effective_length, gc_desc, gc_prefix, gc_ratio, GcFragModel,
     GcRank, GcStore, GcView, GC_SAMP_STRIDE,
 };
-pub use libdetect::LibraryTypeDetector;
+pub use libdetect::{infer_format_from_counts, LibraryTypeDetector};
 pub use posbias::{
     compute_length_quantiles, length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS,
 };

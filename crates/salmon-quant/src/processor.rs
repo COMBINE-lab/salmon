@@ -16,13 +16,16 @@ use paraseq::Record;
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 
 use salmon_core::math::{log_add, LOG_0, LOG_1};
-use salmon_core::{is_compatible, LibraryFormat, MateStatus};
-use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
+use salmon_core::{is_compatible, observed_paired_format, LibraryFormat, MateStatus};
+use salmon_eqclass::{
+    range_factorize_bins, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement, TranscriptGroup,
+    NAIVE_NO_FMT,
+};
 use salmon_index::SalmonIndex;
 use salmon_infer::OnlineInference;
 use salmon_map::{
-    map_read_pair, map_read_pair_sketch, map_single_read, map_single_read_sketch, MapConfig,
-    ScoredMapping,
+    map_read_pair_into, map_read_pair_sketch_into, map_single_read_into,
+    map_single_read_sketch_into, MapConfig, ScoredMapping,
 };
 use salmon_model::seqbias::{SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
 use salmon_model::{
@@ -90,6 +93,19 @@ pub(crate) struct Shared<'a> {
     /// disable the fragment-length distribution in the per-fragment assignment
     /// probability entirely (`--noFragLengthDist`).
     pub no_frag_length_dist: bool,
+    /// assemble equivalence classes during the mapping pass (consumed by the EM
+    /// or an eq-class dump): `!skip_quant || dump_eq || dump_eq_weights`. When
+    /// `false` (a map-only `--writeRad` run) [`record`] still counts fragments and
+    /// trains the FLD but builds no classes. Orthogonal to range-factorization
+    /// (driven by `range_factorization_bins`) and to [`Self::use_online`].
+    pub build_eq: bool,
+    /// compute the abundance-aware online posterior and train the FLD by online
+    /// acceptance sampling. When `false` the FLD is trained deterministically from
+    /// uniquely-mapped fragments (order-independent; matches the RAD reader's
+    /// `derive_fld`) and bias weights fall back to score-only. False whenever the
+    /// run does not quantify (`skip_quant`), where the online estimate has no
+    /// consumer.
+    pub use_online: bool,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
     /// mapped fragments whose representative mapping is an orphan (only one mate
@@ -110,6 +126,19 @@ pub(crate) struct Shared<'a> {
     pub sam: Option<&'a crate::sam::SamWriter>,
     /// when set, write per-fragment mappings to a RAD file (`--writeRad`)
     pub rad: Option<&'a salmon_rad::RadOutputWriter>,
+    /// `--deterministic` mode: collect an order-independent fragment-length
+    /// distribution (+ library-format tally) from uniquely-mapped proper pairs
+    /// during the mapping pass, instead of training the online (log-space) FLD or
+    /// using the prefix library-type detector. Built into a baked FLD at end of
+    /// pass. When `Some`, the per-fragment work is the cheap [`record_discrete`].
+    pub discrete_fld: Option<&'a salmon_model::DiscreteFld>,
+    /// `--deterministic` with bias: also build *naive* (uniform-weight, no-FLD)
+    /// equivalence classes during the mapping pass, so a rough EM at end of mapping
+    /// produces the `initial_abundances` baked into the RAD to seed the requant's
+    /// bias model (so the requant is a single fused RAD read). Set only alongside
+    /// [`Self::discrete_fld`]. Orientation-tagged so incompatible placements can be
+    /// dropped once the library type is resolved at end of mapping.
+    pub naive_eq: Option<&'a NaiveEqBuilder>,
 }
 
 /// Per-thread mapping processor.
@@ -160,9 +189,9 @@ impl<'a> QuantProcessor<'a> {
             posbias,
             unmapped: Vec::new(),
             sam_buf: String::new(),
-            rad_buf: shared
-                .rad
-                .map(|_| salmon_rad::FragmentChunkBuf::with_capacity(64 * 1024)),
+            rad_buf: shared.rad.map(|rad| {
+                salmon_rad::FragmentChunkBuf::with_capacity_codec(64 * 1024, rad.codec())
+            }),
         }
     }
 }
@@ -358,9 +387,75 @@ fn collect_pos(
     }
 }
 
+/// Cheap per-fragment work for `--deterministic`'s mapping pass: count the
+/// fragment and, for a uniquely-mapped proper pair, record its length + observed
+/// format into the order-independent [`salmon_model::DiscreteFld`]. No online
+/// inference, eq-class assembly, bias collection, or prefix library-type
+/// detection — the FLD and library format are derived deterministically from the
+/// accumulator at end of pass and baked into the RAD.
+fn record_discrete(sh: &Shared, maps: &[ScoredMapping], acc: &salmon_model::DiscreteFld) {
+    sh.num_processed.fetch_add(1, Ordering::Relaxed);
+    if maps.is_empty() {
+        return;
+    }
+    sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+    // A uniquely-mapped proper pair unambiguously implies its fragment length and
+    // orientation; its observed format also feeds order-independent `-l A`
+    // detection. Uses the raw mapping (like the RAD records written this pass, and
+    // like the reader's `derive_fld`), so a baked FLD matches a re-derived one.
+    if maps.len() == 1 {
+        let m = &maps[0];
+        if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
+            // Orientation from the mate strands (sketch mode leaves `m.format`
+            // `None`), exactly as `build_rad_record` derives the RAD hit.
+            acc.add(m.fragment_len as usize, m.is_fw, m.r2_fw);
+        }
+    }
+    // Naive (kallisto-style) equivalence class for the rough seed EM: the
+    // compatible transcripts, orientation-tagged so library-incompatible
+    // placements can be dropped once the library type is resolved at end of
+    // mapping. No FLD/score weighting (the FLD isn't known yet). Sketch mode
+    // leaves `m.format` `None`, so derive the observed paired format from the mate
+    // strands (as `build_rad_record` / `DiscreteFld` do).
+    if let Some(nb) = sh.naive_eq {
+        let sig: Vec<NaivePlacement> = maps
+            .iter()
+            .map(|m| {
+                let fmt_id = if m.status == MateStatus::PairedEndPaired {
+                    observed_paired_format(m.is_fw, m.r2_fw).format_id()
+                } else {
+                    NAIVE_NO_FMT
+                };
+                NaivePlacement {
+                    tid: m.tid,
+                    fmt_id,
+                    is_fw: m.is_fw,
+                    status: m.status,
+                }
+            })
+            .collect();
+        nb.add(sig);
+    }
+}
+
 /// Record one fragment's weighted mappings into the shared accumulators.
-/// `log_fm` is the current minibatch's forgetting mass (used only when online
-/// inference is active).
+///
+/// The per-fragment quant work decomposes into independent axes, each gated by a
+/// flag on [`Shared`] so a run does exactly what it needs and no more:
+///   * [`Shared::use_online`] — compute the abundance-aware online posterior
+///     (advancing the online masses) and train the fragment-length distribution
+///     by online acceptance sampling. When `false` the FLD is instead trained
+///     *deterministically* from uniquely-mapped concordant pairs (the
+///     order-independent, commutative-histogram estimate the RAD reader's
+///     `derive_fld` also uses) and bias weights fall back to score-only.
+///   * [`Shared::build_eq`] — assemble the equivalence class and add it to the
+///     shared builder (consumed by the EM or an eq-class dump). Whether those
+///     classes are *range-factorized* is a further, orthogonal choice driven by
+///     `range_factorization_bins` (0 ⇒ basic classes, e.g. for a rough warm-up
+///     EM). When `false` (a map-only `--writeRad` run) no eq-class is built.
+///
+/// Counting, library detection, and FLD training always run; `log_fm` is the
+/// current minibatch's forgetting mass (used only when `use_online`).
 fn record(
     sh: &Shared,
     maps: &[ScoredMapping],
@@ -465,40 +560,43 @@ fn record(
     //   logFragProb  = the shared `frag_log_prob` term (proper-pair conditioned
     //                  PMF, or the orphan / single-end ambiguous-length weight).
     // Used for abundance-aware bias collection and abundance-aware FLD training.
-    let online_post: Option<Vec<f64>> = sh.online.filter(|o| o.collecting()).map(|online| {
-        let use_aux = online.num_assigned() >= sh.pre_burnin;
-        let mm: Vec<(u32, f64)> = compat
-            .iter()
-            .map(|(m, w)| {
-                let ref_len = sh.salmon.ref_len(m.tid as usize);
-                let rl = ref_len.max(1) as f64;
-                let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
-                let flen = m.fragment_len as f64;
-                let start_pos_prob = if proper {
-                    if flen <= rl {
-                        -((rl - flen + 1.0).ln())
-                    } else {
-                        LOG_EPSILON
-                    }
-                } else {
-                    -(rl.ln())
-                };
-                let log_frag_prob = frag_log_prob(
-                    m,
-                    ref_len as i32,
-                    use_aux,
-                    sh.model_single_frag_prob,
-                    sh.paired_lib,
-                    sh.no_frag_length_dist,
-                    &fld_pmf,
-                    &fld_cmf,
-                );
-                let log_cov = if *w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
-                (m.tid, log_cov + start_pos_prob + log_frag_prob)
-            })
-            .collect();
-        online.assign_fragment(&mm, log_fm)
-    });
+    let online_post: Option<Vec<f64>> =
+        sh.online
+            .filter(|o| sh.use_online && o.collecting())
+            .map(|online| {
+                let use_aux = online.num_assigned() >= sh.pre_burnin;
+                let mm: Vec<(u32, f64)> = compat
+                    .iter()
+                    .map(|(m, w)| {
+                        let ref_len = sh.salmon.ref_len(m.tid as usize);
+                        let rl = ref_len.max(1) as f64;
+                        let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
+                        let flen = m.fragment_len as f64;
+                        let start_pos_prob = if proper {
+                            if flen <= rl {
+                                -((rl - flen + 1.0).ln())
+                            } else {
+                                LOG_EPSILON
+                            }
+                        } else {
+                            -(rl.ln())
+                        };
+                        let log_frag_prob = frag_log_prob(
+                            m,
+                            ref_len as i32,
+                            use_aux,
+                            sh.model_single_frag_prob,
+                            sh.paired_lib,
+                            sh.no_frag_length_dist,
+                            &fld_pmf,
+                            &fld_cmf,
+                        );
+                        let log_cov = if *w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
+                        (m.tid, log_cov + start_pos_prob + log_frag_prob)
+                    })
+                    .collect();
+                online.assign_fragment(&mm, log_fm)
+            });
     let bias_w: Vec<f64> = if collecting {
         if let Some(post) = &online_post {
             post.clone()
@@ -527,6 +625,53 @@ fn record(
         if let Some(pos) = posbias {
             collect_pos(sh, &compat, &bias_w, pos);
         }
+    }
+
+    // Train the fragment-length distribution from this fragment. The FLD is
+    // always needed — to quantify now, to set effective lengths, or to bake into
+    // a `--writeRad` header — so this runs regardless of `build_eq`. Two methods,
+    // selected by `use_online`:
+    if let Some(post) = &online_post {
+        // Online (abundance-aware) acceptance: accept each concordant compatible
+        // pair's fragment length with probability = its online posterior
+        // (salmon's `if (r < exp(aln.logProb)) fragLengthDist.addVal(...)`, where
+        // aln.logProb includes transcriptLogCount). For reads shared between
+        // near-duplicates this preferentially samples the dominant transcript's
+        // implied length, concentrating the FLD as salmon does (vs adding every
+        // best pair at full weight, which overdisperses it). Frozen after the
+        // training window (`online_post` is `None`).
+        for (i, (m, _)) in compat.iter().enumerate() {
+            let conc = m.status == MateStatus::PairedEndPaired
+                && m.fragment_len > 0
+                && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
+            if conc && fld_rng_u01() < post[i] {
+                sh.fld.add_val(m.fragment_len as usize, 0.0);
+            }
+        }
+    } else if !sh.use_online {
+        // Deterministic: a *uniquely*-mapped concordant proper pair implies its
+        // fragment length exactly. Adding only unique fragments at full weight is
+        // order-independent (a commutative histogram) and matches the RAD reader's
+        // `derive_fld`, so a baked FLD reproduces on requant. (When `use_online`
+        // is true but `online_post` is `None`, the training window has closed and
+        // the FLD is intentionally frozen — so this branch is skipped.)
+        if compat.len() == 1 {
+            let (m, _) = compat[0];
+            if m.status == MateStatus::PairedEndPaired
+                && m.fragment_len > 0
+                && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
+            {
+                sh.fld.add_val(m.fragment_len as usize, 0.0);
+            }
+        }
+    }
+
+    // Equivalence-class assembly is pure quantification machinery (consumed by
+    // the EM or an eq-class dump). A map-only `--writeRad` run produces the RAD
+    // above and stops here. Range-factorization of the weights below is a further,
+    // orthogonal choice driven by `range_factorization_bins` (0 ⇒ basic classes).
+    if !sh.build_eq {
+        return;
     }
 
     // Fold the fragment-length probability into the equivalence-class weight.
@@ -586,28 +731,20 @@ fn record(
         .map(|((m, w), &lfp)| (m.tid, (w.ln() + lfp - log_denom).exp()))
         .collect();
 
-    // Abundance-aware FLD training: accept each concordant compatible pair's
-    // fragment length with probability = its abundance-aware online posterior
-    // (salmon's `if (r < exp(aln.logProb)) fragLengthDist.addVal(...)`, where
-    // aln.logProb includes transcriptLogCount). For reads shared between
-    // near-duplicates this preferentially samples the dominant transcript's
-    // implied length, concentrating the FLD as salmon does (vs adding every best
-    // pair at full weight, which overdisperses it). Frozen after the training
-    // window (`online_post` is `None`).
-    if let Some(post) = &online_post {
-        for (i, (m, _)) in compat.iter().enumerate() {
-            let conc = m.status == MateStatus::PairedEndPaired
-                && m.fragment_len > 0
-                && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
-            if conc && fld_rng_u01() < post[i] {
-                sh.fld.add_val(m.fragment_len as usize, 0.0);
-            }
-        }
-    }
-
-    // Build the equivalence class: sorted, de-duplicated transcript ids + weights.
+    // Build the equivalence class: sorted transcript ids + weights, combining
+    // duplicate ids by SUMMING their conditional probabilities. A fragment that
+    // maps to the same transcript more than once (e.g. both orientations of an
+    // unstranded library, or two positions) contributes P = Σ of the placements,
+    // not just the first — matching the RAD path's per-tid `logsumexp`.
     pairs.sort_by_key(|p| p.0);
-    pairs.dedup_by_key(|p| p.0);
+    pairs.dedup_by(|a, b| {
+        if a.0 == b.0 {
+            b.1 += a.1;
+            true
+        } else {
+            false
+        }
+    });
     let tids: Vec<u32> = pairs.iter().map(|p| p.0).collect();
     let mut weights: Vec<f64> = pairs.iter().map(|p| p.1).collect();
 
@@ -715,12 +852,20 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
         }
         // one forgetting-mass timestep per minibatch (online inference)
-        let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
+        let log_fm = if sh.use_online {
+            sh.online.map_or(0.0, |o| o.next_log_fm())
+        } else {
+            0.0
+        };
+        // Reused across the batch's reads (the `*_into` calls clear it), so the
+        // per-fragment result Vec isn't reallocated per read.
+        let mut maps: Vec<ScoredMapping> = Vec::new();
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();
-            let mut maps = if sh.sketch {
-                map_read_pair_sketch(
+            if sh.sketch {
+                map_read_pair_sketch_into(
+                    &mut maps,
                     idx,
                     hs,
                     sketch_scratch.as_mut().unwrap(),
@@ -733,10 +878,18 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.max_read_occ,
                     sh.salmon,
                     sh.map_cfg.score.allow_decoy_orphans,
-                )
+                );
             } else {
-                map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
-            };
+                map_read_pair_into(
+                    &mut maps,
+                    idx,
+                    hs,
+                    sh.salmon,
+                    s1.as_ref(),
+                    s2.as_ref(),
+                    sh.map_cfg,
+                );
+            }
             // Sketch mappings carry no per-hit decoy flag and bypass the
             // selective-alignment finalize, so decoys would otherwise leak into
             // the eq-classes. Apply the same decoy policy here (drop decoy tids,
@@ -772,18 +925,22 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !maps.is_empty() {
-                    let rec = build_rad_record(&maps, r1.id());
+                    let rec = build_rad_record(&maps);
                     let _ = buf.write(&rec, rad.context());
                 }
             }
-            record(
-                &sh,
-                &maps,
-                log_fm,
-                seqbias.as_mut(),
-                gcbias.as_mut(),
-                posbias.as_mut(),
-            );
+            if let Some(acc) = sh.discrete_fld {
+                record_discrete(&sh, &maps, acc);
+            } else {
+                record(
+                    &sh,
+                    &maps,
+                    log_fm,
+                    seqbias.as_mut(),
+                    gcbias.as_mut(),
+                    posbias.as_mut(),
+                );
+            }
         }
         Ok(())
     }
@@ -832,11 +989,18 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         if sh.sketch && sketch_scratch.is_none() {
             *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
         }
-        let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
+        let log_fm = if sh.use_online {
+            sh.online.map_or(0.0, |o| o.next_log_fm())
+        } else {
+            0.0
+        };
+        // Reused across the batch's reads (the `*_into` calls clear it).
+        let mut maps: Vec<ScoredMapping> = Vec::new();
         for rec in records {
             let s = rec.seq();
-            let mut maps = if sh.sketch {
-                map_single_read_sketch(
+            if sh.sketch {
+                map_single_read_sketch_into(
+                    &mut maps,
                     idx,
                     hs,
                     sketch_scratch.as_mut().unwrap(),
@@ -844,10 +1008,10 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.skip,
                     sh.map_cfg.collect.max_hit_occ,
                     sh.max_read_occ,
-                )
+                );
             } else {
-                map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
-            };
+                map_single_read_into(&mut maps, idx, hs, sh.salmon, s.as_ref(), sh.map_cfg);
+            }
             // Sketch decoy policy (see the paired-end branch): drop decoy tids /
             // decoy-dominated fragments that SA mode handles inside finalize.
             if sh.sketch && sh.salmon.info().num_decoys > 0 {
@@ -871,18 +1035,22 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !maps.is_empty() {
-                    let radrec = build_rad_record(&maps, rec.id());
+                    let radrec = build_rad_record(&maps);
                     let _ = buf.write(&radrec, rad.context());
                 }
             }
-            record(
-                &sh,
-                &maps,
-                log_fm,
-                seqbias.as_mut(),
-                gcbias.as_mut(),
-                posbias.as_mut(),
-            );
+            if let Some(acc) = sh.discrete_fld {
+                record_discrete(&sh, &maps, acc);
+            } else {
+                record(
+                    &sh,
+                    &maps,
+                    log_fm,
+                    seqbias.as_mut(),
+                    gcbias.as_mut(),
+                    posbias.as_mut(),
+                );
+            }
         }
         Ok(())
     }
@@ -922,8 +1090,7 @@ fn flush_sam(proc: &mut QuantProcessor) {
 /// fragment length and the mate strand for proper pairs, the unpaired sentinel
 /// otherwise. `score` is recorded for the selective-alignment profile and
 /// ignored when writing the sketch profile.
-fn build_rad_record(maps: &[ScoredMapping], id: &[u8]) -> salmon_rad::SalmonBulkRecord {
-    let name_hash = salmon_rad::name_hash(salmon_rad::trim_read_name(id));
+fn build_rad_record(maps: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecord {
     let frag_type = salmon_rad::frag_map_type::fragment_level(maps.iter().map(|m| m.status));
     let hits = maps
         .iter()
@@ -937,21 +1104,33 @@ fn build_rad_record(maps: &[ScoredMapping], id: &[u8]) -> salmon_rad::SalmonBulk
                 frag_len: if paired {
                     m.fragment_len.clamp(0, u16::MAX as i32) as u16
                 } else {
-                    salmon_rad::FRAG_LEN_UNPAIRED
+                    // Orphan / single-end: the fragment length is unknown, so the
+                    // slot instead carries the mapped mate's read length (clamped
+                    // below the unpaired sentinel). The RAD reader uses it with the
+                    // mate's position + orientation + transcript length to compute
+                    // the bounded-CMF ambiguous fragment-length probability — the
+                    // same orphan weight the one-pass path applies — rather than a
+                    // flat penalty. `0` (read length unavailable, e.g. piscem RAD)
+                    // leaves only the forward-strand bound exact.
+                    m.read_len.clamp(0, (u16::MAX - 1) as i32) as u16
                 },
                 score: m.score,
             }
         })
         .collect();
-    salmon_rad::SalmonBulkRecord::new(frag_type, name_hash, hits)
+    salmon_rad::SalmonBulkRecord::new(frag_type, hits)
 }
 
 /// Flush this thread's accumulated RAD records as one chunk to the shared writer.
 fn flush_rad(proc: &mut QuantProcessor) {
     if let (Some(rad), Some(buf)) = (proc.shared.rad, proc.rad_buf.as_mut()) {
         if buf.nrec() > 0 {
-            let bytes = buf.take_bytes();
-            let _ = rad.append_chunk_bytes(&bytes);
+            match buf.take_bytes() {
+                Ok(bytes) => {
+                    let _ = rad.append_chunk_bytes(&bytes);
+                }
+                Err(e) => tracing::error!("failed to serialize RAD chunk: {e}"),
+            }
         }
     }
 }

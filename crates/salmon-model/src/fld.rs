@@ -11,8 +11,9 @@
 
 use salmon_core::atomic::AtomicF64;
 use salmon_core::math::{log_add, LOG_0, LOG_EPSILON};
+use salmon_core::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 use statrs::distribution::{Binomial, ContinuousCDF, Discrete, Normal};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 /// Tracks the observed distribution of fragment lengths.
@@ -333,6 +334,34 @@ impl FragmentLengthDistribution {
         self.have_cache = true;
     }
 
+    /// Reconstruct a *cached* distribution directly from a (log-space) PMF,
+    /// e.g. one serialized into a RAD header during a previous run. `log_pmf` is
+    /// indexed by raw length over `[0, log_pmf.len())`. The CMF, conditional
+    /// means, mean and sd are all re-derived from it via [`cache`](Self::cache),
+    /// so a reconstructed distribution is interchangeable with the original for
+    /// every read-side use. The masses need not be pre-normalized — `cache`
+    /// normalizes them — but a normalized PMF round-trips exactly.
+    pub fn from_log_pmf(log_pmf: &[f64]) -> Self {
+        let max_val = log_pmf.len().saturating_sub(1);
+        let mut d = Self::new(1.0, max_val, 0.0, 1.0, 4, 0.5, 1);
+        // Replace the prior histogram with the supplied masses and recompute the
+        // aggregate statistics (so `mean`/`sd` are consistent), then cache.
+        let mut tot = LOG_0;
+        let mut sm = LOG_0;
+        for (i, &p) in log_pmf.iter().enumerate() {
+            d.hist[i].store(p);
+            tot = log_add(tot, p);
+            if i > 0 {
+                sm = log_add(sm, (i as f64).ln() + p);
+            }
+        }
+        d.tot_mass.store(tot);
+        d.sum.store(sm);
+        d.min.store(0, Ordering::Relaxed);
+        d.cache();
+        d
+    }
+
     /// The cached, normalized log-PMF over `[0, max_val]`. Requires [`cache`](Self::cache).
     pub fn log_pmf(&self) -> &[f64] {
         debug_assert!(self.have_cache, "call cache() before log_pmf()");
@@ -428,6 +457,125 @@ pub fn smoothed_effective_length(cond_means: &[f64], ref_len: usize) -> f64 {
         ref_len as f64
     } else {
         eff
+    }
+}
+
+/// Order-independent accumulator for *deriving* a fragment-length distribution
+/// (and library format) from uniquely-mapped proper pairs.
+///
+/// Unlike [`FragmentLengthDistribution`] — which accumulates in **log space** and
+/// is required for the online phase (it folds in per-fragment forgetting mass and
+/// is read per fragment) — this stores plain **integer counts** per length,
+/// bucketed by orientation. Integer increments are commutative, so the tallies
+/// are independent of thread / chunk order; the FLD is then built **once**,
+/// deterministically (fixed length order), in [`finish`](Self::finish). Keeping
+/// it a separate type means the online FLD's float/log-space accumulation is
+/// never disturbed, and no runtime dispatch is needed.
+#[derive(Debug)]
+pub struct DiscreteFld {
+    /// per-length counts for opposite-strand (inward/outward) proper pairs
+    opp: Vec<AtomicU64>,
+    /// per-length counts for same-strand proper pairs
+    same: Vec<AtomicU64>,
+    n_opp: AtomicU64,
+    n_same: AtomicU64,
+    /// observed-format tally (indexed by [`LibraryFormat::format_id`]) for
+    /// order-independent `-l A` auto-detection
+    fmt_counts: [AtomicU64; 12],
+    max_len: usize,
+}
+
+impl DiscreteFld {
+    /// Create an accumulator covering raw fragment lengths `[0, fld_max]`.
+    pub fn new(fld_max: usize) -> Self {
+        Self {
+            opp: (0..=fld_max).map(|_| AtomicU64::new(0)).collect(),
+            same: (0..=fld_max).map(|_| AtomicU64::new(0)).collect(),
+            n_opp: AtomicU64::new(0),
+            n_same: AtomicU64::new(0),
+            fmt_counts: std::array::from_fn(|_| AtomicU64::new(0)),
+            max_len: fld_max,
+        }
+    }
+
+    /// Record one uniquely-mapped proper pair from its mate strands: fragment
+    /// length, orientation bucket, and observed format (derived from `is_fw` /
+    /// `mate_fw`, mirroring the RAD reader's `rad_frag_format` so the mapping pass
+    /// and the RAD-derive path agree). Works in sketch mode, where no precomputed
+    /// `LibraryFormat` is available. Thread-safe and order-independent.
+    pub fn add(&self, len: usize, is_fw: bool, mate_fw: bool) {
+        let l = len.min(self.max_len);
+        // opposite-strand (inward/outward) vs same-strand, exactly as the RAD
+        // reader classifies placements.
+        let (orientation, strandedness) = if is_fw != mate_fw {
+            let s = if is_fw {
+                ReadStrandedness::SA
+            } else {
+                ReadStrandedness::AS
+            };
+            (ReadOrientation::Toward, s)
+        } else {
+            let s = if is_fw {
+                ReadStrandedness::S
+            } else {
+                ReadStrandedness::A
+            };
+            (ReadOrientation::Same, s)
+        };
+        if orientation == ReadOrientation::Same {
+            self.same[l].fetch_add(1, Ordering::Relaxed);
+            self.n_same.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.opp[l].fetch_add(1, Ordering::Relaxed);
+            self.n_opp.fetch_add(1, Ordering::Relaxed);
+        }
+        let fmt = LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness);
+        self.fmt_counts[fmt.format_id() as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Total unique proper pairs seen across both orientation buckets.
+    pub fn count(&self) -> u64 {
+        self.n_opp.load(Ordering::Relaxed) + self.n_same.load(Ordering::Relaxed)
+    }
+
+    /// Build the FLD from the majority-orientation bucket (deterministically, in
+    /// fixed length order) and infer the library format from the format tally.
+    /// `fld_mean`/`fld_sd` seed the prior. Returns the cached FLD and the detected
+    /// format (`None` when no proper pairs were seen).
+    pub fn finish(
+        &self,
+        fld_mean: f64,
+        fld_sd: f64,
+    ) -> (FragmentLengthDistribution, Option<LibraryFormat>) {
+        let n_opp = self.n_opp.load(Ordering::Relaxed);
+        let n_same = self.n_same.load(Ordering::Relaxed);
+        let chosen = if n_opp >= n_same {
+            &self.opp
+        } else {
+            &self.same
+        };
+        let mut fld =
+            FragmentLengthDistribution::new(1.0, self.max_len, fld_mean, fld_sd, 4, 0.5, 1);
+        // `add_val(len, ln count)` equals `count` unit `add_val(len, 0)` calls in
+        // log space, so this reproduces the per-fragment FLD — but deterministically.
+        for (len, c) in chosen.iter().enumerate() {
+            let c = c.load(Ordering::Relaxed);
+            if c > 0 {
+                fld.add_val(len, (c as f64).ln());
+            }
+        }
+        fld.cache();
+        let tally: Vec<u64> = self
+            .fmt_counts
+            .iter()
+            .map(|a| a.load(Ordering::Relaxed))
+            .collect();
+        let detected = if tally.iter().sum::<u64>() > 0 {
+            Some(crate::infer_format_from_counts(&tally, ReadType::PairedEnd))
+        } else {
+            None
+        };
+        (fld, detected)
     }
 }
 

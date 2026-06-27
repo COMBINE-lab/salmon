@@ -33,7 +33,9 @@ pub enum SeedMode {
     UniMem,
 }
 use crate::pair::{join_reads_and_filter, PairingConfig};
-use crate::score::{finalize_mappings_counted, RawMapping, ScoreConfig, ScoredMapping};
+use crate::score::{
+    finalize_mappings_counted_into, RawMapping, ScoreConfig, ScoredMapping,
+};
 use salmon_core::RefProvider;
 
 /// Full mapper configuration.
@@ -111,6 +113,21 @@ pub fn map_single_read<'idx, R: RefProvider>(
     read: &[u8],
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
+    let mut out = Vec::new();
+    map_single_read_into(&mut out, index, hs, refs, read, cfg);
+    out
+}
+
+/// [`map_single_read`] writing into a caller-provided buffer (cleared first), so
+/// a per-thread `Vec` can be reused across reads instead of allocating per read.
+pub fn map_single_read_into<'idx, R: RefProvider>(
+    out: &mut Vec<ScoredMapping>,
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    refs: &R,
+    read: &[u8],
+    cfg: &MapConfig,
+) {
     let cands = consensus_filter(
         best_per_target(collect_candidates(index, hs, refs, read, true, cfg)),
         cfg.collect.consensus_fraction,
@@ -163,14 +180,13 @@ pub fn map_single_read<'idx, R: RefProvider>(
             below += 1;
         }
     }
-    let (maps, decoy_dominated, below_final) = finalize_mappings_counted(raw, &cfg.score);
+    let (decoy_dominated, below_final) = finalize_mappings_counted_into(out, raw, &cfg.score);
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,
         dovetail: false,
         alns_below_threshold: below + below_final,
     });
-    maps
 }
 
 /// Map a read pair to weighted equivalence-class members.
@@ -182,6 +198,22 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     r2: &[u8],
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
+    let mut out = Vec::new();
+    map_read_pair_into(&mut out, index, hs, refs, r1, r2, cfg);
+    out
+}
+
+/// [`map_read_pair`] writing into a caller-provided buffer (cleared first), for
+/// per-thread `Vec` reuse across reads.
+pub fn map_read_pair_into<'idx, R: RefProvider>(
+    out: &mut Vec<ScoredMapping>,
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    refs: &R,
+    r1: &[u8],
+    r2: &[u8],
+    cfg: &MapConfig,
+) {
     let cf = cfg.collect.consensus_fraction;
     // NOTE: deliberately do NOT collapse to one chain per (tid, is_fw) before
     // pairing. A mate can match a transcript at several positions (an internal
@@ -331,14 +363,13 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     {
         raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
     }
-    let (maps, decoy_dominated, below_final) = finalize_mappings_counted(raw, &cfg.score);
+    let (decoy_dominated, below_final) = finalize_mappings_counted_into(out, raw, &cfg.score);
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,
         dovetail,
         alns_below_threshold: below + below_final,
     });
-    maps
 }
 
 #[inline]

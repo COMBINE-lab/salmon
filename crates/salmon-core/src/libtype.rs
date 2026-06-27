@@ -243,6 +243,34 @@ pub fn compatible_single(expected: LibraryFormat, is_forward: bool, status: Mate
     }
 }
 
+/// The observed library format of a properly-paired mapping, from the two mates'
+/// reference strands. Opposite strands (`is_fw != mate_fw`) are inward
+/// (`Toward`); same strands are `Same`. The strandedness follows read-1's strand
+/// (`SA`/`AS` for inward, `S`/`A` for same). Shared by fragment-length-derivation
+/// and naive-eq orientation tagging so they classify orientation identically.
+pub fn observed_paired_format(is_fw: bool, mate_fw: bool) -> LibraryFormat {
+    let (orientation, strandedness) = if is_fw != mate_fw {
+        (
+            ReadOrientation::Toward,
+            if is_fw {
+                ReadStrandedness::SA
+            } else {
+                ReadStrandedness::AS
+            },
+        )
+    } else {
+        (
+            ReadOrientation::Same,
+            if is_fw {
+                ReadStrandedness::S
+            } else {
+                ReadStrandedness::A
+            },
+        )
+    };
+    LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)
+}
+
 /// Unified compatibility check: dispatches to [`compatible_paired`] for a
 /// properly-paired mapping (using its `observed` format) and to
 /// [`compatible_single`] otherwise.
