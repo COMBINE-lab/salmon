@@ -33,9 +33,7 @@ pub enum SeedMode {
     UniMem,
 }
 use crate::pair::{join_reads_and_filter, PairingConfig};
-use crate::score::{
-    finalize_mappings_counted_into, RawMapping, ScoreConfig, ScoredMapping,
-};
+use crate::score::{finalize_mappings_counted_into, RawMapping, ScoreConfig, ScoredMapping};
 use salmon_core::RefProvider;
 
 /// Full mapper configuration.

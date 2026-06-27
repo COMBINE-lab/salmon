@@ -50,7 +50,7 @@ fn write_rad_codec(
     }
     let ctx: SalmonBulkContext = *w.context();
     let mut cb = FragmentChunkBuf::with_capacity_codec(4096, codec);
-    for (i, hits) in fragments.iter().enumerate() {
+    for hits in fragments.iter() {
         let proper = hits.iter().all(|(_, fl, _)| fl.is_some());
         let frag_type = if proper {
             frag_map_type::MAPPED_PAIR
@@ -426,7 +426,7 @@ fn auto_orientation_derives_fld_from_majority_bucket() {
     .unwrap();
     let ctx: SalmonBulkContext = *w.context();
     let mut cb = FragmentChunkBuf::with_capacity(4096);
-    let mut emit = |i: usize, tid: u32, fl: u16, is_fw: bool, mate_fw: bool| {
+    let mut emit = |_i: usize, tid: u32, fl: u16, is_fw: bool, mate_fw: bool| {
         let rec = salmon_rad::SalmonBulkRecord::new(
             frag_map_type::MAPPED_PAIR,
             vec![RadHit {
