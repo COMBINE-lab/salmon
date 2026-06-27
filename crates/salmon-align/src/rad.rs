@@ -978,7 +978,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // without `-i` is still a separate follow-up.)
     let bias_on = opts.seq_bias || opts.gc_bias || opts.pos_bias;
     anyhow::ensure!(
-        !bias_on || opts.transcripts.is_some(),
+        !bias_on || opts.ref_seqs.is_some() || opts.transcripts.is_some(),
         "--seqBias/--gcBias/--posBias with --rad require -t/--targets (the transcriptome FASTA)"
     );
 
@@ -1124,10 +1124,20 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // is requested; mirrors alignment mode). Seq/GC need the transcript bytes; the
     // GC store is a rank bitvector over the concatenated references; positional
     // bias needs only the per-transcript length classes.
-    let ref_bytes: Vec<Vec<u8>> = if bias_on {
-        crate::load_ref_bytes(opts.transcripts.as_ref().unwrap(), &names)?
-    } else {
+    let ref_bytes: Vec<Vec<u8>> = if !bias_on {
         Vec::new()
+    } else if let Some(rs) = &opts.ref_seqs {
+        // Sequences supplied directly (e.g. by `--deterministic`, from the index).
+        // They are in transcript-id order, which is the RAD ref-name order.
+        anyhow::ensure!(
+            rs.len() == names.len(),
+            "supplied ref_seqs ({}) do not match the RAD reference count ({})",
+            rs.len(),
+            names.len()
+        );
+        rs.clone()
+    } else {
+        crate::load_ref_bytes(opts.transcripts.as_ref().unwrap(), &names)?
     };
     let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if opts.gc_bias {
         let mut concat: Vec<u8> = Vec::new();

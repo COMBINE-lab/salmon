@@ -57,6 +57,12 @@ pub struct AlignQuantOptions {
     pub score_exp: f64,
     /// transcriptome FASTA (`-t`); required to train the alignment error model
     pub transcripts: Option<PathBuf>,
+    /// reference sequences (transcript-id order, decoys included) supplied
+    /// directly instead of loading `transcripts` — used by `--deterministic`,
+    /// which already has the index and can hand its sequences to the requant
+    /// pass so bias correction needs no separate `-t`. Takes precedence over
+    /// [`Self::transcripts`] when set.
+    pub ref_seqs: Option<Vec<Vec<u8>>>,
     /// disable the alignment error model (salmon's `--noErrorModel`)
     pub no_error_model: bool,
     /// enable sequence-specific bias correction (`--seqBias`)
@@ -131,6 +137,7 @@ impl AlignQuantOptions {
             range_factorization_bins: 4,
             score_exp: 1.0,
             transcripts: None,
+            ref_seqs: None,
             no_error_model: false,
             seq_bias: false,
             gc_bias: false,

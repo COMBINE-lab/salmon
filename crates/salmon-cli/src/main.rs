@@ -734,8 +734,10 @@ fn write_gene_level(
 /// library format), then quantify from that RAD via [`quantify_rad`]. Because the
 /// FLD is fixed before equivalence-class assembly, the result is byte-identical
 /// across runs and thread counts. Re-reading the RAD is cheap, so this avoids a
-/// second *mapping* pass; bias correction (which needs the reference) requires
-/// `-t`, and the requant derives its own abundances from the RAD.
+/// second *mapping* pass; the requant derives its own abundances from the RAD.
+/// Bias correction needs the reference sequence, but since we control both passes
+/// and phase 1 loads the index, we hand the index's sequences to phase 2 — so
+/// `--deterministic --seqBias/--gcBias/--posBias` needs no separate `-t`.
 fn run_deterministic(
     mut map_opts: QuantOptions,
     rad_out: Option<PathBuf>,
@@ -745,13 +747,6 @@ fn run_deterministic(
     out_dir: &std::path::Path,
 ) -> Result<()> {
     let bias_on = map_opts.seq_bias || map_opts.gc_bias || map_opts.pos_bias;
-    if bias_on && bias_targets.is_none() {
-        anyhow::bail!(
-            "--deterministic with bias correction (--seqBias/--gcBias/--posBias) requires \
-             -t/--targets (the transcript FASTA) for the requant pass: the intermediate RAD \
-             carries fragment positions but no sequence"
-        );
-    }
     // An explicit `--writeRad PATH` is honoured (and kept — it was a requested
     // output); otherwise a temp under the output directory, removed on success
     // unless `--keepRad`.
@@ -789,7 +784,16 @@ fn run_deterministic(
     q.lib_type = map_opts.lib_type.clone();
     q.em = map_opts.em.clone();
     q.range_factorization_bins = map_opts.range_factorization_bins;
+    // Bias needs the reference sequence. Prefer the index's own sequences (we
+    // already built the index for phase 1), so the user need not pass `-t`; an
+    // explicit `-t` is still honoured as a fallback.
     q.transcripts = bias_targets;
+    if bias_on {
+        q.ref_seqs = Some(
+            salmon_index::load_ref_seqs(&map_opts.index_dir)
+                .context("loading reference sequences from the index for deterministic bias")?,
+        );
+    }
     q.seq_bias = map_opts.seq_bias;
     q.gc_bias = map_opts.gc_bias;
     q.pos_bias = map_opts.pos_bias;

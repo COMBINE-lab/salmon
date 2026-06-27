@@ -891,6 +891,25 @@ pub struct SalmonIndex {
     refseq_loaded: bool,
 }
 
+/// Load just the per-reference forward sequences from an index directory, in
+/// transcript-id order (decoys included), without loading the (multi-GB) SSHash
+/// dictionary. Reads only [`REFSEQ_FILE`] + [`REFSEQ_OFFSETS_FILE`]. Used to feed
+/// bias models a requant pass (e.g. `--deterministic`) the reference sequences
+/// the index already stores, so the user need not re-supply a transcript FASTA.
+pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<Vec<Vec<u8>>> {
+    let dir = dir.as_ref();
+    let refseq =
+        std::fs::read(dir.join(REFSEQ_FILE)).with_context(|| format!("reading {REFSEQ_FILE}"))?;
+    let offsets: Vec<u64> = serde_json::from_slice(
+        &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
+            .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
+    )?;
+    Ok(offsets
+        .windows(2)
+        .map(|w| refseq[w[0] as usize..w[1] as usize].to_vec())
+        .collect())
+}
+
 impl SalmonIndex {
     /// Load a salmon index from a directory produced by [`build`], including the
     /// reference sequence bytes (needed for selective alignment and seq/GC bias).

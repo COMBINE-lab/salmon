@@ -581,3 +581,44 @@ fn pos_bias_rad_runs() {
         "positional bias dump should be populated"
     );
 }
+
+/// Bias correction can take its reference sequences directly via
+/// `AlignQuantOptions::ref_seqs` instead of a `-t` FASTA — the path
+/// `--deterministic` uses to hand phase-2 the index's own sequences. No
+/// `transcripts` is set here.
+#[test]
+fn gc_bias_rad_uses_ref_seqs_without_transcripts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let names = ["t0", "t1", "t2"];
+    let lens = [3000u32, 3000, 3000];
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for (tid, n) in [(0u32, 200), (1, 150), (2, 250)] {
+        for _ in 0..n {
+            frags.push(vec![(tid, Some(200), 0)]);
+        }
+    }
+    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags, None);
+
+    // Reference sequences supplied directly (transcript-id order), as the index
+    // would provide them — no FASTA on disk.
+    let ref_seqs: Vec<Vec<u8>> = lens
+        .iter()
+        .map(|&l| (0..l).map(|j| b"ACGT"[(j as usize) % 4]).collect())
+        .collect();
+
+    let mut o = opts_for(&tmp.path().join("quant"));
+    o.gc_bias = true;
+    o.ref_seqs = Some(ref_seqs);
+    assert!(o.transcripts.is_none(), "this path must not need -t");
+    std::fs::create_dir_all(&o.output_dir).unwrap();
+    let res = quantify_rad(&o, &rad).expect("quantify_rad --gcBias via ref_seqs");
+
+    let sum: f64 = res.counts.iter().sum();
+    assert!((sum - 600.0).abs() < 1.0, "Σcounts = {sum}");
+    assert_eq!(res.num_mapped, 600);
+    assert!(
+        !res.bias_dump.obs_gc.is_empty() && !res.bias_dump.exp_gc.is_empty(),
+        "GC bias dump should be populated from the supplied ref_seqs"
+    );
+}
