@@ -1,0 +1,113 @@
+---
+title: RAD I/O & deterministic quantification
+description: Decouple mapping from quantification with --writeRad/--rad, get reproducible results with --deterministic, and compress RAD output.
+---
+
+salmon can separate the two halves of a run — **mapping** reads to the
+transcriptome and **quantifying** abundances from those mappings — by writing the
+mappings to a **RAD** file (the Reduced Alignment Data format shared across the
+COMBINE-lab tools) and quantifying from it later. The same machinery powers a
+fully **deterministic** quantification mode.
+
+## Why decouple map and quant
+
+- **Map once, quantify many times** — re-run quantification with different
+  options (bias correction, `--numBootstraps`, gene aggregation) without
+  re-mapping.
+- **Quantify a shared RAD** — quantify a RAD produced by
+  [piscem](https://github.com/COMBINE-lab/piscem) `map-bulk` with salmon's EM.
+- **Split the phases across machines** — map on one host, quantify on another.
+
+## Writing a RAD (`--writeRad`)
+
+Add `--writeRad <PATH>` to any reads-mode run to also emit per-fragment mappings.
+The sketch or selective-alignment profile is chosen automatically from the
+mapping mode. Quantification still runs; add `--skipQuant` to **map only**:
+
+```sh
+# map only, write a RAD
+salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 16 \
+  --writeRad mappings.rad --skipQuant -o out_map
+```
+
+The file is **piscem `map-bulk`-compatible** and can be re-quantified with
+`--rad`. salmon additionally bakes an order-independent fragment-length
+distribution, initial abundances, and the resolved library format into the RAD
+header, so re-quantifying it is a single pass (see *Determinism* below).
+
+## Quantifying a RAD (`--rad`)
+
+```sh
+# quantify a salmon- or piscem-produced RAD (no -i needed)
+salmon quant --rad mappings.rad -l A -p 16 -o out_quant
+```
+
+`--rad` reads the RAD in parallel and runs the full EM. Reference names travel in
+the RAD header, so no index is required. salmon auto-detects whether the RAD came
+from salmon (header values are present and consumed — one pass) or from piscem
+(nothing baked — a first pass derives a unique-fragment fragment-length
+distribution, then quantifies). Bias correction (`--seqBias`, `--gcBias`,
+`--posBias`), `--numBootstraps`, `--numGibbsSamples`, and `-g/--geneMap` all work
+in RAD mode.
+
+### piscem interoperability
+
+A RAD produced by `piscem map-bulk` quantifies directly:
+
+```sh
+piscem map-bulk -i piscem_index -1 r1.fq.gz -2 r2.fq.gz -t 16 -o pi
+salmon quant --rad pi.rad -l A -p 16 -o out_quant
+```
+
+## Deterministic quantification (`--deterministic`)
+
+RAD-mode quantification is **byte-identical across thread counts and runs**.
+`--deterministic` brings that guarantee to FASTQ input directly:
+
+```sh
+salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 16 \
+  --deterministic -o out
+```
+
+It maps the reads once to an intermediate RAD, then quantifies from it with a
+fixed fragment-length distribution — no second mapping pass. The intermediate RAD
+is written under the output directory and removed on success unless you pass
+`--keepRad` (or `--writeRad <PATH>` to choose its location and keep it).
+
+The determinism comes from making the computation itself order-independent rather
+than sorting records:
+
+- equivalence-class weights accumulate in fixed-point integers (integer addition
+  is associative, hence independent of thread count and arrival order);
+- the fragment-length distribution is built from integer count histograms in a
+  fixed order, then frozen;
+- the bias observed models accumulate in fixed-point integers too, so the trained
+  models — and the bias-corrected effective lengths — are byte-identical across
+  thread counts.
+
+`--deterministic` works with bias correction and does **not** require `-t`: the
+reference sequences for the second pass are taken from the index.
+
+:::note
+The only output difference from a non-deterministic run is in the bias models'
+last digits (the fixed-point accumulation removes a thread-count-dependent
+rounding wobble). Absolute accuracy versus ground truth is unchanged.
+:::
+
+## Compressing RAD output (`--radCompress`)
+
+RAD chunks can be compressed, on by default for both `--writeRad` and the
+`--deterministic` intermediate:
+
+| Flag | Effect |
+| --- | --- |
+| `--radCompress=lz4` | **Default.** Fast LZ4; ≈ 1.25× smaller on a typical human RAD, neutral-to-faster to write. |
+| `--radCompress=zstd` | Better ratio (≈ 1.9× smaller), a little slower. |
+| `--radCompress=none` | Uncompressed. |
+| `--noCompressRad` | Force uncompressed (overrides `--radCompress`). |
+
+Compression is **transparent and lossless**: chunks are decompressed by the
+reader, so every consumer (salmon, alevin-fry, piscem-infer) is unchanged, and a
+RAD with no codec tag — every file produced before this feature, and every piscem
+RAD — reads as uncompressed automatically. The quantified `quant.sf` is identical
+regardless of codec.

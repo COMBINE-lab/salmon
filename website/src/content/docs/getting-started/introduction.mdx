@@ -35,6 +35,9 @@ tools depend on.
   keep working. See the [output format specification](../reference/output-formats/).
 - **Single portable binary.** No compiler, Boost, or system libraries to install.
 - **A new alignment-free mode** (`--sketch`) for when you want maximum speed.
+- **Decoupled mapping and quantification** via the RAD format (`--writeRad` /
+  `--rad`, interoperable with piscem `map-bulk`), plus a fully reproducible
+  `--deterministic` mode. See [RAD I/O & deterministic quantification](../guides/rad-and-determinism/).
 - **One breaking change you must act on:** the index format changed, so **you
   must rebuild your index** with 2.0. Pointing 2.0 at a C++ (pufferfish) index —
   or C++ salmon at a 2.0 index — is detected and rejected with a clear message.

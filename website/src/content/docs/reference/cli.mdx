@@ -47,8 +47,8 @@ salmon index -t transcripts.fa -i salmon_index -p 16
 
 ## `salmon quant`
 
-Quantify from FASTQ reads (reads mode, `-i`) or from a transcriptome BAM
-(alignment mode, `-a`).
+Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
+(alignment mode, `-a`), or from a RAD file of mappings (RAD mode, `--rad`).
 
 ### Inputs / outputs
 
@@ -56,6 +56,7 @@ Quantify from FASTQ reads (reads mode, `-i`) or from a transcriptome BAM
 | --- | --- |
 | `-i, --index <DIR>` | Salmon index (reads mode). |
 | `-a, --alignments <BAM>` | Alignment mode: a BAM of reads aligned to the transcriptome. |
+| `--rad <RAD>` | RAD mode: quantify a RAD file of mappings (salmon `--writeRad` **or** piscem `map-bulk`/sketch output) directly. No `-i` needed — reference names travel in the RAD header. See [RAD I/O & deterministic quantification](../../guides/rad-and-determinism/). |
 | `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode) — enables the error model. |
 | `-l, --libType <TYPE>` | Library type (e.g. `IU`, `ISR`, `A` for auto). Default `A`. See [library types](../../guides/library-types/). |
 | `-1/-2, --mates1/2 <FASTQ>…` | Paired-end read files. |
@@ -84,6 +85,19 @@ Quantify from FASTQ reads (reads mode, `-i`) or from a transcriptome BAM
 | `--gcBias` | Fragment-GC bias correction. |
 | `--posBias` | Positional bias correction. |
 | `--noLengthCorrection` | Use raw reference length (no effective-length correction). |
+
+### RAD I/O & determinism
+
+See the [RAD I/O & deterministic quantification](../../guides/rad-and-determinism/) guide.
+
+| Option | Description |
+| --- | --- |
+| `--writeRad <FILE>` | Write per-fragment mappings to a RAD file (piscem `map-bulk`-compatible). Quantification still runs unless `--skipQuant`. |
+| `--skipQuant` | Skip quantification (EM, Gibbs/bootstrap, `quant.sf`); still map, build equivalence classes, detect library type, write metadata. |
+| `--deterministic` | Reproducible reads-mode quantification: map once to an intermediate RAD, then quantify from it with a fixed fragment-length distribution. Byte-identical across runs and thread counts. |
+| `--keepRad` | Keep the `--deterministic` intermediate RAD (deleted by default). |
+| `--radCompress <CODEC>` | RAD chunk compression for `--writeRad` / `--deterministic`: `lz4` (default), `zstd` (smaller), or `none`. |
+| `--noCompressRad` | Write uncompressed RAD chunks (overrides `--radCompress`). |
 
 ### Inference
 

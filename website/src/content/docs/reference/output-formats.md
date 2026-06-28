@@ -220,3 +220,30 @@ The 2.0 index is the piscem-rs format and is **not** compatible with C++ salmon
 (pufferfish) indices — they must be rebuilt. Pointing 2.0 at a C++ index (or C++
 salmon at a 2.0 index) produces a clear, actionable error. See
 [what changed in 2.0](../../migrating/from-cpp/).
+
+## RAD output (`--writeRad`)
+
+`--writeRad <PATH>` (and the `--deterministic` intermediate) write a **RAD** file
+— the Reduced Alignment Data format defined by
+[libradicl](https://github.com/COMBINE-lab/libradicl) and shared with piscem and
+alevin-fry. The base format (prelude, file-level tag definitions, and the
+sequence of `[u32 nbytes][u32 nrec][records…]` chunks) is libradicl's contract;
+salmon writes a bulk profile that piscem `map-bulk` can also produce and read.
+See the [RAD I/O guide](../../guides/rad-and-determinism/) for usage.
+
+Two salmon-relevant details on top of the base format:
+
+- **Baked header tags.** A salmon-written RAD records, as file-level tags, an
+  order-independent fragment-length distribution, initial abundances, and the
+  resolved library format, plus a `baked_flags` marker. A `--rad` reader consumes
+  these to quantify in a single pass and to apply `-l A` concordance filtering
+  without re-inference; a piscem RAD carries none of them and is handled with an
+  extra derivation pass.
+- **Chunk compression (`chunk_codec`).** With compression enabled (the default;
+  see `--radCompress`), each chunk's record payload is compressed independently
+  and the `nbytes` field is the **compressed** size; the uncompressed size is
+  carried inside the payload. A file-level `chunk_codec` byte tag selects the
+  codec — `1` = LZ4, `2` = zstd. **A missing `chunk_codec` tag means codec `0`
+  (uncompressed)**, so every RAD produced before this feature, and every piscem
+  RAD, reads as uncompressed automatically. Decompression happens in the reader,
+  so record parsing downstream is identical for compressed and uncompressed RADs.
