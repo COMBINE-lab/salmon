@@ -19,18 +19,18 @@ thread_local! {
     /// Per-thread FFT planner (the per-transcript correction runs in a parallel
     /// sweep). Padding to a power of two keeps the set of distinct plan sizes
     /// tiny, so plans are reused across transcripts.
-    static SEQ_FFT_PLANNER: RefCell<RealFftPlanner<f64>> = RefCell::new(RealFftPlanner::<f64>::new());
+    static FFT_PLANNER: RefCell<RealFftPlanner<f64>> = RefCell::new(RealFftPlanner::<f64>::new());
 }
 
-/// Cross-correlation `xc[Δ] = Σ_k fw[k]·rc[k+Δ]` for `Δ in [0, max_lag]`, via a
-/// real FFT (zero-padded so `rc` beyond its length contributes 0 — i.e. linear,
-/// not circular, correlation). Correlation theorem: `corr(fw,rc) =
-/// IFFT(conj(FFT(fw))·FFT(rc))`. rustfft is unnormalized, so divide by `n`.
-fn seq_xcorr_fft(fw: &[f64], rc: &[f64], max_lag: usize) -> Vec<f64> {
+/// Cross-correlation `xc[Δ] = Σ_k a[k]·b[k+Δ]` for `Δ in [0, max_lag]`, via a
+/// real FFT (zero-padded so `b` beyond its length contributes 0 — i.e. linear,
+/// not circular, correlation). Correlation theorem: `corr(a,b) =
+/// IFFT(conj(FFT(a))·FFT(b))`. rustfft is unnormalized, so divide by `n`.
+fn xcorr_fft(fw: &[f64], rc: &[f64], max_lag: usize) -> Vec<f64> {
     let l = fw.len();
     debug_assert_eq!(l, rc.len());
     let n = (l + max_lag + 1).next_power_of_two().max(2);
-    SEQ_FFT_PLANNER.with(|p| {
+    FFT_PLANNER.with(|p| {
         let mut planner = p.borrow_mut();
         let r2c = planner.plan_fft_forward(n);
         let c2r = planner.plan_fft_inverse(n);
@@ -463,12 +463,89 @@ pub fn corrected_effective_length(
     eff.max(elen.min(offset))
 }
 
-/// FFT form of [`corrected_effective_length`] (sequence-only). The position
-/// sweep `Σ_k fw[k]·rc[k+fl-1]` for every fragment length `fl` is the
-/// cross-correlation of `fw` and `rc` evaluated at all lags, computed once via
-/// [`seq_xcorr_fft`] in `O(L log L)` instead of `O(L · n_len)`. It is therefore
-/// **exact over all lengths** (no `stride` subsampling). Numerically identical
-/// to [`corrected_effective_length`] with `stride = 1` up to FFT round-off.
+/// Bias-corrected effective length when the per-fragment factor is **separable**
+/// as `a[start]·b[end]`. This holds for any combination of sequence and
+/// positional bias (each contributes an independent 5′ start factor and 3′ end
+/// factor); GC bias is *not* separable (its windowed-GC binning couples start
+/// and length) and stays on the scalar convolution.
+///
+/// The length sweep `mass(fl) = Σ_k a[k]·b[k+fl-1]` is then the cross-correlation
+/// of `a` and `b` evaluated at every lag, computed once via [`xcorr_fft`] in
+/// `O(L log L)` instead of `O(L · n_len)`. `a`/`b` must both have length
+/// `ref_len`; `cond` is the conditional fragment-length CMF; `unprocessed` is
+/// `max(0, ref_len − elen)`. Mirrors the scalar loop's `stride` (biasSpeedSamp)
+/// sampling and boundary exclusion exactly, so it is a drop-in replacement.
+#[allow(clippy::too_many_arguments)]
+pub fn eff_len_from_xcorr(
+    a: &[f64],
+    b: &[f64],
+    cond: impl Fn(i32) -> f64,
+    fld_low: usize,
+    fld_high: usize,
+    elen: f64,
+    unprocessed: i32,
+    stride: usize,
+    no_length_threshold: bool,
+) -> f64 {
+    let ref_len = a.len();
+    debug_assert_eq!(ref_len, b.len());
+    let max_len = (ref_len as i32).min(fld_high as i32 + 1);
+    if (fld_low as i32) >= max_len {
+        let offset = (unprocessed as f64).max(1.0);
+        return elen.max(elen.min(offset));
+    }
+    // Lags needed: Δ = fl-1 for fl in [fld_low, max_len). The scalar inner loop
+    // stops at kstart < ref_len-fl (so frag_end ≤ ref_len-2), i.e. it excludes
+    // the single fragment ending at ref_len-1; the zero-padded xcorr includes it
+    // (term a[ref_len-fl]·b[ref_len-1]), so subtract that for exact parity.
+    let max_lag = (max_len - 2).max(0) as usize;
+    let xc = xcorr_fft(a, b, max_lag);
+    let b_last = b[ref_len - 1];
+
+    // Mirror the scalar loop's `stride` (biasSpeedSamp) sampling EXACTLY so this
+    // is a drop-in faster replacement, not an accuracy change: same fragment
+    // lengths, same FLD weights. `xc[fl-1] - boundary` is the scalar's inner
+    // position sum (the boundary term is the one fragment ending at ref_len-1
+    // that the scalar's `kstart < ref_len-fl` bound excludes).
+    let stride = stride.max(1) as i32;
+    let mut eff = 0.0f64;
+    let mut fl = fld_low as i32;
+    let mut done = fl >= max_len;
+    let sp = if fl > 0 { fl - 1 } else { 0 };
+    let mut prev_mass = cond(sp);
+    while !done {
+        if fl >= max_len {
+            done = true;
+            fl = max_len - 1;
+        }
+        let fl_weight = cond(fl) - prev_mass;
+        prev_mass = cond(fl);
+        if fl >= 1 {
+            let delta = (fl - 1) as usize;
+            let boundary = a[(ref_len as i32 - fl) as usize] * b_last;
+            eff += fl_weight * (xc[delta] - boundary);
+        }
+        fl += stride;
+    }
+    if no_length_threshold {
+        if eff > 1.0 {
+            eff
+        } else {
+            elen
+        }
+    } else {
+        let offset = (unprocessed as f64).max(1.0);
+        eff.max(elen.min(offset))
+    }
+}
+
+/// FFT form of [`corrected_effective_length`] (sequence-only): builds the 5′/3′
+/// sequence factor arrays, then evaluates the length sweep as their
+/// cross-correlation via [`eff_len_from_xcorr`]. Kept as the validated
+/// seq-only reference (the combined no-GC path in [`crate::bias`] builds the
+/// same factors, optionally fused with positional bias, and calls the same
+/// core). Numerically identical to [`corrected_effective_length`] up to FFT
+/// round-off.
 #[allow(clippy::too_many_arguments)]
 pub fn corrected_effective_length_fft(
     seq: &[u8],
@@ -508,56 +585,17 @@ pub fn corrected_effective_length_fft(
     }
     rc.reverse();
 
-    let max_len = (ref_len as i32).min(fld_high as i32 + 1);
-    if (fld_low as i32) >= max_len {
-        let offset = (unprocessed as f64).max(1.0);
-        return elen.max(elen.min(offset));
-    }
-    // Lags needed: Δ = fl-1 for fl in [fld_low, max_len). The scalar inner loop
-    // stops at kstart < ref_len-fl (so frag_end ≤ ref_len-2), i.e. it excludes
-    // the single fragment ending at ref_len-1; the zero-padded xcorr includes it
-    // (term fw[ref_len-fl]·rc[ref_len-1]), so subtract that for exact parity.
-    let max_lag = (max_len - 2).max(0) as usize;
-    let xc = seq_xcorr_fft(&fw, &rc, max_lag);
-    let rc_last = rc[ref_len - 1];
-
-    // Mirror the scalar loop's `stride` (biasSpeedSamp) sampling EXACTLY so this
-    // is a drop-in faster replacement, not an accuracy change: same fragment
-    // lengths, same FLD weights. `xc[fl-1] - boundary` is the scalar's inner
-    // position sum (the boundary term is the one fragment ending at ref_len-1
-    // that the scalar's `kstart < ref_len-fl` bound excludes). A larger speedup
-    // is available by summing every length (exact, no stride) — left off by
-    // default to preserve parity with the strided result.
-    let stride = stride.max(1) as i32;
-    let mut eff = 0.0f64;
-    let mut fl = fld_low as i32;
-    let mut done = fl >= max_len;
-    let sp = if fl > 0 { fl - 1 } else { 0 };
-    let mut prev_mass = cond(sp);
-    while !done {
-        if fl >= max_len {
-            done = true;
-            fl = max_len - 1;
-        }
-        let fl_weight = cond(fl) - prev_mass;
-        prev_mass = cond(fl);
-        if fl >= 1 {
-            let delta = (fl - 1) as usize;
-            let boundary = fw[(ref_len as i32 - fl) as usize] * rc_last;
-            eff += fl_weight * (xc[delta] - boundary);
-        }
-        fl += stride;
-    }
-    if no_length_threshold {
-        if eff > 1.0 {
-            eff
-        } else {
-            elen
-        }
-    } else {
-        let offset = (unprocessed as f64).max(1.0);
-        eff.max(elen.min(offset))
-    }
+    eff_len_from_xcorr(
+        &fw,
+        &rc,
+        cond,
+        fld_low,
+        fld_high,
+        elen,
+        unprocessed,
+        stride,
+        no_length_threshold,
+    )
 }
 
 /// Log bias of `observed` relative to `expected` for a context:
@@ -701,6 +739,73 @@ mod tests {
             assert!(
                 rel < 1e-9,
                 "FFT vs scalar mismatch at stride={stride}: scalar={scalar} fft={fft} rel={rel:.3e}"
+            );
+        }
+    }
+
+    #[test]
+    fn eff_len_from_xcorr_matches_scalar_combined_factors() {
+        // The generic core handles ANY separable per-fragment factor
+        // a[start]·b[end] — i.e. seq-only, pos-only, or seq+pos (GC is not
+        // separable). Validate it against an explicit scalar double-loop on
+        // arbitrary positive factor arrays (a stand-in for seqFW·posFW etc.),
+        // at both stride 1 and 5, so the pos / seq+pos dispatch in `bias.rs` is
+        // covered independently of how the factors were built.
+        let ref_len = 1300usize;
+        let a: Vec<f64> = (0..ref_len)
+            .map(|i| 0.5 + 1.5 * ((i as f64 * 0.013).sin() * 0.5 + 0.5))
+            .collect();
+        let b: Vec<f64> = (0..ref_len)
+            .map(|i| 0.4 + 1.8 * ((i as f64 * 0.021 + 1.0).cos() * 0.5 + 0.5))
+            .collect();
+
+        let mut pmf = vec![0.0f64; 600];
+        for (l, v) in pmf.iter_mut().enumerate() {
+            let d = l as f64 - 250.0;
+            *v = (-d * d / (2.0 * 40.0 * 40.0)).exp();
+        }
+        let (cdf, lo, hi) = fld_cdf_and_bounds(&pmf);
+        let elen = 1100.0f64;
+        let unprocessed = (ref_len as i32 - elen as i32).max(0);
+        let cdf_max_arg = (cdf.len() - 1).min(ref_len);
+        let cdf_max_val = cdf[cdf_max_arg];
+        let cond = |x: i32| conditional_cdf(&cdf, cdf_max_arg, cdf_max_val, x);
+
+        for stride in [1usize, 5] {
+            // Explicit scalar reference: same fragment lengths/weights and the
+            // same `kstart < ref_len - fl` bound as the combined scalar loop.
+            let max_len = (ref_len as i32).min(hi as i32 + 1);
+            let st = stride.max(1) as i32;
+            let mut fl = lo as i32;
+            let mut done = fl >= max_len;
+            let sp = if fl > 0 { fl - 1 } else { 0 };
+            let mut prev = cond(sp);
+            let mut eff = 0.0f64;
+            while !done {
+                if fl >= max_len {
+                    done = true;
+                    fl = max_len - 1;
+                }
+                let w = cond(fl) - prev;
+                prev = cond(fl);
+                let kmax = ref_len as i32 - fl;
+                let mut mass = 0.0f64;
+                let mut k = 0i32;
+                while k < kmax {
+                    mass += a[k as usize] * b[(k + fl - 1) as usize];
+                    k += 1;
+                }
+                eff += w * mass;
+                fl += st;
+            }
+            let offset = (unprocessed as f64).max(1.0);
+            let scalar = eff.max(elen.min(offset));
+
+            let fft = eff_len_from_xcorr(&a, &b, cond, lo, hi, elen, unprocessed, stride, false);
+            let rel = (scalar - fft).abs() / scalar.abs();
+            assert!(
+                rel < 1e-9,
+                "combined-factor FFT vs scalar mismatch at stride={stride}: scalar={scalar} fft={fft} rel={rel:.3e}"
             );
         }
     }

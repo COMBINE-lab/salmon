@@ -79,27 +79,6 @@ pub fn corrected_effective_length_full(
     if !bias.any() {
         return elen;
     }
-    // seqBias-only (no GC, no positional): the per-fragment factor is
-    // seqFW[start]·seqRC[end], so the position sweep over every fragment length
-    // is a cross-correlation of the two factor arrays — computed once via FFT in
-    // O(L log L) instead of O(L · n_len), and exact over all lengths (no stride).
-    if bias.gc.is_none() && bias.pos.is_none() {
-        if let Some((obs_fw, exp_fw, obs_rc, exp_rc)) = bias.seq {
-            return crate::seqbias::corrected_effective_length_fft(
-                seq,
-                cdf,
-                fld_low,
-                fld_high,
-                obs_fw,
-                exp_fw,
-                obs_rc,
-                exp_rc,
-                elen,
-                stride,
-                no_length_threshold,
-            );
-        }
-    }
     let k = if bias.seq.is_some() {
         CONTEXT_LENGTH
     } else {
@@ -157,6 +136,41 @@ pub fn corrected_effective_length_full(
         Some((a, b)) => (Some(a), Some(b)),
         None => (None, None),
     };
+
+    // No-GC fast path: with GC absent, the per-fragment factor is
+    // `(seqFW·posFW)[start] · (seqRC·posRC)[end]` — separable into a start array
+    // `a` and an end array `b`, so the length sweep is their cross-correlation,
+    // computed once via FFT in O(L log L) (vs the O(L·n_len) scalar convolution).
+    // GC's windowed-GC binning couples start×length and is not separable, so any
+    // GC run stays on the scalar path below. (`fw`/`rc` are length `ref_len` when
+    // `have_seq`, else empty; the positional factors are length `ref_len`.)
+    if gc_model.is_none() && (have_seq || pos_fw.is_some()) {
+        let mut a = vec![1.0f64; ref_len];
+        let mut b = vec![1.0f64; ref_len];
+        if have_seq {
+            a.copy_from_slice(&fw);
+            b.copy_from_slice(&rc);
+        }
+        if let (Some(pf), Some(pr)) = (pos_fw, pos_rc) {
+            for (((ai, bi), &pfi), &pri) in
+                a.iter_mut().zip(b.iter_mut()).zip(pf.iter()).zip(pr.iter())
+            {
+                *ai *= pfi;
+                *bi *= pri;
+            }
+        }
+        return crate::seqbias::eff_len_from_xcorr(
+            &a,
+            &b,
+            cond,
+            fld_low,
+            fld_high,
+            elen,
+            unprocessed,
+            stride.max(1),
+            no_length_threshold,
+        );
+    }
 
     let stride = stride.max(1) as i32;
     let max_len = (ref_len as i32).min(fld_high as i32 + 1);
