@@ -14,6 +14,7 @@ statrs = { workspace = true }
 flate2 = { workspace = true }
 rayon = { workspace = true }
 sux = "0.14.0"
+realfft = "3.5.0"
 
 [lints]
 workspace = true

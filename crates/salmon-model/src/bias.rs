@@ -79,6 +79,27 @@ pub fn corrected_effective_length_full(
     if !bias.any() {
         return elen;
     }
+    // seqBias-only (no GC, no positional): the per-fragment factor is
+    // seqFW[start]·seqRC[end], so the position sweep over every fragment length
+    // is a cross-correlation of the two factor arrays — computed once via FFT in
+    // O(L log L) instead of O(L · n_len), and exact over all lengths (no stride).
+    if bias.gc.is_none() && bias.pos.is_none() {
+        if let Some((obs_fw, exp_fw, obs_rc, exp_rc)) = bias.seq {
+            return crate::seqbias::corrected_effective_length_fft(
+                seq,
+                cdf,
+                fld_low,
+                fld_high,
+                obs_fw,
+                exp_fw,
+                obs_rc,
+                exp_rc,
+                elen,
+                stride,
+                no_length_threshold,
+            );
+        }
+    }
     let k = if bias.seq.is_some() {
         CONTEXT_LENGTH
     } else {

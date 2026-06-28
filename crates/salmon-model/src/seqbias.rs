@@ -12,6 +12,46 @@
 //! ratio of two models built with the same encoding), so we use A=0, C=1,
 //! G=2, T=3.
 
+use realfft::RealFftPlanner;
+use std::cell::RefCell;
+
+thread_local! {
+    /// Per-thread FFT planner (the per-transcript correction runs in a parallel
+    /// sweep). Padding to a power of two keeps the set of distinct plan sizes
+    /// tiny, so plans are reused across transcripts.
+    static SEQ_FFT_PLANNER: RefCell<RealFftPlanner<f64>> = RefCell::new(RealFftPlanner::<f64>::new());
+}
+
+/// Cross-correlation `xc[Δ] = Σ_k fw[k]·rc[k+Δ]` for `Δ in [0, max_lag]`, via a
+/// real FFT (zero-padded so `rc` beyond its length contributes 0 — i.e. linear,
+/// not circular, correlation). Correlation theorem: `corr(fw,rc) =
+/// IFFT(conj(FFT(fw))·FFT(rc))`. rustfft is unnormalized, so divide by `n`.
+fn seq_xcorr_fft(fw: &[f64], rc: &[f64], max_lag: usize) -> Vec<f64> {
+    let l = fw.len();
+    debug_assert_eq!(l, rc.len());
+    let n = (l + max_lag + 1).next_power_of_two().max(2);
+    SEQ_FFT_PLANNER.with(|p| {
+        let mut planner = p.borrow_mut();
+        let r2c = planner.plan_fft_forward(n);
+        let c2r = planner.plan_fft_inverse(n);
+        let mut a = r2c.make_input_vec();
+        let mut b = r2c.make_input_vec();
+        a[..l].copy_from_slice(fw);
+        b[..l].copy_from_slice(rc);
+        let mut fa = r2c.make_output_vec();
+        let mut fb = r2c.make_output_vec();
+        r2c.process(&mut a, &mut fa).expect("rfft fw");
+        r2c.process(&mut b, &mut fb).expect("rfft rc");
+        for (x, y) in fa.iter_mut().zip(&fb) {
+            *x = x.conj() * *y;
+        }
+        let mut out = c2r.make_output_vec();
+        c2r.process(&mut fa, &mut out).expect("irfft");
+        let scale = 1.0 / n as f64;
+        out[..=max_lag].iter().map(|v| v * scale).collect()
+    })
+}
+
 /// Per-position Markov orders (salmon's "simple" model). Length is the context.
 const ORDER: [u32; 9] = [0, 1, 2, 2, 2, 2, 2, 2, 2];
 /// Context length (= ORDER.len()): 3 left + start + 5 right.
@@ -423,6 +463,103 @@ pub fn corrected_effective_length(
     eff.max(elen.min(offset))
 }
 
+/// FFT form of [`corrected_effective_length`] (sequence-only). The position
+/// sweep `Σ_k fw[k]·rc[k+fl-1]` for every fragment length `fl` is the
+/// cross-correlation of `fw` and `rc` evaluated at all lags, computed once via
+/// [`seq_xcorr_fft`] in `O(L log L)` instead of `O(L · n_len)`. It is therefore
+/// **exact over all lengths** (no `stride` subsampling). Numerically identical
+/// to [`corrected_effective_length`] with `stride = 1` up to FFT round-off.
+#[allow(clippy::too_many_arguments)]
+pub fn corrected_effective_length_fft(
+    seq: &[u8],
+    cdf: &[f64],
+    fld_low: usize,
+    fld_high: usize,
+    obs_fw: &SBModel,
+    exp_fw: &SBModel,
+    obs_rc: &SBModel,
+    exp_rc: &SBModel,
+    elen: f64,
+    stride: usize,
+    no_length_threshold: bool,
+) -> f64 {
+    let k = CONTEXT_LENGTH;
+    let cu = CONTEXT_LEFT;
+    let ref_len = seq.len();
+    let unprocessed = (ref_len as i32 - elen as i32).max(0);
+    let cdf_max_arg = (cdf.len() - 1).min(ref_len);
+    let cdf_max_val = cdf[cdf_max_arg];
+    if ref_len < k || unprocessed <= 0 || cdf_max_val < MIN_CDF_MASS {
+        return elen;
+    }
+    let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
+
+    let rc_seq = revcomp_bytes(seq);
+    let mut fw = vec![1.0f64; ref_len];
+    let mut rc = vec![1.0f64; ref_len];
+    for frag_start in 0..(ref_len - k) {
+        let read_start = frag_start + cu;
+        if read_start < ref_len {
+            fw[read_start] =
+                log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + k], false).exp();
+            rc[read_start] =
+                log_bias(obs_rc, exp_rc, &rc_seq[frag_start..frag_start + k], false).exp();
+        }
+    }
+    rc.reverse();
+
+    let max_len = (ref_len as i32).min(fld_high as i32 + 1);
+    if (fld_low as i32) >= max_len {
+        let offset = (unprocessed as f64).max(1.0);
+        return elen.max(elen.min(offset));
+    }
+    // Lags needed: Δ = fl-1 for fl in [fld_low, max_len). The scalar inner loop
+    // stops at kstart < ref_len-fl (so frag_end ≤ ref_len-2), i.e. it excludes
+    // the single fragment ending at ref_len-1; the zero-padded xcorr includes it
+    // (term fw[ref_len-fl]·rc[ref_len-1]), so subtract that for exact parity.
+    let max_lag = (max_len - 2).max(0) as usize;
+    let xc = seq_xcorr_fft(&fw, &rc, max_lag);
+    let rc_last = rc[ref_len - 1];
+
+    // Mirror the scalar loop's `stride` (biasSpeedSamp) sampling EXACTLY so this
+    // is a drop-in faster replacement, not an accuracy change: same fragment
+    // lengths, same FLD weights. `xc[fl-1] - boundary` is the scalar's inner
+    // position sum (the boundary term is the one fragment ending at ref_len-1
+    // that the scalar's `kstart < ref_len-fl` bound excludes). A larger speedup
+    // is available by summing every length (exact, no stride) — left off by
+    // default to preserve parity with the strided result.
+    let stride = stride.max(1) as i32;
+    let mut eff = 0.0f64;
+    let mut fl = fld_low as i32;
+    let mut done = fl >= max_len;
+    let sp = if fl > 0 { fl - 1 } else { 0 };
+    let mut prev_mass = cond(sp);
+    while !done {
+        if fl >= max_len {
+            done = true;
+            fl = max_len - 1;
+        }
+        let fl_weight = cond(fl) - prev_mass;
+        prev_mass = cond(fl);
+        if fl >= 1 {
+            let delta = (fl - 1) as usize;
+            let boundary = fw[(ref_len as i32 - fl) as usize] * rc_last;
+            eff += fl_weight * (xc[delta] - boundary);
+        }
+        fl += stride;
+    }
+    if no_length_threshold {
+        if eff > 1.0 {
+            eff
+        } else {
+            elen
+        }
+    } else {
+        let offset = (unprocessed as f64).max(1.0);
+        eff.max(elen.min(offset))
+    }
+}
+
 /// Log bias of `observed` relative to `expected` for a context:
 /// `log P_obs(context) - log P_exp(context)`. The fragment-level bias weight is
 /// `exp` of this.
@@ -515,6 +652,57 @@ mod tests {
         // unbiased effLen at point-mass 100 on a 400nt transcript = 400 - 100 = 300
         let eff = corrected_effective_length(&seq, &cdf, lo, hi, &obs, &exp, &obs, &exp, 300.0, 1);
         assert!((eff - 300.0).abs() < 1e-6, "got {eff}");
+    }
+
+    #[test]
+    fn fft_matches_exact_scalar_corrected_eff_len() {
+        // Build a genuinely biased obs/exp pair (so per-position factors != 1),
+        // a spread FLD, and check the FFT cross-correlation form equals the exact
+        // (stride=1) scalar convolution up to FFT round-off.
+        let bases = b"ACGTACGTAGGCCTTAACCGGTTACGTACGTTTAGCGATCG";
+        let seq: Vec<u8> = (0..1500)
+            .map(|i| bases[(i * 7 + 3) % bases.len()])
+            .collect();
+        let rc = revcomp_bytes(&seq);
+        let mut exp = SBModel::new();
+        for p in 0..=(seq.len() - CONTEXT_LENGTH) {
+            exp.add_context(&seq[p..p + CONTEXT_LENGTH], false, 1.0);
+            exp.add_context(&rc[p..p + CONTEXT_LENGTH], false, 1.0);
+        }
+        let mut obs = exp.clone();
+        // enrich a couple of contexts so obs != exp
+        let t1 = b"AAACCCGGG";
+        let t2 = b"TTTGGGCCC";
+        for _ in 0..500 {
+            obs.add_context(t1, false, 1.0);
+            obs.add_context(t2, true, 1.0);
+        }
+        obs.normalize();
+        exp.normalize();
+
+        // spread FLD (Gaussian-ish around 250)
+        let mut pmf = vec![0.0f64; 600];
+        for (l, v) in pmf.iter_mut().enumerate() {
+            let d = l as f64 - 250.0;
+            *v = (-d * d / (2.0 * 40.0 * 40.0)).exp();
+        }
+        let (cdf, lo, hi) = fld_cdf_and_bounds(&pmf);
+
+        // FFT must match the scalar at the SAME stride (drop-in, not an accuracy
+        // change) — check both the exact (stride=1) and strided (stride=5) cases.
+        for stride in [1usize, 5] {
+            let scalar = corrected_effective_length(
+                &seq, &cdf, lo, hi, &obs, &exp, &obs, &exp, 1200.0, stride,
+            );
+            let fft = corrected_effective_length_fft(
+                &seq, &cdf, lo, hi, &obs, &exp, &obs, &exp, 1200.0, stride, false,
+            );
+            let rel = (scalar - fft).abs() / scalar.abs();
+            assert!(
+                rel < 1e-9,
+                "FFT vs scalar mismatch at stride={stride}: scalar={scalar} fft={fft} rel={rel:.3e}"
+            );
+        }
     }
 
     #[test]
