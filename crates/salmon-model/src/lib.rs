@@ -46,4 +46,4 @@ pub use libdetect::{infer_format_from_counts, LibraryTypeDetector};
 pub use posbias::{
     compute_length_quantiles, length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS,
 };
-pub use seqbias::{build_expected, corrected_effective_length, SBModel};
+pub use seqbias::{build_expected, corrected_effective_length, LogBiasTable, SBModel};

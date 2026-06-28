@@ -605,9 +605,194 @@ pub fn log_bias(observed: &SBModel, expected: &SBModel, context: &[u8], rev_comp
     observed.evaluate_log(context, rev_comp) - expected.evaluate_log(context, rev_comp)
 }
 
+/// Precomputed `observed − expected` log-transition table for a fixed model
+/// pair. The effective-length correction evaluates `log_bias` for a context at
+/// every transcript position; `log_bias` evaluates BOTH models (each
+/// re-encoding the context and sweeping all `CONTEXT_LENGTH` positions), so a
+/// context costs two encodes + two table sweeps. Folding the pair into a single
+/// difference table `diff[pos·ROWS+idx] = obs − exp` (built once per quant run,
+/// the models being fixed during correction) collapses that to **one** encode +
+/// **one** sweep — ~1.4× on the per-position factor build, the dominant cost of
+/// the seqBias sweep.
+///
+/// `eval` equals `log_bias(obs, exp, ctx, rc)` up to floating-point
+/// reassociation: it sums `Σ(obs−exp)` rather than `(Σobs) − (Σexp)`, a
+/// difference of ~1e-15 per context (machine epsilon), far below quant-output
+/// resolution.
+pub struct LogBiasTable {
+    diff: Vec<f64>,
+    shifts: [u32; CONTEXT_LENGTH],
+    masks: [u32; CONTEXT_LENGTH],
+}
+
+impl LogBiasTable {
+    /// Build the difference table from a normalized observed/expected pair.
+    pub fn new(observed: &SBModel, expected: &SBModel) -> Self {
+        debug_assert!(observed.trained && expected.trained);
+        let diff = observed
+            .probs
+            .iter()
+            .zip(&expected.probs)
+            .map(|(&o, &e)| o - e)
+            .collect();
+        Self {
+            diff,
+            shifts: observed.shifts,
+            masks: observed.masks,
+        }
+    }
+
+    /// `log_bias` for a context (one encode, one table sweep).
+    #[inline]
+    pub fn eval(&self, context: &[u8], rev_comp: bool) -> f64 {
+        let mer = SBModel::encode(context, rev_comp);
+        let mut lp = 0.0;
+        for pos in 0..CONTEXT_LENGTH {
+            let idx = ((mer >> self.shifts[pos]) & self.masks[pos]) as usize;
+            lp += self.diff[pos * ROWS + idx];
+        }
+        lp
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Build a realistic-ish trained obs/exp pair: expected from a sweep of the
+    // transcript, observed = expected with a few enriched contexts.
+    fn trained_pair(seq: &[u8]) -> (SBModel, SBModel) {
+        let rc = revcomp_bytes(seq);
+        let mut exp = SBModel::new();
+        for p in 0..=(seq.len() - CONTEXT_LENGTH) {
+            exp.add_context(&seq[p..p + CONTEXT_LENGTH], false, 1.0);
+            exp.add_context(&rc[p..p + CONTEXT_LENGTH], false, 1.0);
+        }
+        let mut obs = exp.clone();
+        for _ in 0..500 {
+            obs.add_context(b"AAACCCGGG", false, 1.0);
+            obs.add_context(b"TTTGGGCCC", true, 1.0);
+        }
+        obs.normalize();
+        exp.normalize();
+        (obs, exp)
+    }
+
+    #[test]
+    #[ignore = "profiling bench; run with --ignored --nocapture"]
+    fn bench_factor_build() {
+        use std::time::Instant;
+        let bases = b"ACGTACGTAGGCCTTAACCGGTTACGTACGTTTAGCGATCG";
+        let seq: Vec<u8> = (0..2000)
+            .map(|i| bases[(i * 7 + 3) % bases.len()])
+            .collect();
+        let (obs, exp) = trained_pair(&seq);
+        let rc_seq = revcomp_bytes(&seq);
+        let k = CONTEXT_LENGTH;
+        let n = seq.len() - k;
+        let iters = 8000usize; // ~16M positions, real-workload scale
+
+        // V0: current path — log_bias (two evaluate_log, each re-encodes) + exp.
+        let t = Instant::now();
+        let mut acc = 0.0f64;
+        for _ in 0..iters {
+            for fs in 0..n {
+                acc += log_bias(&obs, &exp, &seq[fs..fs + k], false).exp();
+                acc += log_bias(&obs, &exp, &rc_seq[fs..fs + k], false).exp();
+            }
+        }
+        let v0 = t.elapsed().as_secs_f64();
+
+        // No-exp: V0 minus the exp() to isolate exp cost.
+        let t = Instant::now();
+        let mut acc1 = 0.0f64;
+        for _ in 0..iters {
+            for fs in 0..n {
+                acc1 += log_bias(&obs, &exp, &seq[fs..fs + k], false);
+                acc1 += log_bias(&obs, &exp, &rc_seq[fs..fs + k], false);
+            }
+        }
+        let v_noexp = t.elapsed().as_secs_f64();
+
+        // Encode-only: isolate the encode cost (2 encodes per position as today).
+        let t = Instant::now();
+        let mut enc = 0u64;
+        for _ in 0..iters {
+            for fs in 0..n {
+                enc ^= SBModel::encode(&seq[fs..fs + k], false) as u64;
+                enc ^= SBModel::encode(&rc_seq[fs..fs + k], false) as u64;
+            }
+        }
+        let v_enc = t.elapsed().as_secs_f64();
+
+        // V1: encode ONCE per context, evaluate obs and exp from the shared mer
+        // (byte-identical: encode is deterministic, sum order unchanged).
+        let eval_mer = |m: &SBModel, mer: u32| -> f64 {
+            let mut lp = 0.0;
+            for pos in 0..CONTEXT_LENGTH {
+                lp += m.probs[pos * ROWS + m.index_at(mer, pos)];
+            }
+            lp
+        };
+        let t = Instant::now();
+        let mut acc_v1 = 0.0f64;
+        let mut max_d1 = 0.0f64;
+        for it in 0..iters {
+            for fs in 0..n {
+                let mf = SBModel::encode(&seq[fs..fs + k], false);
+                let mr = SBModel::encode(&rc_seq[fs..fs + k], false);
+                let bf = (eval_mer(&obs, mf) - eval_mer(&exp, mf)).exp();
+                let br = (eval_mer(&obs, mr) - eval_mer(&exp, mr)).exp();
+                acc_v1 += bf + br;
+                if it == 0 {
+                    let rf = log_bias(&obs, &exp, &seq[fs..fs + k], false).exp();
+                    let rr = log_bias(&obs, &exp, &rc_seq[fs..fs + k], false).exp();
+                    max_d1 = max_d1.max((bf - rf).abs()).max((br - rr).abs());
+                }
+            }
+        }
+        let v1 = t.elapsed().as_secs_f64();
+
+        // V2: precomputed diff table d[pos*ROWS+idx] = obs - exp (one eval per
+        // direction). NON-byte-identical (Σ(a-b) vs Σa-Σb reassociation).
+        let mut diff = vec![0.0f64; ROWS * CONTEXT_LENGTH];
+        for (i, d) in diff.iter_mut().enumerate() {
+            *d = obs.probs[i] - exp.probs[i];
+        }
+        let eval_diff = |mer: u32| -> f64 {
+            let mut lp = 0.0;
+            for pos in 0..CONTEXT_LENGTH {
+                lp += diff[pos * ROWS + obs.index_at(mer, pos)];
+            }
+            lp
+        };
+        let t = Instant::now();
+        let mut acc_v2 = 0.0f64;
+        let mut max_d2 = 0.0f64;
+        for it in 0..iters {
+            for fs in 0..n {
+                let bf = eval_diff(SBModel::encode(&seq[fs..fs + k], false)).exp();
+                let br = eval_diff(SBModel::encode(&rc_seq[fs..fs + k], false)).exp();
+                acc_v2 += bf + br;
+                if it == 0 {
+                    let rf = log_bias(&obs, &exp, &seq[fs..fs + k], false).exp();
+                    let rr = log_bias(&obs, &exp, &rc_seq[fs..fs + k], false).exp();
+                    max_d2 = max_d2.max((bf - rf).abs()).max((br - rr).abs());
+                }
+            }
+        }
+        let v2 = t.elapsed().as_secs_f64();
+
+        eprintln!("--- factor-build bench ({iters} iters x {n} pos x2) ---");
+        eprintln!("V0 current (log_bias+exp)   : {v0:.3}s   acc={acc:.3}");
+        eprintln!(
+            "  no-exp (log_bias only)    : {v_noexp:.3}s  => exp cost ~{:.3}s",
+            v0 - v_noexp
+        );
+        eprintln!("  encode-only (2x/pos)      : {v_enc:.3}s   enc={enc}");
+        eprintln!("V1 encode-once (byte-ident) : {v1:.3}s   acc={acc_v1:.3}  max|Δ|={max_d1:.3e}  speedup={:.2}x", v0 / v1);
+        eprintln!("V2 diff-table (reassoc)     : {v2:.3}s   acc={acc_v2:.3}  max|Δ|={max_d2:.3e}  speedup={:.2}x", v0 / v2);
+    }
 
     #[test]
     fn uniform_contexts_give_near_zero_bias() {

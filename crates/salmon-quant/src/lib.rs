@@ -718,6 +718,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             bias_dump.exp5_seq = efw.dump().to_vec();
             bias_dump.exp3_seq = erc.dump().to_vec();
         }
+        // Precompute the 5'/3' (obs − exp) log-bias tables once; the per-position
+        // factor build in the correction sweep evaluates these instead of
+        // re-evaluating both models per context (~1.4× on that build).
+        let seq_tab = seq.as_ref().map(|(of, or, ef, er)| {
+            (
+                salmon_model::LogBiasTable::new(of, ef),
+                salmon_model::LogBiasTable::new(or, er),
+            )
+        });
 
         // Fragment-GC observed + expected models -> clamped ratio model.
         let store = gc_store;
@@ -821,7 +830,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                         (pf, pr)
                     });
                 let bias = salmon_model::BiasInputs {
-                    seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
+                    seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
                     gc: gc_ratio_model
                         .as_ref()
                         .map(|g| (g, store.unwrap().view(tid))),

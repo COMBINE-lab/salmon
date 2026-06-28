@@ -1330,6 +1330,15 @@ fn apply_bias_correction(
         bias_dump.exp5_seq = ef.dump().to_vec();
         bias_dump.exp3_seq = er.dump().to_vec();
     }
+    // Precompute the 5'/3' (obs − exp) log-bias tables once (see the reads-mode
+    // path in salmon-quant): the per-position factor build evaluates these
+    // rather than both models per context.
+    let seq_tab = seq.as_ref().map(|(of, or, ef, er)| {
+        (
+            salmon_model::LogBiasTable::new(of, ef),
+            salmon_model::LogBiasTable::new(or, er),
+        )
+    });
     let gc_ratio_model = if let Some(mut obs) = gc_obs {
         let mut exp = salmon_model::build_expected_gc(
             num_refs,
@@ -1402,7 +1411,7 @@ fn apply_bias_correction(
                 )
             });
         let bias = salmon_model::BiasInputs {
-            seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
+            seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
             gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
             pos: pos_vecs
                 .as_ref()

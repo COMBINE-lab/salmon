@@ -10,7 +10,7 @@
 use crate::gcbias::{GcContext, GcFragModel, GcView};
 use crate::posbias::{length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS};
 use crate::seqbias::{
-    conditional_cdf, log_bias, revcomp_bytes, SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
+    conditional_cdf, revcomp_bytes, LogBiasTable, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
     MIN_CDF_MASS,
 };
 
@@ -45,8 +45,9 @@ pub fn positional_factor(obs: &[f64], exp: &[f64]) -> Vec<f64> {
 /// The enabled bias terms for one transcript's effective-length correction.
 #[derive(Clone, Copy, Default)]
 pub struct BiasInputs<'a> {
-    /// `(obs_fw, exp_fw, obs_rc, exp_rc)` sequence-bias models (`--seqBias`)
-    pub seq: Option<(&'a SBModel, &'a SBModel, &'a SBModel, &'a SBModel)>,
+    /// `(fw, rc)` precomputed `obs − exp` log-bias tables for the 5′/3′
+    /// sequence-bias factors (`--seqBias`). Built once per quant run.
+    pub seq: Option<(&'a LogBiasTable, &'a LogBiasTable)>,
     /// GC ratio model + this transcript's cumulative-GC view (`--gcBias`)
     pub gc: Option<(&'a GcFragModel, GcView<'a>)>,
     /// per-position 5'/3' positional-bias factors (`--posBias`), transcript-length sized
@@ -100,7 +101,7 @@ pub fn corrected_effective_length_full(
     let have_seq = bias.seq.is_some();
     let mut fw: Vec<f64> = Vec::new();
     let mut rc: Vec<f64> = Vec::new();
-    if let Some((obs_fw, exp_fw, obs_rc, exp_rc)) = bias.seq {
+    if let Some((tab_fw, tab_rc)) = bias.seq {
         fw = vec![1.0f64; ref_len];
         rc = vec![1.0f64; ref_len];
         let cu = CONTEXT_LEFT;
@@ -108,20 +109,12 @@ pub fn corrected_effective_length_full(
         for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
             let read_start = frag_start + cu;
             if read_start < ref_len {
-                fw[read_start] = log_bias(
-                    obs_fw,
-                    exp_fw,
-                    &seq[frag_start..frag_start + CONTEXT_LENGTH],
-                    false,
-                )
-                .exp();
-                rc[read_start] = log_bias(
-                    obs_rc,
-                    exp_rc,
-                    &rc_seq[frag_start..frag_start + CONTEXT_LENGTH],
-                    false,
-                )
-                .exp();
+                fw[read_start] = tab_fw
+                    .eval(&seq[frag_start..frag_start + CONTEXT_LENGTH], false)
+                    .exp();
+                rc[read_start] = tab_rc
+                    .eval(&rc_seq[frag_start..frag_start + CONTEXT_LENGTH], false)
+                    .exp();
             }
         }
         rc.reverse();
