@@ -282,10 +282,10 @@ where
                 let density_fw = cond(max_fw);
                 let density_rc = cond(max_rc);
                 if weight * density_fw > EPSILON {
-                    acc.0[lc].add_mass(frag_start, ref_len, (weight * density_fw).ln());
+                    acc.0[lc].add_mass(frag_start, ref_len, weight * density_fw);
                 }
                 if weight * density_rc > EPSILON {
-                    acc.1[lc].add_mass(frag_start, ref_len, (weight * density_rc).ln());
+                    acc.1[lc].add_mass(frag_start, ref_len, weight * density_rc);
                 }
             }
             acc

@@ -48,8 +48,13 @@ fn complement_bit(x: u32) -> u32 {
 #[derive(Debug, Clone)]
 pub struct SBModel {
     /// log (after [`normalize`](Self::normalize)) or linear (before) transition
-    /// probabilities, laid out position-major: `probs[pos * ROWS + idx]`
+    /// probabilities, laid out position-major: `probs[pos * ROWS + idx]`. Before
+    /// `normalize` this is materialized from the integer `probs_fp`.
     probs: Vec<f64>,
+    /// Fixed-point integer accumulator for the transition counts (`weight *
+    /// BIAS_WEIGHT_SCALE`, truncated), summed order-independently across worker
+    /// threads and materialized into `probs` (plus the `PRIOR`) at `normalize`.
+    probs_fp: Vec<u64>,
     /// per-position base marginals: `marginals[pos * 4 + base]`
     marginals: Vec<f64>,
     shifts: [u32; CONTEXT_LENGTH],
@@ -75,6 +80,7 @@ impl SBModel {
         }
         Self {
             probs: vec![PRIOR; ROWS * CONTEXT_LENGTH],
+            probs_fp: vec![0u64; ROWS * CONTEXT_LENGTH],
             marginals: vec![PRIOR; 4 * CONTEXT_LENGTH],
             shifts,
             masks,
@@ -116,9 +122,10 @@ impl SBModel {
     pub fn add_context(&mut self, context: &[u8], rev_comp: bool, weight: f64) {
         debug_assert!(!self.trained, "cannot add to a normalized model");
         let mer = Self::encode(context, rev_comp);
+        let w = crate::bias_mass_to_fp(weight);
         for pos in 0..CONTEXT_LENGTH {
             let idx = self.index_at(mer, pos);
-            self.probs[pos * ROWS + idx] += weight;
+            self.probs_fp[pos * ROWS + idx] += w;
         }
     }
 
@@ -127,6 +134,11 @@ impl SBModel {
     pub fn normalize(&mut self) {
         if self.trained {
             return;
+        }
+        // Materialize the integer counts into `probs`, reintroducing the `PRIOR`
+        // pseudocount in f64 (matching the pre-fixed-point `probs = PRIOR + Σw`).
+        for (p, &fp) in self.probs.iter_mut().zip(&self.probs_fp) {
+            *p = PRIOR + fp as f64 / crate::BIAS_WEIGHT_SCALE;
         }
         for pos in 0..CONTEXT_LENGTH {
             let num_states = 4usize.pow(ORDER[pos]);
@@ -171,8 +183,10 @@ impl SBModel {
     /// pre-normalization; used to merge per-thread observed models.
     pub fn combine_counts(&mut self, other: &SBModel) {
         debug_assert!(!self.trained && !other.trained, "combine before normalize");
-        for (a, b) in self.probs.iter_mut().zip(&other.probs) {
-            *a += *b - PRIOR; // avoid double-counting the prior
+        // Integer sum of the raw counts (the PRIOR is reintroduced once, in f64,
+        // at `normalize`), so the merge is order/thread-count independent.
+        for (a, b) in self.probs_fp.iter_mut().zip(&other.probs_fp) {
+            *a += *b;
         }
     }
 }

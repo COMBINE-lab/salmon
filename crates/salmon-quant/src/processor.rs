@@ -377,7 +377,9 @@ fn collect_pos(
         }
         let lc = length_class[m.tid as usize];
         let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
-        let mass = bias_w[i].ln();
+        // add_mass now takes LINEAR mass (accumulated in fixed-point); pass the
+        // posterior weight directly rather than its log.
+        let mass = bias_w[i];
         if m.fw_pos >= 0 {
             pos.0[lc].add_mass(m.fw_pos, ref_len, mass);
         }
