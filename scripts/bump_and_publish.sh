@@ -33,7 +33,7 @@ Options:
 
 Publish order (dependency-topological):
   salmon-core -> salmon-eqclass -> salmon-model -> salmon-index -> salmon-infer
-  -> salmon-map -> salmon-align -> salmon-quant -> salmon-cli
+  -> salmon-map -> salmon-rad -> salmon-align -> salmon-quant -> salmon-cli
 EOF
 }
 
@@ -93,6 +93,7 @@ CRATES=(
     salmon-index
     salmon-infer
     salmon-map
+    salmon-rad
     salmon-align
     salmon-quant
     salmon-cli
