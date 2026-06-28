@@ -786,7 +786,7 @@ mod tests {
         eprintln!("--- factor-build bench ({iters} iters x {n} pos x2) ---");
         eprintln!("V0 current (log_bias+exp)   : {v0:.3}s   acc={acc:.3}");
         eprintln!(
-            "  no-exp (log_bias only)    : {v_noexp:.3}s  => exp cost ~{:.3}s",
+            "  no-exp (log_bias only)    : {v_noexp:.3}s  acc={acc1:.3}  => exp cost ~{:.3}s",
             v0 - v_noexp
         );
         eprintln!("  encode-only (2x/pos)      : {v_enc:.3}s   enc={enc}");
