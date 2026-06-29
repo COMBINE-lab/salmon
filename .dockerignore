@@ -1,0 +1,11 @@
+# Keep the Docker build context to the cargo workspace. The image build only
+# needs Cargo.toml, Cargo.lock, crates/, and .cargo/config.toml.
+target/
+**/target/
+.git/
+.github/
+website/
+docs/
+realdata/
+*.md
+*.log

@@ -1,0 +1,94 @@
+name: Docker image
+
+# Build and publish the salmon container image. Runs automatically on every
+# release tag (so the published image never lags the release again — see #1040),
+# and can be run on demand against any tag/branch via "Run workflow".
+#
+# Publishes to:
+#   - Docker Hub:  combinelab/salmon       (requires the DOCKERHUB_USERNAME /
+#                                            DOCKERHUB_TOKEN repo secrets)
+#   - GHCR:        ghcr.io/combine-lab/salmon  (uses the built-in GITHUB_TOKEN;
+#                                                always pushed, no secret needed)
+#
+# To refresh the image for an already-published release without cutting a new
+# salmon version (the #1040 case): Actions -> "Docker image" -> Run workflow ->
+# pick the release tag (e.g. v2.2.1). metadata-action derives the version tags
+# from the tag ref.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  GHCR_IMAGE: ghcr.io/combine-lab/salmon
+  DOCKERHUB_IMAGE: combinelab/salmon
+
+jobs:
+  docker:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Compose the target image list: GHCR always; Docker Hub only when its
+      # credentials are configured, so the job still succeeds (GHCR-only) on a
+      # fork or before the secrets are added.
+      - name: Select target registries
+        id: targets
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          images="${GHCR_IMAGE}"
+          if [ -n "$DOCKERHUB_TOKEN" ]; then
+            images="${images}"$'\n'"${DOCKERHUB_IMAGE}"
+            echo "dockerhub=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::DOCKERHUB_TOKEN not set — publishing to GHCR only. Add DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets to also push combinelab/salmon."
+            echo "dockerhub=false" >> "$GITHUB_OUTPUT"
+          fi
+          { echo 'images<<EOF'; echo "$images"; echo 'EOF'; } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: steps.targets.outputs.dockerhub == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Image tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.targets.outputs.images }}
+          # On a vX.Y.Z tag: X.Y.Z, X.Y, and (via the default latest=auto
+          # flavor) `latest` for the newest non-prerelease release. On a manual
+          # branch run with no semver ref, only `latest` is emitted.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref_type != 'tag' }}
+
+      - name: Build and push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
