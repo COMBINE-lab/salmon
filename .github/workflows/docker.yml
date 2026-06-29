@@ -52,6 +52,18 @@ jobs:
           fi
           { echo 'images<<EOF'; echo "$images"; echo 'EOF'; } >> "$GITHUB_OUTPUT"
 
+      # Derive the image version from the workspace manifest rather than the git
+      # ref, so tagging is identical whether the run was triggered by a release
+      # tag push or a manual dispatch from a branch (the tag ref may predate this
+      # workflow file, so a tag-ref dispatch can't see it).
+      - name: Workspace version
+        id: ver
+        run: |
+          v=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml | head -1)
+          [ -n "$v" ] || { echo "::error::could not read [workspace.package] version"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "minor=${v%.*}" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -74,13 +86,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.targets.outputs.images }}
-          # On a vX.Y.Z tag: X.Y.Z, X.Y, and (via the default latest=auto
-          # flavor) `latest` for the newest non-prerelease release. On a manual
-          # branch run with no semver ref, only `latest` is emitted.
+          # Tags come from the workspace version (e.g. 2.2.1 -> :2.2.1, :2.2,
+          # :latest), so a release-tag push and a manual dispatch tag identically.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref_type != 'tag' }}
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=${{ steps.ver.outputs.minor }}
+            type=raw,value=latest
 
       - name: Build and push (linux/amd64, linux/arm64)
         uses: docker/build-push-action@v6
