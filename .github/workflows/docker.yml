@@ -68,6 +68,11 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # No provenance/SBOM attestation manifests — keep the final multi-arch
+          # index to exactly linux/amd64 + linux/arm64 (no "unknown/unknown"
+          # entries on the registry tag listing).
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
 
