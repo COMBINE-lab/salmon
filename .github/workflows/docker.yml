@@ -1,19 +1,22 @@
 name: Docker image
 
-# Build and publish the salmon container image. Runs automatically on every
-# release tag (so the published image never lags the release again — see #1040),
-# and can be run on demand against any tag/branch via "Run workflow".
+# Build and publish the salmon container image on every release tag (so the
+# published image never lags a release again — see #1040), and on demand via
+# "Run workflow".
 #
-# Publishes to:
-#   - Docker Hub:  combinelab/salmon       (requires the DOCKERHUB_USERNAME /
-#                                            DOCKERHUB_TOKEN repo secrets)
-#   - GHCR:        ghcr.io/combine-lab/salmon  (uses the built-in GITHUB_TOKEN;
-#                                                always pushed, no secret needed)
+# Each architecture is built on a NATIVE runner (amd64 on ubuntu-22.04, arm64 on
+# ubuntu-22.04-arm) and pushed to GHCR by digest; a merge job then assembles the
+# multi-arch manifest and copies it to Docker Hub. Native arm64 avoids the very
+# slow / occasionally-wedging QEMU-emulated build.
 #
-# To refresh the image for an already-published release without cutting a new
-# salmon version (the #1040 case): Actions -> "Docker image" -> Run workflow ->
-# pick the release tag (e.g. v2.2.1). metadata-action derives the version tags
-# from the tag ref.
+# Publishes:
+#   - GHCR:       ghcr.io/combine-lab/salmon   (built-in GITHUB_TOKEN, always)
+#   - Docker Hub: combinelab/salmon            (requires DOCKERHUB_USERNAME /
+#                                               DOCKERHUB_TOKEN repo secrets)
+#
+# To refresh an already-released version without cutting a new salmon release:
+# Actions -> "Docker image" -> Run workflow (on the default branch). Image tags
+# are derived from the [workspace.package] version in Cargo.toml.
 
 on:
   push:
@@ -29,34 +32,66 @@ env:
   DOCKERHUB_IMAGE: combinelab/salmon
 
 jobs:
-  docker:
-    runs-on: ubuntu-22.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-22.04
+          - platform: linux/arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      # Compose the target image list: GHCR always; Docker Hub only when its
-      # credentials are configured, so the job still succeeds (GHCR-only) on a
-      # fork or before the secrets are added.
-      - name: Select target registries
-        id: targets
+      - name: Platform pair
+        run: echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
         env:
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          images="${GHCR_IMAGE}"
-          if [ -n "$DOCKERHUB_TOKEN" ]; then
-            images="${images}"$'\n'"${DOCKERHUB_IMAGE}"
-            echo "dockerhub=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::DOCKERHUB_TOKEN not set — publishing to GHCR only. Add DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets to also push combinelab/salmon."
-            echo "dockerhub=false" >> "$GITHUB_OUTPUT"
-          fi
-          { echo 'images<<EOF'; echo "$images"; echo 'EOF'; } >> "$GITHUB_OUTPUT"
+          platform: ${{ matrix.platform }}
 
-      # Derive the image version from the workspace manifest rather than the git
-      # ref, so tagging is identical whether the run was triggered by a release
-      # tag push or a manual dispatch from a branch (the tag ref may predate this
-      # workflow file, so a tag-ref dispatch can't see it).
-      - name: Workspace version
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build this single platform natively and push it to GHCR by digest (no
+      # tag yet — the merge job assembles the tagged multi-arch manifest).
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [build]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4 # for Cargo.toml (image version)
+
+      - name: Image version (from Cargo.toml)
         id: ver
         run: |
           v=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml | head -1)
@@ -64,7 +99,25 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "minor=${v%.*}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v3
+      - name: Docker Hub configured?
+        id: targets
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "dockerhub=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::DOCKERHUB_TOKEN not set — publishing to GHCR only. Add DOCKERHUB_USERNAME/DOCKERHUB_TOKEN to also push combinelab/salmon."
+            echo "dockerhub=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -81,25 +134,27 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Image tags & labels
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.targets.outputs.images }}
-          # Tags come from the workspace version (e.g. 2.2.1 -> :2.2.1, :2.2,
-          # :latest), so a release-tag push and a manual dispatch tag identically.
-          tags: |
-            type=raw,value=${{ steps.ver.outputs.version }}
-            type=raw,value=${{ steps.ver.outputs.minor }}
-            type=raw,value=latest
+      # Assemble the tagged multi-arch manifest on GHCR from the per-arch
+      # digests, then copy the whole thing (manifest + blobs) to Docker Hub.
+      - name: Create and push multi-arch manifests
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+          MINOR: ${{ steps.ver.outputs.minor }}
+          DOCKERHUB: ${{ steps.targets.outputs.dockerhub }}
+        run: |
+          set -euo pipefail
+          src=$(printf "${GHCR_IMAGE}@sha256:%s " *)
+          echo "Assembling GHCR manifest from: $src"
+          docker buildx imagetools create \
+            -t "${GHCR_IMAGE}:${VER}" -t "${GHCR_IMAGE}:${MINOR}" -t "${GHCR_IMAGE}:latest" \
+            $src
+          if [ "$DOCKERHUB" = "true" ]; then
+            echo "Copying manifest to Docker Hub"
+            docker buildx imagetools create \
+              -t "${DOCKERHUB_IMAGE}:${VER}" -t "${DOCKERHUB_IMAGE}:${MINOR}" -t "${DOCKERHUB_IMAGE}:latest" \
+              "${GHCR_IMAGE}:${VER}"
+          fi
 
-      - name: Build and push (linux/amd64, linux/arm64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Inspect published image
+        run: docker buildx imagetools inspect "${GHCR_IMAGE}:${{ steps.ver.outputs.version }}"
