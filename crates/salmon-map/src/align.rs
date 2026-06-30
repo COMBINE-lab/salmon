@@ -128,18 +128,14 @@ pub fn align_chain(
     } else {
         revcomp(read)
     };
-    let qlen = query.len() as i32;
     let diag_origin = chain.ref_start() - chain.read_start();
     let win_start = diag_origin.max(0);
 
     let score = if cfg.full_length_alignment {
-        // Full-read DP over the implied window.
-        let win_end = (win_start + qlen + cfg.indel_margin as i32).min(ref_seq.len() as i32);
-        if win_end <= win_start {
-            return None;
-        }
-        let rwin = &ref_seq[win_start as usize..win_end as usize];
-        ksw2_align_score(&query, rwin, cfg)
+        // Full-read DP over the implied window (shared with the GPU backend via
+        // [`full_length_window`], so the window/orientation logic has one home).
+        let (q, rwin, _) = full_length_window(read, ref_seq, chain, cfg)?;
+        ksw2_align_score(&q, rwin, cfg)
     } else {
         // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
         anchored_align_score(&query, ref_seq, &chain.mems, cfg)
@@ -152,6 +148,77 @@ pub fn align_chain(
         valid,
         ref_window_start: win_start,
     })
+}
+
+/// The oriented query and reference window that a full-length DP scores for
+/// `chain`, matching the `full_length_alignment` branch of [`align_chain`].
+/// Returns `(query, ref_window, win_start)`: `query` is the read in the
+/// reference-forward frame (reverse-complemented when `!chain.is_fw`),
+/// `ref_window` is the implied reference window, and `win_start` is its absolute
+/// start. `None` when no usable window exists (empty read/reference, or the
+/// window collapses). The GPU backend builds its batch from this so it scores
+/// exactly what `align_chain` would in full-length mode.
+pub fn full_length_window<'a>(
+    read: &[u8],
+    ref_seq: &'a [u8],
+    chain: &MemChain,
+    cfg: &AlignConfig,
+) -> Option<(Vec<u8>, &'a [u8], i32)> {
+    if read.is_empty() || ref_seq.is_empty() {
+        return None;
+    }
+    let query: Vec<u8> = if chain.is_fw {
+        read.to_vec()
+    } else {
+        revcomp(read)
+    };
+    let qlen = query.len() as i32;
+    let diag_origin = chain.ref_start() - chain.read_start();
+    let win_start = diag_origin.max(0);
+    let win_end = (win_start + qlen + cfg.indel_margin as i32).min(ref_seq.len() as i32);
+    if win_end <= win_start {
+        return None;
+    }
+    let rwin = &ref_seq[win_start as usize..win_end as usize];
+    Some((query, rwin, win_start))
+}
+
+/// One candidate-validation request for an [`Aligner`]: align `read` against
+/// `ref_seq` along `chain`. The read is supplied in its natural orientation;
+/// `chain.is_fw` selects whether the read or its reverse complement is the query
+/// (see [`align_chain`]). Borrowing keeps task collection allocation-free.
+#[derive(Clone, Copy)]
+pub struct AlignTask<'a> {
+    pub read: &'a [u8],
+    pub ref_seq: &'a [u8],
+    pub chain: &'a MemChain,
+}
+
+/// A backend that validates mapping candidates by alignment. The mapper collects
+/// the candidates a fragment (or a whole mini-batch) needs aligned, hands them to
+/// [`align_batch`](Aligner::align_batch), and consumes the scores: result `i`
+/// corresponds to task `i`, with `None` mirroring [`align_chain`] returning
+/// `None`. Decoupling collection from scoring lets a GPU backend fuse thousands
+/// of independent banded DPs into one dispatch; the scores are integer-valued, so
+/// a faithful backend reproduces [`CpuAligner`] bit-for-bit and preserves
+/// salmon's determinism.
+pub trait Aligner {
+    fn align_batch(&self, tasks: &[AlignTask], cfg: &AlignConfig) -> Vec<Option<Alignment>>;
+}
+
+/// The in-place CPU backend: score-for-score identical to calling [`align_chain`]
+/// on each task. The default backend and the reference semantics every other
+/// backend must reproduce.
+pub struct CpuAligner;
+
+impl Aligner for CpuAligner {
+    #[inline]
+    fn align_batch(&self, tasks: &[AlignTask], cfg: &AlignConfig) -> Vec<Option<Alignment>> {
+        tasks
+            .iter()
+            .map(|t| align_chain(t.read, t.ref_seq, t.chain, cfg))
+            .collect()
+    }
 }
 
 thread_local! {
