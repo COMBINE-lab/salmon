@@ -172,6 +172,38 @@ impl RadHit {
     pub fn decode_ori_ref(v: u32) -> (u32, bool, bool) {
         (v & TID_MASK, (v & ORI_FW) != 0, (v & MATE_FW) != 0)
     }
+
+    /// Build a hit for one placement following piscem's bulk `frag_len`
+    /// convention, shared by every RAD producer (reads, alignment-BAM, genome
+    /// projection): a proper pair stores its real `fragment_len`; an orphan /
+    /// single-end stores the mapped mate's `read_len` in the slot (clamped below
+    /// [`FRAG_LEN_UNPAIRED`]) so the reader can recover the bounded-CMF orphan
+    /// fragment-length weight rather than a flat penalty. `pos` is clamped to
+    /// `>= 0`. `mate_fw` is meaningful only for proper pairs (callers pass
+    /// `false` otherwise).
+    pub fn for_placement(
+        tid: u32,
+        is_fw: bool,
+        mate_fw: bool,
+        pos: i32,
+        paired: bool,
+        fragment_len: i32,
+        read_len: i32,
+        score: i32,
+    ) -> Self {
+        RadHit {
+            tid,
+            is_fw,
+            mate_fw: paired && mate_fw,
+            pos: pos.max(0) as u32,
+            frag_len: if paired {
+                fragment_len.clamp(0, u16::MAX as i32) as u16
+            } else {
+                read_len.clamp(0, (u16::MAX - 1) as i32) as u16
+            },
+            score,
+        }
+    }
 }
 
 /// piscem `MappingType` codes for the read-level `frag_map_type` tag.
@@ -262,5 +294,45 @@ mod tests {
         );
         assert_eq!(fragment_level([MateStatus::SingleEnd]), SINGLE);
         assert_eq!(fragment_level([]), UNMAPPED);
+    }
+
+    #[test]
+    fn for_placement_frag_len_convention() {
+        // Proper pair: real fragment length, mate strand kept, pos clamped >= 0.
+        let p = RadHit::for_placement(5, true, true, -2, true, 247, 100, -3);
+        assert_eq!(
+            p,
+            RadHit {
+                tid: 5,
+                is_fw: true,
+                mate_fw: true,
+                pos: 0,
+                frag_len: 247,
+                score: -3
+            }
+        );
+        // Orphan / single-end: the slot carries the mate read length (clamped
+        // below the unpaired sentinel), and mate_fw is forced false.
+        let o = RadHit::for_placement(5, false, true, 10, false, 247, 100, 7);
+        assert_eq!(
+            o,
+            RadHit {
+                tid: 5,
+                is_fw: false,
+                mate_fw: false,
+                pos: 10,
+                frag_len: 100,
+                score: 7
+            }
+        );
+        // Clamps: fragment length saturates at u16::MAX; orphan read length at MAX-1.
+        assert_eq!(
+            RadHit::for_placement(0, true, false, 0, true, 1 << 20, 0, 0).frag_len,
+            u16::MAX
+        );
+        assert_eq!(
+            RadHit::for_placement(0, true, false, 0, false, 0, 1 << 20, 0).frag_len,
+            u16::MAX - 1
+        );
     }
 }

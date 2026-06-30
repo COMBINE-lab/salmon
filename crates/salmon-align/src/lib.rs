@@ -13,9 +13,11 @@
 //! ([`salmon_infer`]) to `quant.sf`. Mirrors salmon's `quant -a` mode (the
 //! position-binned alignment error model is a later refinement).
 
+mod bam_rad;
 mod error_model;
 mod rad;
 
+pub use bam_rad::{write_alignment_rad, AlignRadSummary};
 pub use rad::quantify_rad;
 
 use std::collections::HashMap;

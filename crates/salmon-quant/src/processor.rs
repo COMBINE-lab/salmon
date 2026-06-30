@@ -1098,26 +1098,20 @@ fn build_rad_record(maps: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecord {
         .iter()
         .map(|m| {
             let paired = m.status == MateStatus::PairedEndPaired;
-            salmon_rad::RadHit {
-                tid: m.tid,
-                is_fw: m.is_fw,
-                mate_fw: paired && m.r2_fw,
-                pos: m.ref_pos.max(0) as u32,
-                frag_len: if paired {
-                    m.fragment_len.clamp(0, u16::MAX as i32) as u16
-                } else {
-                    // Orphan / single-end: the fragment length is unknown, so the
-                    // slot instead carries the mapped mate's read length (clamped
-                    // below the unpaired sentinel). The RAD reader uses it with the
-                    // mate's position + orientation + transcript length to compute
-                    // the bounded-CMF ambiguous fragment-length probability — the
-                    // same orphan weight the one-pass path applies — rather than a
-                    // flat penalty. `0` (read length unavailable, e.g. piscem RAD)
-                    // leaves only the forward-strand bound exact.
-                    m.read_len.clamp(0, (u16::MAX - 1) as i32) as u16
-                },
-                score: m.score,
-            }
+            // Shared bulk frag_len/pos convention (see RadHit::for_placement):
+            // proper pair → real fragment_len; orphan/SE → the mapped mate's
+            // read_len in the slot, so the reader recovers the bounded-CMF orphan
+            // weight rather than a flat penalty.
+            salmon_rad::RadHit::for_placement(
+                m.tid,
+                m.is_fw,
+                m.r2_fw,
+                m.ref_pos,
+                paired,
+                m.fragment_len,
+                m.read_len,
+                m.score,
+            )
         })
         .collect();
     salmon_rad::SalmonBulkRecord::new(frag_type, hits)
