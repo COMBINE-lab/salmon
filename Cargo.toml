@@ -10,6 +10,7 @@ members = [
     "crates/salmon-quant",
     "crates/salmon-cli",
     "crates/salmon-align",
+    "crates/salmon-gpu",
 ]
 
 [workspace.package]
@@ -31,6 +32,7 @@ salmon-index = { path = "crates/salmon-index", version = "2.0.1" }
 salmon-infer = { path = "crates/salmon-infer", version = "2.0.1" }
 salmon-map = { path = "crates/salmon-map", version = "2.0.1" }
 salmon-align = { path = "crates/salmon-align", version = "2.0.1" }
+salmon-gpu = { path = "crates/salmon-gpu", version = "2.0.1" }
 salmon-quant = { path = "crates/salmon-quant", version = "2.0.1" }
 # error handling
 thiserror = "2"
