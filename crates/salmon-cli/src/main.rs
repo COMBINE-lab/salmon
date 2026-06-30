@@ -846,6 +846,80 @@ fn run_deterministic(
     Ok(())
 }
 
+/// Alignment-mode `--deterministic`: write the transcriptome BAM's placements to
+/// an intermediate salmon RAD (one pass — baking an order-independent FLD +
+/// library format, and rough abundances when bias is requested), then quantify
+/// from it via the same deterministic [`quantify_rad`] the reads path uses, so
+/// the result is byte-identical across thread counts. Score-based (carries the
+/// BAM `AS` tag); the online alignment error model is not used in this mode.
+fn run_deterministic_align(
+    opts: AlignQuantOptions,
+    rad_out: Option<PathBuf>,
+    keep_rad: bool,
+    gene_map: Option<&std::path::Path>,
+    codec: ChunkCodec,
+) -> Result<()> {
+    let out_dir = opts.output_dir.clone();
+    // An explicit `--writeRad PATH` is honoured and kept; otherwise a temp under
+    // the output dir, removed on success unless `--keepRad` (or `--skipQuant`,
+    // where the RAD is the deliverable).
+    let explicit = rad_out.is_some();
+    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("intermediate_alignments.rad"));
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+
+    // Phase 1 — one BAM pass: write placements + bake FLD / library format
+    // (+ rough abundances when bias is on) so phase 2 is a single baked pass.
+    let summary = salmon_align::write_alignment_rad(&opts, &rad_path, codec)
+        .context("deterministic alignment RAD-write pass failed")?;
+    let pct = if summary.num_processed > 0 {
+        100.0 * summary.num_mapped as f64 / summary.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "deterministic: wrote {} / {} aligned fragments ({:.2}%) to the intermediate RAD; quantifying",
+        summary.num_mapped,
+        summary.num_processed,
+        pct
+    );
+
+    // Phase 2 — quantify from the fully-baked RAD (single pass, order-independent).
+    let res = quantify_rad(&opts, &rad_path).context("deterministic requant pass failed")?;
+    let pct2 = if res.num_processed > 0 {
+        100.0 * res.num_mapped as f64 / res.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "{} fragments from intermediate RAD, {} quantified ({:.2}%); {} equivalence classes",
+        res.num_processed,
+        res.num_mapped,
+        pct2,
+        res.num_eq_classes
+    );
+    if let Some(gm) = gene_map {
+        write_gene_level(
+            &out_dir,
+            gm,
+            &res.names,
+            &res.lengths,
+            &res.eff_lengths,
+            &res.tpm,
+            &res.counts,
+        )?;
+    }
+    if explicit || keep_rad || opts.skip_quant {
+        tracing::info!("kept intermediate RAD at {}", rad_path.display());
+    } else if let Err(e) = std::fs::remove_file(&rad_path) {
+        tracing::warn!(
+            "could not remove intermediate RAD {}: {e}",
+            rad_path.display()
+        );
+    }
+    Ok(())
+}
+
 fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.ont {
         long_read_redirect();
@@ -955,6 +1029,33 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.thinning_factor = args.thinning_factor;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
+
+        // `--deterministic`: write the BAM's placements to an intermediate RAD
+        // (baking the FLD/library-format + rough abundances) and requantify from
+        // it, for results byte-identical across thread counts. Score-based; no
+        // online error model.
+        if args.deterministic {
+            let codec = if args.no_compress_rad {
+                ChunkCodec::None
+            } else {
+                match args.rad_compress.as_str() {
+                    "none" => ChunkCodec::None,
+                    "lz4" => ChunkCodec::Lz4,
+                    "zstd" => ChunkCodec::Zstd,
+                    other => anyhow::bail!(
+                        "unknown --radCompress codec '{other}' (expected lz4|zstd|none)"
+                    ),
+                }
+            };
+            return run_deterministic_align(
+                opts,
+                args.write_rad.clone(),
+                args.keep_rad,
+                gene_map.as_deref(),
+                codec,
+            );
+        }
+
         // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
         let progress = Arc::new(ProgressCounters::default());
         let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
