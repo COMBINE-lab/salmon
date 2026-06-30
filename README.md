@@ -61,6 +61,36 @@ salmon quant -i salmon_index -l A \
 Results land in `sample_quant/quant.sf` (drop-in for tximport / tximeta /
 fishpond / swish).
 
+## GPU alignment (experimental)
+
+The selective-alignment validation step (a banded Smith-Waterman per candidate)
+can be scored on a GPU. It is **off by default and built only with a feature
+flag**, so the standard binary has no GPU toolchain dependency and is unchanged:
+
+```sh
+# build with the GPU backend (one portable WGSL shader; runs on Metal or Vulkan)
+cargo build -p salmon-cli --release --features gpu
+
+# quantify, scoring alignment on the GPU
+salmon quant -i salmon_index -l A \
+  -1 reads_1.fastq.gz -2 reads_2.fastq.gz -p 16 -o sample_quant --gpu
+```
+
+Notes:
+
+- **`--gpu` implies `--fullLengthAlignment`** (the batchable mode) and produces a
+  `quant.sf` **bit-identical** to the CPU `--fullLengthAlignment` run — it changes
+  *where* alignment runs, not the result. Alignment scores are integer-valued, so
+  the GPU backend reproduces the CPU backend exactly and salmon stays deterministic.
+- It runs via [`wgpu`](https://github.com/gfx-rs/wgpu): one WGSL compute shader on
+  Metal (Apple) or Vulkan (Linux/NVIDIA). No CUDA/Metal SDK is needed at build.
+  If no GPU adapter is found it falls back to a CPU full-length backend.
+- **Performance is workload-dependent.** Each short-read banded DP is tiny, so the
+  win comes from batching a whole mini-batch into one dispatch. On Apple Silicon
+  (unified memory) it is fastest; against a many-core CPU it is not yet a
+  guaranteed net speedup — measure on your data. This is an early, correctness-first
+  backend; throughput work is ongoing.
+
 ## Documentation
 
 Full docs are at **<https://combine-lab.github.io/salmon>** — installation,
