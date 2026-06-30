@@ -20,8 +20,8 @@ use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGr
 use salmon_index::SalmonIndex;
 use salmon_infer::OnlineInference;
 use salmon_map::{
-    map_read_pair, map_read_pair_sketch, map_single_read, map_single_read_sketch, MapConfig,
-    ScoredMapping,
+    collect_pair, map_read_pair, map_read_pair_sketch, map_single_read, map_single_read_sketch,
+    Aligner, MapConfig, ScoredMapping,
 };
 use salmon_model::seqbias::{SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
 use salmon_model::{
@@ -38,6 +38,12 @@ pub(crate) struct Shared<'a> {
     /// library-type detector when auto-detecting (`-l A`); else `None`
     pub detector: Option<&'a LibraryTypeDetector>,
     pub map_cfg: &'a MapConfig,
+    /// optional alignment backend for selective-alignment mode. When `Some`
+    /// (e.g. the GPU backend selected by `--gpu`), the paired mapping pass
+    /// collects every fragment in a mini-batch and scores all their candidate
+    /// alignments in one batched dispatch instead of aligning inline per
+    /// fragment. `None` (the default) leaves the in-place CPU path untouched.
+    pub aligner: Option<&'a (dyn Aligner + Sync)>,
     pub sketch: bool,
     /// sketch mode: only orphan a pair when the other mate had no matching
     /// k-mers (strict), instead of the default empty-accepted-target rule
@@ -576,6 +582,69 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         }
         // one forgetting-mass timestep per minibatch (online inference)
         let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
+        // Batched selective-alignment path (e.g. `--gpu`): collect+pair every
+        // fragment in this mini-batch, score all their candidate alignments in
+        // one dispatch, then finalize each. Only for SA mode (sketch does no
+        // alignment). Returns early, leaving the inline per-fragment loop below
+        // untouched when no aligner is configured (the default path).
+        if let Some(aligner) = sh.aligner {
+            if !sh.sketch {
+                // Phase 1: collect + pair, owning each fragment's reads/ids so
+                // nothing borrows the transient batch records past this point.
+                let mut frags: Vec<(salmon_map::PendingPair, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> =
+                    Vec::new();
+                for (r1, r2) in pairs {
+                    let s1 = r1.seq().as_ref().to_vec();
+                    let s2 = r2.seq().as_ref().to_vec();
+                    let id1 = r1.id().to_vec();
+                    let id2 = r2.id().to_vec();
+                    let pending = collect_pair(idx, hs, sh.salmon, &s1, &s2, sh.map_cfg);
+                    frags.push((pending, s1, s2, id1, id2));
+                }
+                // Phase 2: one batched alignment over every fragment's tasks.
+                let (alns, ranges) = {
+                    let mut all_tasks = Vec::new();
+                    let mut ranges = Vec::with_capacity(frags.len());
+                    for (pending, s1, s2, _, _) in &frags {
+                        let start = all_tasks.len();
+                        all_tasks.extend(pending.align_tasks(s1, s2, sh.salmon));
+                        ranges.push(start..all_tasks.len());
+                    }
+                    (aligner.align_batch(&all_tasks, &sh.map_cfg.align), ranges)
+                };
+                // Phase 3: finalize each fragment and run the same per-fragment
+                // accounting the inline loop does (stats, SAM, record).
+                for ((pending, s1, s2, id1, id2), range) in frags.into_iter().zip(ranges) {
+                    let mut maps = pending.finalize(&s1, &s2, sh.salmon, &alns[range], sh.map_cfg);
+                    if maps.len() > sh.max_read_occ {
+                        maps.clear();
+                    }
+                    if maps.is_empty() && sh.unmapped_names.is_some() {
+                        unmapped.push(format!("{} u", read_name(&id1)));
+                    }
+                    accumulate_vm_stats(&sh, maps.is_empty());
+                    if sh.sam.is_some() && !maps.is_empty() {
+                        crate::sam::write_fragment(
+                            sam_buf,
+                            sh.salmon,
+                            &id1,
+                            &s1,
+                            Some((&id2, &s2)),
+                            &maps,
+                        );
+                    }
+                    record(
+                        &sh,
+                        &maps,
+                        log_fm,
+                        seqbias.as_mut(),
+                        gcbias.as_mut(),
+                        posbias.as_mut(),
+                    );
+                }
+                return Ok(());
+            }
+        }
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();

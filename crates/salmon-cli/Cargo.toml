@@ -20,6 +20,8 @@ salmon-index = { workspace = true }
 salmon-quant = { workspace = true }
 salmon-align = { workspace = true }
 salmon-map = { workspace = true }
+# Optional GPU alignment backend, pulled in only by the `gpu` feature.
+salmon-gpu = { workspace = true, optional = true }
 piscem-rs = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
@@ -30,6 +32,10 @@ indicatif = "0.17"
 [features]
 # Diagnostic: build with the system allocator instead of mimalloc.
 sysalloc = []
+# Build the GPU alignment backend (wgpu; runs on Metal/Vulkan). Off by default,
+# so the standard binary has no GPU toolchain dependency. With it, `--gpu`
+# scores selective alignment on the GPU in full-length mode.
+gpu = ["dep:salmon-gpu", "salmon-gpu/gpu"]
 
 [lints]
 workspace = true

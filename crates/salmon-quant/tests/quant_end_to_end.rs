@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use salmon_index::{build, IndexBuildOptions};
-use salmon_quant::{quantify, QuantOptions};
+use salmon_quant::{quantify, quantify_with_aligner, QuantOptions};
 
 const READ_LEN: usize = 75;
 
@@ -215,4 +215,45 @@ fn pseudoalignment_quantification_tracks_truth() {
             "sketch {name}: true {frac_true:.3} vs est {frac_est:.3}"
         );
     }
+}
+
+/// The batched alignment path (the one `--gpu` drives, here exercised on the CPU
+/// via `RefAligner`) must produce a `quant.sf` byte-identical to the in-place CPU
+/// full-length path. This is the determinism guarantee that lets `--gpu`
+/// accelerate `--fullLengthAlignment` without changing results: the GPU backend
+/// is bit-identical to `RefAligner` (verified in salmon-gpu on Metal), so by
+/// composition it is identical to the in-place path here.
+#[test]
+fn batched_alignment_quant_is_identical_to_inline_full_length() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, _truth) = simulate(tmp.path());
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let run = |tag: &str, batched: bool| {
+        let out = tmp.path().join(format!("quant_{tag}"));
+        let mut opts = QuantOptions::new(idx_dir.clone(), out.clone());
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = "IU".to_string();
+        opts.num_threads = 4;
+        // The GPU path only scores in full-length mode; compare like for like.
+        opts.map_config.align.full_length_alignment = true;
+        if batched {
+            quantify_with_aligner(&opts, Some(&salmon_gpu::RefAligner)).expect("quantify batched");
+        } else {
+            quantify(&opts).expect("quantify inline");
+        }
+        std::fs::read_to_string(out.join("quant.sf")).unwrap()
+    };
+
+    let inline = run("inline", false);
+    let batched = run("batched", true);
+    assert_eq!(
+        inline, batched,
+        "batched alignment path produced a different quant.sf than the inline path"
+    );
 }

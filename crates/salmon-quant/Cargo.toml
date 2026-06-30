@@ -27,6 +27,9 @@ jiff = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# RefAligner, to exercise the batched alignment path in determinism tests
+# (no GPU/wgpu: salmon-gpu's default build is the pure-Rust reference DP).
+salmon-gpu = { workspace = true }
 
 [lints]
 workspace = true
