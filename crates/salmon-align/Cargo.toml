@@ -19,6 +19,12 @@ crossbeam-queue = "0.3"
 noodles-bam = "0.90"
 noodles-sam = "0.85"
 noodles-bgzf = "0.47"
+# Genome-alignment projection (spliced genome BAM -> transcriptome coords). Its
+# public API is plain structs, so it composes with salmon's own noodles for BAM
+# reading; it transitively pulls noodles 0.101 + ksw2rs 0.1.4 (a temporary
+# dual-version graph alongside salmon's noodles 0.90 / ksw2rs 0.2.0 — unify both
+# crates onto the latest noodles + ksw2rs 0.2 as a post-validation cleanup).
+bramble-rs = "0.1.4"
 rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 flate2 = { workspace = true }
