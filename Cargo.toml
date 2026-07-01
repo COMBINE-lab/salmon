@@ -122,5 +122,11 @@ lto = "thin"
 #   paths = ["/path/to/bramble/bramble-rs"]
 # which transparently redirects this dependency to the local clone without
 # changing the committed manifest/lockfile.
+# Temporary patch: libradicl 0.14.1 (crates.io) pins noodles 0.108, which would
+# force a second noodles version (0.108's bam 0.87 / sam 0.83) into the graph
+# alongside salmon's own noodles-bam 0.90 / -sam 0.85. Point at a branch that
+# bumps libradicl to noodles 0.111 so every noodles sub-crate resolves to a
+# single version. Remove this patch at release once the bump ships to crates.io.
 [patch.crates-io]
 bramble-rs = { git = "https://github.com/zrudnick/bramble", branch = "main" }
+libradicl = { git = "https://github.com/COMBINE-lab/libradicl", branch = "chore/noodles-0.111" }
