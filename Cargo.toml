@@ -110,11 +110,17 @@ lto = "thin"
 inherits = "release"
 lto = "thin"
 
-# Local patch: bramble-rs 0.1.4 (crates.io) has a short-read projection bug —
-# `ReadEvaluator::build_config()`'s short-read arm sets similarity_threshold=1.0,
-# making the `similarity > threshold` gate unsatisfiable so no short read ever
-# projects. Fixed locally (threshold 0.90, matching ShortReadEvaluator); point at
-# the local clone until the fix is published. Remove this patch at release once
-# bramble-rs > 0.1.4 ships the fix.
+# Temporary patch: crates.io bramble-rs 0.1.4 has genome-projection bugs fixed
+# upstream but not yet released — the short-read similarity-filter gate, the
+# fixed-seed (deterministic) hasher, and the order-independent mate pairing. Point
+# at zrudnick/bramble `main` (still version 0.1.4, so this `[patch]` matches) so
+# CI and fresh clones build the fixed library. Remove this patch at release once
+# bramble-rs > 0.1.4 ships to crates.io.
+#
+# For local feature work against an editable bramble checkout, add a `paths`
+# override in a `.cargo/config.toml` ABOVE this repo (uncommitted), e.g.
+#   paths = ["/path/to/bramble/bramble-rs"]
+# which transparently redirects this dependency to the local clone without
+# changing the committed manifest/lockfile.
 [patch.crates-io]
-bramble-rs = { path = "/scratch1/rob/long-read-ecosystem/bramble/bramble-rs" }
+bramble-rs = { git = "https://github.com/zrudnick/bramble", branch = "main" }

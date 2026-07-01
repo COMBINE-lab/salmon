@@ -285,6 +285,7 @@ dependencies = [
 [[package]]
 name = "bramble-rs"
 version = "0.1.4"
+source = "git+https://github.com/zrudnick/bramble?branch=main#ed64709891980f929442f849a3f4252084283144"
 dependencies = [
  "ahash",
  "anyhow",
