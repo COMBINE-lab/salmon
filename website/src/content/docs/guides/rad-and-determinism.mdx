@@ -94,6 +94,55 @@ last digits (the fixed-point accumulation removes a thread-count-dependent
 rounding wobble). Absolute accuracy versus ground truth is unchanged.
 :::
 
+### Deterministic alignment mode (`-a --deterministic`)
+
+`--deterministic` also applies to **alignment mode** — quantifying a
+name-grouped transcriptome BAM:
+
+```sh
+salmon quant -a aln.bam -l A -p 16 --deterministic -o out
+```
+
+salmon writes the BAM's placements to an intermediate RAD (baking the
+fixed fragment-length distribution and, with bias correction, the seed
+abundances) and quantifies from it in a single pass — byte-identical across
+thread counts.
+
+By default each placement is scored by its BAM alignment score (`AS`), which is
+what `--noErrorModel` does in ordinary alignment mode. This is deliberate: across
+every benchmark with ground truth (uniform and realistic position-dependent
+Illumina errors, at 50 bp and 76 bp), `AS` scoring is **at least as accurate** as
+an error model, and it needs only a **single BAM pass**.
+
+#### `--errorModel` (opt-in)
+
+To reproduce salmon's classic error-modeled weighting deterministically, pass
+`--errorModel` (which requires `-t`, the transcriptome the reads were aligned to):
+
+```sh
+salmon quant -a aln.bam -t txome.fa -l A -p 16 --deterministic --errorModel -o out
+```
+
+This trains an **order-independent** error model — first-order per-base
+transition *counts* accumulated as integers, merged across threads by integer
+addition (so the trained model is independent of thread count), then normalized
+once and used to score every placement. It stays fully deterministic, but costs a
+**second BAM pass** (train, then score), roughly doubling the alignment-mode
+runtime.
+
+When is it worth it? On well-aligned short-read data with informative `AS` tags
+(e.g. bowtie2, STAR) it changes results but does **not** measurably improve
+accuracy against truth, so the default `AS` scoring is preferred. Reach for
+`--errorModel` when you specifically want parity with salmon's traditional
+error-modeled quant, or when the aligner does not emit a usable `AS` (without
+which `AS` scoring falls back to uniform weighting).
+
+:::note
+Passing `-t` alone does **not** enable the error model in deterministic mode (it
+does in ordinary alignment mode) — you also supply it to reconstruct reference
+sequences for bias correction. The error model is enabled only by `--errorModel`.
+:::
+
 ## Compressing RAD output (`--radCompress`)
 
 RAD chunks can be compressed, on by default for both `--writeRad` and the

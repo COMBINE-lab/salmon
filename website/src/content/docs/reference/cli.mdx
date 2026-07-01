@@ -57,7 +57,7 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | `-i, --index <DIR>` | Salmon index (reads mode). |
 | `-a, --alignments <BAM>` | Alignment mode: a BAM of reads aligned to the transcriptome. |
 | `--rad <RAD>` | RAD mode: quantify a RAD file of mappings (salmon `--writeRad` **or** piscem `map-bulk`/sketch output) directly. No `-i` needed — reference names travel in the RAD header. See [RAD I/O & deterministic quantification](../../guides/rad-and-determinism/). |
-| `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode) — enables the error model. |
+| `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode). Enables the error model in ordinary alignment mode; supplies reference sequences for bias correction and (with `--errorModel`) the deterministic error model. |
 | `-l, --libType <TYPE>` | Library type (e.g. `IU`, `ISR`, `A` for auto). Default `A`. See [library types](../../guides/library-types/). |
 | `-1/-2, --mates1/2 <FASTQ>…` | Paired-end read files. |
 | `-r, --unmatedReads <FASTQ>…` | Single-end read files. |
@@ -75,7 +75,8 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | `--minScoreFraction <f>` | Min alignment score as a fraction of perfect. Default `0.65`. |
 | `--ma/--mp/--go/--ge` | Match score / mismatch / gap-open / gap-extend. |
 | `--orphanChainSubThresh <f>` | Orphan chain pruning (default `0.0` = align all). |
-| `--noErrorModel` | Disable the alignment error model (alignment mode). |
+| `--noErrorModel` | Disable the alignment error model (ordinary alignment mode). |
+| `--errorModel` | Opt in to the order-independent error model in deterministic alignment mode (`-a --deterministic`, needs `-t`). Off by default — deterministic mode scores by the BAM `AS` tag (single pass, at least as accurate against truth); this adds a second BAM pass. See [deterministic alignment mode](../../guides/rad-and-determinism/#deterministic-alignment-mode--a---deterministic). |
 
 ### Model & bias
 

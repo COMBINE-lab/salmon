@@ -112,7 +112,18 @@ pub fn write_alignment_rad(
     } else {
         None
     };
-    let use_error_model = ref_bytes.is_some() && !opts.no_error_model;
+    // The error model is OPT-IN in deterministic mode (`--errorModel`). It is off
+    // by default: across every truth-bearing benchmark (uniform + realistic
+    // Illumina errors, 50/76 bp) AS scoring is at least as accurate, and it runs a
+    // single BAM pass instead of two. See the deterministic-error-model notes.
+    if opts.deterministic_error_model && ref_bytes.is_none() {
+        tracing::warn!(
+            "--errorModel needs a transcriptome (-t / index sequences) to train against; \
+             none provided, scoring by the BAM AS tag instead"
+        );
+    }
+    let use_error_model =
+        opts.deterministic_error_model && ref_bytes.is_some() && !opts.no_error_model;
 
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut writer = RadOutputWriter::create(

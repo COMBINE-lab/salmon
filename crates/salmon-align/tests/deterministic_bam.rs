@@ -179,7 +179,8 @@ fn deterministic_bam_error_model_prefers_correct_and_reproduces() {
         std::fs::create_dir_all(&out).unwrap();
         let mut opts = AlignQuantOptions::new(sam.clone(), out.clone());
         opts.lib_type = "IU".to_string();
-        opts.no_error_model = !error_model;
+        // The error model is opt-in (`--errorModel`) and needs a transcriptome.
+        opts.deterministic_error_model = error_model;
         if error_model {
             opts.transcripts = Some(fasta.clone());
         }

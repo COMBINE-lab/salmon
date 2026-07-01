@@ -297,6 +297,14 @@ struct QuantArgs {
     /// Disable the alignment error model (alignment mode).
     #[arg(long = "noErrorModel")]
     no_error_model: bool,
+    /// Opt in to the order-independent alignment error model in deterministic
+    /// mode (`-a --deterministic`, requires `-t`). Off by default: deterministic
+    /// mode scores by the BAM `AS` tag, which benchmarks at least as accurately
+    /// against ground truth and needs only a single BAM pass; `--errorModel` adds
+    /// a second pass to train the model. Use it for parity with salmon's classic
+    /// error-modeled quant, or when the aligner's `AS` is absent/unreliable.
+    #[arg(long = "errorModel")]
+    error_model: bool,
     /// Genome-alignment mode: a GTF/GFF annotation. Given with `-a <genome.bam>`,
     /// salmon projects the spliced genome alignments into transcriptome
     /// coordinates (via bramble) and quantifies the projected placements. The
@@ -1101,6 +1109,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.range_factorization_bins = range_factorization_bins;
         opts.transcripts = args.targets;
         opts.no_error_model = args.no_error_model;
+        opts.deterministic_error_model = args.error_model;
         opts.seq_bias = args.seq_bias;
         opts.gc_bias = args.gc_bias;
         opts.pos_bias = args.pos_bias;
