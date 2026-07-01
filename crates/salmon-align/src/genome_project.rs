@@ -365,6 +365,19 @@ fn build_projected_record(
 
     let is_read1 =
         |e: &ProjectedAlignment| gas.get(e.input_index).is_none_or(|g| g.is_first_in_pair);
+    // Fragment orientation on the transcript. bramble's projected `is_reverse`
+    // is derived from the read's splice-strand (XS/ts) tag, which is absent for
+    // unstranded reads — so every untagged mate comes out `is_reverse=true`,
+    // making a proper pair look "matching" (same-strand) rather than inward.
+    // `-l A` then mis-detects an MU/MSR format and drops the non-conforming
+    // fragments. The mates' RELATIVE orientation (inward for a proper FR pair)
+    // is a property of the genomic alignment and is preserved under projection,
+    // so take forward-ness from the genomic BAM strand, falling back to the
+    // projected value only when the source record is unavailable.
+    let genomic_fw = |e: &ProjectedAlignment| {
+        gas.get(e.input_index)
+            .map_or(!e.is_reverse, |g| !g.is_reverse)
+    };
 
     for (&tid, entries) in &by_tid {
         let proper = entries.len() >= 2
@@ -386,8 +399,8 @@ fn build_projected_record(
                 .transcript_start
                 .min(r2.transcript_start)
                 .saturating_sub(1) as i32;
-            let is_fw = !r1.is_reverse;
-            let mate_fw = !r2.is_reverse;
+            let is_fw = genomic_fw(r1);
+            let mate_fw = genomic_fw(r2);
             let frag_len = entries
                 .iter()
                 .map(|e| e.insert_size.unsigned_abs())
@@ -421,7 +434,7 @@ fn build_projected_record(
                 } else {
                     MateStatus::PairedEndRight
                 };
-                let is_fw = !e.is_reverse;
+                let is_fw = genomic_fw(e);
                 let pos = e.transcript_start.saturating_sub(1) as i32;
                 let read_len = e.query_aligned_len as i32;
                 let score = (e.similarity_score * e.query_aligned_len as f64).round() as i32;
