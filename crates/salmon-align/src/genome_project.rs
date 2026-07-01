@@ -160,6 +160,10 @@ pub fn project_genome_bam_to_rad(
     let fld = DiscreteFld::new(opts.fld_max);
     let naive = opts.bias.then(NaiveEqBuilder::new);
 
+    // Transcript strand per bramble tid (tid order == `txs` order; `build_g2t`
+    // assigns ids in that order), for the genomic->transcript orientation flip.
+    let tx_is_minus: Vec<bool> = txs.iter().map(|t| t.strand == '-').collect();
+
     let nthreads = rayon::current_num_threads().max(1);
     let (num_processed, num_mapped) = stream_project_pass(
         &opts.bam,
@@ -169,6 +173,7 @@ pub fn project_genome_bam_to_rad(
         &writer,
         &fld,
         naive.as_ref(),
+        &tx_is_minus,
     )?;
 
     // ---- single-pass bake -------------------------------------------------
@@ -345,6 +350,7 @@ fn record_to_genomic_alignment<R: sam::alignment::Record>(
 fn build_projected_record(
     gas: &[GenomicAlignment],
     proj: &[ProjectedAlignment],
+    tx_is_minus: &[bool],
 ) -> Option<(
     SalmonBulkRecord,
     Option<(usize, bool, bool)>,
@@ -365,18 +371,25 @@ fn build_projected_record(
 
     let is_read1 =
         |e: &ProjectedAlignment| gas.get(e.input_index).is_none_or(|g| g.is_first_in_pair);
-    // Fragment orientation on the transcript. bramble's projected `is_reverse`
-    // is derived from the read's splice-strand (XS/ts) tag, which is absent for
-    // unstranded reads — so every untagged mate comes out `is_reverse=true`,
-    // making a proper pair look "matching" (same-strand) rather than inward.
-    // `-l A` then mis-detects an MU/MSR format and drops the non-conforming
-    // fragments. The mates' RELATIVE orientation (inward for a proper FR pair)
-    // is a property of the genomic alignment and is preserved under projection,
-    // so take forward-ness from the genomic BAM strand, falling back to the
-    // projected value only when the source record is unavailable.
+    // Fragment orientation on the transcript. bramble's *public* projected
+    // `is_reverse` is `matched_strand != read_splice_strand`, which is useless
+    // for unstranded reads (no XS/ts tag → read strand `.` → always reverse).
+    // bramble-cli instead sets each mate's output strand as
+    //   output_reverse = genomic_reverse XOR (transcript_strand == '-')
+    // (the genomic BAM strand, flipped when the transcript is on the minus
+    // strand). We replicate that exactly: the genomic strand comes from the
+    // source record and the transcript strand from the annotation (tid order ==
+    // `txs` order, as `build_g2t` assigns ids). This yields correct inward pairs
+    // and a correct `-l A` format (IU on unstranded input, not a spurious ISF).
     let genomic_fw = |e: &ProjectedAlignment| {
-        gas.get(e.input_index)
-            .map_or(!e.is_reverse, |g| !g.is_reverse)
+        let genomic_rev = gas
+            .get(e.input_index)
+            .map_or(e.is_reverse, |g| g.is_reverse);
+        let tx_minus = tx_is_minus
+            .get(e.transcript_id as usize)
+            .copied()
+            .unwrap_or(false);
+        !(genomic_rev ^ tx_minus)
     };
 
     for (&tid, entries) in &by_tid {
@@ -469,6 +482,7 @@ fn stream_project_pass(
     writer: &RadOutputWriter,
     fld: &DiscreteFld,
     naive: Option<&NaiveEqBuilder>,
+    tx_is_minus: &[bool],
 ) -> Result<(u64, u64)> {
     if is_sam_path(bam_path) {
         let mut reader = open_sam_reader(bam_path)?;
@@ -482,6 +496,7 @@ fn stream_project_pass(
             writer,
             fld,
             naive,
+            tx_is_minus,
         )
     } else {
         let file = std::fs::File::open(bam_path)
@@ -503,6 +518,7 @@ fn stream_project_pass(
             writer,
             fld,
             naive,
+            tx_is_minus,
         )
     }
 }
@@ -519,6 +535,7 @@ fn run_project_pass<R, I>(
     writer: &RadOutputWriter,
     fld: &DiscreteFld,
     naive: Option<&NaiveEqBuilder>,
+    tx_is_minus: &[bool],
 ) -> Result<(u64, u64)>
 where
     R: sam::alignment::Record + Send + Sync,
@@ -597,7 +614,7 @@ where
                         }
                         let proj = project_group_with(&gas, g2t, cfg, &mut pctx);
                         let Some((rec, fld_sample, naive_sig)) =
-                            build_projected_record(&gas, &proj)
+                            build_projected_record(&gas, &proj, tx_is_minus)
                         else {
                             continue; // nothing passed the similarity filter
                         };
