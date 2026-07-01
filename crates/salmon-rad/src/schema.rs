@@ -58,6 +58,12 @@ pub fn build_prelude(
         ),
         (crate::LIBRARY_FORMAT_TAG, TagValue::U8(0)),
     ];
+    // Score interpretation, only meaningful for the scored (SA) profile. Reserved
+    // as the default (raw AS) and backpatched at finalize if the write run scored
+    // by the deterministic error model instead (see [`crate::SCORE_KIND_TAG`]).
+    if profile.has_scores() {
+        file_tag_values.push((crate::SCORE_KIND_TAG, TagValue::U8(crate::SCORE_KIND_AS)));
+    }
     // Advertise chunk compression only when enabled; omitting the tag for
     // uncompressed output keeps the file byte-compatible with readers that
     // predate the feature (absent tag ⇒ ChunkCodec::None).

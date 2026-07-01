@@ -200,6 +200,9 @@ struct FragCfg<'a> {
     /// salmon selective-alignment profile → soft-weight by score; else uniform
     scored: bool,
     score_exp: f64,
+    /// how to turn a hit's stored score into the log-weight basis (see
+    /// [`salmon_rad::SCORE_KIND_TAG`]): AS soft-weight vs. quantized log-LR.
+    score_kind: u8,
     /// fixed log-PMF of the fragment-length distribution, indexed by raw length.
     pmf: &'a [f64],
     /// fixed log-CMF of the FLD, indexed by raw length (also passed whole to the
@@ -212,6 +215,23 @@ struct FragCfg<'a> {
     paired_lib: bool,
     range_factorization_bins: u32,
     eq_builder: &'a EquivalenceClassBuilder,
+}
+
+/// The eq-class log-weight basis for one hit, given the file's score
+/// interpretation. Uniform (`0`) when the profile is unscored; for a raw AS
+/// score, the salmon soft-weight `−scoreExp·(best−score)` (best hit → `0`, worse
+/// hits penalized); for a quantized log-LR ([`salmon_rad::SCORE_KIND_LOGWEIGHT`]),
+/// the log-weight itself (`score / scale`), used absolutely like the online error
+/// model's `Σ(fg−bg)` (the eq-class softmax handles the relative scaling).
+#[inline]
+fn score_weight_basis(scored: bool, score_kind: u8, score_exp: f64, best: i32, score: i32) -> f64 {
+    if !scored {
+        0.0
+    } else if score_kind == salmon_rad::SCORE_KIND_LOGWEIGHT {
+        score as f64 / salmon_rad::SCORE_LOG_SCALE
+    } else {
+        -score_exp * (best - score) as f64
+    }
 }
 
 /// Weight one fragment's placements and add the equivalence class. Returns
@@ -238,11 +258,7 @@ fn process_rad_fragment(placements: &[RadPlacement], cfg: &FragCfg) -> bool {
     let mut sp_eq: Vec<f64> = Vec::with_capacity(placements.len());
     for p in placements {
         // eq-class log-weight basis: soft-weight by score (SA) or uniform (sketch).
-        let basis = if cfg.scored {
-            -cfg.score_exp * (best - p.score) as f64
-        } else {
-            0.0
-        };
+        let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
         let rl = cfg.lengths.get(p.tid as usize).copied().unwrap_or(0) as i32;
         let proper = p.status == MateStatus::PairedEndPaired
             && p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED
@@ -411,6 +427,22 @@ fn load_baked_library_format(file_tag_map: &TagMap) -> Option<LibraryFormat> {
             Some(LibraryFormat::from_format_id(*id))
         }
         _ => None,
+    }
+}
+
+/// How to interpret the per-hit `alignment_score`, from the writer's baked
+/// [`salmon_rad::SCORE_KIND_TAG`]. Defaults to [`salmon_rad::SCORE_KIND_AS`] (raw
+/// AS, soft-weighted) when the tag or its baked-flag bit is absent — so every
+/// pre-existing salmon RAD and all piscem RAD read back unchanged.
+fn load_baked_score_kind(file_tag_map: &TagMap) -> u8 {
+    use libradicl::rad_types::TagValue;
+    match file_tag_map.get(salmon_rad::BAKED_FLAGS_TAG) {
+        Some(TagValue::U8(f)) if f & salmon_rad::BAKED_SCORE_KIND != 0 => {}
+        _ => return salmon_rad::SCORE_KIND_AS,
+    }
+    match file_tag_map.get(salmon_rad::SCORE_KIND_TAG) {
+        Some(TagValue::U8(k)) => *k,
+        _ => salmon_rad::SCORE_KIND_AS,
     }
 }
 
@@ -626,6 +658,8 @@ impl BiasLocal {
 struct BiasCfg<'a> {
     scored: bool,
     score_exp: f64,
+    /// see [`FragCfg::score_kind`].
+    score_kind: u8,
     pmf: &'a [f64],
     cmf: &'a [f64],
     lengths: &'a [u32],
@@ -665,11 +699,7 @@ fn collect_bias_fragment(placements: &[RadPlacement], cfg: &BiasCfg, local: &mut
     let mut sp_geom: Vec<(usize, usize, bool, Option<usize>, Option<usize>)> =
         Vec::with_capacity(placements.len());
     for p in placements {
-        let basis = if cfg.scored {
-            -cfg.score_exp * (best - p.score) as f64
-        } else {
-            0.0
-        };
+        let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
         let rl = cfg.lengths.get(p.tid as usize).copied().unwrap_or(0) as i32;
         let proper = p.status == MateStatus::PairedEndPaired
             && p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED
@@ -1019,6 +1049,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // auto-detection during FLD derivation below; then apply concordance filtering
     // exactly like an explicit `-l` (reads mode does the same via its detector).
     let baked_libfmt = load_baked_library_format(&file_tag_map);
+    // Score interpretation: raw AS (default) or a quantized error-model log-LR.
+    let score_kind = load_baked_score_kind(&file_tag_map);
     let ignore_incompat = opts.incompat_prior <= 0.0;
     let nthreads = rayon::current_num_threads().max(1);
 
@@ -1188,6 +1220,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         let cfg = FragCfg {
             scored,
             score_exp: opts.score_exp,
+            score_kind,
             pmf: &pmf,
             cmf: &cmf,
             lengths: &lengths,
@@ -1203,6 +1236,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             let bias_cfg = BiasCfg {
                 scored,
                 score_exp: opts.score_exp,
+                score_kind,
                 pmf: &pmf,
                 cmf: &cmf,
                 lengths: &lengths,
@@ -1331,6 +1365,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             let bias_cfg = BiasCfg {
                 scored,
                 score_exp: opts.score_exp,
+                score_kind,
                 pmf: &pmf,
                 cmf: &cmf,
                 lengths: &lengths,

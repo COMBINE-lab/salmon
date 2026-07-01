@@ -136,6 +136,27 @@ pub const BAKED_FLD: u8 = 0x01;
 pub const BAKED_ABUND: u8 = 0x02;
 /// [`BAKED_FLAGS_TAG`] bit: a resolved library format is present.
 pub const BAKED_LIBFMT: u8 = 0x04;
+/// [`BAKED_FLAGS_TAG`] bit: a non-default [`SCORE_KIND_TAG`] is present (the
+/// per-hit score is a quantized log-weight, not a raw aligner `AS`).
+pub const BAKED_SCORE_KIND: u8 = 0x08;
+
+/// File-tag name: how a reader should interpret the per-hit `alignment_score`
+/// (present only in the selective-alignment profile). A `u8`:
+/// [`SCORE_KIND_AS`] (`0`, default/absent) ⇒ the raw aligner score, weighted as
+/// `exp(-scoreExp·(best−score))`; [`SCORE_KIND_LOGWEIGHT`] (`1`) ⇒ a quantized
+/// alignment-model log-likelihood ratio `round(Σ(fg−bg)·`[`SCORE_LOG_SCALE`]`)`,
+/// used directly (÷ scale) as the eq-class log-weight basis. Absent ⇒ `0`.
+pub const SCORE_KIND_TAG: &str = "score_kind";
+/// [`SCORE_KIND_TAG`] value: raw aligner score (`AS`), soft-weighted by score
+/// difference. The default when the tag is absent (all pre-existing salmon RAD).
+pub const SCORE_KIND_AS: u8 = 0;
+/// [`SCORE_KIND_TAG`] value: a quantized alignment-model log-likelihood ratio
+/// (deterministic error model); the stored `i32` is `Σ(fg−bg)·`[`SCORE_LOG_SCALE`].
+pub const SCORE_KIND_LOGWEIGHT: u8 = 1;
+/// Fixed-point scale for a [`SCORE_KIND_LOGWEIGHT`] score: the per-hit log-LR is
+/// stored as `round(logLR · SCORE_LOG_SCALE)` and read back as `score / scale`.
+/// 1000 keeps ~3 decimal digits of the log-weight, well within an `i32`.
+pub const SCORE_LOG_SCALE: f64 = 1000.0;
 
 /// piscem `frag_map_type` (a.k.a. `MappingType`) code for an unmapped fragment.
 pub const FRAG_MAP_TYPE_UNMAPPED: u8 = 0;
