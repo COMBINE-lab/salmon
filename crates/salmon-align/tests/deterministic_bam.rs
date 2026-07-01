@@ -20,8 +20,18 @@ fn write_sam(dir: &Path) -> PathBuf {
     let pair = |f: &mut std::fs::File, name: &str, tx: &str, p: usize, second: bool| {
         let (l, r) = (p + 1, p + 201);
         let sf = if second { 256 } else { 0 };
-        writeln!(f, "{name}\t{}\t{tx}\t{l}\t60\t100M\t=\t{r}\t300\t*\t*", 99 | sf).unwrap();
-        writeln!(f, "{name}\t{}\t{tx}\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*", 147 | sf).unwrap();
+        writeln!(
+            f,
+            "{name}\t{}\t{tx}\t{l}\t60\t100M\t=\t{r}\t300\t*\t*",
+            99 | sf
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "{name}\t{}\t{tx}\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*",
+            147 | sf
+        )
+        .unwrap();
     };
     let mut pos = 1usize;
     for i in 0..40 {
@@ -101,5 +111,9 @@ fn deterministic_bam_is_reproducible() {
 
     // Two independent write+quant runs must agree exactly (the producer + the
     // baked-FLD requant are both order-independent).
-    assert_eq!(run("r1"), run("r2"), "deterministic alignment quant must reproduce");
+    assert_eq!(
+        run("r1"),
+        run("r2"),
+        "deterministic alignment quant must reproduce"
+    );
 }

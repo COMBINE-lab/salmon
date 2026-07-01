@@ -15,9 +15,13 @@
 
 mod bam_rad;
 mod error_model;
+mod genome_project;
 mod rad;
 
 pub use bam_rad::{write_alignment_rad, AlignRadSummary};
+pub use genome_project::{
+    project_genome_bam_to_rad, GenomeProjectOptions, ProjectionArtifacts, ReadKind,
+};
 pub use rad::quantify_rad;
 
 use std::collections::HashMap;
