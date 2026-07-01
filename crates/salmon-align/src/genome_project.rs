@@ -165,6 +165,7 @@ pub fn project_genome_bam_to_rad(
     let tx_is_minus: Vec<bool> = txs.iter().map(|t| t.strand == '-').collect();
 
     let nthreads = rayon::current_num_threads().max(1);
+    let is_short = matches!(opts.read_kind, ReadKind::Short);
     let (num_processed, num_mapped) = stream_project_pass(
         &opts.bam,
         nthreads,
@@ -174,6 +175,7 @@ pub fn project_genome_bam_to_rad(
         &fld,
         naive.as_ref(),
         &tx_is_minus,
+        is_short,
     )?;
 
     // ---- single-pass bake -------------------------------------------------
@@ -273,6 +275,26 @@ fn strand_tag<R: sam::alignment::Record>(rec: &R, tag: [u8; 2]) -> Option<char> 
     }
 }
 
+/// The original aligner (e.g. STAR) `AS` alignment score of a genome record.
+/// bramble's C++ passes this through unchanged as the projected short-read score
+/// (it only recomputes AS for long reads), so we carry it alongside each
+/// `GenomicAlignment` and use it as the placement score. Missing/absent AS -> 0.
+fn genome_alignment_score<R: sam::alignment::Record>(rec: &R) -> i32 {
+    rec.data()
+        .get(&Tag::ALIGNMENT_SCORE)
+        .and_then(|r| r.ok())
+        .and_then(|v| match v {
+            Value::Int8(x) => Some(x as i32),
+            Value::UInt8(x) => Some(x as i32),
+            Value::Int16(x) => Some(x as i32),
+            Value::UInt16(x) => Some(x as i32),
+            Value::Int32(x) => Some(x),
+            Value::UInt32(x) => Some(x as i32),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
 /// Build a bramble `GenomicAlignment` from one mapped noodles record. `query_name`
 /// is the (shared) canonical group name. Returns `None` for unmapped/unnamed/
 /// no-reference records.
@@ -349,8 +371,10 @@ fn record_to_genomic_alignment<R: sam::alignment::Record>(
 /// signature. `None` if nothing projected.
 fn build_projected_record(
     gas: &[GenomicAlignment],
+    gn_as: &[i32],
     proj: &[ProjectedAlignment],
     tx_is_minus: &[bool],
+    is_short: bool,
 ) -> Option<(
     SalmonBulkRecord,
     Option<(usize, bool, bool)>,
@@ -392,6 +416,21 @@ fn build_projected_record(
         !(genomic_rev ^ tx_minus)
     };
 
+    // Per-placement score, matching C++ bramble. Short reads: pass the original
+    // aligner (STAR) AS through unchanged — C++ never rewrites short-read AS and
+    // leaves `similarity_score` unweighted, so junc_hits does NOT skew the split
+    // across a read's isoforms. Long reads: C++ rewrites AS = (genome_AS + clip) *
+    // similarity_score; clip rescue isn't exposed on ProjectedAlignment, so use
+    // genome_AS * similarity_score (clip ~ 0 without soft-clip rescue).
+    let placement_score = |e: &ProjectedAlignment| -> i32 {
+        let g = gn_as.get(e.input_index).copied().unwrap_or(0);
+        if is_short {
+            g
+        } else {
+            (g as f64 * e.similarity_score).round() as i32
+        }
+    };
+
     for (&tid, entries) in &by_tid {
         let proper = entries.len() >= 2
             && entries
@@ -419,9 +458,7 @@ fn build_projected_record(
                 .map(|e| e.insert_size.unsigned_abs())
                 .max()
                 .unwrap_or(0) as i32;
-            let score = (r1.similarity_score * r1.query_aligned_len as f64
-                + r2.similarity_score * r2.query_aligned_len as f64)
-                .round() as i32;
+            let score = placement_score(r1) + placement_score(r2);
             hits.push(RadHit::for_placement(
                 tid, is_fw, mate_fw, pos, true, frag_len, 0, score,
             ));
@@ -450,7 +487,7 @@ fn build_projected_record(
                 let is_fw = genomic_fw(e);
                 let pos = e.transcript_start.saturating_sub(1) as i32;
                 let read_len = e.query_aligned_len as i32;
-                let score = (e.similarity_score * e.query_aligned_len as f64).round() as i32;
+                let score = placement_score(e);
                 hits.push(RadHit::for_placement(
                     tid, is_fw, false, pos, false, 0, read_len, score,
                 ));
@@ -483,6 +520,7 @@ fn stream_project_pass(
     fld: &DiscreteFld,
     naive: Option<&NaiveEqBuilder>,
     tx_is_minus: &[bool],
+    is_short: bool,
 ) -> Result<(u64, u64)> {
     if is_sam_path(bam_path) {
         let mut reader = open_sam_reader(bam_path)?;
@@ -497,6 +535,7 @@ fn stream_project_pass(
             fld,
             naive,
             tx_is_minus,
+            is_short,
         )
     } else {
         let file = std::fs::File::open(bam_path)
@@ -519,6 +558,7 @@ fn stream_project_pass(
             fld,
             naive,
             tx_is_minus,
+            is_short,
         )
     }
 }
@@ -536,6 +576,7 @@ fn run_project_pass<R, I>(
     fld: &DiscreteFld,
     naive: Option<&NaiveEqBuilder>,
     tx_is_minus: &[bool],
+    is_short: bool,
 ) -> Result<(u64, u64)>
 where
     R: sam::alignment::Record + Send + Sync,
@@ -588,12 +629,16 @@ where
                 let mut pctx = ProjectionContext::new();
                 let mut buf = FragmentChunkBuf::with_capacity_codec(CHUNK_FLUSH_BYTES, codec);
                 let mut gas: Vec<GenomicAlignment> = Vec::new();
+                // Original aligner AS per genome record, parallel to `gas` (same
+                // index space as `ProjectedAlignment::input_index`).
+                let mut gn_as: Vec<i32> = Vec::new();
                 let mut processed = 0u64;
                 let mut mapped = 0u64;
                 while let Ok(raw_batch) = rx.recv() {
                     for raw_group in &raw_batch {
                         processed += 1;
                         gas.clear();
+                        gn_as.clear();
                         // The whole group shares one canonical query name.
                         let qname = raw_group
                             .iter()
@@ -607,6 +652,7 @@ where
                         for r in raw_group {
                             if let Some(ga) = record_to_genomic_alignment(r, header, &qname) {
                                 gas.push(ga);
+                                gn_as.push(genome_alignment_score(r));
                             }
                         }
                         if gas.is_empty() {
@@ -614,7 +660,7 @@ where
                         }
                         let proj = project_group_with(&gas, g2t, cfg, &mut pctx);
                         let Some((rec, fld_sample, naive_sig)) =
-                            build_projected_record(&gas, &proj, tx_is_minus)
+                            build_projected_record(&gas, &gn_as, &proj, tx_is_minus, is_short)
                         else {
                             continue; // nothing passed the similarity filter
                         };
