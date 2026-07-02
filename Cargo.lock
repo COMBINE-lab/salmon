@@ -278,8 +278,9 @@ dependencies = [
 
 [[package]]
 name = "bramble-rs"
-version = "0.1.4"
-source = "git+https://github.com/zrudnick/bramble?branch=main#fee66a34cdd3f7efd249553f7858d69c04f7247a"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8010bfc1fa9c732318daa1c05f1506a1642a6eb082eadd492dac33254d68d31f"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1434,8 +1435,9 @@ dependencies = [
 
 [[package]]
 name = "libradicl"
-version = "0.14.1"
-source = "git+https://github.com/COMBINE-lab/libradicl?branch=chore%2Fnoodles-0.111#422ed6cfcd7406bc1575da703c550a80205fba95"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7ab0fd2a57bab41a3fd0c8077f29aaccd5ef6bdfc1973a75b821db4974e08b2"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1459,8 +1461,9 @@ dependencies = [
 
 [[package]]
 name = "libradicl-macros"
-version = "0.14.0"
-source = "git+https://github.com/COMBINE-lab/libradicl?branch=chore%2Fnoodles-0.111#422ed6cfcd7406bc1575da703c550a80205fba95"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee69892dffb9a35973e35f62e4597b33c0eeb6323ba91de1b1988b08a1bf25f3"
 dependencies = [
  "proc-macro2",
  "quote",

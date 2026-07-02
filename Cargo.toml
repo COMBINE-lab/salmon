@@ -74,7 +74,7 @@ cf1-rs = "0.5"
 piscem-rs = "0.6.1"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
-libradicl = { version = "0.14", features = ["zstd"] }
+libradicl = { version = "0.14.2", features = ["zstd"] }
 
 # dev / test helpers
 tempfile = "3"
@@ -109,24 +109,3 @@ lto = "thin"
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-# Temporary patch: crates.io bramble-rs 0.1.4 has genome-projection bugs fixed
-# upstream but not yet released — the short-read similarity-filter gate, the
-# fixed-seed (deterministic) hasher, and the order-independent mate pairing. Point
-# at zrudnick/bramble `main` (still version 0.1.4, so this `[patch]` matches) so
-# CI and fresh clones build the fixed library. Remove this patch at release once
-# bramble-rs > 0.1.4 ships to crates.io.
-#
-# For local feature work against an editable bramble checkout, add a `paths`
-# override in a `.cargo/config.toml` ABOVE this repo (uncommitted), e.g.
-#   paths = ["/path/to/bramble/bramble-rs"]
-# which transparently redirects this dependency to the local clone without
-# changing the committed manifest/lockfile.
-# Temporary patch: libradicl 0.14.1 (crates.io) pins noodles 0.108, which would
-# force a second noodles version (0.108's bam 0.87 / sam 0.83) into the graph
-# alongside salmon's own noodles-bam 0.90 / -sam 0.85. Point at a branch that
-# bumps libradicl to noodles 0.111 so every noodles sub-crate resolves to a
-# single version. Remove this patch at release once the bump ships to crates.io.
-[patch.crates-io]
-bramble-rs = { git = "https://github.com/zrudnick/bramble", branch = "main" }
-libradicl = { git = "https://github.com/COMBINE-lab/libradicl", branch = "chore/noodles-0.111" }
