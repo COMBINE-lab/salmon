@@ -55,7 +55,11 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | Option | Description |
 | --- | --- |
 | `-i, --index <DIR>` | Salmon index (reads mode). |
-| `-a, --alignments <BAM>` | Alignment mode: a BAM of reads aligned to the transcriptome. |
+| `-a, --alignments <BAM>` | Alignment mode: a name-grouped BAM of reads aligned to the transcriptome. With `--annotation`, a genome-aligned BAM instead (see below). |
+| `--annotation <GTF\|GFF>` | Genome-alignment mode: project a genome-aligned BAM into transcriptome coordinates via this annotation. See [genome-alignment quantification](../../guides/genome-projection/). |
+| `--genome <FASTA>` | Genome FASTA (genome mode); enables bias correction by reconstructing transcript sequences from exon slices. |
+| `--readKind <short\|long>` | Read type for genome projection (default `short`). |
+| `--juncMissDiscount <f>` | Penalty for an unannotated splice junction in genome projection (default `1.0` = none). |
 | `--rad <RAD>` | RAD mode: quantify a RAD file of mappings (salmon `--writeRad` **or** piscem `map-bulk`/sketch output) directly. No `-i` needed — reference names travel in the RAD header. See [RAD I/O & deterministic quantification](../../guides/rad-and-determinism/). |
 | `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode). Enables the error model in ordinary alignment mode; supplies reference sequences for bias correction and (with `--errorModel`) the deterministic error model. |
 | `-l, --libType <TYPE>` | Library type (e.g. `IU`, `ISR`, `A` for auto). Default `A`. See [library types](../../guides/library-types/). |

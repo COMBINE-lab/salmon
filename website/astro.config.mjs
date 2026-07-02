@@ -54,6 +54,10 @@ export default defineConfig({
               label: 'RAD I/O & deterministic quantification',
               slug: 'guides/rad-and-determinism',
             },
+            {
+              label: 'Genome-alignment quantification',
+              slug: 'guides/genome-projection',
+            },
           ],
         },
         {
