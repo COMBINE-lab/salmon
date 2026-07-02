@@ -17,7 +17,10 @@ use clap::{Args, Parser, Subcommand};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use salmon_align::{quantify_alignments, quantify_rad, AlignQuantOptions};
+use salmon_align::{
+    project_genome_bam_to_rad, quantify_alignments, quantify_rad, AlignQuantOptions,
+    GenomeProjectOptions,
+};
 use salmon_index::{build as build_index, IndexBuildOptions};
 use salmon_quant::{quantify, ChunkCodec, ProgressCounters, QuantOptions};
 
@@ -294,6 +297,28 @@ struct QuantArgs {
     /// Disable the alignment error model (alignment mode).
     #[arg(long = "noErrorModel")]
     no_error_model: bool,
+    /// Opt in to the order-independent alignment error model in deterministic
+    /// mode (`-a --deterministic`, requires `-t`). Off by default: deterministic
+    /// mode scores by the BAM `AS` tag, which benchmarks at least as accurately
+    /// against ground truth and needs only a single BAM pass; `--errorModel` adds
+    /// a second pass to train the model. Use it for parity with salmon's classic
+    /// error-modeled quant, or when the aligner's `AS` is absent/unreliable.
+    #[arg(long = "errorModel")]
+    error_model: bool,
+    /// Genome-alignment mode: a GTF/GFF annotation. Given with `-a <genome.bam>`,
+    /// salmon projects the spliced genome alignments into transcriptome
+    /// coordinates (via bramble) and quantifies the projected placements. The
+    /// transcript set is taken from the annotation.
+    #[arg(long = "annotation", value_name = "GTF|GFF")]
+    annotation: Option<PathBuf>,
+    /// Genome FASTA (genome-alignment mode) — needed only for bias correction, to
+    /// reconstruct transcript sequences from the annotation's exons.
+    #[arg(long = "genome", value_name = "FASTA")]
+    genome: Option<PathBuf>,
+    /// Genome-alignment projection: penalty multiplier per junction mismatch
+    /// (bramble `junc_miss_discount`; default 1.0 = no penalty).
+    #[arg(long = "juncMissDiscount", value_name = "F")]
+    junc_miss_discount: Option<f64>,
     /// Library type (e.g. IU, ISR, A for auto).
     #[arg(short = 'l', long = "libType", default_value = "A")]
     lib_type: String,
@@ -846,6 +871,157 @@ fn run_deterministic(
     Ok(())
 }
 
+/// Alignment-mode `--deterministic`: write the transcriptome BAM's placements to
+/// an intermediate salmon RAD (one pass — baking an order-independent FLD +
+/// library format, and rough abundances when bias is requested), then quantify
+/// from it via the same deterministic [`quantify_rad`] the reads path uses, so
+/// the result is byte-identical across thread counts. Score-based (carries the
+/// BAM `AS` tag); the online alignment error model is not used in this mode.
+fn run_deterministic_align(
+    opts: AlignQuantOptions,
+    rad_out: Option<PathBuf>,
+    keep_rad: bool,
+    gene_map: Option<&std::path::Path>,
+    codec: ChunkCodec,
+) -> Result<()> {
+    let out_dir = opts.output_dir.clone();
+    // An explicit `--writeRad PATH` is honoured and kept; otherwise a temp under
+    // the output dir, removed on success unless `--keepRad` (or `--skipQuant`,
+    // where the RAD is the deliverable).
+    let explicit = rad_out.is_some();
+    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("intermediate_alignments.rad"));
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+
+    // Phase 1 — one BAM pass: write placements + bake FLD / library format
+    // (+ rough abundances when bias is on) so phase 2 is a single baked pass.
+    let summary = salmon_align::write_alignment_rad(&opts, &rad_path, codec)
+        .context("deterministic alignment RAD-write pass failed")?;
+    let pct = if summary.num_processed > 0 {
+        100.0 * summary.num_mapped as f64 / summary.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "deterministic: wrote {} / {} aligned fragments ({:.2}%) to the intermediate RAD; quantifying",
+        summary.num_mapped,
+        summary.num_processed,
+        pct
+    );
+
+    // Phase 2 — quantify from the fully-baked RAD (single pass, order-independent).
+    let res = quantify_rad(&opts, &rad_path).context("deterministic requant pass failed")?;
+    let pct2 = if res.num_processed > 0 {
+        100.0 * res.num_mapped as f64 / res.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "{} fragments from intermediate RAD, {} quantified ({:.2}%); {} equivalence classes",
+        res.num_processed,
+        res.num_mapped,
+        pct2,
+        res.num_eq_classes
+    );
+    if let Some(gm) = gene_map {
+        write_gene_level(
+            &out_dir,
+            gm,
+            &res.names,
+            &res.lengths,
+            &res.eff_lengths,
+            &res.tpm,
+            &res.counts,
+        )?;
+    }
+    if explicit || keep_rad || opts.skip_quant {
+        tracing::info!("kept intermediate RAD at {}", rad_path.display());
+    } else if let Err(e) = std::fs::remove_file(&rad_path) {
+        tracing::warn!(
+            "could not remove intermediate RAD {}: {e}",
+            rad_path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Resolve the RAD chunk-compression codec from the CLI flags.
+fn rad_codec_from_args(no_compress_rad: bool, rad_compress: &str) -> Result<ChunkCodec> {
+    if no_compress_rad {
+        return Ok(ChunkCodec::None);
+    }
+    Ok(match rad_compress {
+        "none" => ChunkCodec::None,
+        "lz4" => ChunkCodec::Lz4,
+        "zstd" => ChunkCodec::Zstd,
+        other => anyhow::bail!("unknown --radCompress codec '{other}' (expected lz4|zstd|none)"),
+    })
+}
+
+/// Genome-alignment mode (`-a <genome.bam> --annotation <gtf>`): project the
+/// spliced genome alignments into transcriptome coordinates with bramble, write
+/// a salmon RAD, then quantify from it with the deterministic `quantify_rad`.
+/// `q` supplies the EM / bias / output / bootstrap knobs for that requant.
+fn run_genome_project(
+    gp: GenomeProjectOptions,
+    q: AlignQuantOptions,
+    rad_out: Option<PathBuf>,
+    keep_rad: bool,
+    gene_map: Option<&std::path::Path>,
+) -> Result<()> {
+    let out_dir = q.output_dir.clone();
+    let explicit = rad_out.is_some();
+    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("genome_projected.rad"));
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+
+    // Phase 1 — project the genome BAM into a fully-baked transcriptome RAD.
+    let art = project_genome_bam_to_rad(&gp, &rad_path).context("genome projection pass failed")?;
+    let pct = if art.num_processed > 0 {
+        100.0 * art.num_mapped as f64 / art.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "projected {} / {} read groups ({:.2}%) onto {} annotated transcripts; quantifying",
+        art.num_mapped,
+        art.num_processed,
+        pct,
+        art.names.len()
+    );
+
+    // Phase 2 — quantify from the projected RAD (single baked pass). Hand the
+    // reconstructed transcript sequences to bias correction (no `-t` needed).
+    let mut q = q;
+    if q.ref_seqs.is_none() {
+        q.ref_seqs = art.ref_seqs;
+    }
+    let res = quantify_rad(&q, &rad_path).context("genome-projected quantification failed")?;
+    tracing::info!(
+        "{} fragments from projected RAD, {} quantified; {} equivalence classes",
+        res.num_processed,
+        res.num_mapped,
+        res.num_eq_classes
+    );
+    if let Some(gm) = gene_map {
+        write_gene_level(
+            &out_dir,
+            gm,
+            &res.names,
+            &res.lengths,
+            &res.eff_lengths,
+            &res.tpm,
+            &res.counts,
+        )?;
+    }
+    if explicit || keep_rad {
+        tracing::info!("kept projected RAD at {}", rad_path.display());
+    } else if let Err(e) = std::fs::remove_file(&rad_path) {
+        tracing::warn!("could not remove projected RAD {}: {e}", rad_path.display());
+    }
+    Ok(())
+}
+
 fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.ont {
         long_read_redirect();
@@ -928,6 +1104,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.range_factorization_bins = range_factorization_bins;
         opts.transcripts = args.targets;
         opts.no_error_model = args.no_error_model;
+        opts.deterministic_error_model = args.error_model;
         opts.seq_bias = args.seq_bias;
         opts.gc_bias = args.gc_bias;
         opts.pos_bias = args.pos_bias;
@@ -955,6 +1132,65 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.thinning_factor = args.thinning_factor;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
+
+        // Genome-alignment mode: `-a <genome.bam> --annotation <gtf>` projects the
+        // spliced genome alignments into transcriptome coordinates (bramble) and
+        // quantifies the projection. Inherently RAD-based / deterministic.
+        if let Some(annotation) = args.annotation.clone() {
+            // Genome projection is inherently deterministic (RAD-based) and has no
+            // error model (bramble exposes no projected CIGAR), so flags that only
+            // matter for transcriptomic alignment are accepted but no-ops here.
+            if args.deterministic {
+                tracing::warn!(
+                    "--deterministic is redundant in genome-projection mode (--annotation): \
+                     projection is already deterministic; ignoring it"
+                );
+            }
+            if args.error_model {
+                tracing::warn!(
+                    "--errorModel has no effect in genome-projection mode (--annotation): \
+                     projection scores by bramble similarity, not an alignment error model"
+                );
+            }
+            let codec = rad_codec_from_args(args.no_compress_rad, &args.rad_compress)?;
+            let gp = GenomeProjectOptions {
+                bam: opts.bam.clone(),
+                annotation,
+                genome_fasta: args.genome.clone(),
+                lib_type: opts.lib_type.clone(),
+                junc_miss_discount: args.junc_miss_discount,
+                bias: opts.seq_bias || opts.gc_bias || opts.pos_bias,
+                fld_mean: opts.fld_mean,
+                fld_sd: opts.fld_sd,
+                fld_max: opts.fld_max,
+                bias_seed_em_iters: opts.bias_seed_em_iters,
+                em: opts.em.clone(),
+                rad_codec: codec,
+            };
+            return run_genome_project(
+                gp,
+                opts,
+                args.write_rad.clone(),
+                args.keep_rad,
+                gene_map.as_deref(),
+            );
+        }
+
+        // `--deterministic`: write the BAM's placements to an intermediate RAD
+        // (baking the FLD/library-format + rough abundances) and requantify from
+        // it, for results byte-identical across thread counts. Score-based; no
+        // online error model.
+        if args.deterministic {
+            let codec = rad_codec_from_args(args.no_compress_rad, &args.rad_compress)?;
+            return run_deterministic_align(
+                opts,
+                args.write_rad.clone(),
+                args.keep_rad,
+                gene_map.as_deref(),
+                codec,
+            );
+        }
+
         // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
         let progress = Arc::new(ProgressCounters::default());
         let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {

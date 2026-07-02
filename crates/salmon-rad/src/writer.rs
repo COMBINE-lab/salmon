@@ -18,7 +18,7 @@ use libradicl::writers::{ConcurrentChunkWriter, RadFileWriter};
 use libradicl::ChunkCodec;
 
 use crate::record::{SalmonBulkContext, SalmonBulkRecord};
-use crate::{schema, RadProfile, BAKED_ABUND, BAKED_FLD, BAKED_LIBFMT};
+use crate::{schema, RadProfile, BAKED_ABUND, BAKED_FLD, BAKED_LIBFMT, BAKED_SCORE_KIND};
 
 /// Shared, thread-safe RAD output sink for one file.
 pub struct RadOutputWriter {
@@ -32,6 +32,9 @@ pub struct RadOutputWriter {
     pending_abund: Option<Vec<f64>>,
     /// resolved library format as a `format_id` (see [`crate::LIBRARY_FORMAT_TAG`]).
     pending_libfmt: Option<u8>,
+    /// non-default score interpretation (see [`crate::SCORE_KIND_TAG`]); only the
+    /// scored (SA) profile reserves the slot, so set only in that profile.
+    pending_score_kind: Option<u8>,
     /// chunk compression codec applied by worker buffers (advertised in the header).
     codec: ChunkCodec,
 }
@@ -62,6 +65,7 @@ impl RadOutputWriter {
             pending_fld: None,
             pending_abund: None,
             pending_libfmt: None,
+            pending_score_kind: None,
             codec,
         })
     }
@@ -97,6 +101,14 @@ impl RadOutputWriter {
         self.pending_libfmt = Some(format_id);
     }
 
+    /// Bake the per-hit score interpretation (see [`crate::SCORE_KIND_TAG`]) into
+    /// the header at finalize. Only valid on the scored (selective-alignment)
+    /// profile, whose prelude reserves the slot; a no-op-worthy default
+    /// ([`crate::SCORE_KIND_AS`]) need not be set (absent ⇒ that default).
+    pub fn set_score_kind(&mut self, score_kind: u8) {
+        self.pending_score_kind = Some(score_kind);
+    }
+
     /// Append a fully-framed chunk (from [`FragmentChunkBuf::take_bytes`]) to the
     /// file. Thread-safe.
     pub fn append_chunk_bytes(&self, bytes: &[u8]) -> anyhow::Result<()> {
@@ -112,6 +124,7 @@ impl RadOutputWriter {
         let pending_fld = self.pending_fld;
         let pending_abund = self.pending_abund;
         let pending_libfmt = self.pending_libfmt;
+        let pending_score_kind = self.pending_score_kind;
         let mut w = self.ccw.into_writer()?;
         let mut flags: u8 = 0;
         if let Some(mut pmf) = pending_fld {
@@ -128,6 +141,14 @@ impl RadOutputWriter {
         if let Some(fmt) = pending_libfmt {
             w.backpatch_file_tag_value(crate::LIBRARY_FORMAT_TAG, &TagValue::U8(fmt))?;
             flags |= BAKED_LIBFMT;
+        }
+        // Only bake a non-default score kind; the reserved slot already holds the
+        // AS default, so leaving it untouched keeps older readers' behavior.
+        if let Some(k) = pending_score_kind {
+            if k != crate::SCORE_KIND_AS {
+                w.backpatch_file_tag_value(crate::SCORE_KIND_TAG, &TagValue::U8(k))?;
+                flags |= BAKED_SCORE_KIND;
+            }
         }
         if flags != 0 {
             w.backpatch_file_tag_value(crate::BAKED_FLAGS_TAG, &TagValue::U8(flags))?;

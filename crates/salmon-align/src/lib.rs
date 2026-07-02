@@ -13,9 +13,13 @@
 //! ([`salmon_infer`]) to `quant.sf`. Mirrors salmon's `quant -a` mode (the
 //! position-binned alignment error model is a later refinement).
 
+mod bam_rad;
 mod error_model;
+mod genome_project;
 mod rad;
 
+pub use bam_rad::{write_alignment_rad, AlignRadSummary};
+pub use genome_project::{project_genome_bam_to_rad, GenomeProjectOptions, ProjectionArtifacts};
 pub use rad::quantify_rad;
 
 use std::collections::HashMap;
@@ -65,6 +69,12 @@ pub struct AlignQuantOptions {
     pub ref_seqs: Option<Vec<Vec<u8>>>,
     /// disable the alignment error model (salmon's `--noErrorModel`)
     pub no_error_model: bool,
+    /// opt in to the order-independent error model in `--deterministic` alignment
+    /// mode (`--errorModel`). Off by default: deterministic mode scores by the BAM
+    /// `AS` tag, which benchmarks at least as accurately against truth and runs a
+    /// single BAM pass; enabling this trains the model in a second BAM pass. Only
+    /// consulted by the `--deterministic` BAM→RAD producer, and needs `-t`.
+    pub deterministic_error_model: bool,
     /// enable sequence-specific bias correction (`--seqBias`)
     pub seq_bias: bool,
     /// enable fragment-GC bias correction (`--gcBias`)
@@ -139,6 +149,7 @@ impl AlignQuantOptions {
             transcripts: None,
             ref_seqs: None,
             no_error_model: false,
+            deterministic_error_model: false,
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
