@@ -74,18 +74,28 @@ pub struct Alignment {
     pub ref_window_start: i32,
 }
 
+/// Reverse-complement a DNA base (ACGT, case-insensitive; anything else → N).
+#[inline]
+fn comp(b: u8) -> u8 {
+    match b {
+        b'A' | b'a' => b'T',
+        b'C' | b'c' => b'G',
+        b'G' | b'g' => b'C',
+        b'T' | b't' => b'A',
+        _ => b'N',
+    }
+}
+
 /// Reverse-complement a DNA byte slice (ACGT, case-insensitive output upper).
 pub(crate) fn revcomp(s: &[u8]) -> Vec<u8> {
-    s.iter()
-        .rev()
-        .map(|&b| match b {
-            b'A' | b'a' => b'T',
-            b'C' | b'c' => b'G',
-            b'G' | b'g' => b'C',
-            b'T' | b't' => b'A',
-            _ => b'N',
-        })
-        .collect()
+    s.iter().rev().map(|&b| comp(b)).collect()
+}
+
+/// Reverse-complement `s` into `out` (cleared first), reusing its allocation.
+#[inline]
+fn revcomp_into(s: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.extend(s.iter().rev().map(|&b| comp(b)));
 }
 
 /// The perfect (all-match) score for a read of length `read_len`.
@@ -122,58 +132,64 @@ pub fn align_chain(
         return None;
     }
 
-    // Query in the reference-forward frame.
-    let query: Vec<u8> = if chain.is_fw {
-        read.to_vec()
-    } else {
-        revcomp(read)
-    };
-    let qlen = query.len() as i32;
-
-    // Invariant boundary: every MEM must lie within the read and the reference.
-    // Seeding guarantees this; a violation is an upstream bug. We `debug_assert`
-    // so it surfaces loudly in tests/dev (rather than being silently masked —
-    // this is how issue #1038, a contig-overshoot in piscem-rs's skip search,
-    // was found), and degrade to "skip candidate" in release so a future
-    // coordinate bug can never turn into an out-of-bounds slice panic.
-    let reflen_i = ref_seq.len() as i32;
-    let out_of_bounds = chain.mems.iter().any(|m| {
-        m.read_start < 0
-            || m.ref_start < 0
-            || m.len <= 0
-            || m.read_end() > qlen
-            || m.ref_end() > reflen_i
-    });
-    debug_assert!(
-        !out_of_bounds,
-        "align_chain: chain MEM outside read/reference bounds (qlen={qlen} reflen={reflen_i}) — upstream seeding bug"
-    );
-    if out_of_bounds {
-        return None;
-    }
-
     let diag_origin = chain.ref_start() - chain.read_start();
     let win_start = diag_origin.max(0);
+    let reflen_i = ref_seq.len() as i32;
 
-    let score = if cfg.full_length_alignment {
-        // Full-read DP over the implied window.
-        let win_end = (win_start + qlen + cfg.indel_margin as i32).min(ref_seq.len() as i32);
-        if win_end <= win_start {
+    // Build the oriented query into a reused thread-local buffer — `align_chain`
+    // runs once per candidate (millions of times), so a fresh
+    // `read.to_vec()`/`revcomp` per call was pure allocator traffic.
+    ALIGN_QUERY.with(|qbuf| {
+        let mut query = qbuf.borrow_mut();
+        if chain.is_fw {
+            query.clear();
+            query.extend_from_slice(read);
+        } else {
+            revcomp_into(read, &mut query);
+        }
+        let qlen = query.len() as i32;
+
+        // Invariant boundary: every MEM must lie within the read and the reference.
+        // Seeding guarantees this; a violation is an upstream bug. We `debug_assert`
+        // so it surfaces loudly in tests/dev (rather than being silently masked —
+        // this is how issue #1038, a contig-overshoot in piscem-rs's skip search,
+        // was found), and degrade to "skip candidate" in release so a future
+        // coordinate bug can never turn into an out-of-bounds slice panic.
+        let out_of_bounds = chain.mems.iter().any(|m| {
+            m.read_start < 0
+                || m.ref_start < 0
+                || m.len <= 0
+                || m.read_end() > qlen
+                || m.ref_end() > reflen_i
+        });
+        debug_assert!(
+            !out_of_bounds,
+            "align_chain: chain MEM outside read/reference bounds (qlen={qlen} reflen={reflen_i}) — upstream seeding bug"
+        );
+        if out_of_bounds {
             return None;
         }
-        let rwin = &ref_seq[win_start as usize..win_end as usize];
-        ksw2_align_score(&query, rwin, cfg)
-    } else {
-        // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
-        anchored_align_score(&query, ref_seq, &chain.mems, cfg)
-    };
 
-    let valid = score > min_accepted_score(query.len(), cfg);
+        let score = if cfg.full_length_alignment {
+            // Full-read DP over the implied window.
+            let win_end = (win_start + qlen + cfg.indel_margin as i32).min(ref_seq.len() as i32);
+            if win_end <= win_start {
+                return None;
+            }
+            let rwin = &ref_seq[win_start as usize..win_end as usize];
+            ksw2_align_score(&query, rwin, cfg)
+        } else {
+            // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
+            anchored_align_score(&query, ref_seq, &chain.mems, cfg)
+        };
 
-    Some(Alignment {
-        score,
-        valid,
-        ref_window_start: win_start,
+        let valid = score > min_accepted_score(query.len(), cfg);
+
+        Some(Alignment {
+            score,
+            valid,
+            ref_window_start: win_start,
+        })
     })
 }
 
@@ -190,6 +206,10 @@ thread_local! {
     /// the DNA5-encoded query/target buffers between small gap/flank DPs.
     static KSW_SCRATCH: std::cell::RefCell<KswScratch> =
         std::cell::RefCell::new(KswScratch::default());
+    /// Per-thread query buffer for [`align_chain`], reused across the millions of
+    /// per-candidate alignments instead of allocating a fresh `Vec` each call.
+    static ALIGN_QUERY: std::cell::RefCell<Vec<u8>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 struct KswScratch {
@@ -465,28 +485,36 @@ fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: boo
     })
 }
 
+/// DNA5 lookup table: `DNA5_LUT[b]` is the 2-bit code for ACGT (upper/lower) and
+/// 4 for anything else. A single table load per base beats the per-base `match`
+/// (a chain of compares) on the alignment hot path, where encoding the read and
+/// reference window is a measurable share of full-length scoring.
+static DNA5_LUT: [u8; 256] = {
+    let mut t = [4u8; 256];
+    t[b'A' as usize] = 0;
+    t[b'a' as usize] = 0;
+    t[b'C' as usize] = 1;
+    t[b'c' as usize] = 1;
+    t[b'G' as usize] = 2;
+    t[b'g' as usize] = 2;
+    t[b'T' as usize] = 3;
+    t[b't' as usize] = 3;
+    t
+};
+
 fn dna5_encode_into(seq: &[u8], out: &mut Vec<u8>) {
     out.clear();
     out.reserve(seq.len());
-    out.extend(seq.iter().map(|&b| match b {
-        b'A' | b'a' => 0,
-        b'C' | b'c' => 1,
-        b'G' | b'g' => 2,
-        b'T' | b't' => 3,
-        _ => 4,
-    }));
+    out.extend(seq.iter().map(|&b| DNA5_LUT[b as usize]));
 }
 
+/// Like [`dna5_encode_into`] but emits the codes in reverse order. Note this
+/// only reverses — it does *not* complement — so the per-base LUT applies
+/// unchanged (the caller has already oriented the sequence).
 fn dna5_encode_rev_into(seq: &[u8], out: &mut Vec<u8>) {
     out.clear();
     out.reserve(seq.len());
-    out.extend(seq.iter().rev().map(|&b| match b {
-        b'A' | b'a' => 0,
-        b'C' | b'c' => 1,
-        b'G' | b'g' => 2,
-        b'T' | b't' => 3,
-        _ => 4,
-    }));
+    out.extend(seq.iter().rev().map(|&b| DNA5_LUT[b as usize]));
 }
 
 /// ksw2 score, matching C++ salmon's banded `ksw_extz2_sse` configuration
