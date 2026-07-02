@@ -1137,6 +1137,21 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // spliced genome alignments into transcriptome coordinates (bramble) and
         // quantifies the projection. Inherently RAD-based / deterministic.
         if let Some(annotation) = args.annotation.clone() {
+            // Genome projection is inherently deterministic (RAD-based) and has no
+            // error model (bramble exposes no projected CIGAR), so flags that only
+            // matter for transcriptomic alignment are accepted but no-ops here.
+            if args.deterministic {
+                tracing::warn!(
+                    "--deterministic is redundant in genome-projection mode (--annotation): \
+                     projection is already deterministic; ignoring it"
+                );
+            }
+            if args.error_model {
+                tracing::warn!(
+                    "--errorModel has no effect in genome-projection mode (--annotation): \
+                     projection scores by bramble similarity, not an alignment error model"
+                );
+            }
             let codec = rad_codec_from_args(args.no_compress_rad, &args.rad_compress)?;
             let gp = GenomeProjectOptions {
                 bam: opts.bam.clone(),
