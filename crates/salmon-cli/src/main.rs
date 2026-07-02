@@ -19,7 +19,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use salmon_align::{
     project_genome_bam_to_rad, quantify_alignments, quantify_rad, AlignQuantOptions,
-    GenomeProjectOptions, ReadKind,
+    GenomeProjectOptions,
 };
 use salmon_index::{build as build_index, IndexBuildOptions};
 use salmon_quant::{quantify, ChunkCodec, ProgressCounters, QuantOptions};
@@ -315,11 +315,6 @@ struct QuantArgs {
     /// reconstruct transcript sequences from the annotation's exons.
     #[arg(long = "genome", value_name = "FASTA")]
     genome: Option<PathBuf>,
-    /// Read kind for genome-alignment projection: `short` (Illumina) or `long`
-    /// (PacBio/ONT). Selects bramble's projection preset.
-    #[arg(long = "readKind", value_name = "KIND", default_value = "short",
-          value_parser = ["short", "long"])]
-    read_kind: String,
     /// Genome-alignment projection: penalty multiplier per junction mismatch
     /// (bramble `junc_miss_discount`; default 1.0 = no penalty).
     #[arg(long = "juncMissDiscount", value_name = "F")]
@@ -1148,11 +1143,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 annotation,
                 genome_fasta: args.genome.clone(),
                 lib_type: opts.lib_type.clone(),
-                read_kind: if args.read_kind == "long" {
-                    ReadKind::Long
-                } else {
-                    ReadKind::Short
-                },
                 junc_miss_discount: args.junc_miss_discount,
                 bias: opts.seq_bias || opts.gc_bias || opts.pos_bias,
                 fld_mean: opts.fld_mean,

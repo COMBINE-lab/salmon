@@ -38,8 +38,13 @@ before.
 | --- | --- |
 | `--annotation <gtf\|gff>` | **Required** for genome mode. Transcript models used to build the genome→transcriptome map. |
 | `--genome <fasta>` | Genome FASTA. Optional; supply it to enable bias correction — transcript sequences are reconstructed from exon slices so `--seqBias`/`--gcBias`/`--posBias` work. |
-| `--readKind <short\|long>` | Read type (default `short`). Controls bramble's scoring/filtering; use `long` for long-read (e.g. minimap2) input. |
 | `--juncMissDiscount <f>` | Penalty for a spliced read whose junction is not supported by the annotation (bramble `junc_miss_discount`; default `1.0` = no penalty). |
+
+:::note[Short reads]
+Genome projection targets short-read (Illumina) data. For long reads (PacBio/ONT),
+use [oarfish](https://github.com/COMBINE-lab/oarfish), COMBINE-lab's dedicated
+long-read quantifier.
+:::
 
 ## How it works
 

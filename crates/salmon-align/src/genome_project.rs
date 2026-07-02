@@ -47,13 +47,6 @@ use crate::{coordinate_sorted_unusable, is_sam_path, open_sam_reader, read_align
 const CHUNK_FLUSH_BYTES: usize = 64 * 1024;
 const MINIBATCH: usize = 1000;
 
-/// Short- vs long-read projection preset (bramble `ProjectionConfig`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadKind {
-    Short,
-    Long,
-}
-
 /// Options for the genome→transcriptome projection pass.
 pub struct GenomeProjectOptions {
     /// name-collated genome BAM (spliced alignments)
@@ -64,7 +57,6 @@ pub struct GenomeProjectOptions {
     pub genome_fasta: Option<PathBuf>,
     /// salmon library type string (resolved against the FLD-detected format)
     pub lib_type: String,
-    pub read_kind: ReadKind,
     pub junc_miss_discount: Option<f64>,
     /// any of seq/GC/positional bias requested (drives the rough-EM + ref_seqs)
     pub bias: bool,
@@ -149,10 +141,9 @@ pub fn project_genome_bam_to_rad(
         opts.rad_codec,
     )?;
 
-    let mut cfg = match opts.read_kind {
-        ReadKind::Short => ProjectionConfig::short_read(),
-        ReadKind::Long => ProjectionConfig::long_read(),
-    };
+    // Short-read projection only. Long-read genome quantification is out of scope
+    // for salmon — use oarfish (https://github.com/COMBINE-lab/oarfish) instead.
+    let mut cfg = ProjectionConfig::short_read();
     if let Some(d) = opts.junc_miss_discount {
         cfg.junc_miss_discount = d;
     }
@@ -165,7 +156,7 @@ pub fn project_genome_bam_to_rad(
     let tx_is_minus: Vec<bool> = txs.iter().map(|t| t.strand == '-').collect();
 
     let nthreads = rayon::current_num_threads().max(1);
-    let is_short = matches!(opts.read_kind, ReadKind::Short);
+    let is_short = true;
     let (num_processed, num_mapped) = stream_project_pass(
         &opts.bam,
         nthreads,
