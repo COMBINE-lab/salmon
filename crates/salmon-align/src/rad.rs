@@ -999,6 +999,7 @@ where
 /// Quantify from a RAD file (`salmon quant --rad`).
 pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQuantResult> {
     let start_time = asctime_now();
+    let run_timer = std::time::Instant::now();
 
     // Bias correction is computed from the REFERENCE sequence at each fragment's
     // RAD position (never the read bases). seq/GC need the reference bases;
@@ -1425,6 +1426,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         em
     };
     let inference_truncated_mass = em.dropped_mass;
+    let (em_iters, em_converged) = (em.iters, em.converged);
     let counts = em.alphas;
 
     let rates: Vec<f64> = (0..num_refs)
@@ -1474,6 +1476,31 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         Vec::new()
     };
 
+    // Run diagnostics from end-of-run aggregates (no per-fragment cost): the
+    // observed (baked/auto-detected) library format powers the strandedness
+    // sanity check, gated on `-l A` so an explicit `-l` is never contradicted.
+    let detected_library_type = detected_fmt
+        .or(baked_libfmt)
+        .map(|f| f.canonical().to_string());
+    let auto_detect = LibraryFormat::is_auto(&opts.lib_type);
+    let requested_lib = LibraryFormat::parse(&opts.lib_type)
+        .map(|f| f.canonical().to_string())
+        .unwrap_or_else(|_| opts.lib_type.clone());
+    let diagnostics = salmon_core::input_diagnostics(
+        num_processed,
+        num_mapped,
+        auto_detect,
+        &requested_lib,
+        detected_library_type.as_deref(),
+    );
+    for d in &diagnostics {
+        if d.severity == "error" {
+            tracing::error!("{}", d.message);
+        } else {
+            tracing::warn!("{}", d.message);
+        }
+    }
+
     let result = AlignQuantResult {
         names,
         lengths,
@@ -1492,6 +1519,12 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         bias_dump,
         ambig,
         bootstraps,
+        em_iters,
+        em_converged,
+        detected_library_type,
+        total_seconds: run_timer.elapsed().as_secs_f64(),
+        peak_rss_kb: salmon_core::peak_rss_kb(),
+        diagnostics,
     };
     crate::write_outputs(opts, &result)?;
     Ok(result)

@@ -222,18 +222,7 @@ impl QuantOptions {
     }
 }
 
-/// A structured run diagnostic surfaced to the log and to `meta_info.json`
-/// (`diagnostics` array). Codes are stable/machine-readable so downstream tools
-/// can key on them (e.g. `low_mapping_rate`, `no_fragments_mapped`).
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct Diagnostic {
-    /// stable machine-readable identifier (snake_case)
-    pub code: String,
-    /// `"warning"` | `"error"` | `"info"`
-    pub severity: String,
-    /// human-readable explanation
-    pub message: String,
-}
+pub use salmon_core::Diagnostic;
 
 /// Quantification results (also written to disk by [`write_outputs`]).
 #[derive(Debug, Clone)]
@@ -314,22 +303,6 @@ pub struct QuantResult {
     pub detected_library_type: Option<String>,
     /// structured run diagnostics / bad-input warnings (also emitted to the log)
     pub diagnostics: Vec<Diagnostic>,
-}
-
-/// Peak resident set size in KiB from `/proc/self/status` (`VmHWM`); 0 if
-/// unavailable (non-Linux or parse failure). Read once at end of run — no
-/// per-fragment cost.
-fn peak_rss_kb() -> u64 {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines().find_map(|l| {
-                l.strip_prefix("VmHWM:")
-                    .and_then(|v| v.split_whitespace().next())
-                    .and_then(|n| n.parse::<u64>().ok())
-            })
-        })
-        .unwrap_or(0)
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
@@ -1023,61 +996,18 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 .filter(|d| d.can_guess())
                 .map(|d| d.final_format().canonical().to_string())
         });
-    let mut diagnostics: Vec<Diagnostic> = Vec::new();
-    {
-        let mut push = |code: &str, severity: &str, message: String| {
-            if severity == "error" {
-                tracing::error!("{message}");
-            } else {
-                tracing::warn!("{message}");
-            }
-            diagnostics.push(Diagnostic {
-                code: code.to_string(),
-                severity: severity.to_string(),
-                message,
-            });
-        };
-        if np == 0 {
-            push(
-                "no_input_fragments",
-                "error",
-                "no input fragments were processed — check that the read files are non-empty and readable".to_string(),
-            );
-        } else if nm == 0 {
-            push(
-                "no_fragments_mapped",
-                "error",
-                "0 fragments mapped — the index almost certainly does not match these reads (wrong reference/organism)".to_string(),
-            );
+    let diagnostics = salmon_core::input_diagnostics(
+        np,
+        nm,
+        auto_detect,
+        &library_type,
+        detected_library_type.as_deref(),
+    );
+    for d in &diagnostics {
+        if d.severity == "error" {
+            tracing::error!("{}", d.message);
         } else {
-            let pct = 100.0 * nm as f64 / np as f64;
-            if pct < 10.0 {
-                push(
-                    "very_low_mapping_rate",
-                    "warning",
-                    format!("very low mapping rate ({pct:.1}%): the index likely does not match these reads (wrong reference/organism or heavy contamination)"),
-                );
-            } else if pct < 30.0 {
-                push(
-                    "low_mapping_rate",
-                    "warning",
-                    format!("low mapping rate ({pct:.1}%): verify the reference matches the sample and that adapter/quality trimming was applied"),
-                );
-            }
-        }
-        // Strandedness sanity: an explicit `-l` that disagrees with the observed
-        // format. (The auto-detector currently runs only in `-l A` mode, so this
-        // fires once the always-on detector lands — staged follow-up.)
-        if !auto_detect {
-            if let Some(det) = detected_library_type.as_deref() {
-                if det != library_type {
-                    push(
-                        "library_type_mismatch",
-                        "warning",
-                        format!("specified library type '{library_type}' disagrees with the observed format '{det}' — check the -l strandedness setting"),
-                    );
-                }
-            }
+            tracing::warn!("{}", d.message);
         }
     }
 
@@ -1125,7 +1055,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         em_iters,
         em_converged,
         total_seconds: run_timer.elapsed().as_secs_f64(),
-        peak_rss_kb: peak_rss_kb(),
+        peak_rss_kb: salmon_core::peak_rss_kb(),
         detected_library_type,
         diagnostics,
     };
