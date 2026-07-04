@@ -422,7 +422,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     } else {
         ReadType::SingleEnd
     };
-    let detector = auto_detect.then(|| LibraryTypeDetector::new(read_type));
+    // Run the library-type detector ALWAYS (not just under `-l A`): under an
+    // explicit `-l` it still observes the true orientation distribution (sampled
+    // pre-strand-filter in `processor::record`), which powers the
+    // `library_type_mismatch` diagnostic. It never overrides an explicit `-l` —
+    // the resolution below gates its format on `auto_detect`. The cost is bounded
+    // (sampling stops after the detector locks in) → effectively free.
+    let detector = Some(LibraryTypeDetector::new(read_type));
 
     // `--deterministic`: an order-independent FLD / library-format accumulator,
     // populated during the mapping pass instead of the online FLD + prefix
@@ -634,8 +640,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // no usable samples.
     let library_type = if let Some(f) = det_fmt {
         f.canonical().to_string()
-    } else if let Some(det) = &detector {
-        det.final_format().canonical().to_string()
+    } else if auto_detect {
+        // Auto mode only: adopt the prefix detector's format. Under an explicit
+        // `-l` the (now always-on) detector is used purely for the mismatch
+        // diagnostic and must NOT override the user's choice.
+        match &detector {
+            Some(det) => det.final_format().canonical().to_string(),
+            None => opts.lib_type.clone(),
+        }
     } else {
         opts.lib_type.clone()
     };
