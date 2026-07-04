@@ -82,7 +82,7 @@ Pretty-printed JSON. tximport keys off several fields (`num_bootstraps`,
 | `library_types` | string[] | detected/declared library type(s) |
 | `frag_dist_length` | int | number of FLD length bins |
 | `frag_length_mean` / `frag_length_sd` | float | observed fragment length stats |
-| `seq_bias_correct` / `gc_bias_correct` | bool | bias correction enabled |
+| `seq_bias_correct` / `gc_bias_correct` / `pos_bias_correct` | bool | bias correction enabled (`--seqBias` / `--gcBias` / `--posBias`) |
 | `mapping_type` | string | `"mapping"` (SA) or `"pseudo"` (sketch) |
 | `keep_duplicates` | bool | index built with `--keepDuplicates` |
 | `index_seq_hash` / `index_name_hash` | string | SHA-256 (hex) of reference seqs / names |
@@ -102,6 +102,41 @@ Pretty-printed JSON. tximport keys off several fields (`num_bootstraps`,
 (Plus `quant_errors`, `num_bias_bins`, `serialized_eq_classes`,
 `num_dovetail_fragments`, `num_fragments_filtered_vm`,
 `num_alignments_below_threshold_for_mapped_fragments_vm`, and `call`.)
+
+#### salmon-rs extensions (beyond the C++ field set)
+
+These fields are added by the Rust implementation; downstream tools that only
+know the C++ schema simply ignore them. All are computed from end-of-run
+aggregates (no per-fragment cost) and are emitted for every mode — reads,
+`-a` alignment, and `--rad`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `num_orphan` | int | mapped fragments placed as orphans (one mate only); reads mode |
+| `range_factorization_bins` | int | range-factorization bins used (0 = disabled) |
+| `num_em_iterations` | int | EM/VBEM iterations actually run |
+| `em_converged` | bool | whether the relative-difference criterion was met before the iteration cap |
+| `detected_library_type` | string \| null | library format observed by the auto-detector (reads / `--rad`); `null` if not observed (e.g. `-a` transcriptomic BAM) |
+| `total_time_seconds` | float | wall-clock seconds for the quantification call |
+| `peak_rss_kb` | int | peak resident set size in KiB (Linux `VmHWM`; 0 elsewhere) |
+| `diagnostics` | object[] | structured run diagnostics (see below) |
+
+##### `diagnostics` — machine-readable run warnings
+
+An array of `{ "code", "severity", "message" }` objects surfacing likely
+bad-input conditions, so pipelines can gate on `code`/`severity` rather than
+scraping the log (the same messages are also written to
+`logs/salmon_quant.log`). `severity` is `"error"` or `"warning"`. Codes:
+
+| `code` | severity | fires when |
+| --- | --- | --- |
+| `no_input_fragments` | error | zero fragments were processed (empty/unreadable input) |
+| `no_fragments_mapped` | error | zero fragments mapped (reference almost certainly wrong) |
+| `very_low_mapping_rate` | warning | < 10% of fragments mapped |
+| `low_mapping_rate` | warning | < 30% of fragments mapped |
+| `library_type_mismatch` | warning | an explicit `-l` disagrees with the observed library format (reads / `--rad`) |
+
+An empty array means no red flags were detected.
 
 ### `aux_info/ambig_info.tsv` — per-transcript read partition (TSV)
 
