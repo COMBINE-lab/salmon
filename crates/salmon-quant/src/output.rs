@@ -285,6 +285,7 @@ struct MetaInfo {
     frag_length_sd: f64,
     seq_bias_correct: bool,
     gc_bias_correct: bool,
+    pos_bias_correct: bool,
     num_bias_bins: usize,
     mapping_type: String,
     keep_duplicates: bool,
@@ -311,6 +312,20 @@ struct MetaInfo {
     /// of an equivalence class truncated); normally 0.
     inference_truncated_mass: f64,
     num_bootstraps: u32,
+    /// mapped fragments placed as orphans (only one mate mapped)
+    num_orphan: u64,
+    /// range-factorization bins used for equivalence classes (0 = disabled)
+    range_factorization_bins: u32,
+    /// EM/VBEM convergence
+    num_em_iterations: u32,
+    em_converged: bool,
+    /// library format observed by the auto-detector (null if not observed)
+    detected_library_type: Option<String>,
+    /// total wall-clock seconds and peak resident set size (KiB, Linux)
+    total_time_seconds: f64,
+    peak_rss_kb: u64,
+    /// machine-readable run diagnostics / bad-input warnings
+    diagnostics: Vec<crate::Diagnostic>,
     call: String,
     start_time: String,
     end_time: String,
@@ -347,6 +362,7 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         frag_length_sd: res.frag_len_sd,
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
+        pos_bias_correct: opts.pos_bias,
         num_bias_bins: 0,
         mapping_type: if opts.sketch { "pseudo" } else { "mapping" }.to_string(),
         keep_duplicates: res.keep_duplicates,
@@ -385,6 +401,14 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         num_decoy_fragments: res.num_decoy_fragments,
         inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
+        num_orphan: res.num_orphan,
+        range_factorization_bins: opts.range_factorization_bins,
+        num_em_iterations: res.em_iters,
+        em_converged: res.em_converged,
+        detected_library_type: res.detected_library_type.clone(),
+        total_time_seconds: res.total_seconds,
+        peak_rss_kb: res.peak_rss_kb,
+        diagnostics: res.diagnostics.clone(),
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: crate::asctime_now(),

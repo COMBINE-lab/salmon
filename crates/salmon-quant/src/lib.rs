@@ -222,6 +222,19 @@ impl QuantOptions {
     }
 }
 
+/// A structured run diagnostic surfaced to the log and to `meta_info.json`
+/// (`diagnostics` array). Codes are stable/machine-readable so downstream tools
+/// can key on them (e.g. `low_mapping_rate`, `no_fragments_mapped`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Diagnostic {
+    /// stable machine-readable identifier (snake_case)
+    pub code: String,
+    /// `"warning"` | `"error"` | `"info"`
+    pub severity: String,
+    /// human-readable explanation
+    pub message: String,
+}
+
 /// Quantification results (also written to disk by [`write_outputs`]).
 #[derive(Debug, Clone)]
 pub struct QuantResult {
@@ -287,11 +300,42 @@ pub struct QuantResult {
     /// observed/expected bias-model tables for the aux dumps; each component is
     /// empty unless the corresponding `--seqBias`/`--gcBias`/`--posBias` ran
     pub bias_dump: BiasDump,
+    /// EM/VBEM convergence: iterations actually run and whether the
+    /// relative-difference criterion was met before `max_iter`
+    pub em_iters: u32,
+    pub em_converged: bool,
+    /// total wall-clock seconds for the quantification call
+    pub total_seconds: f64,
+    /// peak resident set size in KiB (Linux `VmHWM`); 0 if unavailable
+    pub peak_rss_kb: u64,
+    /// library format observed by the auto-detector (when it ran with enough
+    /// samples), for provenance and the strandedness sanity check; `None` when
+    /// detection did not run or saw too few samples
+    pub detected_library_type: Option<String>,
+    /// structured run diagnostics / bad-input warnings (also emitted to the log)
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Peak resident set size in KiB from `/proc/self/status` (`VmHWM`); 0 if
+/// unavailable (non-Linux or parse failure). Read once at end of run — no
+/// per-fragment cost.
+fn peak_rss_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                l.strip_prefix("VmHWM:")
+                    .and_then(|v| v.split_whitespace().next())
+                    .and_then(|n| n.parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(0)
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
 pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let start_time = asctime_now();
+    let run_timer = std::time::Instant::now();
     // The raw reference nucleotides are only needed for selective-alignment
     // extension (non-sketch mapping) and for sequence-dependent bias correction
     // (seq/GC; positional bias is sequence-free). In sketch mode without seq/GC
@@ -868,6 +912,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // eq-class co-members, so `counts` already sum to `total_count` minus only the
     // mass in fully-truncated classes (`dropped_mass`, normally 0). No rescale.
     let inference_truncated_mass = em.dropped_mass;
+    let (em_iters, em_converged) = (em.iters, em.converged);
     let counts = em.alphas;
 
     // Finalize RAD output now that the FLD and abundances are known: bake the
@@ -952,6 +997,78 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         })
         .collect();
 
+    // ---- run diagnostics: bad-input red flags from already-computed aggregates
+    // (evaluated once here → no per-fragment cost). Emitted to the log AND to
+    // meta_info.json's `diagnostics` array for machine-readable consumption.
+    let np = num_processed.load(Ordering::Relaxed);
+    let nm = num_mapped.load(Ordering::Relaxed);
+    let detected_library_type = det_fmt
+        .as_ref()
+        .map(|f| f.canonical().to_string())
+        .or_else(|| {
+            detector
+                .as_ref()
+                .filter(|d| d.can_guess())
+                .map(|d| d.final_format().canonical().to_string())
+        });
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    {
+        let mut push = |code: &str, severity: &str, message: String| {
+            if severity == "error" {
+                tracing::error!("{message}");
+            } else {
+                tracing::warn!("{message}");
+            }
+            diagnostics.push(Diagnostic {
+                code: code.to_string(),
+                severity: severity.to_string(),
+                message,
+            });
+        };
+        if np == 0 {
+            push(
+                "no_input_fragments",
+                "error",
+                "no input fragments were processed — check that the read files are non-empty and readable".to_string(),
+            );
+        } else if nm == 0 {
+            push(
+                "no_fragments_mapped",
+                "error",
+                "0 fragments mapped — the index almost certainly does not match these reads (wrong reference/organism)".to_string(),
+            );
+        } else {
+            let pct = 100.0 * nm as f64 / np as f64;
+            if pct < 10.0 {
+                push(
+                    "very_low_mapping_rate",
+                    "warning",
+                    format!("very low mapping rate ({pct:.1}%): the index likely does not match these reads (wrong reference/organism or heavy contamination)"),
+                );
+            } else if pct < 30.0 {
+                push(
+                    "low_mapping_rate",
+                    "warning",
+                    format!("low mapping rate ({pct:.1}%): verify the reference matches the sample and that adapter/quality trimming was applied"),
+                );
+            }
+        }
+        // Strandedness sanity: an explicit `-l` that disagrees with the observed
+        // format. (The auto-detector currently runs only in `-l A` mode, so this
+        // fires once the always-on detector lands — staged follow-up.)
+        if !auto_detect {
+            if let Some(det) = detected_library_type.as_deref() {
+                if det != library_type {
+                    push(
+                        "library_type_mismatch",
+                        "warning",
+                        format!("specified library type '{library_type}' disagrees with the observed format '{det}' — check the -l strandedness setting"),
+                    );
+                }
+            }
+        }
+    }
+
     let result = QuantResult {
         names: (0..num_refs)
             .map(|i| salmon.ref_name(i).to_string())
@@ -993,6 +1110,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         bootstraps,
         ambig,
         bias_dump,
+        em_iters,
+        em_converged,
+        total_seconds: run_timer.elapsed().as_secs_f64(),
+        peak_rss_kb: peak_rss_kb(),
+        detected_library_type,
+        diagnostics,
     };
 
     tracing::info!("writing results to {}", opts.output_dir.display());
