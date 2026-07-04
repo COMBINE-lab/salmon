@@ -174,8 +174,65 @@ thread_local! {
     /// target/orientation instead of a per-read `HashMap`), a per-group anchor
     /// buffer, and the merged-anchor output buffer. Mirrors `collect`'s
     /// `PROJ_SCRATCH`, eliminating the per-read map + per-group `HashSet`.
-    static UNIMEM_SCRATCH: std::cell::RefCell<(Vec<(u32, bool, Mem)>, Vec<Mem>, Vec<Mem>)> =
-        const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
+    #[allow(clippy::type_complexity)]
+    static UNIMEM_SCRATCH: std::cell::RefCell<(
+        Vec<(u32, bool, Mem)>,
+        Vec<Mem>,
+        Vec<Mem>,
+        Vec<(u32, bool, Mem)>,
+    )> = const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new(), Vec::new())) };
+}
+
+/// Key ordering `(tid, is_fw)` as a single `u32` (tid dominant, `is_fw` in bit 0
+/// with `false < true`) — identical ordering to the `(tid, fw)` tuple.
+#[inline]
+fn tidfw_key(tid: u32, fw: bool) -> u32 {
+    (tid << 1) | fw as u32
+}
+
+/// Radix threshold: below this, `sort_unstable_by_key` wins (its overhead is
+/// lower for short lists); at/above it, the O(N) radix pays off. The hot,
+/// cost-dominant reads (repetitive, many hits across many targets) are large.
+const RADIX_THRESHOLD: usize = 256;
+
+/// LSD radix sort of `flat` by the `(tid, is_fw)` key — same ascending grouping
+/// as `sort_unstable_by_key(|&(tid,fw,_)| (tid,fw))` (within-key order differs
+/// but is irrelevant: `merge_same_diagonal` re-sorts each group by diagonal).
+/// O(N) and independent of the number of distinct targets, unlike a comparison
+/// sort's O(N log N). `tmp` is reused ping-pong scratch; result ends in `flat`.
+fn radix_sort_tidfw(flat: &mut Vec<(u32, bool, Mem)>, tmp: &mut Vec<(u32, bool, Mem)>) {
+    let n = flat.len();
+    if n < 2 {
+        return;
+    }
+    let maxk = flat.iter().map(|&(t, f, _)| tidfw_key(t, f)).max().unwrap_or(0);
+    let npass = if maxk == 0 {
+        1
+    } else {
+        (32 - maxk.leading_zeros()).div_ceil(8) as usize
+    };
+    tmp.clear();
+    tmp.resize(n, (0, false, Mem::new(0, 0, 0)));
+    let mut cnt = [0u32; 256];
+    for p in 0..npass {
+        let shift = (p * 8) as u32;
+        cnt.fill(0);
+        for &(t, f, _) in flat.iter() {
+            cnt[((tidfw_key(t, f) >> shift) & 0xff) as usize] += 1;
+        }
+        let mut sum = 0u32;
+        for c in cnt.iter_mut() {
+            let v = *c;
+            *c = sum;
+            sum += v;
+        }
+        for &e in flat.iter() {
+            let b = ((tidfw_key(e.0, e.1) >> shift) & 0xff) as usize;
+            tmp[cnt[b] as usize] = e;
+            cnt[b] += 1;
+        }
+        std::mem::swap(flat, tmp);
+    }
 }
 
 /// Collapse same-diagonal overlapping/abutting uni-MEMs into maximal anchors.
@@ -231,7 +288,7 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
     chain_cfg.seed_len = k;
 
     UNIMEM_SCRATCH.with(|cell| {
-        let (flat, group, merged) = &mut *cell.borrow_mut();
+        let (flat, group, merged, radix_tmp) = &mut *cell.borrow_mut();
         flat.clear();
         // For each queried k-mer (one `ProjectedHits` = one unitig + all its
         // reference occurrences), extend the seed to its uni-MEM AT MOST ONCE PER
@@ -283,7 +340,14 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
                 flat.push((tid, rp.is_fw, Mem::new(read_start, base_pos + crel, len)));
             }
         }
-        flat.sort_unstable_by_key(|&(tid, fw, _)| (tid, fw));
+        // Group by (tid, is_fw): radix (O(N), target-count-independent) for the
+        // large repetitive reads where this sort's cost lives; comparison sort
+        // for short lists where its overhead is lower.
+        if flat.len() >= RADIX_THRESHOLD {
+            radix_sort_tidfw(flat, radix_tmp);
+        } else {
+            flat.sort_unstable_by_key(|&(tid, fw, _)| (tid, fw));
+        }
 
         let mut candidates = Vec::new();
         let mut i = 0;
