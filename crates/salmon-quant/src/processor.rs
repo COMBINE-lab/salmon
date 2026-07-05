@@ -377,6 +377,12 @@ fn collect_gc(sh: &Shared, compat: &[(&ScoredMapping, f64)], bias_w: &[f64], gc:
 /// placement, keyed by transcript, on the same `gc_bins` grid as
 /// `transcript_gc_geometry`'s `B_t`. Unweighted integer counts → the per-thread
 /// maps merge order-independently (deterministic).
+///
+/// Uses ALL compatible proper-pair placements (not unique-only): on an
+/// isoform-rich transcriptome, restricting to uniquely-mapped fragments both
+/// starves coverage and selects a GC-skewed subset (the paralog-free transcripts)
+/// — empirically WORSE on accuracy and bias-free safety than keeping all
+/// placements (the multi-mapping smear averages out across the panel).
 fn collect_within_txp_gc(
     sh: &Shared,
     compat: &[(&ScoredMapping, f64)],
