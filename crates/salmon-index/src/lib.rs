@@ -554,6 +554,15 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     };
     build_index(&config).context("piscem index construction failed")?;
 
+    // sshash-lib's external minimizer sort creates an `sshash_tmp/` directory
+    // (relative to the CWD; the name is hard-coded and not exposed through
+    // piscem-rs's BuildConfig). It removes the temp files it writes there but
+    // never the directory itself, leaving an empty `sshash_tmp/` behind. Prune
+    // it here: `remove_dir` only succeeds on an empty directory, so a
+    // still-in-use one (or a pre-existing non-empty one) is left untouched, and
+    // any error (missing dir, permissions) is intentionally ignored.
+    let _ = std::fs::remove_dir("sshash_tmp");
+
     // Load once to capture reference count and confirm the index is usable.
     let idx = ReferenceIndex::load(&index_prefix, opts.build_ec_table, false)
         .context("loading freshly built index")?;
