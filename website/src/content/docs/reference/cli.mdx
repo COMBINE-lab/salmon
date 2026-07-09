@@ -38,7 +38,9 @@ Build a reusable index from one or more transcriptome FASTA files.
 | `--gencode` | GENCODE references: truncate each name at the first `\|`. |
 | `--keepFixedFasta` | Keep the cleaned (non-ACGT-replaced) reference FASTA. |
 | `--keepIntermediate` | Keep intermediate compacted-dBG files. |
-| `--tmpdir <DIR>` | Directory for build intermediates. |
+| `--tmpdir <DIR>` | Directory for build intermediates (cleaned FASTA + cDBG files). Defaults to the index dir. |
+| `--sshashTmpDir <DIR>` | Directory for sshash's external minimizer-sort scratch. Defaults to a `sshash_tmp` subdirectory of `--tmpdir` (or the index dir when `--tmpdir` is unset). Override to place the sort scratch on a separate/fast disk; it is created before the build and removed afterwards (kept with `--keepIntermediate`). |
+| `--ramLimit <GiB>` | RAM ceiling for sshash's external minimizer sort — the main build-time memory/disk trade-off. Default `8`; a smaller value uses less RAM but spills to disk sooner. |
 | `--filterSize <N>` | *Accepted for compatibility; no effect.* |
 
 ```sh
