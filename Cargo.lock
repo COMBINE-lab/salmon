@@ -2607,6 +2607,7 @@ dependencies = [
 name = "salmon-infer"
 version = "2.3.2"
 dependencies = [
+ "criterion",
  "rand 0.8.6",
  "rand_distr",
  "rand_pcg",

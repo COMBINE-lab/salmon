@@ -306,9 +306,35 @@ pub struct QuantResult {
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
+/// Coarse per-phase wall-clock timing for profiling. Each [`mark`](PhaseTimer::mark)
+/// logs the elapsed time since the previous mark on the dedicated `salmon::timing`
+/// target, so a breakdown (mapping vs. inference vs. posterior) is available inline
+/// at the default `info` level, or in isolation via `RUST_LOG=salmon::timing=info`.
+/// This is pure instrumentation: a handful of `Instant::now()` calls around
+/// second-scale phases, emitting logs — it never touches quant output or determinism.
+struct PhaseTimer {
+    last: std::time::Instant,
+}
+
+impl PhaseTimer {
+    fn new() -> Self {
+        Self {
+            last: std::time::Instant::now(),
+        }
+    }
+
+    fn mark(&mut self, phase: &str) {
+        let now = std::time::Instant::now();
+        let elapsed_s = now.duration_since(self.last).as_secs_f64();
+        tracing::info!(target: "salmon::timing", phase, elapsed_s, "phase complete");
+        self.last = now;
+    }
+}
+
 pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();
+    let mut timer = PhaseTimer::new();
     // The raw reference nucleotides are only needed for selective-alignment
     // extension (non-sketch mapping) and for sequence-dependent bias correction
     // (seq/GC; positional bias is sequence-free). In sketch mode without seq/GC
@@ -318,6 +344,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let salmon = SalmonIndex::load_with_opts(&opts.index_dir, need_refseq)
         .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
     let num_refs = salmon.num_refs();
+    timer.mark("index_load");
 
     let eq_builder = EquivalenceClassBuilder::new();
     // Gaussian-prior fragment length distribution (mean 250, sd 25); empirical
@@ -582,6 +609,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         };
         tracing::info!("mapped {m} / {p} fragments ({pct:.2}%)");
     }
+    timer.mark("mapping");
     if let Some(sw) = &sam_writer {
         sw.flush().context("flushing SAM output")?;
     }
@@ -646,6 +674,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let mut collapsed = eq_builder.finish();
     collapsed.update_eff_lengths(&eff_lengths);
     let num_eq_classes = collapsed.len();
+    timer.mark("eff_length_collapse");
 
     if opts.dump_eq || opts.dump_eq_weights {
         dump_eq_classes(&opts.output_dir, &salmon, &collapsed, opts.dump_eq_weights)
@@ -932,6 +961,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         rw.finalize().context("finalizing RAD output")?;
     }
 
+    timer.mark("em_bias");
+
     // ---- posterior uncertainty (bootstrap / Gibbs) + ambiguity --------------
     // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
     let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
@@ -959,6 +990,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     } else {
         Vec::new()
     };
+    timer.mark("posterior");
 
     // ---- TPM ----------------------------------------------------------------
     let rates: Vec<f64> = (0..num_refs)
@@ -1062,6 +1094,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
     tracing::info!("writing results to {}", opts.output_dir.display());
     write_outputs(opts, &result)?;
+    timer.mark("output");
     Ok(result)
 }
 

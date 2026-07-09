@@ -102,6 +102,16 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 
+# Like `release`, but keeps line-table debug info and does not strip, so
+# `samply`/`cargo flamegraph` can attribute samples to functions/lines. The
+# shipped `release`/`dist` binaries are unaffected (they stay stripped), and the
+# same portable `target-cpu` floor from `.cargo/config.toml` still applies — we
+# profile the binary users actually run. Build: `cargo build --profile profiling`.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
+
 [profile.bench]
 lto = "thin"
 
