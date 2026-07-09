@@ -205,7 +205,11 @@ fn radix_sort_tidfw(flat: &mut Vec<(u32, bool, Mem)>, tmp: &mut Vec<(u32, bool, 
     if n < 2 {
         return;
     }
-    let maxk = flat.iter().map(|&(t, f, _)| tidfw_key(t, f)).max().unwrap_or(0);
+    let maxk = flat
+        .iter()
+        .map(|&(t, f, _)| tidfw_key(t, f))
+        .max()
+        .unwrap_or(0);
     let npass = if maxk == 0 {
         1
     } else {
