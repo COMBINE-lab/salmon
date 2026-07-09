@@ -17,6 +17,7 @@
 
 use salmon_eqclass::CollapsedEqClasses;
 
+mod daarem;
 mod online;
 mod packed;
 pub mod uncertainty;
@@ -36,6 +37,13 @@ pub enum EmAccel {
     /// reaching the same fixpoint in far fewer M-steps. Not byte-identical to
     /// `None` (a different iterate sequence, same fixpoint within `rel_diff_tol`).
     Squarem,
+    /// DAAREM: damped Anderson acceleration with restarts and residual-monotonicity
+    /// control, extrapolating over a window of the last several iterates (a
+    /// multi-secant quasi-Newton step) rather than just two. Converges faster than
+    /// SQUAREM on high-dimensional, ill-conditioned problems. Same opt-in,
+    /// same-fixpoint semantics as [`EmAccel::Squarem`]; not byte-identical to
+    /// `None`. See [`daarem`].
+    Daarem,
 }
 
 /// Optimizer configuration. Defaults mirror salmon's command-line defaults.
@@ -96,7 +104,7 @@ pub struct EmResult {
 /// Relative-difference convergence check, matching salmon: the max over
 /// transcripts (with `alpha_in` above the cutoff) of
 /// `|alpha_out - alpha_in| / alpha_out`.
-fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
+pub(crate) fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
     let mut max_d = f64::NEG_INFINITY;
     for i in 0..alpha_in.len() {
         if alpha_in[i] > cutoff && alpha_out[i] > 0.0 {
@@ -319,6 +327,9 @@ pub(crate) fn run_em_counts(
                 min_iter,
                 &mut it,
             );
+        }
+        EmAccel::Daarem => {
+            converged = daarem::daarem_loop(&mut f, &mut alphas, num_txps, opts, min_iter, &mut it);
         }
     }
     (alphas, it, converged)
@@ -631,6 +642,121 @@ mod tests {
             sq.iters * 20 < plain.iters,
             "expected SQUAREM ({}) to need far fewer M-steps than plain ({})",
             sq.iters,
+            plain.iters
+        );
+    }
+
+    #[test]
+    fn daarem_matches_plain_em_fixpoint() {
+        let eq = ambiguous();
+        let plain = optimize(&eq, 3, &EmOptions::default(), None);
+        let da = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Daarem,
+                ..Default::default()
+            },
+            None,
+        );
+        for t in 0..3 {
+            let rel = (da.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
+            assert!(
+                rel < 1e-3,
+                "txp {t}: daarem {} vs plain {} (rel {rel})",
+                da.alphas[t],
+                plain.alphas[t]
+            );
+        }
+        let tp: f64 = plain.alphas.iter().sum();
+        let td: f64 = da.alphas.iter().sum();
+        assert!((tp - td).abs() < 1e-6, "totals differ: {tp} vs {td}");
+        assert!(
+            da.iters <= plain.iters,
+            "daarem used more M-steps ({}) than plain ({})",
+            da.iters,
+            plain.iters
+        );
+    }
+
+    #[test]
+    fn daarem_matches_plain_vbem_fixpoint() {
+        let eq = ambiguous();
+        let base = EmOptions {
+            use_vbem: true,
+            ..Default::default()
+        };
+        let plain = optimize(&eq, 3, &base, None);
+        let da = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Daarem,
+                ..base.clone()
+            },
+            None,
+        );
+        for t in 0..3 {
+            let rel = (da.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
+            assert!(
+                rel < 1e-3,
+                "vbem txp {t}: {} vs {}",
+                da.alphas[t],
+                plain.alphas[t]
+            );
+        }
+    }
+
+    #[test]
+    fn daarem_conserves_total_count() {
+        let eq = ambiguous();
+        let res = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Daarem,
+                ..Default::default()
+            },
+            None,
+        );
+        let total: f64 = res.alphas.iter().sum();
+        assert!((total - 1340.0).abs() < 1e-6, "total={total}");
+    }
+
+    #[test]
+    fn daarem_reduces_iters_on_slow_mixer() {
+        // Same slow-mixing case as the SQUAREM test: two near-indistinguishable
+        // transcripts, a huge shared class, tiny asymmetric unique evidence, tight
+        // tolerance. Analytic fixpoint a0=25001, a1=75003 (see SQUAREM test).
+        let ntxp = 2usize;
+        let eq = build(&[(vec![0], 1), (vec![1], 3), (vec![0, 1], 100_000)], ntxp);
+        let tight = EmOptions {
+            rel_diff_tol: 1e-5,
+            min_iter: 1,
+            alpha_check_cutoff: 1e-8,
+            ..Default::default()
+        };
+        let plain = optimize(&eq, ntxp, &tight, None);
+        let da = optimize(
+            &eq,
+            ntxp,
+            &EmOptions {
+                accel: EmAccel::Daarem,
+                ..tight.clone()
+            },
+            None,
+        );
+        println!(
+            "daarem_reduces_iters: plain M-steps={} (converged={}) daarem M-steps={} (converged={})",
+            plain.iters, plain.converged, da.iters, da.converged
+        );
+        assert!(da.converged, "daarem did not converge");
+        assert!((da.alphas[0] - 25001.0).abs() < 1.0, "a0={}", da.alphas[0]);
+        assert!((da.alphas[1] - 75003.0).abs() < 1.0, "a1={}", da.alphas[1]);
+        assert!(
+            da.iters * 20 < plain.iters,
+            "expected DAAREM ({}) to need far fewer M-steps than plain ({})",
+            da.iters,
             plain.iters
         );
     }
