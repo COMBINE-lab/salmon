@@ -159,6 +159,9 @@ enum EmAccelArg {
     None,
     /// SQUAREM acceleration (same fixpoint, far fewer M-steps; not byte-identical).
     Squarem,
+    /// DAAREM: damped Anderson acceleration over a window of past iterates; faster
+    /// than SQUAREM on high-dimensional problems. Same fixpoint; not byte-identical.
+    Daarem,
 }
 
 impl From<EmAccelArg> for EmAccel {
@@ -166,6 +169,7 @@ impl From<EmAccelArg> for EmAccel {
         match a {
             EmAccelArg::None => EmAccel::None,
             EmAccelArg::Squarem => EmAccel::Squarem,
+            EmAccelArg::Daarem => EmAccel::Daarem,
         }
     }
 }

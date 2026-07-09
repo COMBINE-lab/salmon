@@ -143,6 +143,13 @@ fn bench_em(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("converge_em_squarem", &id), &p, |b, p| {
             b.iter(|| optimize_packed(p, &conv_sq, true))
         });
+        let conv_da = EmOptions {
+            accel: EmAccel::Daarem,
+            ..Default::default()
+        };
+        group.bench_with_input(BenchmarkId::new("converge_em_daarem", &id), &p, |b, p| {
+            b.iter(|| optimize_packed(p, &conv_da, true))
+        });
     }
     group.finish();
 }
