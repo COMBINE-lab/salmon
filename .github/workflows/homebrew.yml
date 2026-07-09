@@ -1,0 +1,41 @@
+# Keep the Homebrew formula (brewsci/bio/salmon) in sync with salmon releases.
+#
+# On every published GitHub release this opens a version-bump pull request
+# against the brewsci/homebrew-bio tap. `brew bump-formula-pr` recomputes the
+# per-platform url(s) and sha256(s) from the new release, so it works for both
+# source-build and prebuilt-binary formulae.
+#
+# Requirements (one-time, set by a maintainer):
+#   * A repository secret HOMEBREW_TAP_TOKEN: a GitHub Personal Access Token with
+#     `public_repo` scope (and access to fork brewsci/homebrew-bio + open PRs).
+# Trigger it manually for an existing tag via the "Run workflow" button.
+name: Homebrew
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to bump the formula to (e.g. v2.1.1)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bump-brewsci:
+    name: Bump brewsci/bio formula
+    runs-on: ubuntu-latest
+    # Skip prereleases: only stable releases should update the formula.
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    steps:
+      - name: Open bump PR to brewsci/homebrew-bio
+        uses: dawidd6/action-homebrew-bump-formula@v4
+        with:
+          # PAT that can fork brewsci/homebrew-bio and open a PR from the fork.
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          tap: brewsci/bio
+          formula: salmon
+          tag: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          force: false
