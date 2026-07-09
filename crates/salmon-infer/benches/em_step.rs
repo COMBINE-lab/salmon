@@ -16,7 +16,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
-use salmon_infer::{optimize_packed, EmOptions, PackedEqClasses};
+use salmon_infer::{optimize_packed, EmAccel, EmOptions, PackedEqClasses};
 
 /// Deterministic splitmix64 PRNG — no external rng dependency, fully reproducible.
 struct Rng(u64);
@@ -129,6 +129,19 @@ fn bench_em(c: &mut Criterion) {
         let loop_vbem = bounded(true, 50);
         group.bench_with_input(BenchmarkId::new("loop50_vbem_par", &id), &p, |b, p| {
             b.iter(|| optimize_packed(p, &loop_vbem, true))
+        });
+
+        // --- full convergence: plain EM vs SQUAREM (the headline comparison) ---
+        let conv_plain = EmOptions::default();
+        group.bench_with_input(BenchmarkId::new("converge_em_plain", &id), &p, |b, p| {
+            b.iter(|| optimize_packed(p, &conv_plain, true))
+        });
+        let conv_sq = EmOptions {
+            accel: EmAccel::Squarem,
+            ..Default::default()
+        };
+        group.bench_with_input(BenchmarkId::new("converge_em_squarem", &id), &p, |b, p| {
+            b.iter(|| optimize_packed(p, &conv_sq, true))
         });
     }
     group.finish();

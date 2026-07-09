@@ -22,7 +22,7 @@ use salmon_align::{
     GenomeProjectOptions,
 };
 use salmon_index::{build as build_index, IndexBuildOptions};
-use salmon_quant::{quantify, ChunkCodec, ProgressCounters, QuantOptions};
+use salmon_quant::{quantify, ChunkCodec, EmAccel, ProgressCounters, QuantOptions};
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -149,6 +149,25 @@ struct Cli {
     /// `SALMON_NO_VERSION_CHECK` environment variable) is a no-op.
     #[arg(long = "no-version-check", global = true)]
     no_version_check: bool,
+}
+
+/// CLI surface for [`EmAccel`]: the EM/VBEM convergence acceleration scheme.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum EmAccelArg {
+    /// Plain fixed-point iteration; output unchanged from historical salmon.
+    #[default]
+    None,
+    /// SQUAREM acceleration (same fixpoint, far fewer M-steps; not byte-identical).
+    Squarem,
+}
+
+impl From<EmAccelArg> for EmAccel {
+    fn from(a: EmAccelArg) -> Self {
+        match a {
+            EmAccelArg::None => EmAccel::None,
+            EmAccelArg::Squarem => EmAccel::Squarem,
+        }
+    }
 }
 
 // clap subcommand args structs differ in size (IndexArgs vs the larger QuantArgs);
@@ -497,6 +516,10 @@ struct QuantArgs {
     /// VBEM per-feature Dirichlet prior weight.
     #[arg(long = "vbPrior", default_value_t = 1e-2)]
     vb_prior: f64,
+    /// EM/VBEM convergence acceleration. `squarem` reaches the same abundances in
+    /// far fewer M-steps but is not byte-identical to the default `none`.
+    #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
+    em_accel: EmAccelArg,
     /// Mean of the fragment-length distribution prior.
     #[arg(long = "fldMean", default_value_t = 250.0)]
     fld_mean: f64,
@@ -1127,6 +1150,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.incompat_prior = args.incompat_prior;
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+        opts.em.accel = args.em_accel.into();
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean;
         opts.fld_sd = args.fld_sd;
@@ -1286,6 +1310,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.incompat_prior = args.incompat_prior;
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+        opts.em.accel = args.em_accel.into();
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean;
         opts.fld_sd = args.fld_sd;
@@ -1415,6 +1440,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // inference + fragment-length-distribution knobs
     opts.em.vb_prior = args.vb_prior;
     opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+    opts.em.accel = args.em_accel.into();
     opts.sig_digits = args.sig_digits;
     opts.max_read_occ = args.max_read_occ;
     opts.fld_mean = args.fld_mean;

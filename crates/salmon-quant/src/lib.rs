@@ -26,6 +26,7 @@ use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 use salmon_core::{LibraryFormat, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::SalmonIndex;
+pub use salmon_infer::EmAccel;
 use salmon_infer::{optimize, optimize_with_init, EmOptions};
 use salmon_map::MapConfig;
 use salmon_model::dumps::{dump_bias_models_to_file, BiasDump};
