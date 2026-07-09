@@ -222,6 +222,8 @@ impl QuantOptions {
     }
 }
 
+pub use salmon_core::Diagnostic;
+
 /// Quantification results (also written to disk by [`write_outputs`]).
 #[derive(Debug, Clone)]
 pub struct QuantResult {
@@ -287,11 +289,26 @@ pub struct QuantResult {
     /// observed/expected bias-model tables for the aux dumps; each component is
     /// empty unless the corresponding `--seqBias`/`--gcBias`/`--posBias` ran
     pub bias_dump: BiasDump,
+    /// EM/VBEM convergence: iterations actually run and whether the
+    /// relative-difference criterion was met before `max_iter`
+    pub em_iters: u32,
+    pub em_converged: bool,
+    /// total wall-clock seconds for the quantification call
+    pub total_seconds: f64,
+    /// peak resident set size in KiB (Linux `VmHWM`); 0 if unavailable
+    pub peak_rss_kb: u64,
+    /// library format observed by the auto-detector (when it ran with enough
+    /// samples), for provenance and the strandedness sanity check; `None` when
+    /// detection did not run or saw too few samples
+    pub detected_library_type: Option<String>,
+    /// structured run diagnostics / bad-input warnings (also emitted to the log)
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
 pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let start_time = asctime_now();
+    let run_timer = std::time::Instant::now();
     // The raw reference nucleotides are only needed for selective-alignment
     // extension (non-sketch mapping) and for sequence-dependent bias correction
     // (seq/GC; positional bias is sequence-free). In sketch mode without seq/GC
@@ -378,7 +395,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     } else {
         ReadType::SingleEnd
     };
-    let detector = auto_detect.then(|| LibraryTypeDetector::new(read_type));
+    // Run the library-type detector ALWAYS (not just under `-l A`): under an
+    // explicit `-l` it still observes the true orientation distribution (sampled
+    // pre-strand-filter in `processor::record`), which powers the
+    // `library_type_mismatch` diagnostic. It never overrides an explicit `-l` —
+    // the resolution below gates its format on `auto_detect`. The cost is bounded
+    // (sampling stops after the detector locks in) → effectively free.
+    let detector = Some(LibraryTypeDetector::new(read_type));
 
     // `--deterministic`: an order-independent FLD / library-format accumulator,
     // populated during the mapping pass instead of the online FLD + prefix
@@ -590,8 +613,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // no usable samples.
     let library_type = if let Some(f) = det_fmt {
         f.canonical().to_string()
-    } else if let Some(det) = &detector {
-        det.final_format().canonical().to_string()
+    } else if auto_detect {
+        // Auto mode only: adopt the prefix detector's format. Under an explicit
+        // `-l` the (now always-on) detector is used purely for the mismatch
+        // diagnostic and must NOT override the user's choice.
+        match &detector {
+            Some(det) => det.final_format().canonical().to_string(),
+            None => opts.lib_type.clone(),
+        }
     } else {
         opts.lib_type.clone()
     };
@@ -868,6 +897,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // eq-class co-members, so `counts` already sum to `total_count` minus only the
     // mass in fully-truncated classes (`dropped_mass`, normally 0). No rescale.
     let inference_truncated_mass = em.dropped_mass;
+    let (em_iters, em_converged) = (em.iters, em.converged);
     let counts = em.alphas;
 
     // Finalize RAD output now that the FLD and abundances are known: bake the
@@ -952,6 +982,35 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         })
         .collect();
 
+    // ---- run diagnostics: bad-input red flags from already-computed aggregates
+    // (evaluated once here → no per-fragment cost). Emitted to the log AND to
+    // meta_info.json's `diagnostics` array for machine-readable consumption.
+    let np = num_processed.load(Ordering::Relaxed);
+    let nm = num_mapped.load(Ordering::Relaxed);
+    let detected_library_type = det_fmt
+        .as_ref()
+        .map(|f| f.canonical().to_string())
+        .or_else(|| {
+            detector
+                .as_ref()
+                .filter(|d| d.can_guess())
+                .map(|d| d.final_format().canonical().to_string())
+        });
+    let diagnostics = salmon_core::input_diagnostics(
+        np,
+        nm,
+        auto_detect,
+        &library_type,
+        detected_library_type.as_deref(),
+    );
+    for d in &diagnostics {
+        if d.severity == "error" {
+            tracing::error!("{}", d.message);
+        } else {
+            tracing::warn!("{}", d.message);
+        }
+    }
+
     let result = QuantResult {
         names: (0..num_refs)
             .map(|i| salmon.ref_name(i).to_string())
@@ -993,6 +1052,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         bootstraps,
         ambig,
         bias_dump,
+        em_iters,
+        em_converged,
+        total_seconds: run_timer.elapsed().as_secs_f64(),
+        peak_rss_kb: salmon_core::peak_rss_kb(),
+        detected_library_type,
+        diagnostics,
     };
 
     tracing::info!("writing results to {}", opts.output_dir.display());

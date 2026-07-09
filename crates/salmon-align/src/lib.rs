@@ -203,6 +203,19 @@ pub struct AlignQuantResult {
     /// posterior samples (bootstrap or Gibbs), one abundance vector each; empty
     /// when neither was requested. Length is `num_refs`, matching `quant.sf` rows.
     pub bootstraps: Vec<Vec<f64>>,
+    /// EM/VBEM convergence: iterations run and whether the relative-difference
+    /// criterion was met before `max_iter`
+    pub em_iters: u32,
+    pub em_converged: bool,
+    /// library format observed for these alignments (baked/auto-detected), for
+    /// provenance and the strandedness sanity check; `None` if not observed
+    pub detected_library_type: Option<String>,
+    /// total wall-clock seconds for the quantification call
+    pub total_seconds: f64,
+    /// peak resident set size in KiB (Linux `VmHWM`); 0 if unavailable
+    pub peak_rss_kb: u64,
+    /// structured run diagnostics / bad-input warnings (also emitted to the log)
+    pub diagnostics: Vec<salmon_core::Diagnostic>,
 }
 
 /// Current local time as an asctime-style string, matching salmon's timestamps.
@@ -1445,6 +1458,7 @@ fn apply_bias_correction(
 /// Run alignment-based quantification end-to-end.
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
     let start_time = asctime_now();
+    let run_timer = std::time::Instant::now();
     let header = read_alignment_header(&opts.bam)?;
 
     // Reject coordinate-sorted input up front (header-only check, no per-record cost):
@@ -1695,6 +1709,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
     }
     let inference_truncated_mass = em.dropped_mass;
+    let (em_iters, em_converged) = (em.iters, em.converged);
     let counts = em.alphas;
 
     let rates: Vec<f64> = (0..num_refs)
@@ -1720,6 +1735,25 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     let length_classes =
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES);
+
+    // Run diagnostics from end-of-run aggregates. The transcriptomic-BAM online
+    // path has no aggregate observed-format estimate (per-fragment only), so the
+    // library-type mismatch check is `--rad`-only; the mapping-rate / empty-input
+    // checks still apply here.
+    let diagnostics = salmon_core::input_diagnostics(
+        num_processed,
+        num_mapped,
+        LibraryFormat::is_auto(&opts.lib_type),
+        &opts.lib_type,
+        None,
+    );
+    for d in &diagnostics {
+        if d.severity == "error" {
+            tracing::error!("{}", d.message);
+        } else {
+            tracing::warn!("{}", d.message);
+        }
+    }
 
     // Posterior uncertainty (bootstrap / Gibbs) + ambiguity. The packed CSR
     // layout is identical to reads mode — alignment mode simply feeds it from the
@@ -1766,6 +1800,12 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         bias_dump,
         ambig,
         bootstraps,
+        em_iters,
+        em_converged,
+        detected_library_type: None,
+        total_seconds: run_timer.elapsed().as_secs_f64(),
+        peak_rss_kb: salmon_core::peak_rss_kb(),
+        diagnostics,
     };
     write_outputs(opts, &result)?;
     Ok(result)
@@ -1806,6 +1846,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         frag_length_sd: f64,
         seq_bias_correct: bool,
         gc_bias_correct: bool,
+        pos_bias_correct: bool,
         num_bias_bins: usize,
         mapping_type: String,
         // index hashes are empty in alignment mode (no salmon index)
@@ -1830,6 +1871,13 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_decoy_fragments: u64,
         inference_truncated_mass: f64,
         num_bootstraps: u32,
+        range_factorization_bins: u32,
+        num_em_iterations: u32,
+        em_converged: bool,
+        detected_library_type: Option<String>,
+        total_time_seconds: f64,
+        peak_rss_kb: u64,
+        diagnostics: Vec<salmon_core::Diagnostic>,
         call: String,
         start_time: String,
         end_time: String,
@@ -1856,6 +1904,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         frag_length_sd: res.frag_len_sd,
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
+        pos_bias_correct: opts.pos_bias,
         num_bias_bins: 0,
         mapping_type: "alignment".to_string(),
         index_seq_hash: String::new(),
@@ -1879,6 +1928,13 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_decoy_fragments: 0,
         inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
+        range_factorization_bins: opts.range_factorization_bins,
+        num_em_iterations: res.em_iters,
+        em_converged: res.em_converged,
+        detected_library_type: res.detected_library_type.clone(),
+        total_time_seconds: res.total_seconds,
+        peak_rss_kb: res.peak_rss_kb,
+        diagnostics: res.diagnostics.clone(),
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: asctime_now(),
