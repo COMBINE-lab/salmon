@@ -255,6 +255,17 @@ struct IndexArgs {
     /// index still lands in --index. Defaults to the index dir. (salmon's --tmpdir)
     #[arg(long = "tmpdir")]
     tmpdir: Option<PathBuf>,
+    /// Directory for sshash's external minimizer-sort scratch. Defaults to a
+    /// `sshash_tmp` subdirectory of --tmpdir (or the index dir when --tmpdir is
+    /// unset). Override to place the sort scratch on a separate/fast disk; the
+    /// directory is created before the build and removed afterwards.
+    #[arg(long = "sshashTmpDir")]
+    sshash_tmp_dir: Option<PathBuf>,
+    /// RAM ceiling, in GiB, for sshash's external minimizer sort (the main
+    /// build-time memory/disk trade-off). Default is 8; a smaller value uses
+    /// less RAM but spills to disk sooner.
+    #[arg(long = "ramLimit")]
+    ram_limit_gib: Option<usize>,
     /// Retain exact-duplicate transcript sequences instead of collapsing them
     /// (salmon collapses duplicates by default).
     #[arg(long = "keepDuplicates")]
@@ -696,6 +707,8 @@ fn run_index(args: IndexArgs) -> Result<()> {
     opts.keep_intermediate = args.keep_intermediate;
     opts.keep_fixed_fasta = args.keep_fixed_fasta;
     opts.tmpdir = args.tmpdir;
+    opts.sshash_tmp = args.sshash_tmp_dir;
+    opts.ram_limit_gib = args.ram_limit_gib;
     opts.keep_duplicates = args.keep_duplicates;
     opts.decoys = args.decoys;
     opts.gencode = args.gencode;

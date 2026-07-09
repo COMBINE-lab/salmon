@@ -71,7 +71,7 @@ clap = { version = "4", features = ["derive"] }
 sha2 = "0.10"
 # COMBINE-lab dependencies, from crates.io.
 cf1-rs = "0.5"
-piscem-rs = "0.6.2"
+piscem-rs = "0.6.4"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
 libradicl = { version = "0.14.2", features = ["zstd"] }
