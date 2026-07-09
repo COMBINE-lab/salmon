@@ -349,7 +349,9 @@ struct QuantArgs {
     /// gene-level estimates to `quant.genes.sf`.
     #[arg(short = 'g', long = "geneMap", value_name = "FILE")]
     gene_map: Option<PathBuf>,
-    /// Worker threads (0 = all cores).
+    /// Worker threads (0 = all cores). salmon also runs one auxiliary thread for
+    /// FASTQ parsing/decompression, so total CPU use can slightly exceed this
+    /// value; on schedulers that enforce the limit, request one extra core.
     #[arg(short = 'p', long = "threads", default_value_t = 0)]
     threads: usize,
     /// Use the alignment-free pseudoalignment path.
