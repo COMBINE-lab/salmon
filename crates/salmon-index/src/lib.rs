@@ -123,6 +123,18 @@ pub struct IndexBuildOptions {
     /// its trailing `A`s trimmed; an all-`A` reference is dropped from the index.
     /// Reference hashes are computed pre-clip, so this does not change provenance.
     pub clip_polya: bool,
+    /// Directory for sshash's external minimizer-sort scratch. `None` defaults to
+    /// a `sshash_tmp` subdirectory of the build-intermediate dir (i.e. `--tmpdir`
+    /// when set, else the output dir); `Some(dir)` overrides it, e.g. to place the
+    /// sort scratch on a separate/fast disk. Salmon creates the directory before
+    /// the build and removes it afterwards unless `keep_intermediate` is set.
+    /// (Without this, sshash writes to `sshash_tmp` relative to the current
+    /// working directory and leaves the empty directory behind.)
+    pub sshash_tmp: Option<PathBuf>,
+    /// RAM ceiling, in GiB, for sshash's external minimizer sort (the dominant
+    /// build-time memory/disk trade-off). `None` keeps sshash's default (8 GiB);
+    /// a smaller value spills to disk sooner (less RAM, more I/O).
+    pub ram_limit_gib: Option<usize>,
 }
 
 impl IndexBuildOptions {
@@ -144,6 +156,8 @@ impl IndexBuildOptions {
             decoys: None,
             gencode: false,
             clip_polya: true,
+            sshash_tmp: None,
+            ram_limit_gib: None,
         }
     }
 }
@@ -683,6 +697,20 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         );
     }
 
+    // sshash sorts its minimizer tuples through an on-disk scratch directory.
+    // Left to its default it writes to `sshash_tmp` relative to the *current
+    // working directory* and leaves the (emptied) directory behind. Anchor it
+    // under our build-intermediate dir instead (a `sshash_tmp` subdir of
+    // `--tmpdir`, or the output dir when unset), or wherever the caller asked,
+    // so the scratch is co-located with the other intermediates and we can
+    // remove it cleanly afterwards.
+    let sshash_tmp = opts
+        .sshash_tmp
+        .clone()
+        .unwrap_or_else(|| intermediate_dir.join("sshash_tmp"));
+    std::fs::create_dir_all(&sshash_tmp)
+        .with_context(|| format!("creating sshash scratch dir {}", sshash_tmp.display()))?;
+
     // Stage 2: piscem SSHash + contig-table index over the tiling.
     info!("building piscem index (m={})", m);
     let config = BuildConfig {
@@ -696,6 +724,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         seed: 1,
         single_mphf: false,
         emit_tiny: None,
+        tmp_dir: Some(sshash_tmp.clone()),
+        ram_limit_gib: opts.ram_limit_gib,
     };
     build_index(&config).context("piscem index construction failed")?;
 
@@ -787,6 +817,10 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         if !opts.keep_fixed_fasta {
             let _ = std::fs::remove_file(&cleaned);
         }
+        // sshash removes its own scratch files but leaves the directory. Prune
+        // it: `remove_dir` only succeeds on an empty directory, so a caller-
+        // supplied override that is shared / pre-populated is left untouched.
+        let _ = std::fs::remove_dir(&sshash_tmp);
     }
 
     info!("index built: {} references", info.num_refs);
@@ -1138,6 +1172,12 @@ mod tests {
         // info.json persisted and the cDBG intermediates were cleaned up.
         assert!(out.join("info.json").exists());
         assert!(!out.join("cdbg.cf_seg").exists());
+        // sshash's scratch defaults under the output dir and is pruned after the
+        // build (no stray `sshash_tmp` left behind — the bug #1045 addressed).
+        assert!(
+            !out.join("sshash_tmp").exists(),
+            "sshash scratch dir should be pruned after a default build"
+        );
 
         let idx = SalmonIndex::load(&out).expect("index load");
         assert_eq!(idx.k(), 31);
@@ -1156,6 +1196,39 @@ mod tests {
             );
             assert!(seq.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')));
         }
+    }
+
+    /// The sshash scratch dir honors an explicit override and the
+    /// `keep_intermediate` flag: with `keep_intermediate` it survives at the
+    /// overridden location; without it, it is pruned. In neither case does a
+    /// `sshash_tmp` appear relative to the current working directory.
+    #[test]
+    fn sshash_scratch_override_and_keep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let scratch = tmp.path().join("fastdisk").join("scratch");
+
+        // keep_intermediate => the overridden scratch dir is retained.
+        let mut opts = IndexBuildOptions::new(vec![fasta.clone()], tmp.path().join("idx_keep"));
+        opts.threads = 1;
+        opts.sshash_tmp = Some(scratch.clone());
+        opts.keep_intermediate = true;
+        build(&opts).expect("index build (keep)");
+        assert!(
+            scratch.is_dir(),
+            "overridden scratch dir should be kept with keep_intermediate"
+        );
+
+        // default (no keep) => the same overridden dir is pruned afterwards.
+        let scratch2 = tmp.path().join("fastdisk2").join("scratch");
+        let mut opts = IndexBuildOptions::new(vec![fasta], tmp.path().join("idx_prune"));
+        opts.threads = 1;
+        opts.sshash_tmp = Some(scratch2.clone());
+        build(&opts).expect("index build (prune)");
+        assert!(
+            !scratch2.exists(),
+            "overridden scratch dir should be pruned without keep_intermediate"
+        );
     }
 
     /// Build ONE index that simultaneously exercises every short/decoy edge case
