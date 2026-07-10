@@ -3,8 +3,9 @@
 //! Provides the two most-used subcommands so far: `index` (build a salmon
 //! index over a transcriptome) and `quant` (quantify from FASTQ reads, via
 //! selective alignment or the pseudoalignment-only `--sketch` path). Flag
-//! names mirror C++ salmon where they overlap. Alignment-based `quant -a`,
-//! `quantmerge`, and `alevin` are stubbed for later phases.
+//! names mirror C++ salmon where they overlap. Alignment-based `quant -a` and
+//! `quantmerge` are stubbed for later phases; `alevin` is a permanent redirect
+//! to the alevin-fry ecosystem.
 
 use std::path::PathBuf;
 
@@ -133,11 +134,7 @@ impl Drop for ProgressGuard {
 }
 
 #[derive(Parser)]
-#[command(
-    name = "salmon",
-    version,
-    about = "RNA-seq transcript quantification (Rust port)"
-)]
+#[command(name = "salmon", version, about = "RNA-seq transcript quantification")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -187,8 +184,9 @@ enum Command {
     Quantmerge(QuantMergeArgs),
     /// Diagnostic: per-read best-mapping detail (placement, seed coverage, score).
     DebugMap(DebugMapArgs),
-    /// Single-cell quantification (removed; redirects to alevin-fry).
-    #[command(disable_help_flag = true)]
+    /// Single-cell quantification: removed; use the alevin-fry ecosystem.
+    /// Hidden from help; retained only to redirect legacy `salmon alevin` calls.
+    #[command(hide = true, disable_help_flag = true)]
     Alevin(AlevinArgs),
     /// Perform super-secret operation.
     #[command(hide = true)]
