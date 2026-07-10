@@ -10,6 +10,7 @@ members = [
     "crates/salmon-quant",
     "crates/salmon-cli",
     "crates/salmon-align",
+    "crates/salmon-gpu",
     "crates/salmon-rad",
 ]
 
@@ -32,6 +33,7 @@ salmon-index = { path = "crates/salmon-index", version = "2.3.3" }
 salmon-infer = { path = "crates/salmon-infer", version = "2.3.3" }
 salmon-map = { path = "crates/salmon-map", version = "2.3.3" }
 salmon-align = { path = "crates/salmon-align", version = "2.3.3" }
+salmon-gpu = { path = "crates/salmon-gpu", version = "2.3.3" }
 salmon-quant = { path = "crates/salmon-quant", version = "2.3.3" }
 salmon-rad = { path = "crates/salmon-rad", version = "2.3.3" }
 # error handling

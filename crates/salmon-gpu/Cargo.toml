@@ -1,0 +1,33 @@
+[package]
+name = "salmon-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Optional GPU backend for salmon's selective alignment: a banded affine-gap DP kernel (wgpu/WGSL, runs on Metal and Vulkan) plus a pure-Rust reference of the same recurrence used to validate it."
+
+[dependencies]
+salmon-map = { workspace = true }
+# GPU backend deps, compiled only under the `gpu` feature. wgpu compiles one
+# WGSL shader and dispatches it on whatever native API is present (Metal on
+# Apple, Vulkan on Linux/NVIDIA), so there is no CUDA/Metal SDK needed at build
+# and the default build stays a single portable binary.
+wgpu = { version = "22", optional = true }
+pollster = { version = "0.3", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+# The CPU alignment backend salmon uses, to differential-test the reference DP
+# against the exact scores salmon would compute.
+ksw2rs = "0.2.0"
+
+[features]
+# `gpu` pulls in wgpu and compiles the actual GPU backend. Off by default so the
+# normal build stays a single portable binary with no GPU toolchain.
+default = []
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[lints]
+workspace = true

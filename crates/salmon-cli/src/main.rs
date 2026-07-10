@@ -23,7 +23,43 @@ use salmon_align::{
     GenomeProjectOptions,
 };
 use salmon_index::{build as build_index, IndexBuildOptions};
-use salmon_quant::{quantify, ChunkCodec, EmAccel, ProgressCounters, QuantOptions};
+use salmon_quant::{
+    quantify, quantify_with_aligner, ChunkCodec, EmAccel, ProgressCounters, QuantOptions,
+};
+
+/// Build the optional selective-alignment backend for `--gpu`. Returns `None`
+/// for the default CPU path. With the `gpu` feature, `--gpu` acquires a GPU
+/// (falling back to a CPU full-length reference backend if none is present);
+/// without it, `--gpu` is a hard error.
+#[cfg(feature = "gpu")]
+fn build_alignment_backend(
+    gpu: bool,
+) -> anyhow::Result<Option<Box<dyn salmon_map::Aligner + Sync>>> {
+    if !gpu {
+        return Ok(None);
+    }
+    match salmon_gpu::GpuAligner::new() {
+        Some(g) => {
+            tracing::info!("GPU alignment backend ready (full-length mode)");
+            Ok(Some(Box::new(g)))
+        }
+        None => {
+            tracing::warn!("--gpu: no GPU adapter found; using the CPU full-length backend");
+            Ok(Some(Box::new(salmon_gpu::RefAligner)))
+        }
+    }
+}
+
+#[cfg(not(feature = "gpu"))]
+fn build_alignment_backend(
+    gpu: bool,
+) -> anyhow::Result<Option<Box<dyn salmon_map::Aligner + Sync>>> {
+    anyhow::ensure!(
+        !gpu,
+        "--gpu requested but salmon was built without GPU support; rebuild with `--features gpu`"
+    );
+    Ok(None)
+}
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -483,6 +519,13 @@ struct QuantArgs {
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
     full_length_alignment: bool,
+    /// Score selective alignment on the GPU (requires a build with
+    /// `--features gpu`; runs on Metal or Vulkan via wgpu). Implies
+    /// `--fullLengthAlignment` and produces output identical to the CPU
+    /// full-length path. Falls back to a CPU full-length backend if no GPU
+    /// adapter is found.
+    #[arg(long = "gpu")]
+    gpu: bool,
     /// Seed with sparse fixed-k k-mer anchors instead of the default
     /// unitig-constrained uni-MEMs.
     #[arg(long = "sparseSeeds", conflicts_with_all = ["unimems", "refmems"])]
@@ -1472,7 +1515,12 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     } else {
         None
     };
-    let res = quantify(&opts).context("quantification failed")?;
+    if args.gpu {
+        // --gpu only scores in full-length mode (the batchable banded DP).
+        opts.map_config.align.full_length_alignment = true;
+    }
+    let aligner = build_alignment_backend(args.gpu)?;
+    let res = quantify_with_aligner(&opts, aligner.as_deref()).context("quantification failed")?;
     drop(guard); // stop + clear the spinner before the summary
     let pct = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64

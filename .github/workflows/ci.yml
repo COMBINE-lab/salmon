@@ -85,3 +85,33 @@ jobs:
             -a sample_data/sample_alignments.bam \
             -o target/sample_quant_alignment
           test -s target/sample_quant_alignment/quant.sf
+
+  # GPU alignment backend. Builds the wgpu/WGSL backend and runs its tests; on
+  # the Apple-Silicon runner Metal is present so the GPU differential test
+  # actually exercises the kernel (it skips gracefully if no adapter is found).
+  # The default build above never touches this feature, so the standard binary
+  # stays GPU-toolchain-free.
+  gpu-backend:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Checkout salmon
+        uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (gpu feature)
+        run: cargo clippy -p salmon-gpu --features gpu --all-targets -- -D warnings
+
+      - name: Build CLI with --features gpu
+        run: cargo build -p salmon-cli --features gpu --release
+
+      - name: Test salmon-gpu (gpu feature)
+        run: cargo test -p salmon-gpu --features gpu --release

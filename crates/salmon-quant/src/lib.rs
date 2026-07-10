@@ -307,7 +307,19 @@ pub struct QuantResult {
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
+///
+/// `aligner` optionally overrides the selective-alignment backend: pass `Some`
+/// (e.g. a GPU backend) to score each mini-batch's candidate alignments in one
+/// batched dispatch in full-length mode. `None` keeps the in-place CPU path.
 pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
+    quantify_with_aligner(opts, None)
+}
+
+/// Like [`quantify`] but with an explicit selective-alignment backend.
+pub fn quantify_with_aligner(
+    opts: &QuantOptions,
+    aligner: Option<&(dyn salmon_map::Aligner + Sync)>,
+) -> Result<QuantResult> {
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();
     let mut timer = PhaseTimer::new();
@@ -506,6 +518,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             fld: &fld,
             detector: detector.as_ref(),
             map_cfg: &opts.map_config,
+            aligner,
             sketch: opts.sketch,
             sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
