@@ -23,7 +23,7 @@ use flate2::read::MultiGzDecoder;
 use piscem_rs::io::fastx::{reader_with_batch_size, Collection, CollectionType};
 use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 
-use salmon_core::{LibraryFormat, ReadType};
+use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::SalmonIndex;
 pub use salmon_infer::EmAccel;
@@ -307,31 +307,6 @@ pub struct QuantResult {
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
-/// Coarse per-phase wall-clock timing for profiling. Each [`mark`](PhaseTimer::mark)
-/// logs the elapsed time since the previous mark on the dedicated `salmon::timing`
-/// target, so a breakdown (mapping vs. inference vs. posterior) is available inline
-/// at the default `info` level, or in isolation via `RUST_LOG=salmon::timing=info`.
-/// This is pure instrumentation: a handful of `Instant::now()` calls around
-/// second-scale phases, emitting logs — it never touches quant output or determinism.
-struct PhaseTimer {
-    last: std::time::Instant,
-}
-
-impl PhaseTimer {
-    fn new() -> Self {
-        Self {
-            last: std::time::Instant::now(),
-        }
-    }
-
-    fn mark(&mut self, phase: &str) {
-        let now = std::time::Instant::now();
-        let elapsed_s = now.duration_since(self.last).as_secs_f64();
-        tracing::info!(target: "salmon::timing", phase, elapsed_s, "phase complete");
-        self.last = now;
-    }
-}
-
 pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();

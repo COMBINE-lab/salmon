@@ -50,7 +50,8 @@ use libradicl::readers::{ParallelRadReader, EMPTY_METACHUNK_CALLBACK};
 use libradicl::record::{MappedRecord, PiscemBulkReadRecord, RecordContext};
 
 use salmon_core::{
-    is_compatible, LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType,
+    is_compatible, LibraryFormat, MateStatus, PhaseTimer, ReadOrientation, ReadStrandedness,
+    ReadType,
 };
 use salmon_eqclass::{
     range_factorize_bins, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement, TranscriptGroup,
@@ -1000,6 +1001,7 @@ where
 pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQuantResult> {
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();
+    let mut timer = PhaseTimer::new();
 
     // Bias correction is computed from the REFERENCE sequence at each fragment's
     // RAD position (never the read bases). seq/GC need the reference bases;
@@ -1309,6 +1311,9 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let mut collapsed = eq_builder.finish();
     collapsed.update_eff_lengths(&eff_lengths);
     let num_eq_classes = collapsed.len();
+    // RAD read + equivalence-class build (the input phase for RAD/deterministic/
+    // alignment input; analogous to "mapping" in the reads driver).
+    timer.mark("rad_read");
 
     // Deterministic EM from a uniform start. With a fixed FLD the collapsed
     // classes are independent of fragment/worker order, so the EM fixed point is
@@ -1428,6 +1433,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
     let counts = em.alphas;
+    // Bias correction + EM/VBEM point estimate (matches the reads driver's phase).
+    timer.mark("em_bias");
 
     let rates: Vec<f64> = (0..num_refs)
         .map(|i| {
@@ -1475,6 +1482,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     } else {
         Vec::new()
     };
+    // Posterior sampling (bootstrap / Gibbs); empty when neither is requested.
+    timer.mark("posterior");
 
     // Run diagnostics from end-of-run aggregates (no per-fragment cost): the
     // observed (baked/auto-detected) library format powers the strandedness
@@ -1527,5 +1536,6 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         diagnostics,
     };
     crate::write_outputs(opts, &result)?;
+    timer.mark("output");
     Ok(result)
 }
