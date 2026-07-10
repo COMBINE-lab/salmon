@@ -216,7 +216,12 @@ fn radix_sort_tidfw(flat: &mut Vec<(u32, bool, Mem)>, tmp: &mut Vec<(u32, bool, 
         (32 - maxk.leading_zeros()).div_ceil(8) as usize
     };
     tmp.clear();
-    tmp.resize(n, (0, false, Mem::new(0, 0, 0)));
+    // Scratch fill for the ping-pong buffer; every slot is overwritten by the
+    // counting-sort scatter below before it is ever read. Fill with a copy of a
+    // real element (`flat[0]`, valid since `n >= 2`) rather than constructing a
+    // zero-length `Mem`, which would violate `Mem`'s `len > 0` invariant (a
+    // `debug_assert` in `Mem::new`, panicking in debug builds).
+    tmp.resize(n, flat[0]);
     let mut cnt = [0u32; 256];
     for p in 0..npass {
         let shift = (p * 8) as u32;
@@ -405,6 +410,30 @@ mod tests {
     use super::*;
     use piscem_rs::index::contig_table::{ContigTable, ContigTableBuilder};
     use piscem_rs::mapping::projected_hits::ProjectedHits;
+
+    #[test]
+    fn radix_sort_tidfw_groups_by_key() {
+        // Regression: the ping-pong scratch fill must be a valid `Mem` (len > 0).
+        // A zero-length placeholder tripped `Mem::new`'s `debug_assert!(len > 0)`
+        // and panicked every *debug*-build map of a read with >= 2 uni-MEMs (the
+        // path below), while being masked in release. Exercise it and confirm the
+        // LSD counting sort is stable by the `(tid, fw)` key.
+        let orig = vec![
+            (5u32, true, Mem::new(0, 10, 20)),
+            (1u32, false, Mem::new(3, 40, 15)),
+            (5u32, false, Mem::new(1, 22, 18)),
+            (1u32, true, Mem::new(0, 5, 31)),
+            (2u32, true, Mem::new(2, 60, 25)),
+            (1u32, false, Mem::new(7, 44, 12)),
+        ];
+        let mut flat = orig.clone();
+        let mut tmp = Vec::new();
+        radix_sort_tidfw(&mut flat, &mut tmp);
+        // A stable LSD radix by the full key equals a stable sort by that key.
+        let mut expected = orig;
+        expected.sort_by_key(|&(t, f, _)| tidfw_key(t, f));
+        assert_eq!(flat, expected);
+    }
 
     #[test]
     fn merge_collapses_same_diagonal_overlaps() {
