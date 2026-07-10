@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.3.2"
+version = "2.3.3"
 edition = "2021"
 rust-version = "1.91"
 license = "BSD-3-Clause"
@@ -25,15 +25,15 @@ authors = ["Rob Patro and the COMBINE-lab"]
 [workspace.dependencies]
 # internal salmon crates — path for local builds, version for `cargo publish`.
 # bump_and_publish.sh bumps the shared [workspace.package] version, which flows here.
-salmon-core = { path = "crates/salmon-core", version = "2.3.2" }
-salmon-eqclass = { path = "crates/salmon-eqclass", version = "2.3.2" }
-salmon-model = { path = "crates/salmon-model", version = "2.3.2" }
-salmon-index = { path = "crates/salmon-index", version = "2.3.2" }
-salmon-infer = { path = "crates/salmon-infer", version = "2.3.2" }
-salmon-map = { path = "crates/salmon-map", version = "2.3.2" }
-salmon-align = { path = "crates/salmon-align", version = "2.3.2" }
-salmon-quant = { path = "crates/salmon-quant", version = "2.3.2" }
-salmon-rad = { path = "crates/salmon-rad", version = "2.3.2" }
+salmon-core = { path = "crates/salmon-core", version = "2.3.3" }
+salmon-eqclass = { path = "crates/salmon-eqclass", version = "2.3.3" }
+salmon-model = { path = "crates/salmon-model", version = "2.3.3" }
+salmon-index = { path = "crates/salmon-index", version = "2.3.3" }
+salmon-infer = { path = "crates/salmon-infer", version = "2.3.3" }
+salmon-map = { path = "crates/salmon-map", version = "2.3.3" }
+salmon-align = { path = "crates/salmon-align", version = "2.3.3" }
+salmon-quant = { path = "crates/salmon-quant", version = "2.3.3" }
+salmon-rad = { path = "crates/salmon-rad", version = "2.3.3" }
 # error handling
 thiserror = "2"
 anyhow = "1"
