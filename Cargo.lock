@@ -2573,6 +2573,7 @@ version = "2.3.2"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
