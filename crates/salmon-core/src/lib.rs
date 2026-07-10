@@ -7,6 +7,7 @@
 //! dependencies so every other crate can depend on it cheaply.
 
 pub mod atomic;
+pub mod diagnostics;
 pub mod error;
 pub mod genemap;
 pub mod libtype;
@@ -15,12 +16,15 @@ pub mod math;
 pub mod progress;
 pub mod quantmerge;
 pub mod refprovider;
+pub mod timing;
 pub mod transcript;
 
 pub use atomic::AtomicF64;
-pub use libtype::{compatible_paired, compatible_single, is_compatible};
+pub use diagnostics::{input_diagnostics, peak_rss_kb, Diagnostic};
+pub use libtype::{compatible_paired, compatible_single, is_compatible, observed_paired_format};
 pub use progress::ProgressCounters;
 pub use refprovider::RefProvider;
+pub use timing::PhaseTimer;
 
 pub use error::{Result, SalmonError};
 pub use libtype::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};

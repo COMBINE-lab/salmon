@@ -179,11 +179,32 @@ impl std::hash::BuildHasher for IdentityBuildHasher {
     }
 }
 
+/// Scale for fixed-point accumulation of per-class weights. Each fragment's
+/// per-transcript weight is a conditional probability in `[0, 1]`; scaling by
+/// 2^40 and summing as integers makes the per-class total **independent of the
+/// order** fragments were added in. f64 addition is not associative, so the
+/// arrival order — which varies with thread count and (in RAD mode) chunk order
+/// — would otherwise perturb the sum and, through range-factorization bin
+/// boundaries, the equivalence-class set itself. 2^40 (~1.1e12) gives ~1e-12
+/// weight resolution, finer than range-factorization needs, and u128
+/// accumulation cannot overflow for any realistic fragment count.
+const WEIGHT_SCALE: f64 = (1u64 << 40) as f64;
+
+#[inline]
+fn weight_to_fixed(w: f64) -> u128 {
+    (w.max(0.0) * WEIGHT_SCALE).round() as u128
+}
+
 /// The aggregated value for an equivalence class.
 #[derive(Debug, Clone)]
 pub struct TGValue {
-    /// per-transcript auxiliary weights (bias / positional / orientation), in
-    /// the same order as the group's `txps`
+    /// order-independent fixed-point accumulator of the summed per-transcript
+    /// weights (integer addition is associative; see [`WEIGHT_SCALE`]).
+    /// Materialized into `weights` at [`EquivalenceClassBuilder::finish`] and
+    /// then emptied.
+    acc: Vec<u128>,
+    /// per-transcript auxiliary weights (bias / positional / orientation), in the
+    /// same order as the group's `txps`. Materialized from `acc` at finish.
     pub weights: Vec<f64>,
     /// `weights[i] / effLen(txps[i])`, filled by [`CollapsedEqClasses::update_eff_lengths`]
     pub combined_weights: Vec<f64>,
@@ -193,21 +214,30 @@ pub struct TGValue {
 
 impl TGValue {
     pub fn new(weights: Vec<f64>, count: u64) -> Self {
-        let combined_weights = weights.clone();
+        let acc = weights.iter().map(|&w| weight_to_fixed(w)).collect();
         Self {
-            weights,
-            combined_weights,
+            acc,
+            weights: Vec::new(),
+            combined_weights: Vec::new(),
             count,
         }
     }
 
     /// Accumulate another observation's weights and count into this class.
     fn accumulate(&mut self, weights: &[f64], count: u64) {
-        debug_assert_eq!(self.weights.len(), weights.len());
-        for (w, &add) in self.weights.iter_mut().zip(weights) {
-            *w += add;
+        debug_assert_eq!(self.acc.len(), weights.len());
+        for (a, &add) in self.acc.iter_mut().zip(weights) {
+            *a += weight_to_fixed(add);
         }
         self.count += count;
+    }
+
+    /// Convert the fixed-point accumulator into the f64 `weights` (and seed
+    /// `combined_weights`), then drop the accumulator. Called once at finish.
+    fn materialize(&mut self) {
+        self.weights = self.acc.iter().map(|&a| a as f64 / WEIGHT_SCALE).collect();
+        self.combined_weights = self.weights.clone();
+        self.acc = Vec::new();
     }
 }
 
@@ -258,6 +288,11 @@ impl EquivalenceClassBuilder {
             .iter()
             .for_each(|e| classes.push((e.key().clone(), e.value().clone())));
         classes.sort_by(|a, b| a.0.txps.cmp(&b.0.txps));
+        // Materialize f64 weights from each class's order-independent fixed-point
+        // accumulator (the sort above already makes the class *order* stable).
+        for (_, v) in &mut classes {
+            v.materialize();
+        }
         let total_count = classes.iter().map(|(_, v)| v.count).sum();
         CollapsedEqClasses {
             classes,
@@ -304,6 +339,90 @@ impl CollapsedEqClasses {
                 }
             }
         }
+    }
+}
+
+/// `fmt_id` sentinel for a placement with no observed paired format (orphan /
+/// single-end); compatibility is then decided by strand + status.
+pub const NAIVE_NO_FMT: u8 = u8::MAX;
+
+/// One placement of a NAIVE fragment signature: a transcript plus enough
+/// orientation/strand info to drop it later if it is library-incompatible.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NaivePlacement {
+    pub tid: u32,
+    /// observed paired-format id ([`salmon_core::LibraryFormat::format_id`]), or
+    /// [`NAIVE_NO_FMT`] for orphan/single-end (filtered by `is_fw`/`status`).
+    pub fmt_id: u8,
+    pub is_fw: bool,
+    pub status: salmon_core::MateStatus,
+}
+
+/// Concurrent accumulator of orientation-tagged **naive** (weightless) fragment
+/// signatures, for the rough seed EM that produces bias-weighting abundances when
+/// none are baked.
+///
+/// Naive classes carry no conditional-probability weights (the FLD isn't known
+/// when they are built) and no strand filter yet — instead each placement keeps
+/// its observed orientation, so that once the library type is determined (after
+/// the FLD pass) library-incompatible placements can be **dropped** in
+/// [`finish`](Self::finish) (the rough seed treats `incompat_prior` as 0) before
+/// forming the uniform eq-classes the rough EM consumes. The output is built via
+/// a normal [`EquivalenceClassBuilder`], so it is deterministic (sorted finish +
+/// integer counts) regardless of this accumulator's hashing/insertion order.
+#[derive(Default)]
+pub struct NaiveEqBuilder {
+    sigs: dashmap::DashMap<Vec<NaivePlacement>, u64>,
+}
+
+impl NaiveEqBuilder {
+    pub fn new() -> Self {
+        Self {
+            sigs: dashmap::DashMap::new(),
+        }
+    }
+
+    /// Record one fragment's placements (the full compatible set, orientation
+    /// tagged). Thread-safe; order-independent (counts are commutative).
+    pub fn add(&self, mut placements: Vec<NaivePlacement>) {
+        if placements.is_empty() {
+            return;
+        }
+        // Canonicalize the signature so identical fragments aggregate.
+        placements.sort_unstable_by_key(|p| (p.tid, p.fmt_id, p.is_fw));
+        *self.sigs.entry(placements).or_insert(0) += 1;
+    }
+
+    /// Build uniform-weight equivalence classes, dropping placements that are
+    /// incompatible with `expected` (`None` ⇒ keep all, e.g. unresolved `-l A`).
+    /// Incompatible placements are removed (not down-weighted): for the rough seed
+    /// `incompat_prior` is treated as 0.
+    pub fn finish(&self, expected: Option<salmon_core::LibraryFormat>) -> CollapsedEqClasses {
+        use salmon_core::LibraryFormat;
+        let out = EquivalenceClassBuilder::new();
+        for e in self.sigs.iter() {
+            let count = *e.value();
+            let mut tids: Vec<u32> = e
+                .key()
+                .iter()
+                .filter(|p| {
+                    expected.is_none_or(|exp| {
+                        let obs = (p.fmt_id != NAIVE_NO_FMT)
+                            .then(|| LibraryFormat::from_format_id(p.fmt_id));
+                        salmon_core::is_compatible(exp, obs, p.is_fw, p.status)
+                    })
+                })
+                .map(|p| p.tid)
+                .collect();
+            tids.sort_unstable();
+            tids.dedup();
+            let n = tids.len();
+            if n > 0 {
+                let w = vec![1.0 / n as f64; n];
+                out.add_group(TranscriptGroup::from_sorted(tids), w, count);
+            }
+        }
+        out.finish()
     }
 }
 

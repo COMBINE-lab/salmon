@@ -44,10 +44,36 @@ available as `salmon-cpp` for reproducibility.
   </TabItem>
 
   <TabItem label="Docker">
+Multi-arch images (`linux/amd64` + `linux/arm64`) are published on every release
+to Docker Hub and GHCR:
+
 ```sh
-docker run --rm -v "$PWD:/data" -w /data \
-  combinelab/salmon:latest salmon --version
+docker pull combinelab/salmon:latest          # or pin a version: :2.2.1
+# mirror on GHCR:
+docker pull ghcr.io/combine-lab/salmon:latest
 ```
+
+The image's entrypoint **is** `salmon`, so arguments go straight to it (don't
+repeat `salmon`):
+
+```sh
+docker run --rm combinelab/salmon:latest --version
+```
+
+Mount your data and run as usual — the first argument is the salmon subcommand:
+
+```sh
+# build an index
+docker run --rm -v "$PWD:/data" -w /data combinelab/salmon:latest \
+  index -t transcripts.fa -i salmon_index
+
+# quantify
+docker run --rm -v "$PWD:/data" -w /data combinelab/salmon:latest \
+  quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 8 -o out
+```
+
+Tags: `latest` (newest release), `X.Y` (e.g. `2.2`), and exact `X.Y.Z` (e.g.
+`2.2.1`) — pin `X.Y.Z` for reproducible pipelines.
   </TabItem>
 
   <TabItem label="From source">

@@ -307,11 +307,95 @@ fn pseudoalignment_only_mode() {
         SkippingStrategy::Permissive,
         256,
         2500,
+        &idx,
+        false,
     );
     assert!(
         sp.iter()
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "sketch pair: {sp:?}"
+    );
+}
+
+#[test]
+fn dovetail_pair_rejected_by_default_accepted_with_flag() {
+    // A dovetailed fragment: insert (50) shorter than the read length (100), so
+    // the mates overhang each other. mate1 forward with 5' at 200, mate2
+    // reverse-complement with 5' at 250 -> fwd.start(200) > rev.start(150) and
+    // the piscem k-mer-anchor fragment length (~insert - readlen = -50) is below
+    // the default -32 floor: a true dovetail under both pairing definitions.
+    let transcript = gen_seq(600, 0xD0FE);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let refs = IdxRefs(&idx);
+    let mut hs = HitSearcher::new(idx.inner());
+    let r1 = transcript[200..300].to_vec();
+    let r2 = revcomp(&transcript[150..250]);
+
+    // --- selective alignment ---
+    // Default: the dovetail is rejected and the valid mate falls back to an orphan.
+    let def = MapConfig::default();
+    let sa_def = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &def);
+    assert!(
+        sa_def
+            .iter()
+            .all(|m| m.status != MateStatus::PairedEndPaired)
+            && !sa_def.is_empty(),
+        "SA default should reject the dovetail (orphan, not a pair): {sa_def:?}"
+    );
+    // --allowDovetail: accepted as a concordant pair.
+    let mut allow = MapConfig::default();
+    allow.pair.allow_dovetail = true;
+    let sa_allow = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
+    assert!(
+        sa_allow
+            .iter()
+            .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
+        "SA --allowDovetail should pair the dovetail: {sa_allow:?}"
+    );
+
+    // --- sketch / pseudoalignment ---
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
+    // Default: below the -32 frag-length floor -> no concordant pair (unmapped).
+    let sk_def = map_read_pair_sketch(
+        idx.inner(),
+        &mut hs,
+        &mut scratch,
+        &r1,
+        &r2,
+        false, // strict_orphan
+        false, // allow_dovetail
+        SkippingStrategy::Permissive,
+        256,
+        2500,
+        &idx,
+        false, // allow_decoy_orphans
+    );
+    assert!(
+        !sk_def
+            .iter()
+            .any(|m| m.status == MateStatus::PairedEndPaired),
+        "sketch default should reject the dovetail: {sk_def:?}"
+    );
+    // --allowDovetail: the floor drops to -read_len -> concordant pair.
+    let sk_allow = map_read_pair_sketch(
+        idx.inner(),
+        &mut hs,
+        &mut scratch,
+        &r1,
+        &r2,
+        false, // strict_orphan
+        true,  // allow_dovetail
+        SkippingStrategy::Permissive,
+        256,
+        2500,
+        &idx,
+        false, // allow_decoy_orphans
+    );
+    assert!(
+        sk_allow
+            .iter()
+            .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
+        "sketch --allowDovetail should pair the dovetail: {sk_allow:?}"
     );
 }
 

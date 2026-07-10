@@ -50,6 +50,14 @@ export default defineConfig({
               label: 'Inferential replicates',
               slug: 'guides/inferential-replicates',
             },
+            {
+              label: 'RAD I/O & deterministic quantification',
+              slug: 'guides/rad-and-determinism',
+            },
+            {
+              label: 'Genome-alignment quantification',
+              slug: 'guides/genome-projection',
+            },
           ],
         },
         {

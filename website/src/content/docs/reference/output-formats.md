@@ -82,7 +82,7 @@ Pretty-printed JSON. tximport keys off several fields (`num_bootstraps`,
 | `library_types` | string[] | detected/declared library type(s) |
 | `frag_dist_length` | int | number of FLD length bins |
 | `frag_length_mean` / `frag_length_sd` | float | observed fragment length stats |
-| `seq_bias_correct` / `gc_bias_correct` | bool | bias correction enabled |
+| `seq_bias_correct` / `gc_bias_correct` / `pos_bias_correct` | bool | bias correction enabled (`--seqBias` / `--gcBias` / `--posBias`) |
 | `mapping_type` | string | `"mapping"` (SA) or `"pseudo"` (sketch) |
 | `keep_duplicates` | bool | index built with `--keepDuplicates` |
 | `index_seq_hash` / `index_name_hash` | string | SHA-256 (hex) of reference seqs / names |
@@ -102,6 +102,41 @@ Pretty-printed JSON. tximport keys off several fields (`num_bootstraps`,
 (Plus `quant_errors`, `num_bias_bins`, `serialized_eq_classes`,
 `num_dovetail_fragments`, `num_fragments_filtered_vm`,
 `num_alignments_below_threshold_for_mapped_fragments_vm`, and `call`.)
+
+#### salmon-rs extensions (beyond the C++ field set)
+
+These fields are added by the Rust implementation; downstream tools that only
+know the C++ schema simply ignore them. All are computed from end-of-run
+aggregates (no per-fragment cost) and are emitted for every mode — reads,
+`-a` alignment, and `--rad`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `num_orphan` | int | mapped fragments placed as orphans (one mate only); reads mode |
+| `range_factorization_bins` | int | range-factorization bins used (0 = disabled) |
+| `num_em_iterations` | int | EM/VBEM iterations actually run |
+| `em_converged` | bool | whether the relative-difference criterion was met before the iteration cap |
+| `detected_library_type` | string \| null | library format observed by the auto-detector (reads / `--rad`); `null` if not observed (e.g. `-a` transcriptomic BAM) |
+| `total_time_seconds` | float | wall-clock seconds for the quantification call |
+| `peak_rss_kb` | int | peak resident set size in KiB (Linux `VmHWM`; 0 elsewhere) |
+| `diagnostics` | object[] | structured run diagnostics (see below) |
+
+##### `diagnostics` — machine-readable run warnings
+
+An array of `{ "code", "severity", "message" }` objects surfacing likely
+bad-input conditions, so pipelines can gate on `code`/`severity` rather than
+scraping the log (the same messages are also written to
+`logs/salmon_quant.log`). `severity` is `"error"` or `"warning"`. Codes:
+
+| `code` | severity | fires when |
+| --- | --- | --- |
+| `no_input_fragments` | error | zero fragments were processed (empty/unreadable input) |
+| `no_fragments_mapped` | error | zero fragments mapped (reference almost certainly wrong) |
+| `very_low_mapping_rate` | warning | < 10% of fragments mapped |
+| `low_mapping_rate` | warning | < 30% of fragments mapped |
+| `library_type_mismatch` | warning | an explicit `-l` disagrees with the observed library format (reads / `--rad`) |
+
+An empty array means no red flags were detected.
 
 ### `aux_info/ambig_info.tsv` — per-transcript read partition (TSV)
 
@@ -143,12 +178,17 @@ Written when bootstrap or Gibbs sampling is requested; byte-compatible with C++
 salmon's `GZipWriter::writeBootstrap<double>`.
 
 - **`names.tsv.gz`** — uncompressed payload is the transcript names,
-  **tab-separated** on a single line terminated by a newline, in index order.
+  **tab-separated** on a single line terminated by a newline, in the same order
+  and set as the `quant.sf` rows: decoy references are **excluded** and sub-`k`
+  "short" transcripts are **included** (always 0). Aligns positionally with both
+  `quant.sf` and `bootstraps.gz`.
 - **`bootstraps.gz`** — uncompressed payload is raw **`f64` little-endian** values
   with no header: `n_replicates` samples written contiguously, each sample being
-  `num_valid_targets` values in index order. Total length =
-  `n_replicates × num_valid_targets × 8` bytes. `samp_type` in `meta_info.json`
-  records whether the replicates are `bootstrap` or `gibbs`.
+  `num_valid_targets` values in `quant.sf` row order (decoys excluded, shorts
+  included). Total length = `n_replicates × num_valid_targets × 8` bytes.
+  `samp_type` in `meta_info.json` records whether the replicates are `bootstrap`
+  or `gibbs`. Available in both mapping-based and **alignment-based** (`-a`)
+  quantification.
 
 ### `cmd_info.json` / `lib_format_counts.json` (JSON)
 
@@ -215,3 +255,30 @@ The 2.0 index is the piscem-rs format and is **not** compatible with C++ salmon
 (pufferfish) indices — they must be rebuilt. Pointing 2.0 at a C++ index (or C++
 salmon at a 2.0 index) produces a clear, actionable error. See
 [what changed in 2.0](../../migrating/from-cpp/).
+
+## RAD output (`--writeRad`)
+
+`--writeRad <PATH>` (and the `--deterministic` intermediate) write a **RAD** file
+— the Reduced Alignment Data format defined by
+[libradicl](https://github.com/COMBINE-lab/libradicl) and shared with piscem and
+alevin-fry. The base format (prelude, file-level tag definitions, and the
+sequence of `[u32 nbytes][u32 nrec][records…]` chunks) is libradicl's contract;
+salmon writes a bulk profile that piscem `map-bulk` can also produce and read.
+See the [RAD I/O guide](../../guides/rad-and-determinism/) for usage.
+
+Two salmon-relevant details on top of the base format:
+
+- **Baked header tags.** A salmon-written RAD records, as file-level tags, an
+  order-independent fragment-length distribution, initial abundances, and the
+  resolved library format, plus a `baked_flags` marker. A `--rad` reader consumes
+  these to quantify in a single pass and to apply `-l A` concordance filtering
+  without re-inference; a piscem RAD carries none of them and is handled with an
+  extra derivation pass.
+- **Chunk compression (`chunk_codec`).** With compression enabled (the default;
+  see `--radCompress`), each chunk's record payload is compressed independently
+  and the `nbytes` field is the **compressed** size; the uncompressed size is
+  carried inside the payload. A file-level `chunk_codec` byte tag selects the
+  codec — `1` = LZ4, `2` = zstd. **A missing `chunk_codec` tag means codec `0`
+  (uncompressed)**, so every RAD produced before this feature, and every piscem
+  RAD, reads as uncompressed automatically. Decompression happens in the reader,
+  so record parsing downstream is identical for compressed and uncompressed RADs.

@@ -97,31 +97,83 @@ fn write_ambig_info(path: &Path, res: &QuantResult) -> Result<()> {
 /// layout — `names.tsv.gz` lists the transcript names (tab-separated, id order),
 /// `bootstraps.gz` is the gzip of raw little-endian `f64`s with each sample's
 /// `num_txps` values written contiguously (tximport reads it directly).
+///
+/// The emitted set is restricted to the same rows as `quant.sf` via
+/// `quant_row_indices` — decoys are excluded and the sub-`k` "short" transcripts
+/// (always 0) are included — so both files align positionally and by name with
+/// `quant.sf`, which is what tximport and friends assume when they read
+/// `bootstraps.gz` against the `quant.sf` rows. (The per-sample vectors are
+/// indexed by reference id over the full `[transcripts][decoys][shorts]` range;
+/// without this filter they would carry the decoy columns and misalign.)
 fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
+    let row_indices: Vec<usize> =
+        quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys).collect();
+
     let f = std::fs::File::create(dir.join("names.tsv.gz"))?;
     let mut enc = GzEncoder::new(f, Compression::new(6));
-    for (i, name) in res.names.iter().enumerate() {
-        if i > 0 {
-            enc.write_all(b"\t")?;
-        }
-        enc.write_all(name.as_bytes())?;
-    }
-    enc.write_all(b"\n")?;
+    enc.write_all(&select_names_tsv(&res.names, &row_indices))?;
     enc.finish()?;
 
     let f = std::fs::File::create(dir.join("bootstraps.gz"))?;
     let mut enc = GzEncoder::new(f, Compression::new(6));
     for sample in &res.bootstraps {
-        for v in sample {
-            enc.write_all(&v.to_le_bytes())?;
-        }
+        enc.write_all(&select_sample_bytes(sample, &row_indices))?;
     }
     enc.finish()?;
     Ok(())
+}
+
+/// Tab-separated, newline-terminated `names.tsv.gz` body for the selected rows.
+fn select_names_tsv(names: &[String], row_indices: &[usize]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (j, &i) in row_indices.iter().enumerate() {
+        if j > 0 {
+            out.push(b'\t');
+        }
+        out.extend_from_slice(names[i].as_bytes());
+    }
+    out.push(b'\n');
+    out
+}
+
+/// Little-endian `f64` bytes for one posterior sample, restricted to the selected
+/// rows (in `row_indices` order) so the stream aligns positionally with `quant.sf`.
+fn select_sample_bytes(sample: &[f64], row_indices: &[usize]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(row_indices.len() * 8);
+    for &i in row_indices {
+        out.extend_from_slice(&sample[i].to_le_bytes());
+    }
+    out
+}
+
+/// Reference indices to emit in `quant.sf`, in order, given the decoy layout.
+///
+/// The index numbering is `[transcripts][decoys][short transcripts]`: transcripts
+/// occupy `[0, first_decoy_index)`, the decoy block `[first_decoy_index,
+/// first_decoy_index + num_decoys)` is skipped, and sub-`k` "short" transcripts
+/// (no k-mers, never seeded, always 0 reads) occupy the tail
+/// `[first_decoy_index + num_decoys, total)` and are still reported.
+///
+/// `first_decoy_index == None` means no decoys (emit everything). A legacy index
+/// that recorded decoys but not `num_decoys` (== 0) keeps the old behavior:
+/// everything from `first_decoy_index` on is treated as decoy and dropped. The
+/// build guarantees decoys are one contiguous block, so the emitted set is simply
+/// the two non-decoy ranges below.
+fn quant_row_indices(
+    total: usize,
+    first_decoy_index: Option<usize>,
+    num_decoys: usize,
+) -> impl Iterator<Item = usize> {
+    let fdi = first_decoy_index.unwrap_or(total).min(total);
+    let decoy_end = match first_decoy_index {
+        Some(_) if num_decoys > 0 => (fdi + num_decoys).min(total),
+        _ => total,
+    };
+    (0..fdi).chain(decoy_end..total)
 }
 
 /// `quant.sf`: `Name  Length  EffectiveLength  TPM  NumReads`.
@@ -130,12 +182,15 @@ fn write_quant_sf(path: &Path, res: &QuantResult, sig_digits: usize) -> Result<(
         std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
     );
     writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-    // Decoy references (indices >= first_decoy_index) are never quantified and
-    // are excluded from quant.sf, matching salmon.
+    // The reference numbering is `[transcripts][decoys][short transcripts]`:
+    // decoys occupy `[first_decoy_index, first_decoy_index + num_decoys)` and are
+    // never quantified (excluded here, matching salmon), while sub-`k` "short"
+    // transcripts (no k-mers, never seeded) are appended after the decoy block by
+    // the index builder. We still report the shorts — always 0 reads / 0 TPM — so
+    // `quant.sf` lists every input transcript.
     // salmon writes EffectiveLength and NumReads with `--sigDigits` decimals
     // (default 3) and TPM with the fixed `{:f}` (6-decimal) format.
-    let n = res.first_decoy_index.unwrap_or(res.names.len());
-    for i in 0..n {
+    for i in quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys) {
         writeln!(
             w,
             "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
@@ -230,6 +285,7 @@ struct MetaInfo {
     frag_length_sd: f64,
     seq_bias_correct: bool,
     gc_bias_correct: bool,
+    pos_bias_correct: bool,
     num_bias_bins: usize,
     mapping_type: String,
     keep_duplicates: bool,
@@ -252,7 +308,24 @@ struct MetaInfo {
     num_alignments_below_threshold_for_mapped_fragments_vm: u64,
     percent_mapped: f64,
     num_decoy_fragments: u64,
+    /// fragment mass dropped in the final min-alpha redistribution (every member
+    /// of an equivalence class truncated); normally 0.
+    inference_truncated_mass: f64,
     num_bootstraps: u32,
+    /// mapped fragments placed as orphans (only one mate mapped)
+    num_orphan: u64,
+    /// range-factorization bins used for equivalence classes (0 = disabled)
+    range_factorization_bins: u32,
+    /// EM/VBEM convergence
+    num_em_iterations: u32,
+    em_converged: bool,
+    /// library format observed by the auto-detector (null if not observed)
+    detected_library_type: Option<String>,
+    /// total wall-clock seconds and peak resident set size (KiB, Linux)
+    total_time_seconds: f64,
+    peak_rss_kb: u64,
+    /// machine-readable run diagnostics / bad-input warnings
+    diagnostics: Vec<crate::Diagnostic>,
     call: String,
     start_time: String,
     end_time: String,
@@ -289,6 +362,7 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         frag_length_sd: res.frag_len_sd,
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
+        pos_bias_correct: opts.pos_bias,
         num_bias_bins: 0,
         mapping_type: if opts.sketch { "pseudo" } else { "mapping" }.to_string(),
         keep_duplicates: res.keep_duplicates,
@@ -298,10 +372,21 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         index_name_hash512: res.index_name_hash512.clone(),
         index_decoy_seq_hash: res.index_decoy_seq_hash.clone(),
         index_decoy_name_hash: res.index_decoy_name_hash.clone(),
-        num_valid_targets: res.first_decoy_index.unwrap_or(res.names.len()),
-        num_decoy_targets: res
-            .first_decoy_index
-            .map_or(0, |fdi| res.names.len().saturating_sub(fdi)),
+        // Valid targets = all non-decoy references (transcripts, including the
+        // sub-k shorts we report with 0 counts); decoys are the explicit block.
+        // Legacy indices (decoys present, `num_decoys` unrecorded) fall back to
+        // the old suffix interpretation.
+        num_valid_targets: if res.num_decoys > 0 {
+            res.names.len().saturating_sub(res.num_decoys)
+        } else {
+            res.first_decoy_index.unwrap_or(res.names.len())
+        },
+        num_decoy_targets: if res.num_decoys > 0 {
+            res.num_decoys
+        } else {
+            res.first_decoy_index
+                .map_or(0, |fdi| res.names.len().saturating_sub(fdi))
+        },
         num_eq_classes: res.num_eq_classes,
         serialized_eq_classes: opts.dump_eq || opts.dump_eq_weights,
         eq_class_properties,
@@ -314,7 +399,16 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
             .num_alignments_below_threshold_for_mapped_fragments_vm,
         percent_mapped,
         num_decoy_fragments: res.num_decoy_fragments,
+        inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
+        num_orphan: res.num_orphan,
+        range_factorization_bins: opts.range_factorization_bins,
+        num_em_iterations: res.em_iters,
+        em_converged: res.em_converged,
+        detected_library_type: res.detected_library_type.clone(),
+        total_time_seconds: res.total_seconds,
+        peak_rss_kb: res.peak_rss_kb,
+        diagnostics: res.diagnostics.clone(),
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: crate::asctime_now(),
@@ -326,4 +420,69 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(value)?;
     std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{quant_row_indices, select_names_tsv, select_sample_bytes};
+
+    fn rows(total: usize, fdi: Option<usize>, nd: usize) -> Vec<usize> {
+        quant_row_indices(total, fdi, nd).collect()
+    }
+
+    #[test]
+    fn no_decoys_emits_all() {
+        assert_eq!(rows(5, None, 0), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn decoys_then_shorts_skips_decoys_keeps_shorts() {
+        // [0,3) transcripts, [3,5) decoys, [5,7) short transcripts.
+        assert_eq!(rows(7, Some(3), 2), vec![0, 1, 2, 5, 6]);
+    }
+
+    #[test]
+    fn decoys_as_clean_suffix_no_shorts() {
+        assert_eq!(rows(5, Some(3), 2), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn legacy_index_without_num_decoys_drops_suffix() {
+        // num_decoys unrecorded (0) but decoys present -> old behavior: drop
+        // everything from first_decoy_index on (no spurious decoy/short rows).
+        assert_eq!(rows(7, Some(3), 0), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn clamps_out_of_range_decoy_block() {
+        // num_decoys overshooting total must not panic or emit phantom rows.
+        assert_eq!(rows(5, Some(3), 99), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn bootstrap_output_aligns_with_quant_rows() {
+        // Reference layout: [t0 t1 t2][d0 d1][s0] — 3 transcripts, 2 decoys, 1
+        // short. The per-sample vector is indexed by reference id over the full
+        // range (decoys carry residual mass, the short is always 0). The emitted
+        // bootstrap rows must drop the decoys, keep the short at 0, and stay in
+        // quant.sf order so names.tsv.gz/bootstraps.gz align positionally.
+        let names: Vec<String> = ["t0", "t1", "t2", "d0", "d1", "s0"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let sample = vec![10.0_f64, 20.0, 30.0, 7.0, 9.0, 0.0];
+        let row_indices: Vec<usize> = quant_row_indices(names.len(), Some(3), 2).collect();
+        assert_eq!(row_indices, vec![0, 1, 2, 5]);
+
+        let names_tsv = select_names_tsv(&names, &row_indices);
+        assert_eq!(names_tsv, b"t0\tt1\tt2\ts0\n");
+
+        let bytes = select_sample_bytes(&sample, &row_indices);
+        let got: Vec<f64> = bytes
+            .chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        // decoy values 7.0/9.0 excluded; short s0 present at 0.0.
+        assert_eq!(got, vec![10.0, 20.0, 30.0, 0.0]);
+    }
 }

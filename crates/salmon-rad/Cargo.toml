@@ -1,0 +1,22 @@
+[package]
+name = "salmon-rad"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "RAD-format schema, record types, and writer for the salmon Rust port (libradicl-backed)."
+
+[dependencies]
+salmon-core = { workspace = true }
+libradicl = { workspace = true }
+anyhow = { workspace = true }
+# `Strand`, used by libradicl's MappedRecord trait (same version libradicl uses).
+bio-types = "1"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

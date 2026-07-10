@@ -3,8 +3,9 @@
 //! Provides the two most-used subcommands so far: `index` (build a salmon
 //! index over a transcriptome) and `quant` (quantify from FASTQ reads, via
 //! selective alignment or the pseudoalignment-only `--sketch` path). Flag
-//! names mirror C++ salmon where they overlap. Alignment-based `quant -a`,
-//! `quantmerge`, and `alevin` are stubbed for later phases.
+//! names mirror C++ salmon where they overlap. Alignment-based `quant -a` and
+//! `quantmerge` are stubbed for later phases; `alevin` is a permanent redirect
+//! to the alevin-fry ecosystem.
 
 use std::path::PathBuf;
 
@@ -17,9 +18,14 @@ use clap::{Args, Parser, Subcommand};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use salmon_align::{quantify_alignments, AlignQuantOptions};
+use salmon_align::{
+    project_genome_bam_to_rad, quantify_alignments, quantify_rad, AlignQuantOptions,
+    GenomeProjectOptions,
+};
 use salmon_index::{build as build_index, IndexBuildOptions};
-use salmon_quant::{quantify_with_aligner, ProgressCounters, QuantOptions};
+use salmon_quant::{
+    quantify, quantify_with_aligner, ChunkCodec, EmAccel, ProgressCounters, QuantOptions,
+};
 
 /// Build the optional selective-alignment backend for `--gpu`. Returns `None`
 /// for the default CPU path. With the `gpu` feature, `--gpu` acquires a GPU
@@ -164,11 +170,7 @@ impl Drop for ProgressGuard {
 }
 
 #[derive(Parser)]
-#[command(
-    name = "salmon",
-    version,
-    about = "RNA-seq transcript quantification (Rust port)"
-)]
+#[command(name = "salmon", version, about = "RNA-seq transcript quantification")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -180,6 +182,29 @@ struct Cli {
     /// `SALMON_NO_VERSION_CHECK` environment variable) is a no-op.
     #[arg(long = "no-version-check", global = true)]
     no_version_check: bool,
+}
+
+/// CLI surface for [`EmAccel`]: the EM/VBEM convergence acceleration scheme.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum EmAccelArg {
+    /// Plain fixed-point iteration; output unchanged from historical salmon.
+    #[default]
+    None,
+    /// SQUAREM acceleration (same fixpoint, far fewer M-steps; not byte-identical).
+    Squarem,
+    /// DAAREM: damped Anderson acceleration over a window of past iterates; faster
+    /// than SQUAREM on high-dimensional problems. Same fixpoint; not byte-identical.
+    Daarem,
+}
+
+impl From<EmAccelArg> for EmAccel {
+    fn from(a: EmAccelArg) -> Self {
+        match a {
+            EmAccelArg::None => EmAccel::None,
+            EmAccelArg::Squarem => EmAccel::Squarem,
+            EmAccelArg::Daarem => EmAccel::Daarem,
+        }
+    }
 }
 
 // clap subcommand args structs differ in size (IndexArgs vs the larger QuantArgs);
@@ -195,8 +220,9 @@ enum Command {
     Quantmerge(QuantMergeArgs),
     /// Diagnostic: per-read best-mapping detail (placement, seed coverage, score).
     DebugMap(DebugMapArgs),
-    /// Single-cell quantification (removed; redirects to alevin-fry).
-    #[command(disable_help_flag = true)]
+    /// Single-cell quantification: removed; use the alevin-fry ecosystem.
+    /// Hidden from help; retained only to redirect legacy `salmon alevin` calls.
+    #[command(hide = true, disable_help_flag = true)]
     Alevin(AlevinArgs),
     /// Perform super-secret operation.
     #[command(hide = true)]
@@ -242,10 +268,14 @@ struct DebugMapArgs {
     /// Single-end FASTQ (plain text).
     #[arg(short = 'r', long = "reads", required = true)]
     reads: PathBuf,
+    /// Seed with sparse fixed-k k-mer anchors instead of the default
+    /// unitig-constrained uni-MEMs.
+    #[arg(long = "sparseSeeds", conflicts_with_all = ["unimems", "refmems"])]
+    sparse_seeds: bool,
     /// Seed with reference-extended MEMs (cross unitig boundaries).
     #[arg(long = "refMEMs", conflicts_with = "unimems")]
     refmems: bool,
-    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
+    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style; default).
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
 }
@@ -261,7 +291,7 @@ struct IndexArgs {
     /// K-mer length (odd, ≤ 31 recommended).
     #[arg(short = 'k', long = "kmerLen", default_value_t = 31)]
     kmer_len: usize,
-    /// Minimizer length (0 = auto).
+    /// Minimizer length (0 = auto; 19 for the default k=31).
     #[arg(short = 'm', long = "minimizerLen", default_value_t = 0)]
     minimizer_len: usize,
     /// Worker threads (0 = all cores).
@@ -282,6 +312,17 @@ struct IndexArgs {
     /// index still lands in --index. Defaults to the index dir. (salmon's --tmpdir)
     #[arg(long = "tmpdir")]
     tmpdir: Option<PathBuf>,
+    /// Directory for sshash's external minimizer-sort scratch. Defaults to a
+    /// `sshash_tmp` subdirectory of --tmpdir (or the index dir when --tmpdir is
+    /// unset). Override to place the sort scratch on a separate/fast disk; the
+    /// directory is created before the build and removed afterwards.
+    #[arg(long = "sshashTmpDir")]
+    sshash_tmp_dir: Option<PathBuf>,
+    /// RAM ceiling, in GiB, for sshash's external minimizer sort (the main
+    /// build-time memory/disk trade-off). Default is 8; a smaller value uses
+    /// less RAM but spills to disk sooner.
+    #[arg(long = "ramLimit")]
+    ram_limit_gib: Option<usize>,
     /// Retain exact-duplicate transcript sequences instead of collapsing them
     /// (salmon collapses duplicates by default).
     #[arg(long = "keepDuplicates")]
@@ -305,17 +346,47 @@ struct IndexArgs {
 #[derive(Args)]
 struct QuantArgs {
     /// Salmon index directory (reads mode).
-    #[arg(short = 'i', long = "index", required_unless_present = "alignments")]
+    #[arg(
+        short = 'i',
+        long = "index",
+        required_unless_present_any = ["alignments", "rad"]
+    )]
     index: Option<PathBuf>,
     /// Alignment-based mode: a BAM of reads aligned to the transcriptome.
     #[arg(short = 'a', long = "alignments")]
     alignments: Option<PathBuf>,
+    /// RAD-input mode: a RAD file of mappings (from `salmon quant --writeRad` or
+    /// `piscem map-bulk`) to quantify directly, in parallel.
+    #[arg(long = "rad", conflicts_with_all = ["alignments", "mates1", "mates2", "unmated"])]
+    rad: Option<PathBuf>,
     /// Transcriptome FASTA (alignment mode `-a`): enables the alignment error model.
     #[arg(short = 't', long = "targets")]
     targets: Option<PathBuf>,
     /// Disable the alignment error model (alignment mode).
     #[arg(long = "noErrorModel")]
     no_error_model: bool,
+    /// Opt in to the order-independent alignment error model in deterministic
+    /// mode (`-a --deterministic`, requires `-t`). Off by default: deterministic
+    /// mode scores by the BAM `AS` tag, which benchmarks at least as accurately
+    /// against ground truth and needs only a single BAM pass; `--errorModel` adds
+    /// a second pass to train the model. Use it for parity with salmon's classic
+    /// error-modeled quant, or when the aligner's `AS` is absent/unreliable.
+    #[arg(long = "errorModel")]
+    error_model: bool,
+    /// Genome-alignment mode: a GTF/GFF annotation. Given with `-a <genome.bam>`,
+    /// salmon projects the spliced genome alignments into transcriptome
+    /// coordinates (via bramble) and quantifies the projected placements. The
+    /// transcript set is taken from the annotation.
+    #[arg(long = "annotation", value_name = "GTF|GFF")]
+    annotation: Option<PathBuf>,
+    /// Genome FASTA (genome-alignment mode) — needed only for bias correction, to
+    /// reconstruct transcript sequences from the annotation's exons.
+    #[arg(long = "genome", value_name = "FASTA")]
+    genome: Option<PathBuf>,
+    /// Genome-alignment projection: penalty multiplier per junction mismatch
+    /// (bramble `junc_miss_discount`; default 1.0 = no penalty).
+    #[arg(long = "juncMissDiscount", value_name = "F")]
+    junc_miss_discount: Option<f64>,
     /// Library type (e.g. IU, ISR, A for auto).
     #[arg(short = 'l', long = "libType", default_value = "A")]
     lib_type: String,
@@ -335,7 +406,9 @@ struct QuantArgs {
     /// gene-level estimates to `quant.genes.sf`.
     #[arg(short = 'g', long = "geneMap", value_name = "FILE")]
     gene_map: Option<PathBuf>,
-    /// Worker threads (0 = all cores).
+    /// Worker threads (0 = all cores). salmon also runs one auxiliary thread for
+    /// FASTQ parsing/decompression, so total CPU use can slightly exceed this
+    /// value; on schedulers that enforce the limit, request one extra core.
     #[arg(short = 'p', long = "threads", default_value_t = 0)]
     threads: usize,
     /// Use the alignment-free pseudoalignment path.
@@ -378,6 +451,24 @@ struct QuantArgs {
     /// standard `--writeMappings`).
     #[arg(short = 'z', long = "writeMappings")]
     write_mappings: Option<PathBuf>,
+    /// Write per-fragment mappings to a RAD file at this path. Sketch or
+    /// selective-alignment profile is chosen automatically from the mapping
+    /// mode. Quantification still runs; add --skipQuant to map only. The file is
+    /// piscem map-bulk compatible and can be re-quantified with `--rad`.
+    #[arg(long = "writeRad")]
+    write_rad: Option<PathBuf>,
+    /// Deterministic quantification (reads/FASTQ input): map once to an
+    /// intermediate RAD, then quantify from it with a fixed fragment-length
+    /// distribution, so the result is byte-identical across runs and thread
+    /// counts. Avoids a second mapping pass. The intermediate RAD is written under
+    /// the output directory and deleted on success unless --keepRad (or use
+    /// --writeRad PATH to choose its location and keep it).
+    #[arg(long = "deterministic")]
+    deterministic: bool,
+    /// Keep the intermediate RAD produced by --deterministic (by default it is
+    /// deleted once quantification finishes). Ignored without --deterministic.
+    #[arg(long = "keepRad")]
+    keep_rad: bool,
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
@@ -387,6 +478,21 @@ struct QuantArgs {
     /// Enable positional bias correction.
     #[arg(long = "posBias")]
     pos_bias: bool,
+    /// EM iterations for the preliminary abundance estimate that weights bias
+    /// model collection (expert; rough on purpose to avoid overfitting).
+    #[arg(long = "biasSeedEMIters", default_value_t = 11, hide = true)]
+    bias_seed_em_iters: u32,
+    /// Dump observed+expected seq/GC/positional bias models to
+    /// `bias_models.txt` (debugging / parity).
+    #[arg(long = "dumpBiasModels", hide = true)]
+    dump_bias_models: bool,
+    /// Compression codec for RAD output (`--writeRad` and the `--deterministic`
+    /// intermediate): `lz4` (default), `zstd` (better ratio), or `none`.
+    #[arg(long = "radCompress", default_value = "lz4", value_parser = ["lz4", "zstd", "none"])]
+    rad_compress: String,
+    /// Write uncompressed RAD chunks (overrides --radCompress).
+    #[arg(long = "noCompressRad")]
+    no_compress_rad: bool,
     /// Number of bootstrap replicates for posterior uncertainty.
     #[arg(long = "numBootstraps", default_value_t = 0)]
     num_bootstraps: u32,
@@ -420,10 +526,15 @@ struct QuantArgs {
     /// adapter is found.
     #[arg(long = "gpu")]
     gpu: bool,
+    /// Seed with sparse fixed-k k-mer anchors instead of the default
+    /// unitig-constrained uni-MEMs.
+    #[arg(long = "sparseSeeds", conflicts_with_all = ["unimems", "refmems"])]
+    sparse_seeds: bool,
     /// Seed with reference-extended MEMs (cross unitig boundaries).
     #[arg(long = "refMEMs", conflicts_with = "unimems")]
     refmems: bool,
-    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
+    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style). This is the
+    /// default; the flag is accepted for explicitness/back-compat.
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
     /// Match score for selective alignment (reads mode).
@@ -450,6 +561,10 @@ struct QuantArgs {
     /// VBEM per-feature Dirichlet prior weight.
     #[arg(long = "vbPrior", default_value_t = 1e-2)]
     vb_prior: f64,
+    /// EM/VBEM convergence acceleration. `squarem` reaches the same abundances in
+    /// far fewer M-steps but is not byte-identical to the default `none`.
+    #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
+    em_accel: EmAccelArg,
     /// Mean of the fragment-length distribution prior.
     #[arg(long = "fldMean", default_value_t = 250.0)]
     fld_mean: f64,
@@ -474,9 +589,16 @@ struct QuantArgs {
     /// Significant digits for the EffectiveLength and NumReads columns of quant.sf.
     #[arg(long = "sigDigits", default_value_t = 3)]
     sig_digits: u32,
-    /// Discard a read/fragment that maps to more than this many places (reads mode).
-    #[arg(short = 'w', long = "maxReadOcc", default_value_t = 200)]
+    /// Discard a read/fragment that maps to more than this many places — counting
+    /// the total set of distinct mappings (concordant + orphan union) (reads mode).
+    #[arg(short = 'w', long = "maxReadOcc", default_value_t = 250)]
     max_read_occ: usize,
+    /// Only emit a single-mate (orphan) mapping when the read's mate is entirely
+    /// unmapped. By default, when a pair has no concordant mapping, orphans are
+    /// reported for both mates (their union); with this flag a read that maps only
+    /// because its mate also mapped (to a disjoint set) is not reported as an orphan.
+    #[arg(long = "orphansRequireUnmappedMate")]
+    orphans_require_unmapped_mate: bool,
     /// Allow dovetailed mappings (mates extending past each other) as concordant.
     #[arg(long = "allowDovetail")]
     allow_dovetail: bool,
@@ -508,6 +630,14 @@ struct QuantArgs {
     /// only the best-scoring mapping(s), each with equal weight.
     #[arg(long = "hardFilter")]
     hard_filter: bool,
+    /// When a fragment's best transcript alignment is outscored by a decoy
+    /// (genome) alignment, keep the transcript placement instead of discarding the
+    /// fragment. Off by default (decoy-dominated fragments are dropped, matching
+    /// salmon). Increases the reported mapping rate on decoy-aware indices at the
+    /// cost of retaining transcript mappings for fragments better explained by the
+    /// genome; only affects fragments that retain a transcript candidate.
+    #[arg(long = "allowDecoyOrphans")]
+    allow_decoy_orphans: bool,
     /// Allow soft-clipping of read ends during selective alignment: unaligned
     /// read-end bases are clipped rather than penalized. (salmon's --softclip)
     #[arg(long = "softclip")]
@@ -619,15 +749,20 @@ struct QuantArgs {
     validate_mappings: bool,
 }
 
-/// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
-/// enforces they are mutually exclusive).
-fn seed_mode(unimems: bool, refmems: bool) -> salmon_map::SeedMode {
-    if unimems {
-        salmon_map::SeedMode::UniMem
+/// Resolve the `--sparseSeeds` / `--uniMEMs` / `--refMEMs` flags into a seeding
+/// mode (clap enforces they are mutually exclusive). The default is uni-MEM
+/// seeding (`--uniMEMs`): it is faster than sparse k-mer seeding and at least as
+/// accurate, and faithfully reproduces pufferfish's seeding. `--sparseSeeds`
+/// selects the older sparse fixed-k anchors.
+fn seed_mode(unimems: bool, refmems: bool, sparse_seeds: bool) -> salmon_map::SeedMode {
+    if sparse_seeds {
+        salmon_map::SeedMode::Sparse
     } else if refmems {
         salmon_map::SeedMode::RefMem
     } else {
-        salmon_map::SeedMode::Sparse
+        // default (and explicit `--uniMEMs`)
+        let _ = unimems;
+        salmon_map::SeedMode::UniMem
     }
 }
 
@@ -642,6 +777,8 @@ fn run_index(args: IndexArgs) -> Result<()> {
     opts.keep_intermediate = args.keep_intermediate;
     opts.keep_fixed_fasta = args.keep_fixed_fasta;
     opts.tmpdir = args.tmpdir;
+    opts.sshash_tmp = args.sshash_tmp_dir;
+    opts.ram_limit_gib = args.ram_limit_gib;
     opts.keep_duplicates = args.keep_duplicates;
     opts.decoys = args.decoys;
     opts.gencode = args.gencode;
@@ -700,6 +837,274 @@ fn write_gene_level(
     Ok(())
 }
 
+/// Deterministic reads-mode quantification: map the FASTQ once to an
+/// intermediate RAD (baking a fixed, order-independent FLD and the resolved
+/// library format), then quantify from that RAD via [`quantify_rad`]. Because the
+/// FLD is fixed before equivalence-class assembly, the result is byte-identical
+/// across runs and thread counts. Re-reading the RAD is cheap, so this avoids a
+/// second *mapping* pass; the requant derives its own abundances from the RAD.
+/// Bias correction needs the reference sequence, but since we control both passes
+/// and phase 1 loads the index, we hand the index's sequences to phase 2 — so
+/// `--deterministic --seqBias/--gcBias/--posBias` needs no separate `-t`.
+fn run_deterministic(
+    mut map_opts: QuantOptions,
+    rad_out: Option<PathBuf>,
+    keep_rad: bool,
+    bias_targets: Option<PathBuf>,
+    gene_map: Option<&std::path::Path>,
+    out_dir: &std::path::Path,
+) -> Result<()> {
+    let bias_on = map_opts.seq_bias || map_opts.gc_bias || map_opts.pos_bias;
+    // An explicit `--writeRad PATH` is honoured (and kept — it was a requested
+    // output); otherwise a temp under the output directory, removed on success
+    // unless `--keepRad`.
+    let explicit = rad_out.is_some();
+    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("intermediate_mappings.rad"));
+    // The RAD writer opens its file before the mapping pass, so the output
+    // directory (where the default intermediate lives) must exist first.
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+
+    // Phase 1 — map once, write the RAD (bakes the deterministic FLD + resolved
+    // library format), skipping the online EM: quantification happens in phase 2.
+    map_opts.write_rad = Some(rad_path.clone());
+    map_opts.skip_quant = true;
+    // Derive the FLD + library format order-independently during this pass and
+    // bake them (see `QuantOptions::deterministic_fld`), so phase 2 is a single
+    // pass and the whole result is byte-identical across thread counts.
+    map_opts.deterministic_fld = true;
+    let map_res = quantify(&map_opts).context("deterministic mapping pass failed")?;
+    let pct = if map_res.num_processed > 0 {
+        100.0 * map_res.num_mapped as f64 / map_res.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "deterministic: mapped {} / {} fragments ({:.2}%); quantifying from intermediate RAD",
+        map_res.num_mapped,
+        map_res.num_processed,
+        pct
+    );
+
+    // Phase 2 — deterministic quant from the RAD (fixed baked FLD + library
+    // format ⇒ order-independent eq-classes + EM). Mirrors the `--rad` knob wiring.
+    let mut q = AlignQuantOptions::new(rad_path.clone(), out_dir.to_path_buf());
+    q.lib_type = map_opts.lib_type.clone();
+    q.em = map_opts.em.clone();
+    q.range_factorization_bins = map_opts.range_factorization_bins;
+    // Bias needs the reference sequence. Prefer the index's own sequences (we
+    // already built the index for phase 1), so the user need not pass `-t`; an
+    // explicit `-t` is still honoured as a fallback.
+    q.transcripts = bias_targets;
+    if bias_on {
+        q.ref_seqs = Some(
+            salmon_index::load_ref_seqs(&map_opts.index_dir)
+                .context("loading reference sequences from the index for deterministic bias")?,
+        );
+    }
+    q.seq_bias = map_opts.seq_bias;
+    q.gc_bias = map_opts.gc_bias;
+    q.pos_bias = map_opts.pos_bias;
+    q.bias_seed_em_iters = map_opts.bias_seed_em_iters;
+    q.score_exp = map_opts.map_config.score.score_exp;
+    q.incompat_prior = map_opts.incompat_prior;
+    q.sig_digits = map_opts.sig_digits;
+    q.fld_mean = map_opts.fld_mean;
+    q.fld_sd = map_opts.fld_sd;
+    q.fld_max = map_opts.fld_max;
+    q.gc_bins = map_opts.gc_bins;
+    q.cond_gc_bins = map_opts.cond_gc_bins;
+    q.num_bootstraps = map_opts.num_bootstraps;
+    q.num_gibbs_samples = map_opts.num_gibbs_samples;
+    q.thinning_factor = map_opts.thinning_factor;
+    let res = quantify_rad(&q, &rad_path).context("deterministic requant pass failed")?;
+    let pct2 = if res.num_processed > 0 {
+        100.0 * res.num_mapped as f64 / res.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "{} fragments from intermediate RAD, {} quantified ({:.2}%); {} equivalence classes",
+        res.num_processed,
+        res.num_mapped,
+        pct2,
+        res.num_eq_classes
+    );
+    if let Some(gm) = gene_map {
+        write_gene_level(
+            out_dir,
+            gm,
+            &res.names,
+            &res.lengths,
+            &res.eff_lengths,
+            &res.tpm,
+            &res.counts,
+        )?;
+    }
+    // Remove the intermediate unless kept (an explicit --writeRad path is always
+    // kept).
+    if explicit || keep_rad {
+        tracing::info!("kept intermediate RAD at {}", rad_path.display());
+    } else if let Err(e) = std::fs::remove_file(&rad_path) {
+        tracing::warn!(
+            "could not remove intermediate RAD {}: {e}",
+            rad_path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Alignment-mode `--deterministic`: write the transcriptome BAM's placements to
+/// an intermediate salmon RAD (one pass — baking an order-independent FLD +
+/// library format, and rough abundances when bias is requested), then quantify
+/// from it via the same deterministic [`quantify_rad`] the reads path uses, so
+/// the result is byte-identical across thread counts. Score-based (carries the
+/// BAM `AS` tag); the online alignment error model is not used in this mode.
+fn run_deterministic_align(
+    opts: AlignQuantOptions,
+    rad_out: Option<PathBuf>,
+    keep_rad: bool,
+    gene_map: Option<&std::path::Path>,
+    codec: ChunkCodec,
+) -> Result<()> {
+    let out_dir = opts.output_dir.clone();
+    // An explicit `--writeRad PATH` is honoured and kept; otherwise a temp under
+    // the output dir, removed on success unless `--keepRad` (or `--skipQuant`,
+    // where the RAD is the deliverable).
+    let explicit = rad_out.is_some();
+    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("intermediate_alignments.rad"));
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+
+    // Phase 1 — one BAM pass: write placements + bake FLD / library format
+    // (+ rough abundances when bias is on) so phase 2 is a single baked pass.
+    let summary = salmon_align::write_alignment_rad(&opts, &rad_path, codec)
+        .context("deterministic alignment RAD-write pass failed")?;
+    let pct = if summary.num_processed > 0 {
+        100.0 * summary.num_mapped as f64 / summary.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "deterministic: wrote {} / {} aligned fragments ({:.2}%) to the intermediate RAD; quantifying",
+        summary.num_mapped,
+        summary.num_processed,
+        pct
+    );
+
+    // Phase 2 — quantify from the fully-baked RAD (single pass, order-independent).
+    let res = quantify_rad(&opts, &rad_path).context("deterministic requant pass failed")?;
+    let pct2 = if res.num_processed > 0 {
+        100.0 * res.num_mapped as f64 / res.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "{} fragments from intermediate RAD, {} quantified ({:.2}%); {} equivalence classes",
+        res.num_processed,
+        res.num_mapped,
+        pct2,
+        res.num_eq_classes
+    );
+    if let Some(gm) = gene_map {
+        write_gene_level(
+            &out_dir,
+            gm,
+            &res.names,
+            &res.lengths,
+            &res.eff_lengths,
+            &res.tpm,
+            &res.counts,
+        )?;
+    }
+    if explicit || keep_rad || opts.skip_quant {
+        tracing::info!("kept intermediate RAD at {}", rad_path.display());
+    } else if let Err(e) = std::fs::remove_file(&rad_path) {
+        tracing::warn!(
+            "could not remove intermediate RAD {}: {e}",
+            rad_path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Resolve the RAD chunk-compression codec from the CLI flags.
+fn rad_codec_from_args(no_compress_rad: bool, rad_compress: &str) -> Result<ChunkCodec> {
+    if no_compress_rad {
+        return Ok(ChunkCodec::None);
+    }
+    Ok(match rad_compress {
+        "none" => ChunkCodec::None,
+        "lz4" => ChunkCodec::Lz4,
+        "zstd" => ChunkCodec::Zstd,
+        other => anyhow::bail!("unknown --radCompress codec '{other}' (expected lz4|zstd|none)"),
+    })
+}
+
+/// Genome-alignment mode (`-a <genome.bam> --annotation <gtf>`): project the
+/// spliced genome alignments into transcriptome coordinates with bramble, write
+/// a salmon RAD, then quantify from it with the deterministic `quantify_rad`.
+/// `q` supplies the EM / bias / output / bootstrap knobs for that requant.
+fn run_genome_project(
+    gp: GenomeProjectOptions,
+    q: AlignQuantOptions,
+    rad_out: Option<PathBuf>,
+    keep_rad: bool,
+    gene_map: Option<&std::path::Path>,
+) -> Result<()> {
+    let out_dir = q.output_dir.clone();
+    let explicit = rad_out.is_some();
+    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("genome_projected.rad"));
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+
+    // Phase 1 — project the genome BAM into a fully-baked transcriptome RAD.
+    let art = project_genome_bam_to_rad(&gp, &rad_path).context("genome projection pass failed")?;
+    let pct = if art.num_processed > 0 {
+        100.0 * art.num_mapped as f64 / art.num_processed as f64
+    } else {
+        0.0
+    };
+    tracing::info!(
+        "projected {} / {} read groups ({:.2}%) onto {} annotated transcripts; quantifying",
+        art.num_mapped,
+        art.num_processed,
+        pct,
+        art.names.len()
+    );
+
+    // Phase 2 — quantify from the projected RAD (single baked pass). Hand the
+    // reconstructed transcript sequences to bias correction (no `-t` needed).
+    let mut q = q;
+    if q.ref_seqs.is_none() {
+        q.ref_seqs = art.ref_seqs;
+    }
+    let res = quantify_rad(&q, &rad_path).context("genome-projected quantification failed")?;
+    tracing::info!(
+        "{} fragments from projected RAD, {} quantified; {} equivalence classes",
+        res.num_processed,
+        res.num_mapped,
+        res.num_eq_classes
+    );
+    if let Some(gm) = gene_map {
+        write_gene_level(
+            &out_dir,
+            gm,
+            &res.names,
+            &res.lengths,
+            &res.eff_lengths,
+            &res.tpm,
+            &res.counts,
+        )?;
+    }
+    if explicit || keep_rad {
+        tracing::info!("kept projected RAD at {}", rad_path.display());
+    } else if let Err(e) = std::fs::remove_file(&rad_path) {
+        tracing::warn!("could not remove projected RAD {}: {e}", rad_path.display());
+    }
+    Ok(())
+}
+
 fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.ont {
         long_read_redirect();
@@ -720,12 +1125,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.eqclasses.is_some() {
         tracing::warn!("--eqclasses (quantify from a precomputed equivalence-class file) is not yet implemented and is ignored; mapping/alignment input is used instead.");
     }
-    if args.no_frag_length_dist {
-        tracing::warn!("--noFragLengthDist is accepted but not yet implemented and has no effect: the fragment-length distribution is still used in the per-fragment probability.");
-    }
-    if args.no_single_frag_prob {
-        tracing::warn!("--noSingleFragProb is accepted but not yet implemented and has no effect.");
-    }
     if args.sample_out || args.sample_unaligned || args.write_qualities {
         tracing::warn!("--sampleOut/--sampleUnaligned/--writeQualities (posterior-sampled BAM output) are accepted but not yet implemented and have no effect.");
     }
@@ -739,6 +1138,17 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     }
     if args.validate_mappings {
         tracing::warn!("--validateMappings has no effect (deprecated in salmon too): selective alignment is the default mapping mode; pass --sketch for pseudoalignment.");
+    }
+    if args.sketch && args.decoy_threshold != 1.0 {
+        tracing::warn!(
+            "--decoyThreshold {} has no effect in --sketch mode: sketch (pseudoalignment) \
+             returns only equally-best mappings, so the decoy-domination comparison \
+             (bestTxpScore < decoyThreshold * bestDecoyScore) never triggers. A fragment is \
+             treated as decoy-dominated only when it maps to decoys *and no transcript*; \
+             otherwise decoy hits are dropped and transcript hits kept (use --allowDecoyOrphans \
+             to keep transcript hits even when a decoy also matches).",
+            args.decoy_threshold
+        );
     }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
@@ -777,12 +1187,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.range_factorization_bins = range_factorization_bins;
         opts.transcripts = args.targets;
         opts.no_error_model = args.no_error_model;
+        opts.deterministic_error_model = args.error_model;
         opts.seq_bias = args.seq_bias;
         opts.gc_bias = args.gc_bias;
         opts.pos_bias = args.pos_bias;
+        opts.bias_seed_em_iters = args.bias_seed_em_iters;
         opts.incompat_prior = args.incompat_prior;
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+        opts.em.accel = args.em_accel.into();
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean;
         opts.fld_sd = args.fld_sd;
@@ -798,8 +1211,70 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.cond_gc_bins = args.conditional_gc_bins;
         opts.skip_quant = args.skip_quant;
         opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
+        opts.num_bootstraps = args.num_bootstraps;
+        opts.num_gibbs_samples = args.num_gibbs_samples;
+        opts.thinning_factor = args.thinning_factor;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
+
+        // Genome-alignment mode: `-a <genome.bam> --annotation <gtf>` projects the
+        // spliced genome alignments into transcriptome coordinates (bramble) and
+        // quantifies the projection. Inherently RAD-based / deterministic.
+        if let Some(annotation) = args.annotation.clone() {
+            // Genome projection is inherently deterministic (RAD-based) and has no
+            // error model (bramble exposes no projected CIGAR), so flags that only
+            // matter for transcriptomic alignment are accepted but no-ops here.
+            if args.deterministic {
+                tracing::warn!(
+                    "--deterministic is redundant in genome-projection mode (--annotation): \
+                     projection is already deterministic; ignoring it"
+                );
+            }
+            if args.error_model {
+                tracing::warn!(
+                    "--errorModel has no effect in genome-projection mode (--annotation): \
+                     projection scores by bramble similarity, not an alignment error model"
+                );
+            }
+            let codec = rad_codec_from_args(args.no_compress_rad, &args.rad_compress)?;
+            let gp = GenomeProjectOptions {
+                bam: opts.bam.clone(),
+                annotation,
+                genome_fasta: args.genome.clone(),
+                lib_type: opts.lib_type.clone(),
+                junc_miss_discount: args.junc_miss_discount,
+                bias: opts.seq_bias || opts.gc_bias || opts.pos_bias,
+                fld_mean: opts.fld_mean,
+                fld_sd: opts.fld_sd,
+                fld_max: opts.fld_max,
+                bias_seed_em_iters: opts.bias_seed_em_iters,
+                em: opts.em.clone(),
+                rad_codec: codec,
+            };
+            return run_genome_project(
+                gp,
+                opts,
+                args.write_rad.clone(),
+                args.keep_rad,
+                gene_map.as_deref(),
+            );
+        }
+
+        // `--deterministic`: write the BAM's placements to an intermediate RAD
+        // (baking the FLD/library-format + rough abundances) and requantify from
+        // it, for results byte-identical across thread counts. Score-based; no
+        // online error model.
+        if args.deterministic {
+            let codec = rad_codec_from_args(args.no_compress_rad, &args.rad_compress)?;
+            return run_deterministic_align(
+                opts,
+                args.write_rad.clone(),
+                args.keep_rad,
+                gene_map.as_deref(),
+                codec,
+            );
+        }
+
         // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
         let progress = Arc::new(ProgressCounters::default());
         let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
@@ -815,8 +1290,88 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         } else {
             0.0
         };
+        // Alignment mode: the records are already aligned (by the upstream
+        // aligner), so `num_processed` is the count of *aligned* fragments and
+        // `num_mapped` is those with a strand-compatible placement we could
+        // quantify. Report it that way so a (necessarily) <100% rate on a
+        // stranded library reads as "strand-incompatible", not "lost alignments".
+        if res.num_processed > res.num_mapped {
+            tracing::info!(
+                "{} aligned fragments; {} strand-compatible and quantified ({:.2}%); \
+                 {} dropped as incompatible with library type {}; {} equivalence classes",
+                res.num_processed,
+                res.num_mapped,
+                pct,
+                res.num_processed - res.num_mapped,
+                opts.lib_type,
+                res.num_eq_classes
+            );
+        } else {
+            tracing::info!(
+                "{} aligned fragments, all strand-compatible and quantified; {} equivalence classes",
+                res.num_processed,
+                res.num_eq_classes
+            );
+        }
+        if res.inference_truncated_mass > 0.0 {
+            tracing::warn!(
+                "{:.3} fragments of equivalence-class mass could not be assigned (every member \
+                 transcript was truncated below the min-alpha threshold); reported as \
+                 inference_truncated_mass in meta_info.json",
+                res.inference_truncated_mass
+            );
+        }
+        if let Some(gm) = &gene_map {
+            write_gene_level(
+                &out_dir,
+                gm,
+                &res.names,
+                &res.lengths,
+                &res.eff_lengths,
+                &res.tpm,
+                &res.counts,
+            )?;
+        }
+        return Ok(());
+    }
+
+    // RAD-input mode: quantify directly from a RAD file of mappings, in parallel.
+    if let Some(rad_path) = args.rad {
+        // The RAD reuses alignment mode's inference/output; AlignQuantOptions
+        // carries the relevant knobs (lib type, EM/VBEM, score-exp, FLD prior,
+        // bootstrap/Gibbs). `bam` is unused by the RAD path.
+        let mut opts = AlignQuantOptions::new(rad_path.clone(), args.output);
+        opts.lib_type = args.lib_type;
+        opts.em.use_vbem = use_vbem;
+        opts.range_factorization_bins = range_factorization_bins;
+        // Bias correction from RAD: seq/GC use the reference at each fragment's
+        // recorded position (the transcriptome `-t`), positional uses only the RAD.
+        opts.transcripts = args.targets;
+        opts.seq_bias = args.seq_bias;
+        opts.gc_bias = args.gc_bias;
+        opts.pos_bias = args.pos_bias;
+        opts.bias_seed_em_iters = args.bias_seed_em_iters;
+        opts.score_exp = args.score_exp;
+        opts.incompat_prior = args.incompat_prior;
+        opts.em.vb_prior = args.vb_prior;
+        opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+        opts.em.accel = args.em_accel.into();
+        opts.sig_digits = args.sig_digits;
+        opts.fld_mean = args.fld_mean;
+        opts.fld_sd = args.fld_sd;
+        opts.fld_max = args.fld_max;
+        opts.skip_quant = args.skip_quant;
+        opts.num_bootstraps = args.num_bootstraps;
+        opts.num_gibbs_samples = args.num_gibbs_samples;
+        opts.thinning_factor = args.thinning_factor;
+        let res = quantify_rad(&opts, &rad_path).context("RAD-input quantification failed")?;
+        let pct = if res.num_processed > 0 {
+            100.0 * res.num_mapped as f64 / res.num_processed as f64
+        } else {
+            0.0
+        };
         tracing::info!(
-            "processed {} fragments, mapped {} ({:.2}%), {} equivalence classes",
+            "{} fragments from RAD, {} quantified ({:.2}%); {} equivalence classes",
             res.num_processed,
             res.num_mapped,
             pct,
@@ -839,7 +1394,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // Reads (selective-alignment / pseudoalignment) mode.
     anyhow::ensure!(
         !args.mates1.is_empty() || !args.unmated.is_empty(),
-        "no reads provided: pass -1/-2 (paired), -r (single-end), or -a (BAM)"
+        "no reads provided: pass -1/-2 (paired), -r (single-end), -a (BAM), or --rad (RAD)"
     );
     anyhow::ensure!(
         args.mates1.len() == args.mates2.len(),
@@ -862,18 +1417,39 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.dump_eq_weights = args.dump_eq_weights;
     opts.write_unmapped_names = args.write_unmapped_names;
     opts.write_mappings = args.write_mappings;
+    opts.write_rad = args.write_rad;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
     opts.pos_bias = args.pos_bias;
+    opts.bias_seed_em_iters = args.bias_seed_em_iters;
+    opts.dump_bias_models = args.dump_bias_models;
+    // RAD chunk compression (only consumed when a RAD is actually written:
+    // --writeRad output or the --deterministic intermediate). --noCompressRad
+    // overrides --radCompress.
+    opts.rad_codec = if args.no_compress_rad {
+        ChunkCodec::None
+    } else {
+        match args.rad_compress.as_str() {
+            "none" => ChunkCodec::None,
+            "lz4" => ChunkCodec::Lz4,
+            "zstd" => ChunkCodec::Zstd,
+            other => {
+                anyhow::bail!("unknown --radCompress codec '{other}' (expected lz4|zstd|none)")
+            }
+        }
+    };
     opts.num_bootstraps = args.num_bootstraps;
     opts.num_gibbs_samples = args.num_gibbs_samples;
     opts.thinning_factor = args.thinning_factor;
     opts.no_length_correction = args.no_length_correction;
+    opts.model_single_frag_prob = !args.no_single_frag_prob;
+    opts.no_frag_length_dist = args.no_frag_length_dist;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.align.bandwidth = args.bandwidth;
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
+    opts.map_config.pair.orphans_require_unmapped_mate = args.orphans_require_unmapped_mate;
     opts.map_config.align.softclip = args.softclip;
     opts.map_config.align.softclip_overhangs = args.softclip_overhangs;
     opts.map_config.score.score_exp = args.score_exp;
@@ -885,6 +1461,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.score.decoy_thresh = args.decoy_threshold;
     opts.map_config.score.min_aln_prob = args.min_aln_prob;
     opts.map_config.score.hard_filter = args.hard_filter;
+    opts.map_config.score.allow_decoy_orphans = args.allow_decoy_orphans;
     // chaining sub-optimality thresholds (Tier 2)
     opts.map_config.collect.chain.chain_subopt_thresh = args.pre_merge_chain_sub_thresh;
     opts.map_config.pair.post_merge_chain_sub_thresh = args.post_merge_chain_sub_thresh;
@@ -896,7 +1473,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.cond_gc_bins = args.conditional_gc_bins;
     opts.skip_quant = args.skip_quant;
     opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
-    opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
+    opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;
     opts.map_config.align.mismatch_pen = args.mp as i8;
@@ -908,12 +1485,27 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // inference + fragment-length-distribution knobs
     opts.em.vb_prior = args.vb_prior;
     opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+    opts.em.accel = args.em_accel.into();
     opts.sig_digits = args.sig_digits;
     opts.max_read_occ = args.max_read_occ;
     opts.fld_mean = args.fld_mean;
     opts.fld_sd = args.fld_sd;
     opts.fld_max = args.fld_max;
     opts.forgetting_factor = args.forgetting_factor;
+
+    // Deterministic mode: map once to an intermediate RAD, then quantify from it
+    // with a fixed FLD (byte-identical output, no second mapping pass).
+    if args.deterministic {
+        let rad_out = opts.write_rad.take(); // honour an explicit --writeRad path
+        return run_deterministic(
+            opts,
+            rad_out,
+            args.keep_rad,
+            args.targets.clone(),
+            gene_map.as_deref(),
+            &out_dir,
+        );
+    }
 
     // Live mapping spinner on an interactive terminal (unless --quiet/--no-progress).
     let progress = Arc::new(ProgressCounters::default());
@@ -943,6 +1535,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         pct,
         res.num_eq_classes
     );
+    if res.inference_truncated_mass > 0.0 {
+        tracing::warn!(
+            "{:.3} fragments of equivalence-class mass could not be assigned (every member \
+             transcript was truncated below the min-alpha threshold); reported as \
+             inference_truncated_mass in meta_info.json",
+            res.inference_truncated_mass
+        );
+    }
     if let Some(gm) = &gene_map {
         write_gene_level(
             &out_dir,
@@ -1103,7 +1703,7 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
     let idx = SalmonIndex::load(&args.index).context("loading index")?;
     let mut hs = HitSearcher::new(idx.inner());
     let cfg = MapConfig {
-        seed_mode: seed_mode(args.unimems, args.refmems),
+        seed_mode: seed_mode(args.unimems, args.refmems, args.sparse_seeds),
         ..MapConfig::default()
     };
 

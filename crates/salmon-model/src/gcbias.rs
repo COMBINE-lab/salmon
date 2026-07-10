@@ -43,8 +43,14 @@ pub fn bin_frac(frac: i32, n: usize) -> usize {
 pub struct GcFragModel {
     cond_bins: usize,
     gc_bins: usize,
-    /// row-major `counts[ctx * gc_bins + gc]`
+    /// row-major `counts[ctx * gc_bins + gc]`. Until [`normalize`], this is the
+    /// f64 *view* materialized from `counts_fp`; the live accumulator during
+    /// collection is the integer `counts_fp` (for thread-count-independent sums).
     counts: Vec<f64>,
+    /// Fixed-point integer accumulator (`mass * BIAS_WEIGHT_SCALE`, truncated);
+    /// summed order-independently across worker threads, materialized into
+    /// `counts` once at [`normalize`]. See [`crate::BIAS_WEIGHT_SCALE`].
+    counts_fp: Vec<u64>,
     normalized: bool,
     /// Precomputed `[0..=100] -> bin` maps for the context and GC fractions
     /// (both always lie in `[0, 100]`). [`bin_frac`] is ~44% of the eff-length
@@ -64,6 +70,7 @@ impl GcFragModel {
             cond_bins,
             gc_bins,
             counts: vec![0.0; cond_bins * gc_bins],
+            counts_fp: vec![0u64; cond_bins * gc_bins],
             normalized: false,
             ctx_lut,
             gc_lut,
@@ -100,7 +107,7 @@ impl GcFragModel {
     pub fn inc(&mut self, gc_frac: i32, ctx_frac: i32, weight: f64) {
         debug_assert!(!self.normalized, "cannot inc a normalized model");
         let i = self.idx(ctx_frac, gc_frac);
-        self.counts[i] += weight;
+        self.counts_fp[i] += crate::bias_mass_to_fp(weight);
     }
 
     /// Value at a `(context, GC)` cell (a normalized density after `normalize`,
@@ -113,7 +120,9 @@ impl GcFragModel {
     /// Merge another (compatible) model's counts. Both must be pre-normalization.
     pub fn combine_counts(&mut self, other: &GcFragModel) {
         debug_assert!(!self.normalized && !other.normalized);
-        for (a, b) in self.counts.iter_mut().zip(&other.counts) {
+        // Integer sum — associative, so the merged model is independent of how
+        // fragments were partitioned across worker threads.
+        for (a, b) in self.counts_fp.iter_mut().zip(&other.counts_fp) {
             *a += *b;
         }
     }
@@ -123,6 +132,11 @@ impl GcFragModel {
     pub fn normalize(&mut self) {
         if self.normalized {
             return;
+        }
+        // Materialize the integer accumulator into the f64 `counts` the rest of
+        // the model (rows, `get`, `gc_ratio`, dumps) reads.
+        for (c, &fp) in self.counts.iter_mut().zip(&self.counts_fp) {
+            *c = fp as f64 / crate::BIAS_WEIGHT_SCALE;
         }
         for r in 0..self.cond_bins {
             let base = r * self.gc_bins;
@@ -496,7 +510,7 @@ impl GcContext {
 /// fragment lengths ([`GC_SAMP_STRIDE`]).
 #[allow(clippy::too_many_arguments)]
 pub fn build_expected_gc<'a, FS, FP>(
-    num_refs: usize,
+    num_targets: usize,
     seq_of: FS,
     view_of: FP,
     alphas: &[f64],
@@ -559,7 +573,7 @@ where
         }
         Some(model)
     };
-    (0..num_refs)
+    (0..num_targets)
         .into_par_iter()
         .fold(
             || GcFragModel::new(cond_bins, gc_bins),

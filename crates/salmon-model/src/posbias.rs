@@ -24,26 +24,19 @@ const POSITION_BINS: [f64; NUM_POS_BINS] = [
     0.96, 0.98, 1.0,
 ];
 
-/// `log(exp(x) + exp(y))`, numerically stable. Inputs here are always finite
-/// (bin masses start at `log(1) = 0` and only accumulate finite log-weights).
-#[inline]
-fn log_add(x: f64, y: f64) -> f64 {
-    if x == f64::NEG_INFINITY {
-        return y;
-    }
-    if y == f64::NEG_INFINITY {
-        return x;
-    }
-    let (max, min) = if x > y { (x, y) } else { (y, x) };
-    max + (min - max).exp().ln_1p()
-}
-
 /// A single positional-bias distribution (20 bins).
 #[derive(Debug, Clone)]
 pub struct SimplePosBias {
     num_bins: usize,
-    /// bin masses; log space until [`finalize`](Self::finalize), then linear
+    /// bin masses; log space until [`finalize`](Self::finalize), then linear.
+    /// Materialized from `masses_fp` at finalize.
     masses: Vec<f64>,
+    /// Fixed-point integer accumulator of LINEAR per-bin mass (`mass *
+    /// BIAS_WEIGHT_SCALE`, truncated); summed order-independently across worker
+    /// threads and materialized into the log-space `masses` (with the single
+    /// `log(1)` pseudocount injected once) at [`finalize`]. Replaces the old
+    /// non-associative log-space `log_add`. See [`crate::BIAS_WEIGHT_SCALE`].
+    masses_fp: Vec<u64>,
     finalized: bool,
     spline: Option<Spline>,
 }
@@ -61,18 +54,37 @@ impl SimplePosBias {
         Self {
             num_bins,
             masses: vec![0.0; num_bins],
+            masses_fp: vec![0u64; num_bins],
             finalized: false,
             spline: None,
         }
     }
 
-    /// Add `mass` (log space) to bin `bin`.
-    #[inline]
-    pub fn add_mass_bin(&mut self, bin: usize, mass: f64) {
-        self.masses[bin] = log_add(self.masses[bin], mass);
+    /// A model with masses at `log(0) = -inf` — the true [`log_add`] identity, so
+    /// it carries *no* pseudocount. Used as the per-thread accumulator when
+    /// building an expected model in parallel: partials accumulate pure observed
+    /// log-mass and merge associatively via [`combine`](Self::combine); the single
+    /// `log(1)` pseudocount is then injected once by combining into a [`new`](Self::new)
+    /// (or [`default`](Self::default)) model.
+    pub fn new_empty(num_bins: usize) -> Self {
+        Self {
+            num_bins,
+            masses: vec![f64::NEG_INFINITY; num_bins],
+            masses_fp: vec![0u64; num_bins],
+            finalized: false,
+            spline: None,
+        }
     }
 
-    /// Add `mass` (log space) to the bin for `pos` on a transcript of `length`
+    /// Add `mass` (LINEAR, e.g. a `[0,1]` posterior or an expected `weight *
+    /// density`) to bin `bin`. Accumulated in the fixed-point integer buffer so
+    /// the merge across threads is order-independent.
+    #[inline]
+    pub fn add_mass_bin(&mut self, bin: usize, mass: f64) {
+        self.masses_fp[bin] += crate::bias_mass_to_fp(mass);
+    }
+
+    /// Add `mass` (LINEAR) to the bin for `pos` on a transcript of `length`
     /// (`bin = floor(pos / (length / numBins))`, clamped to the last bin).
     #[inline]
     pub fn add_mass(&mut self, pos: i32, length: i32, mass: f64) {
@@ -91,8 +103,12 @@ impl SimplePosBias {
     /// Merge another (un-finalized) model's masses (log-space sum).
     pub fn combine(&mut self, other: &SimplePosBias) {
         debug_assert!(!self.finalized && !other.finalized);
-        for (a, b) in self.masses.iter_mut().zip(&other.masses) {
-            *a = log_add(*a, *b);
+        // Integer sum of linear masses — associative, so merging is independent
+        // of the worker-thread fragment partition. The `log(1)` pseudocount is
+        // injected once at `finalize`, so neither `new` nor `new_empty` carries a
+        // per-partial prior (both start `masses_fp` at 0).
+        for (a, b) in self.masses_fp.iter_mut().zip(&other.masses_fp) {
+            *a += *b;
         }
     }
 
@@ -101,6 +117,13 @@ impl SimplePosBias {
     pub fn finalize(&mut self) {
         if self.finalized {
             return;
+        }
+        // Materialize the integer linear accumulator into the log-space `masses`,
+        // injecting the single `log(1)` pseudocount once: `log(1 + Σ mass)`. This
+        // matches the old serial `log_add` from a `log(1)`-seeded bin, but is
+        // thread-count independent (the data sum is exact-integer).
+        for (m, &fp) in self.masses.iter_mut().zip(&self.masses_fp) {
+            *m = (1.0 + fp as f64 / crate::BIAS_WEIGHT_SCALE).ln();
         }
         let mut sum = 0.0;
         for m in &mut self.masses {

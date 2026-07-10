@@ -30,6 +30,45 @@ pub struct BiasDump {
     pub exp3_pos: Vec<Vec<f64>>,
 }
 
+/// Write the observed/expected bias-model tables to a human-readable text file
+/// (`--dumpBiasModels`). One line per row: `<name> [<lc>] v0 v1 ...`. Empty
+/// groups (corrections not enabled) are skipped. Intended for debugging and
+/// C++↔Rust parity comparison, not as a stable machine format.
+pub fn dump_bias_models_to_file(path: &Path, d: &BiasDump) -> std::io::Result<()> {
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let flat = |f: &mut std::io::BufWriter<std::fs::File>, name: &str, v: &[f64]| {
+        if v.is_empty() {
+            return Ok(());
+        }
+        write!(f, "{name}")?;
+        for x in v {
+            write!(f, " {x:.6}")?;
+        }
+        writeln!(f)
+    };
+    let per_lc = |f: &mut std::io::BufWriter<std::fs::File>, name: &str, v: &[Vec<f64>]| {
+        for (lc, row) in v.iter().enumerate() {
+            write!(f, "{name} {lc}")?;
+            for x in row {
+                write!(f, " {x:.6}")?;
+            }
+            writeln!(f)?;
+        }
+        Ok::<(), std::io::Error>(())
+    };
+    flat(&mut f, "obs5_seq", &d.obs5_seq)?;
+    flat(&mut f, "obs3_seq", &d.obs3_seq)?;
+    flat(&mut f, "exp5_seq", &d.exp5_seq)?;
+    flat(&mut f, "exp3_seq", &d.exp3_seq)?;
+    flat(&mut f, "obs_gc", &d.obs_gc)?;
+    flat(&mut f, "exp_gc", &d.exp_gc)?;
+    per_lc(&mut f, "obs5_pos", &d.obs5_pos)?;
+    per_lc(&mut f, "obs3_pos", &d.obs3_pos)?;
+    per_lc(&mut f, "exp5_pos", &d.exp5_pos)?;
+    per_lc(&mut f, "exp3_pos", &d.exp3_pos)?;
+    f.flush()
+}
+
 /// gzip a raw byte buffer to `path` (level 6, matching salmon's aux dumps).
 pub fn gz_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let f = std::fs::File::create(path)?;

@@ -30,7 +30,7 @@ Build a reusable index from one or more transcriptome FASTA files.
 | `-t, --transcripts <FASTA>…` | Transcript FASTA file(s). **Required.** |
 | `-i, --index <DIR>` | Output index directory. **Required.** |
 | `-k, --kmerLen <N>` | K-mer length (odd, ≤ 31 recommended). Default `31`. |
-| `-m, --minimizerLen <N>` | Minimizer length (`0` = auto). Default `0`. |
+| `-m, --minimizerLen <N>` | Minimizer length (`0` = auto → 19 for the default k=31). Default `0`. |
 | `-p, --threads <N>` | Worker threads (`0` = all cores). Default `0`. |
 | `-d, --decoys <FILE>` | File of decoy sequence names (one per line; decoy records must come last in the FASTA). |
 | `--keepDuplicates` | Retain exact-duplicate transcript sequences instead of collapsing them. |
@@ -38,7 +38,9 @@ Build a reusable index from one or more transcriptome FASTA files.
 | `--gencode` | GENCODE references: truncate each name at the first `\|`. |
 | `--keepFixedFasta` | Keep the cleaned (non-ACGT-replaced) reference FASTA. |
 | `--keepIntermediate` | Keep intermediate compacted-dBG files. |
-| `--tmpdir <DIR>` | Directory for build intermediates. |
+| `--tmpdir <DIR>` | Directory for build intermediates (cleaned FASTA + cDBG files). Defaults to the index dir. |
+| `--sshashTmpDir <DIR>` | Directory for sshash's external minimizer-sort scratch. Defaults to a `sshash_tmp` subdirectory of `--tmpdir` (or the index dir when `--tmpdir` is unset). Override to place the sort scratch on a separate/fast disk; it is created before the build and removed afterwards (kept with `--keepIntermediate`). |
+| `--ramLimit <GiB>` | RAM ceiling for sshash's external minimizer sort — the main build-time memory/disk trade-off. Default `8`; a smaller value uses less RAM but spills to disk sooner. |
 | `--filterSize <N>` | *Accepted for compatibility; no effect.* |
 
 ```sh
@@ -47,16 +49,20 @@ salmon index -t transcripts.fa -i salmon_index -p 16
 
 ## `salmon quant`
 
-Quantify from FASTQ reads (reads mode, `-i`) or from a transcriptome BAM
-(alignment mode, `-a`).
+Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
+(alignment mode, `-a`), or from a RAD file of mappings (RAD mode, `--rad`).
 
 ### Inputs / outputs
 
 | Option | Description |
 | --- | --- |
 | `-i, --index <DIR>` | Salmon index (reads mode). |
-| `-a, --alignments <BAM>` | Alignment mode: a BAM of reads aligned to the transcriptome. |
-| `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode) — enables the error model. |
+| `-a, --alignments <BAM>` | Alignment mode: a name-grouped BAM of reads aligned to the transcriptome. With `--annotation`, a genome-aligned BAM instead (see below). |
+| `--annotation <GTF\|GFF>` | Genome-alignment mode: project a genome-aligned BAM into transcriptome coordinates via this annotation. See [genome-alignment quantification](../../guides/genome-projection/). |
+| `--genome <FASTA>` | Genome FASTA (genome mode); enables bias correction by reconstructing transcript sequences from exon slices. |
+| `--juncMissDiscount <f>` | Penalty for an unannotated splice junction in genome projection (default `1.0` = none). |
+| `--rad <RAD>` | RAD mode: quantify a RAD file of mappings (salmon `--writeRad` **or** piscem `map-bulk`/sketch output) directly. No `-i` needed — reference names travel in the RAD header. See [RAD I/O & deterministic quantification](../../guides/rad-and-determinism/). |
+| `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode). Enables the error model in ordinary alignment mode; supplies reference sequences for bias correction and (with `--errorModel`) the deterministic error model. |
 | `-l, --libType <TYPE>` | Library type (e.g. `IU`, `ISR`, `A` for auto). Default `A`. See [library types](../../guides/library-types/). |
 | `-1/-2, --mates1/2 <FASTQ>…` | Paired-end read files. |
 | `-r, --unmatedReads <FASTQ>…` | Single-end read files. |
@@ -74,7 +80,8 @@ Quantify from FASTQ reads (reads mode, `-i`) or from a transcriptome BAM
 | `--minScoreFraction <f>` | Min alignment score as a fraction of perfect. Default `0.65`. |
 | `--ma/--mp/--go/--ge` | Match score / mismatch / gap-open / gap-extend. |
 | `--orphanChainSubThresh <f>` | Orphan chain pruning (default `0.0` = align all). |
-| `--noErrorModel` | Disable the alignment error model (alignment mode). |
+| `--noErrorModel` | Disable the alignment error model (ordinary alignment mode). |
+| `--errorModel` | Opt in to the order-independent error model in deterministic alignment mode (`-a --deterministic`, needs `-t`). Off by default — deterministic mode scores by the BAM `AS` tag (single pass, at least as accurate against truth); this adds a second BAM pass. See [deterministic alignment mode](../../guides/rad-and-determinism/#deterministic-alignment-mode--a---deterministic). |
 
 ### Model & bias
 
@@ -84,6 +91,19 @@ Quantify from FASTQ reads (reads mode, `-i`) or from a transcriptome BAM
 | `--gcBias` | Fragment-GC bias correction. |
 | `--posBias` | Positional bias correction. |
 | `--noLengthCorrection` | Use raw reference length (no effective-length correction). |
+
+### RAD I/O & determinism
+
+See the [RAD I/O & deterministic quantification](../../guides/rad-and-determinism/) guide.
+
+| Option | Description |
+| --- | --- |
+| `--writeRad <FILE>` | Write per-fragment mappings to a RAD file (piscem `map-bulk`-compatible). Quantification still runs unless `--skipQuant`. |
+| `--skipQuant` | Skip quantification (EM, Gibbs/bootstrap, `quant.sf`); still map, build equivalence classes, detect library type, write metadata. |
+| `--deterministic` | Reproducible reads-mode quantification: map once to an intermediate RAD, then quantify from it with a fixed fragment-length distribution. Byte-identical across runs and thread counts. |
+| `--keepRad` | Keep the `--deterministic` intermediate RAD (deleted by default). |
+| `--radCompress <CODEC>` | RAD chunk compression for `--writeRad` / `--deterministic`: `lz4` (default), `zstd` (smaller), or `none`. |
+| `--noCompressRad` | Write uncompressed RAD chunks (overrides `--radCompress`). |
 
 ### Inference
 

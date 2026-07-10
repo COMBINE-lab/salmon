@@ -13,7 +13,14 @@
 //! ([`salmon_infer`]) to `quant.sf`. Mirrors salmon's `quant -a` mode (the
 //! position-binned alignment error model is a later refinement).
 
+mod bam_rad;
 mod error_model;
+mod genome_project;
+mod rad;
+
+pub use bam_rad::{write_alignment_rad, AlignRadSummary};
+pub use genome_project::{project_genome_bam_to_rad, GenomeProjectOptions, ProjectionArtifacts};
+pub use rad::quantify_rad;
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -29,7 +36,8 @@ use serde::Serialize;
 
 use error_model::{AlignmentModel, AlnOp, SharedAlignmentModel};
 use salmon_core::{
-    is_compatible, LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType,
+    is_compatible, LibraryFormat, MateStatus, PhaseTimer, ReadOrientation, ReadStrandedness,
+    ReadType,
 };
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
 use salmon_infer::{optimize, optimize_with_init, EmOptions};
@@ -54,14 +62,29 @@ pub struct AlignQuantOptions {
     pub score_exp: f64,
     /// transcriptome FASTA (`-t`); required to train the alignment error model
     pub transcripts: Option<PathBuf>,
+    /// reference sequences (transcript-id order, decoys included) supplied
+    /// directly instead of loading `transcripts` — used by `--deterministic`,
+    /// which already has the index and can hand its sequences to the requant
+    /// pass so bias correction needs no separate `-t`. Takes precedence over
+    /// [`Self::transcripts`] when set.
+    pub ref_seqs: Option<Vec<Vec<u8>>>,
     /// disable the alignment error model (salmon's `--noErrorModel`)
     pub no_error_model: bool,
+    /// opt in to the order-independent error model in `--deterministic` alignment
+    /// mode (`--errorModel`). Off by default: deterministic mode scores by the BAM
+    /// `AS` tag, which benchmarks at least as accurately against truth and runs a
+    /// single BAM pass; enabling this trains the model in a second BAM pass. Only
+    /// consulted by the `--deterministic` BAM→RAD producer, and needs `-t`.
+    pub deterministic_error_model: bool,
     /// enable sequence-specific bias correction (`--seqBias`)
     pub seq_bias: bool,
     /// enable fragment-GC bias correction (`--gcBias`)
     pub gc_bias: bool,
     /// enable positional bias correction (`--posBias`)
     pub pos_bias: bool,
+    /// EM iterations for the rough abundance seed that weights bias collection
+    /// when no baked prior is present (`--biasSeedEMIters`, hidden); default 11.
+    pub bias_seed_em_iters: u32,
     /// weight multiplier for orientation-incompatible alignments; `0` drops them
     /// (salmon's default `ignoreIncompat` behavior)
     pub incompat_prior: f64,
@@ -102,6 +125,13 @@ pub struct AlignQuantOptions {
     /// fragments processed before the FLD aux model is applied
     /// (salmon's `--numPreAuxModelSamples`; prior hardcoded value 5,000)
     pub num_pre_aux_model_samples: u64,
+    /// number of posterior bootstrap replicates to draw (`--numBootstraps`, 0 = off)
+    pub num_bootstraps: u32,
+    /// number of posterior Gibbs samples to draw (`--numGibbsSamples`, 0 = off);
+    /// ignored when `num_bootstraps > 0` (bootstrap takes precedence, like reads mode)
+    pub num_gibbs_samples: u32,
+    /// Gibbs thinning factor (`--thinningFactor`, salmon default 16)
+    pub thinning_factor: u32,
     /// Optional shared progress counters. When `Some`, the BAM pass reports
     /// processed/mapped fragment counts here as it runs so the caller can drive
     /// a live progress display. `None` (the default) disables sharing.
@@ -118,10 +148,13 @@ impl AlignQuantOptions {
             range_factorization_bins: 4,
             score_exp: 1.0,
             transcripts: None,
+            ref_seqs: None,
             no_error_model: false,
+            deterministic_error_model: false,
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
+            bias_seed_em_iters: 11,
             incompat_prior: 0.0,
             fld_mean: 250.0,
             fld_sd: 25.0,
@@ -138,6 +171,9 @@ impl AlignQuantOptions {
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
             num_pre_aux_model_samples: 5_000,
+            num_bootstraps: 0,
+            num_gibbs_samples: 0,
+            thinning_factor: 16,
             progress: None,
         }
     }
@@ -153,6 +189,9 @@ pub struct AlignQuantResult {
     pub counts: Vec<f64>,
     pub num_processed: u64,
     pub num_mapped: u64,
+    /// fragment mass dropped in the final min-alpha redistribution (every member
+    /// of an equivalence class truncated); normally 0.
+    pub inference_truncated_mass: f64,
     pub num_eq_classes: usize,
     pub frag_len_mean: f64,
     pub frag_len_sd: f64,
@@ -162,6 +201,22 @@ pub struct AlignQuantResult {
     pub bias_dump: salmon_model::dumps::BiasDump,
     /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
     pub ambig: (Vec<u32>, Vec<u32>),
+    /// posterior samples (bootstrap or Gibbs), one abundance vector each; empty
+    /// when neither was requested. Length is `num_refs`, matching `quant.sf` rows.
+    pub bootstraps: Vec<Vec<f64>>,
+    /// EM/VBEM convergence: iterations run and whether the relative-difference
+    /// criterion was met before `max_iter`
+    pub em_iters: u32,
+    pub em_converged: bool,
+    /// library format observed for these alignments (baked/auto-detected), for
+    /// provenance and the strandedness sanity check; `None` if not observed
+    pub detected_library_type: Option<String>,
+    /// total wall-clock seconds for the quantification call
+    pub total_seconds: f64,
+    /// peak resident set size in KiB (Linux `VmHWM`); 0 if unavailable
+    pub peak_rss_kb: u64,
+    /// structured run diagnostics / bad-input warnings (also emitted to the log)
+    pub diagnostics: Vec<salmon_core::Diagnostic>,
 }
 
 /// Current local time as an asctime-style string, matching salmon's timestamps.
@@ -737,7 +792,7 @@ where
         let mut workers = Vec::with_capacity(cfg.nthreads);
         for _ in 0..cfg.nthreads {
             let rx = rx.clone();
-            workers.push(scope.spawn(move || -> (Local, u64) {
+            workers.push(scope.spawn(move || -> (Local, u64, u64) {
                 let mut local = Local::new(
                     cfg.use_error_model,
                     cfg.error_bins,
@@ -748,6 +803,7 @@ where
                     cfg.pos_bias,
                 );
                 let mut count = 0u64;
+                let mut mapped = 0u64;
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
                     let ctx = FragCtx {
@@ -769,6 +825,7 @@ where
                         log_fm,
                     };
                     let mut since_flush = 0usize;
+                    let mut batch_mapped = 0u64;
                     for raw_group in &raw_batch {
                         frags.clear();
                         for r in raw_group {
@@ -776,7 +833,9 @@ where
                                 frags.push(f);
                             }
                         }
-                        process_fragment(&frags, &ctx, &mut local);
+                        if process_fragment(&frags, &ctx, &mut local) {
+                            batch_mapped += 1;
+                        }
                         // Publish the error-model delta into the shared model
                         // every FLUSH_INTERVAL fragments so other workers' `basis`
                         // sees fresh-enough training. The update granularity is
@@ -799,16 +858,20 @@ where
                         }
                     }
                     count += raw_batch.len() as u64;
-                    // Live progress: alignment mode treats every fragment in the
-                    // BAM as processed+mapped (see the totals below), so bump both.
+                    mapped += batch_mapped;
+                    // Live progress: every fragment in the BAM is "processed";
+                    // only fragments with a surviving strand-compatible placement
+                    // are "mapped" (so percent_mapped is correct on stranded data).
                     if let Some(p) = cfg.progress {
-                        let n = raw_batch.len() as u64;
-                        p.processed
-                            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
-                        p.mapped.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                        p.processed.fetch_add(
+                            raw_batch.len() as u64,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        p.mapped
+                            .fetch_add(batch_mapped, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-                (local, count)
+                (local, count, mapped)
             }));
         }
         drop(rx); // workers hold their own clones; lets the queue disconnect
@@ -828,18 +891,23 @@ where
             cfg.pos_bias,
         );
         let mut total = 0u64;
+        let mut total_mapped = 0u64;
         for w in workers {
-            let (local, count) = w
+            let (local, count, mapped) = w
                 .join()
                 .map_err(|_| anyhow::anyhow!("alignment worker thread panicked"))?;
             merged = merged.merge(local);
             total += count;
+            total_mapped += mapped;
         }
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
         acc.pos_obs = merged.pos_obs;
+        // num_processed = every aligned fragment in the BAM; num_mapped = those
+        // with a surviving strand-compatible placement (assigned to an eq-class).
+        // They differ only for stranded libraries; matches reads-mode (#1025).
         acc.num_processed = total;
-        acc.num_mapped = total;
+        acc.num_mapped = total_mapped;
         Ok(())
     })
 }
@@ -961,7 +1029,13 @@ impl Local {
 /// (during burn-in) accumulate the error-model and bias deltas into `local`.
 /// Pure with respect to shared state except for the concurrency-safe sinks
 /// (`fld`, `online`, `eq_builder`), so it is safe to run in parallel.
-fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
+/// Returns `true` if the fragment was assigned (had at least one surviving,
+/// strand-compatible placement and joined an equivalence class), `false` if it
+/// was dropped (every reported alignment incompatible / orphan-discarded). The
+/// caller counts a fragment as *mapped* only when this returns `true`, so a
+/// stranded library does not over-report `num_mapped` for fragments whose every
+/// alignment is strand-incompatible (the alignment-mode analog of #1025).
+fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bool {
     use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
     // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
     const LOG_EPSILON: f64 = -23.998_158_637_57;
@@ -1054,7 +1128,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
     // a fragment whose every reported alignment was incompatible is a
     // zero-probability fragment: it is not assigned and joins no eq-class.
     if sp_tid.is_empty() {
-        return;
+        return false;
     }
 
     // Aggregate surviving placements by distinct transcript id (sorted).
@@ -1197,6 +1271,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
         TranscriptGroup::from_sorted(tids)
     };
     ctx.eq_builder.add_group(group, weights, 1);
+    true
 }
 
 /// Is the input coordinate-sorted and *not* grouped by read name?
@@ -1227,9 +1302,165 @@ fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
     so_coord && !go_query
 }
 
+/// Build expected bias models from the collected seq/GC/positional observations
+/// plus abundance estimates, fold them into bias-corrected **effective lengths**
+/// (mutating `eff_lengths` in place), and return the [`BiasDump`] for output.
+///
+/// Shared by alignment mode and RAD mode: both collect the same per-fragment
+/// observations (weighted by abundance-aware posteriors) and then correct
+/// effective lengths identically — only the *source* of the observations and
+/// abundances differs (online posteriors for BAM; fixed baked/derived abundances
+/// for RAD). The caller runs the subsequent re-EM with the corrected lengths.
+#[allow(clippy::too_many_arguments)]
+fn apply_bias_correction(
+    num_refs: usize,
+    ref_bytes: &[Vec<u8>],
+    gc_store: &salmon_model::GcStore<'_>,
+    lengths: &[u32],
+    length_class: Option<&[usize]>,
+    length_quantiles: Option<&[u32]>,
+    fld: &FragmentLengthDistribution,
+    alphas: &[f64],
+    eff_lengths: &mut [f64],
+    seq_obs: Option<(salmon_model::SBModel, salmon_model::SBModel)>,
+    gc_obs: Option<salmon_model::GcFragModel>,
+    pos_obs: Option<(
+        Vec<salmon_model::SimplePosBias>,
+        Vec<salmon_model::SimplePosBias>,
+    )>,
+    seq_bias: bool,
+    cond_gc_bins: usize,
+    gc_bins: usize,
+    bias_speed_samp: usize,
+    no_bias_length_threshold: bool,
+) -> salmon_model::dumps::BiasDump {
+    use salmon_model::seqbias::CONTEXT_LENGTH;
+    let mut bias_dump = salmon_model::dumps::BiasDump::default();
+    let log_pmf = fld.log_pmf();
+    let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
+    let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
+    let k = if seq_bias { CONTEXT_LENGTH } else { 1 };
+    let refseq_of = |t: usize| ref_bytes[t].as_slice();
+
+    let seq = seq_obs.map(|(mut of, mut or)| {
+        of.normalize();
+        or.normalize();
+        let (ef, er) =
+            salmon_model::build_expected(num_refs, refseq_of, alphas, eff_lengths, &fld_cdf);
+        (of, or, ef, er)
+    });
+    if let Some((of, or, ef, er)) = seq.as_ref() {
+        bias_dump.obs5_seq = of.dump().to_vec();
+        bias_dump.obs3_seq = or.dump().to_vec();
+        bias_dump.exp5_seq = ef.dump().to_vec();
+        bias_dump.exp3_seq = er.dump().to_vec();
+    }
+    // Precompute the 5'/3' (obs − exp) log-bias tables once (see the reads-mode
+    // path in salmon-quant): the per-position factor build evaluates these
+    // rather than both models per context.
+    let seq_tab = seq.as_ref().map(|(of, or, ef, er)| {
+        (
+            salmon_model::LogBiasTable::new(of, ef),
+            salmon_model::LogBiasTable::new(or, er),
+        )
+    });
+    let gc_ratio_model = if let Some(mut obs) = gc_obs {
+        let mut exp = salmon_model::build_expected_gc(
+            num_refs,
+            refseq_of,
+            |t| gc_store.view(t),
+            alphas,
+            eff_lengths,
+            &fld_cdf,
+            fld_low,
+            fld_high,
+            cond_gc_bins,
+            gc_bins,
+            k,
+            bias_speed_samp,
+        );
+        obs.normalize();
+        exp.normalize();
+        bias_dump.obs_gc = obs.dump().to_vec();
+        bias_dump.exp_gc = exp.dump().to_vec();
+        Some(salmon_model::gc_ratio(
+            &mut obs,
+            &mut exp,
+            salmon_model::gcbias::GC_MAX_RATIO,
+        ))
+    } else {
+        None
+    };
+    let pos_models = pos_obs.map(|(mut of, mut or)| {
+        for x in of.iter_mut().chain(or.iter_mut()) {
+            x.finalize();
+        }
+        let (ef, er) = salmon_model::build_expected_pos(
+            num_refs,
+            |t| lengths[t] as usize,
+            alphas,
+            eff_lengths,
+            &fld_cdf,
+            length_quantiles.expect("positional bias requires length quantiles"),
+            k,
+        );
+        (of, or, ef, er)
+    });
+    if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
+        let masses =
+            |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
+        bias_dump.obs5_pos = masses(ofw);
+        bias_dump.obs3_pos = masses(orc);
+        bias_dump.exp5_pos = masses(efw);
+        bias_dump.exp3_pos = masses(erc);
+    }
+
+    for tid in 0..num_refs {
+        if alphas[tid] < 1e-8 {
+            continue;
+        }
+        let s = ref_bytes[tid].as_slice();
+        let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
+            pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
+                let lc = length_class.expect("positional bias requires length classes")[tid];
+                let rl = s.len();
+                let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
+                let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
+                ofw[lc].project_weights(&mut o5);
+                efw[lc].project_weights(&mut e5);
+                orc[lc].project_weights(&mut o3);
+                erc[lc].project_weights(&mut e3);
+                (
+                    salmon_model::positional_factor(&o5, &e5),
+                    salmon_model::positional_factor(&o3, &e3),
+                )
+            });
+        let bias = salmon_model::BiasInputs {
+            seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
+            gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
+            pos: pos_vecs
+                .as_ref()
+                .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
+        };
+        eff_lengths[tid] = salmon_model::corrected_effective_length_full(
+            s,
+            &fld_cdf,
+            fld_low,
+            fld_high,
+            &bias,
+            eff_lengths[tid],
+            bias_speed_samp,
+            no_bias_length_threshold,
+        );
+    }
+    bias_dump
+}
+
 /// Run alignment-based quantification end-to-end.
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
     let start_time = asctime_now();
+    let run_timer = std::time::Instant::now();
+    let mut timer = PhaseTimer::new();
     let header = read_alignment_header(&opts.bam)?;
 
     // Reject coordinate-sorted input up front (header-only check, no per-record cost):
@@ -1289,7 +1520,6 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     // Per-transcript inputs the bias collection needs (the observed bias models
     // themselves are accumulated per-worker inside the pass).
-    use salmon_model::seqbias::CONTEXT_LENGTH;
     // GC cumulative-count backing: one rank bitvector over the concatenated
     // references (salmon's `--reduceGCMemory`, now the default — faster and ~2x
     // leaner than dense per-transcript prefixes, identical results). `gc_store`
@@ -1403,6 +1633,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let mut collapsed = eq_builder.finish();
     collapsed.update_eff_lengths(&eff_lengths);
     let num_eq_classes = collapsed.len();
+    // BAM read + online equivalence-class build.
+    timer.mark("mapping");
 
     // Count-blended EM initialization (salmon's `CollapsedEMOptimizer::optimize`):
     // seed abundances with a linear combination of the online-phase abundance
@@ -1441,6 +1673,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
         optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
@@ -1454,126 +1687,36 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         )
     };
 
-    // ---- bias-corrected effective lengths (shared with reads mode) ----------
+    // ---- bias-corrected effective lengths (shared with RAD mode) ------------
     let mut bias_dump = salmon_model::dumps::BiasDump::default();
     if bias_on && !opts.skip_quant {
-        let log_pmf = fld.log_pmf();
-        let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
-        let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
-        let k = if opts.seq_bias { CONTEXT_LENGTH } else { 1 };
-        let refseq_of = |t: usize| ref_bytes[t].as_slice();
-
-        let seq = seq_obs.map(|(mut of, mut or)| {
-            of.normalize();
-            or.normalize();
-            let (ef, er) = salmon_model::build_expected(
-                num_refs,
-                refseq_of,
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-            );
-            (of, or, ef, er)
-        });
-        if let Some((of, or, ef, er)) = seq.as_ref() {
-            bias_dump.obs5_seq = of.dump().to_vec();
-            bias_dump.obs3_seq = or.dump().to_vec();
-            bias_dump.exp5_seq = ef.dump().to_vec();
-            bias_dump.exp3_seq = er.dump().to_vec();
-        }
-        let gc_ratio_model = if let Some(mut obs) = gc_obs {
-            let mut exp = salmon_model::build_expected_gc(
-                num_refs,
-                refseq_of,
-                |t| gc_store.view(t),
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-                fld_low,
-                fld_high,
-                opts.cond_gc_bins,
-                opts.gc_bins,
-                k,
-                opts.bias_speed_samp,
-            );
-            obs.normalize();
-            exp.normalize();
-            bias_dump.obs_gc = obs.dump().to_vec();
-            bias_dump.exp_gc = exp.dump().to_vec();
-            Some(salmon_model::gc_ratio(
-                &mut obs,
-                &mut exp,
-                salmon_model::gcbias::GC_MAX_RATIO,
-            ))
-        } else {
-            None
-        };
-        let pos_models = pos_obs.map(|(mut of, mut or)| {
-            for x in of.iter_mut().chain(or.iter_mut()) {
-                x.finalize();
-            }
-            let (ef, er) = salmon_model::build_expected_pos(
-                num_refs,
-                |t| lengths[t] as usize,
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-                length_quantiles.as_ref().unwrap(),
-                k,
-            );
-            (of, or, ef, er)
-        });
-        if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
-            let masses =
-                |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
-            bias_dump.obs5_pos = masses(ofw);
-            bias_dump.obs3_pos = masses(orc);
-            bias_dump.exp5_pos = masses(efw);
-            bias_dump.exp3_pos = masses(erc);
-        }
-
-        for tid in 0..num_refs {
-            if em.alphas[tid] < 1e-8 {
-                continue;
-            }
-            let s = ref_bytes[tid].as_slice();
-            let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
-                pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
-                    let lc = length_class.as_ref().unwrap()[tid];
-                    let rl = s.len();
-                    let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
-                    let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
-                    ofw[lc].project_weights(&mut o5);
-                    efw[lc].project_weights(&mut e5);
-                    orc[lc].project_weights(&mut o3);
-                    erc[lc].project_weights(&mut e3);
-                    (
-                        salmon_model::positional_factor(&o5, &e5),
-                        salmon_model::positional_factor(&o3, &e3),
-                    )
-                });
-            let bias = salmon_model::BiasInputs {
-                seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
-                gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
-                pos: pos_vecs
-                    .as_ref()
-                    .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
-            };
-            eff_lengths[tid] = salmon_model::corrected_effective_length_full(
-                s,
-                &fld_cdf,
-                fld_low,
-                fld_high,
-                &bias,
-                eff_lengths[tid],
-                opts.bias_speed_samp,
-                opts.no_bias_length_threshold,
-            );
-        }
+        bias_dump = apply_bias_correction(
+            num_refs,
+            &ref_bytes,
+            &gc_store,
+            &lengths,
+            length_class.as_deref(),
+            length_quantiles.as_deref(),
+            &fld,
+            &em.alphas,
+            &mut eff_lengths,
+            seq_obs,
+            gc_obs,
+            pos_obs,
+            opts.seq_bias,
+            opts.cond_gc_bins,
+            opts.gc_bins,
+            opts.bias_speed_samp,
+            opts.no_bias_length_threshold,
+        );
         collapsed.update_eff_lengths(&eff_lengths);
         em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
     }
+    let inference_truncated_mass = em.dropped_mass;
+    let (em_iters, em_converged) = (em.iters, em.converged);
     let counts = em.alphas;
+    // Bias correction + EM/VBEM point estimate.
+    timer.mark("em_bias");
 
     let rates: Vec<f64> = (0..num_refs)
         .map(|i| {
@@ -1598,9 +1741,55 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     let length_classes =
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES);
-    let ambig = salmon_infer::ambiguity_counts(&salmon_infer::PackedEqClasses::from_collapsed(
-        &collapsed, num_refs,
-    ));
+
+    // Run diagnostics from end-of-run aggregates. The transcriptomic-BAM online
+    // path has no aggregate observed-format estimate (per-fragment only), so the
+    // library-type mismatch check is `--rad`-only; the mapping-rate / empty-input
+    // checks still apply here.
+    let diagnostics = salmon_core::input_diagnostics(
+        num_processed,
+        num_mapped,
+        LibraryFormat::is_auto(&opts.lib_type),
+        &opts.lib_type,
+        None,
+    );
+    for d in &diagnostics {
+        if d.severity == "error" {
+            tracing::error!("{}", d.message);
+        } else {
+            tracing::warn!("{}", d.message);
+        }
+    }
+
+    // Posterior uncertainty (bootstrap / Gibbs) + ambiguity. The packed CSR
+    // layout is identical to reads mode — alignment mode simply feeds it from the
+    // BAM-derived eq-classes — so the same `salmon_infer` samplers apply. Bootstrap
+    // takes precedence over Gibbs, matching reads mode.
+    let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
+    let ambig = salmon_infer::ambiguity_counts(&packed);
+    let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
+        Vec::new()
+    } else if opts.num_bootstraps > 0 {
+        salmon_infer::bootstrap(&packed, &opts.em, opts.num_bootstraps, 0x5A13_0000)
+    } else if opts.num_gibbs_samples > 0 {
+        let prior = if opts.em.use_vbem {
+            opts.em.vb_prior.max(1.0)
+        } else {
+            1e-3
+        };
+        let gopts = salmon_infer::GibbsOptions {
+            num_samples: opts.num_gibbs_samples,
+            thinning: opts.thinning_factor,
+            prior,
+            per_transcript_prior: true,
+        };
+        salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
+    } else {
+        Vec::new()
+    };
+    // Posterior sampling (bootstrap / Gibbs); empty when neither is requested.
+    timer.mark("posterior");
+
     let result = AlignQuantResult {
         names,
         lengths,
@@ -1609,6 +1798,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         counts,
         num_processed,
         num_mapped,
+        inference_truncated_mass,
         num_eq_classes,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
@@ -1617,8 +1807,16 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         start_time,
         bias_dump,
         ambig,
+        bootstraps,
+        em_iters,
+        em_converged,
+        detected_library_type: None,
+        total_seconds: run_timer.elapsed().as_secs_f64(),
+        peak_rss_kb: salmon_core::peak_rss_kb(),
+        diagnostics,
     };
     write_outputs(opts, &result)?;
+    timer.mark("output");
     Ok(result)
 }
 
@@ -1657,6 +1855,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         frag_length_sd: f64,
         seq_bias_correct: bool,
         gc_bias_correct: bool,
+        pos_bias_correct: bool,
         num_bias_bins: usize,
         mapping_type: String,
         // index hashes are empty in alignment mode (no salmon index)
@@ -1679,7 +1878,15 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_alignments_below_threshold_for_mapped_fragments_vm: u64,
         percent_mapped: f64,
         num_decoy_fragments: u64,
+        inference_truncated_mass: f64,
         num_bootstraps: u32,
+        range_factorization_bins: u32,
+        num_em_iterations: u32,
+        em_converged: bool,
+        detected_library_type: Option<String>,
+        total_time_seconds: f64,
+        peak_rss_kb: u64,
+        diagnostics: Vec<salmon_core::Diagnostic>,
         call: String,
         start_time: String,
         end_time: String,
@@ -1706,6 +1913,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         frag_length_sd: res.frag_len_sd,
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
+        pos_bias_correct: opts.pos_bias,
         num_bias_bins: 0,
         mapping_type: "alignment".to_string(),
         index_seq_hash: String::new(),
@@ -1727,7 +1935,15 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_alignments_below_threshold_for_mapped_fragments_vm: 0,
         percent_mapped: pct,
         num_decoy_fragments: 0,
-        num_bootstraps: 0,
+        inference_truncated_mass: res.inference_truncated_mass,
+        num_bootstraps: res.bootstraps.len() as u32,
+        range_factorization_bins: opts.range_factorization_bins,
+        num_em_iterations: res.em_iters,
+        em_converged: res.em_converged,
+        detected_library_type: res.detected_library_type.clone(),
+        total_time_seconds: res.total_seconds,
+        peak_rss_kb: res.peak_rss_kb,
+        diagnostics: res.diagnostics.clone(),
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: asctime_now(),
@@ -1736,6 +1952,38 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         dir.join("aux_info").join("meta_info.json"),
         serde_json::to_string_pretty(&meta)?,
     )?;
+
+    // aux_info/bootstrap/{names.tsv.gz, bootstraps.gz}: posterior samples in the
+    // same layout reads mode uses (gzipped tab-separated names; gzipped raw
+    // little-endian f64, each sample's `num_refs` values contiguously). Alignment
+    // mode has no decoy/short references, so every `quant.sf` row is emitted,
+    // keeping the two files aligned positionally with `quant.sf`.
+    if !res.bootstraps.is_empty() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        let bdir = dir.join("aux_info").join("bootstrap");
+        std::fs::create_dir_all(&bdir).context("creating bootstrap dir")?;
+
+        let f = std::fs::File::create(bdir.join("names.tsv.gz"))?;
+        let mut enc = GzEncoder::new(f, Compression::new(6));
+        for (i, name) in res.names.iter().enumerate() {
+            if i > 0 {
+                enc.write_all(b"\t")?;
+            }
+            enc.write_all(name.as_bytes())?;
+        }
+        enc.write_all(b"\n")?;
+        enc.finish()?;
+
+        let f = std::fs::File::create(bdir.join("bootstraps.gz"))?;
+        let mut enc = GzEncoder::new(f, Compression::new(6));
+        for sample in &res.bootstraps {
+            for v in sample {
+                enc.write_all(&v.to_le_bytes())?;
+            }
+        }
+        enc.finish()?;
+    }
 
     // libParams/flenDist.txt, logs/salmon_quant.log, and the aux dumps (shared).
     std::fs::create_dir_all(dir.join("libParams")).context("creating libParams")?;
@@ -1749,9 +1997,14 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     salmon_model::dumps::write_aux_bias_dumps(&dir.join("aux_info"), &res.bias_dump)
         .context("writing aux bias dumps")?;
     std::fs::create_dir_all(dir.join("logs")).context("creating logs")?;
+    // In alignment mode the input records are already aligned, so `num_processed`
+    // is the count of aligned fragments and `num_mapped` is those with a strand-
+    // compatible placement that were quantified; label them accordingly so a
+    // <100% rate on a stranded library is not read as lost alignments.
     let log = format!(
         "salmon (rust port, alignment mode) v{SALMON_VERSION}\nstart: {}\nend:   {}\n\
-         library type: {}\nobserved fragments: {}\nmapped fragments:   {}\nmapping rate: {pct:.4}%\n\
+         library type: {}\naligned fragments: {}\nstrand-compatible (quantified): {}\n\
+         compatible rate: {pct:.4}%\n\
          number of equivalence classes: {}\nfragment length mean (sd): {:.2} ({:.2})\n",
         res.start_time,
         asctime_now(),

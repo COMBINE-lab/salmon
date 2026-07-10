@@ -315,6 +315,113 @@ impl AlignmentModel {
     }
 }
 
+/// An **order-independent** counting error model: a first-order transition
+/// *count* per `(read_bin, is_left, prev, cur)` accumulated as `u64` integers.
+/// Integer addition is associative and commutative, so merging per-thread
+/// counters ([`combine`](Self::combine)) yields the same totals regardless of
+/// how fragments were partitioned across threads — the property the online
+/// [`SharedAlignmentModel`] cannot offer (its log-space, posterior-weighted,
+/// concurrently-flushed updates depend on processing order). Once training is
+/// done, [`finalize`](Self::finalize) normalizes the counts once (adding the
+/// `alpha` pseudocount exactly, in the denominator too) into a fixed log-space
+/// [`AlignmentModel`], so scoring reuses the same `log_likelihood` walk. This is
+/// the fidelity model behind deterministic alignment mode (`--deterministic`
+/// with `-t`): trained uniformly (one count per placement-mate, no posterior
+/// weighting) so the whole pipeline stays byte-reproducible.
+#[derive(Clone)]
+pub struct CountingAlignmentModel {
+    // read_bins vectors, each NUM_ALN_STATES*NUM_ALN_STATES transition counts.
+    left: Vec<Vec<u64>>,
+    right: Vec<Vec<u64>>,
+    read_bins: usize,
+}
+
+impl CountingAlignmentModel {
+    /// A zeroed counting model with `read_bins` position bins per mate.
+    pub fn new(read_bins: usize) -> Self {
+        let cells = NUM_ALN_STATES * NUM_ALN_STATES;
+        Self {
+            left: (0..read_bins).map(|_| vec![0u64; cells]).collect(),
+            right: (0..read_bins).map(|_| vec![0u64; cells]).collect(),
+            read_bins,
+        }
+    }
+
+    /// Tally one alignment's transitions (each `+1`). `is_left` selects the
+    /// mate's matrices; args match [`AlignmentModel::update`] minus the weight.
+    pub fn count(
+        &mut self,
+        read_2bit: &[u8],
+        ref_bytes: &[u8],
+        pos: usize,
+        ops: &[(AlnOp, usize)],
+        is_left: bool,
+    ) {
+        let mats = if is_left {
+            &mut self.left
+        } else {
+            &mut self.right
+        };
+        AlignmentModel::walk(
+            self.read_bins,
+            read_2bit,
+            ref_bytes,
+            pos,
+            ops,
+            |bin, prev, cur| {
+                mats[bin][prev * NUM_ALN_STATES + cur] += 1;
+            },
+        );
+    }
+
+    /// Add another counting model's transition counts into this one (integer,
+    /// order-independent). Both must share the same `read_bins`.
+    pub fn combine(&mut self, other: &CountingAlignmentModel) {
+        debug_assert_eq!(self.read_bins, other.read_bins);
+        for (s, o) in self.left.iter_mut().zip(&other.left) {
+            for (a, b) in s.iter_mut().zip(o) {
+                *a += *b;
+            }
+        }
+        for (s, o) in self.right.iter_mut().zip(&other.right) {
+            for (a, b) in s.iter_mut().zip(o) {
+                *a += *b;
+            }
+        }
+    }
+
+    /// Normalize the integer counts into a fixed log-space [`AlignmentModel`],
+    /// adding an `alpha` Laplace pseudocount to every cell (and `NUM_ALN_STATES *
+    /// alpha` to each row denominator) so unobserved transitions keep a small
+    /// mass — matching the online model's alpha-seeded matrices. The result is a
+    /// deterministic function of the totals alone.
+    pub fn finalize(&self, alpha: f64) -> AlignmentModel {
+        let build = |counts: &[Vec<u64>]| -> Vec<TransMatrix> {
+            counts
+                .iter()
+                .map(|cell| {
+                    let mut storage = vec![0.0f64; NUM_ALN_STATES * NUM_ALN_STATES];
+                    let mut rowsums = vec![0.0f64; NUM_ALN_STATES];
+                    for prev in 0..NUM_ALN_STATES {
+                        let base = prev * NUM_ALN_STATES;
+                        let rowcount: u64 = cell[base..base + NUM_ALN_STATES].iter().sum();
+                        rowsums[prev] = (rowcount as f64 + NUM_ALN_STATES as f64 * alpha).ln();
+                        for cur in 0..NUM_ALN_STATES {
+                            storage[base + cur] = (cell[base + cur] as f64 + alpha).ln();
+                        }
+                    }
+                    TransMatrix { storage, rowsums }
+                })
+                .collect()
+        };
+        AlignmentModel {
+            left: build(&self.left),
+            right: build(&self.right),
+            read_bins: self.read_bins,
+        }
+    }
+}
+
 /// An atomic, log-space transition matrix shared across worker threads. Reads
 /// (`get`) are lock-free relaxed loads (free on x86); updates arrive as
 /// occasional bulk merges of a per-thread plain [`TransMatrix`] delta, so the
@@ -460,5 +567,61 @@ mod tests {
         let (read, refs, ops) = perfect();
         let (fg, bg) = m.log_likelihood(&read, &refs, 0, &ops, true);
         assert!((fg - bg).abs() < 1e-9, "untrained score {} not 0", fg - bg);
+    }
+
+    #[test]
+    fn counting_model_prefers_matches_after_training() {
+        // The integer counting model, once normalized, ranks a clean match above
+        // a mismatch just like the float model.
+        let mut c = CountingAlignmentModel::new(4);
+        let (read, refs, ops) = perfect();
+        for _ in 0..200 {
+            c.count(&read, &refs, 0, &ops, true);
+        }
+        let m = c.finalize(1.0);
+        let mut bad = read.clone();
+        bad[2] = 0; // A where ref is G
+        let (fg_good, bg_good) = m.log_likelihood(&read, &refs, 0, &ops, true);
+        let (fg_bad, bg_bad) = m.log_likelihood(&bad, &refs, 0, &ops, true);
+        assert!(
+            (fg_good - bg_good) > (fg_bad - bg_bad),
+            "match score {} !> mismatch score {}",
+            fg_good - bg_good,
+            fg_bad - bg_bad
+        );
+    }
+
+    #[test]
+    fn counting_model_merge_is_order_independent() {
+        // Splitting the same observations across two counters and merging in
+        // either order yields byte-identical normalized transition tables — the
+        // determinism guarantee for multi-threaded training.
+        let (read, refs, ops) = perfect();
+        let mut bad = read.clone();
+        bad[2] = 0;
+        let mut a = CountingAlignmentModel::new(4);
+        let mut b = CountingAlignmentModel::new(4);
+        for _ in 0..120 {
+            a.count(&read, &refs, 0, &ops, true);
+        }
+        for _ in 0..80 {
+            b.count(&bad, &refs, 0, &ops, true);
+            b.count(&read, &refs, 0, &ops, false);
+        }
+        let mut ab = a.clone();
+        ab.combine(&b);
+        let mut ba = b.clone();
+        ba.combine(&a);
+        // Same totals ⇒ identical log-space matrices ⇒ identical likelihoods.
+        let ll = |m: &AlignmentModel, is_left| m.log_likelihood(&read, &refs, 0, &ops, is_left);
+        let (m_ab, m_ba) = (ab.finalize(1.0), ba.finalize(1.0));
+        assert_eq!(ll(&m_ab, true), ll(&m_ba, true));
+        assert_eq!(ll(&m_ab, false), ll(&m_ba, false));
+        // And equal to a single counter fed everything.
+        let mut all = CountingAlignmentModel::new(4);
+        all.combine(&a);
+        all.combine(&b);
+        let m_all = all.finalize(1.0);
+        assert_eq!(ll(&m_ab, true), ll(&m_all, true));
     }
 }

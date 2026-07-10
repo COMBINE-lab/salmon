@@ -74,18 +74,28 @@ pub struct Alignment {
     pub ref_window_start: i32,
 }
 
+/// Reverse-complement a DNA base (ACGT, case-insensitive; anything else → N).
+#[inline]
+fn comp(b: u8) -> u8 {
+    match b {
+        b'A' | b'a' => b'T',
+        b'C' | b'c' => b'G',
+        b'G' | b'g' => b'C',
+        b'T' | b't' => b'A',
+        _ => b'N',
+    }
+}
+
 /// Reverse-complement a DNA byte slice (ACGT, case-insensitive output upper).
 pub(crate) fn revcomp(s: &[u8]) -> Vec<u8> {
-    s.iter()
-        .rev()
-        .map(|&b| match b {
-            b'A' | b'a' => b'T',
-            b'C' | b'c' => b'G',
-            b'G' | b'g' => b'C',
-            b'T' | b't' => b'A',
-            _ => b'N',
-        })
-        .collect()
+    s.iter().rev().map(|&b| comp(b)).collect()
+}
+
+/// Reverse-complement `s` into `out` (cleared first), reusing its allocation.
+#[inline]
+fn revcomp_into(s: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.extend(s.iter().rev().map(|&b| comp(b)));
 }
 
 /// The perfect (all-match) score for a read of length `read_len`.
@@ -122,31 +132,64 @@ pub fn align_chain(
         return None;
     }
 
-    // Query in the reference-forward frame.
-    let query: Vec<u8> = if chain.is_fw {
-        read.to_vec()
-    } else {
-        revcomp(read)
-    };
     let diag_origin = chain.ref_start() - chain.read_start();
     let win_start = diag_origin.max(0);
+    let reflen_i = ref_seq.len() as i32;
 
-    let score = if cfg.full_length_alignment {
-        // Full-read DP over the implied window (shared with the GPU backend via
-        // [`full_length_window`], so the window/orientation logic has one home).
-        let (q, rwin, _) = full_length_window(read, ref_seq, chain, cfg)?;
-        ksw2_align_score(&q, rwin, cfg)
-    } else {
-        // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
-        anchored_align_score(&query, ref_seq, &chain.mems, cfg)
-    };
+    // Build the oriented query into a reused thread-local buffer — `align_chain`
+    // runs once per candidate (millions of times), so a fresh
+    // `read.to_vec()`/`revcomp` per call was pure allocator traffic.
+    ALIGN_QUERY.with(|qbuf| {
+        let mut query = qbuf.borrow_mut();
+        if chain.is_fw {
+            query.clear();
+            query.extend_from_slice(read);
+        } else {
+            revcomp_into(read, &mut query);
+        }
+        let qlen = query.len() as i32;
 
-    let valid = score > min_accepted_score(query.len(), cfg);
+        // Invariant boundary: every MEM must lie within the read and the reference.
+        // Seeding guarantees this; a violation is an upstream bug. We `debug_assert`
+        // so it surfaces loudly in tests/dev (rather than being silently masked —
+        // this is how issue #1038, a contig-overshoot in piscem-rs's skip search,
+        // was found), and degrade to "skip candidate" in release so a future
+        // coordinate bug can never turn into an out-of-bounds slice panic.
+        let out_of_bounds = chain.mems.iter().any(|m| {
+            m.read_start < 0
+                || m.ref_start < 0
+                || m.len <= 0
+                || m.read_end() > qlen
+                || m.ref_end() > reflen_i
+        });
+        debug_assert!(
+            !out_of_bounds,
+            "align_chain: chain MEM outside read/reference bounds (qlen={qlen} reflen={reflen_i}) — upstream seeding bug"
+        );
+        if out_of_bounds {
+            return None;
+        }
 
-    Some(Alignment {
-        score,
-        valid,
-        ref_window_start: win_start,
+        let score = if cfg.full_length_alignment {
+            // Full-read DP over the implied window.
+            let win_end = (win_start + qlen + cfg.indel_margin as i32).min(ref_seq.len() as i32);
+            if win_end <= win_start {
+                return None;
+            }
+            let rwin = &ref_seq[win_start as usize..win_end as usize];
+            ksw2_align_score(&query, rwin, cfg)
+        } else {
+            // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
+            anchored_align_score(&query, ref_seq, &chain.mems, cfg)
+        };
+
+        let valid = score > min_accepted_score(query.len(), cfg);
+
+        Some(Alignment {
+            score,
+            valid,
+            ref_window_start: win_start,
+        })
     })
 }
 
@@ -230,6 +273,30 @@ thread_local! {
     /// — an unbounded thread-local here cost tens of GB on a 36M-read library.
     static GAP_CACHE: std::cell::RefCell<ahash::AHashMap<(Box<[u8]>, Box<[u8]>), i32>> =
         std::cell::RefCell::new(ahash::AHashMap::new());
+    /// Per-thread ksw2 scratch. This reuses both the ksw DP workspace/result and
+    /// the DNA5-encoded query/target buffers between small gap/flank DPs.
+    static KSW_SCRATCH: std::cell::RefCell<KswScratch> =
+        std::cell::RefCell::new(KswScratch::default());
+    /// Per-thread query buffer for [`align_chain`], reused across the millions of
+    /// per-candidate alignments instead of allocating a fresh `Vec` each call.
+    static ALIGN_QUERY: std::cell::RefCell<Vec<u8>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct KswScratch {
+    aligner: ksw2rs::Aligner,
+    query: Vec<u8>,
+    target: Vec<u8>,
+}
+
+impl Default for KswScratch {
+    fn default() -> Self {
+        Self {
+            aligner: ksw2rs::Aligner::new(),
+            query: Vec::new(),
+            target: Vec::new(),
+        }
+    }
 }
 
 /// Maximum number of cached (query, ref) DP scores per thread. The cache exists
@@ -287,17 +354,28 @@ fn anchored_align_score(
         score += mem.len * m;
         if i + 1 < mems.len() {
             let nxt = &mems[i + 1];
-            let (rg_s, rg_e) = (mem.read_end(), nxt.read_start);
-            let (tg_s, tg_e) = (mem.ref_end(), nxt.ref_start);
-            if rg_e >= rg_s && tg_e >= tg_s {
-                let qg = &query[rg_s as usize..rg_e as usize];
-                let tg = &ref_seq[tg_s as usize..tg_e as usize];
-                score += cached_gap_score(qg, tg, cfg);
-            } else {
-                // Overlapping MEMs: remove the double-counted exact bases.
-                let ov = (rg_s - rg_e).max(tg_s - tg_e).max(0);
-                score -= ov * m;
-            }
+            // Per-axis overlap of this MEM with the next (negative ⇒ a true gap).
+            let read_ov = mem.read_end() - nxt.read_start;
+            let ref_ov = mem.ref_end() - nxt.ref_start;
+            // Trim the overlapping exact bases back to a common boundary on BOTH
+            // axes, then DP-align whatever residual remains between the MEMs:
+            //  * same diagonal (read_ov == ref_ov): residual is empty on both
+            //    axes, so this degenerates to "remove the double-counted bases"
+            //    (the cached gap DP returns 0 for empty/empty);
+            //  * gap-separated (both overlaps <= 0): ov is 0 and we DP the gap;
+            //  * different diagonals (read_ov != ref_ov): trimming to the larger
+            //    overlap exposes the implied indel as a one-sided residual, which
+            //    the gap DP penalizes — instead of the indel being silently
+            //    absorbed as a plain overlap (which inflated the score).
+            let ov = read_ov.max(ref_ov).max(0);
+            score -= ov * m;
+            let q_lo = (mem.read_end() - ov)
+                .max(mem.read_start)
+                .min(nxt.read_start) as usize;
+            let t_lo = (mem.ref_end() - ov).max(mem.ref_start).min(nxt.ref_start) as usize;
+            let qg = &query[q_lo..nxt.read_start as usize];
+            let tg = &ref_seq[t_lo..nxt.ref_start as usize];
+            score += cached_gap_score(qg, tg, cfg);
         }
     }
 
@@ -327,38 +405,43 @@ fn dna5_mat(cfg: &AlignConfig) -> [i8; 25] {
 /// Global DP score of an inter-MEM gap (both substrings fully consumed). The
 /// band is widened to guarantee the alignment can reach the corner.
 fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
-    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
+    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qg.is_empty() {
         return -(cfg.gap_open_pen as i32 + tg.len() as i32 * cfg.gap_extend_pen as i32);
     }
     if tg.is_empty() {
         return -(cfg.gap_open_pen as i32 + qg.len() as i32 * cfg.gap_extend_pen as i32);
     }
-    let q = dna5_encode(qg);
-    let t = dna5_encode(tg);
     let mat = dna5_mat(cfg);
     let w = cfg
         .bandwidth
         .max((qg.len() as i32 - tg.len() as i32).abs() + 4);
-    let input = Extz2Input {
-        query: &q,
-        target: &t,
-        m: 5,
-        mat: &mat,
-        q: cfg.gap_open_pen,
-        e: cfg.gap_extend_pen,
-        w,
-        zdrop: -1,
-        end_bonus: 0,
-        // Mapping only needs the score, not the CIGAR — score-only mode skips the
-        // O(qlen·tlen) traceback-matrix fill and backtrack pass.
-        flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
-    };
-    let mut ez = Extz::default();
-    ez.reset();
-    extz2(&input, &mut ez);
-    if ez.score > KSW_NEG_INF {
-        ez.score
+    let score = KSW_SCRATCH.with(|cell| {
+        let KswScratch {
+            aligner,
+            query,
+            target,
+        } = &mut *cell.borrow_mut();
+        dna5_encode_into(qg, query);
+        dna5_encode_into(tg, target);
+        let input = Extz2Input {
+            query,
+            target,
+            m: 5,
+            mat: &mat,
+            q: cfg.gap_open_pen,
+            e: cfg.gap_extend_pen,
+            w,
+            zdrop: -1,
+            end_bonus: 0,
+            // Mapping only needs the score, not the CIGAR — score-only mode skips
+            // the O(qlen·tlen) traceback-matrix fill and backtrack pass.
+            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
+        };
+        aligner.align(&input).score
+    });
+    if score > KSW_NEG_INF {
+        score
     } else {
         // Corner unreachable: approximate by matching the common prefix length.
         let common = qg.len().min(tg.len()) as i32;
@@ -371,38 +454,43 @@ fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
 /// 5' flank (`anchor_right`) the sequences are reversed so the anchor is on the
 /// left, matching ksw2's left-anchored extension.
 fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool) -> i32 {
-    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
+    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qf.is_empty() {
         return 0;
     }
     if tf.is_empty() {
         return -(cfg.gap_open_pen as i32 + qf.len() as i32 * cfg.gap_extend_pen as i32);
     }
-    let (q, t): (Vec<u8>, Vec<u8>) = if anchor_right {
-        (
-            dna5_encode(&qf.iter().rev().copied().collect::<Vec<u8>>()),
-            dna5_encode(&tf.iter().rev().copied().collect::<Vec<u8>>()),
-        )
-    } else {
-        (dna5_encode(qf), dna5_encode(tf))
-    };
     let mat = dna5_mat(cfg);
-    let input = Extz2Input {
-        query: &q,
-        target: &t,
-        m: 5,
-        mat: &mat,
-        q: cfg.gap_open_pen,
-        e: cfg.gap_extend_pen,
-        w: cfg.bandwidth.max(qf.len() as i32),
-        zdrop: -1,
-        end_bonus: 0,
-        // Score-only: we read `mqe`/`max`, never the CIGAR (see ksw2_gap_global).
-        flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
-    };
-    let mut ez = Extz::default();
-    ez.reset();
-    extz2(&input, &mut ez);
+    let (mqe, mte, max_score) = KSW_SCRATCH.with(|cell| {
+        let KswScratch {
+            aligner,
+            query,
+            target,
+        } = &mut *cell.borrow_mut();
+        if anchor_right {
+            dna5_encode_rev_into(qf, query);
+            dna5_encode_rev_into(tf, target);
+        } else {
+            dna5_encode_into(qf, query);
+            dna5_encode_into(tf, target);
+        }
+        let input = Extz2Input {
+            query,
+            target,
+            m: 5,
+            mat: &mat,
+            q: cfg.gap_open_pen,
+            e: cfg.gap_extend_pen,
+            w: cfg.bandwidth.max(qf.len() as i32),
+            zdrop: -1,
+            end_bonus: 0,
+            // Score-only: we read `mqe`/`max`, never the CIGAR (see ksw2_gap_global).
+            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
+        };
+        let ez = aligner.align(&input);
+        (ez.mqe, ez.mte, ez.max as i32)
+    });
     // Soft-clip semantics mirror PuffAligner's flank `part_score` (mqe = read
     // flank fully consumed, reference free to overhang; mte = reference fully
     // consumed, read free to overhang the transcript end):
@@ -412,23 +500,23 @@ fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool
     // `--softclip` implies `--softclipOverhangs`. `ez.max` is the fallback when
     // neither extension is valid (e.g. band-clipped), matching the prior guard.
     if cfg.softclip {
-        let s = ez.mqe.max(ez.mte);
+        let s = mqe.max(mte);
         if s > KSW_NEG_INF {
             s.max(0)
         } else {
-            (ez.max as i32).max(0)
+            max_score.max(0)
         }
     } else if cfg.softclip_overhangs {
-        let s = ez.mqe.max(ez.mte);
+        let s = mqe.max(mte);
         if s > KSW_NEG_INF {
             s
         } else {
-            ez.max as i32
+            max_score
         }
-    } else if ez.mqe > KSW_NEG_INF {
-        ez.mqe
+    } else if mqe > KSW_NEG_INF {
+        mqe
     } else {
-        ez.max as i32
+        max_score
     }
 }
 
@@ -468,17 +556,36 @@ fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: boo
     })
 }
 
-/// 2-bit/DNA5 encode (A=0,C=1,G=2,T=3,N/other=4) for ksw2.
-fn dna5_encode(seq: &[u8]) -> Vec<u8> {
-    seq.iter()
-        .map(|&b| match b {
-            b'A' | b'a' => 0,
-            b'C' | b'c' => 1,
-            b'G' | b'g' => 2,
-            b'T' | b't' => 3,
-            _ => 4,
-        })
-        .collect()
+/// DNA5 lookup table: `DNA5_LUT[b]` is the 2-bit code for ACGT (upper/lower) and
+/// 4 for anything else. A single table load per base beats the per-base `match`
+/// (a chain of compares) on the alignment hot path, where encoding the read and
+/// reference window is a measurable share of full-length scoring.
+static DNA5_LUT: [u8; 256] = {
+    let mut t = [4u8; 256];
+    t[b'A' as usize] = 0;
+    t[b'a' as usize] = 0;
+    t[b'C' as usize] = 1;
+    t[b'c' as usize] = 1;
+    t[b'G' as usize] = 2;
+    t[b'g' as usize] = 2;
+    t[b'T' as usize] = 3;
+    t[b't' as usize] = 3;
+    t
+};
+
+fn dna5_encode_into(seq: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(seq.len());
+    out.extend(seq.iter().map(|&b| DNA5_LUT[b as usize]));
+}
+
+/// Like [`dna5_encode_into`] but emits the codes in reverse order. Note this
+/// only reverses — it does *not* complement — so the per-base LUT applies
+/// unchanged (the caller has already oriented the sequence).
+fn dna5_encode_rev_into(seq: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(seq.len());
+    out.extend(seq.iter().rev().map(|&b| DNA5_LUT[b as usize]));
 }
 
 /// ksw2 score, matching C++ salmon's banded `ksw_extz2_sse` configuration
@@ -488,37 +595,43 @@ fn dna5_encode(seq: &[u8]) -> Vec<u8> {
 /// diagonal. This narrow band is what makes salmon reject off-diagonal /
 /// large-indel placements that a wide-band aligner would accept.
 fn ksw2_align_score(query: &[u8], rwin: &[u8], cfg: &AlignConfig) -> i32 {
-    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
-    let q_enc = dna5_encode(query);
-    let t_enc = dna5_encode(rwin);
+    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     // 5x5 DNA5 scoring matrix: match on the diagonal, mismatch off, N-N = 0.
     let mut mat = [-cfg.mismatch_pen; 25];
     for i in 0..5 {
         mat[i * 5 + i] = cfg.match_score;
     }
     mat[24] = 0;
-    let input = Extz2Input {
-        query: &q_enc,
-        target: &t_enc,
-        m: 5,
-        mat: &mat,
-        q: cfg.gap_open_pen,
-        e: cfg.gap_extend_pen,
-        w: cfg.bandwidth,
-        zdrop: -1,
-        end_bonus: 0,
-        flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
-    };
-    let mut ez = Extz::default();
-    ez.reset(); // initialize mqe/mte/score to KSW_NEG_INF as ksw2 expects
-    extz2(&input, &mut ez);
+    let (mqe, max_score) = KSW_SCRATCH.with(|cell| {
+        let KswScratch {
+            aligner,
+            query: q_enc,
+            target: t_enc,
+        } = &mut *cell.borrow_mut();
+        dna5_encode_into(query, q_enc);
+        dna5_encode_into(rwin, t_enc);
+        let input = Extz2Input {
+            query: q_enc,
+            target: t_enc,
+            m: 5,
+            mat: &mat,
+            q: cfg.gap_open_pen,
+            e: cfg.gap_extend_pen,
+            w: cfg.bandwidth,
+            zdrop: -1,
+            end_bonus: 0,
+            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
+        };
+        let ez = aligner.align(&input);
+        (ez.mqe, ez.max as i32)
+    });
     // `mqe` is the best score with the entire query consumed (the read aligned
     // fully). Fall back to the local max if the query end was never reached
     // within the band.
-    if ez.mqe > KSW_NEG_INF {
-        ez.mqe
+    if mqe > KSW_NEG_INF {
+        mqe
     } else {
-        ez.max as i32
+        max_score
     }
 }
 
@@ -679,6 +792,30 @@ mod tests {
     }
 
     #[test]
+    fn read_overlap_with_reference_gap_penalizes_deletion() {
+        // Divergent-paralog geometry (read ERR/sim mate vs a partial paralog):
+        // two exact MEMs that overlap by 1 base in the read but are separated by a
+        // 60 bp REFERENCE gap (different diagonals) — a large deletion. The pre-fix
+        // overlap branch absorbed this as a 1-base overlap (a perfect 152) and
+        // over-credited the placement past the score threshold; the residual gap DP
+        // must charge the deletion so the divergent placement is rejected.
+        let cfg = AlignConfig::default();
+        let query = gen_seq(76, 3);
+        let reference = gen_seq(400, 9);
+        let mems = vec![Mem::new(0, 198, 43), Mem::new(42, 301, 34)];
+        let score = anchored_align_score(&query, &reference, &mems, &cfg);
+        let m = cfg.match_score as i32;
+        // 43*2 + 34*2 - 1bp read overlap, minus a 61 bp deletion gap (open + 61*ext).
+        let gap = cfg.gap_open_pen as i32 + 61 * cfg.gap_extend_pen as i32;
+        let expected = (43 + 34 - 1) * m - gap; // 152 - 128 = 24
+        assert_eq!(score, expected);
+        assert!(
+            score < min_accepted_score(query.len(), &cfg),
+            "divergent placement must be rejected (score {score})"
+        );
+    }
+
+    #[test]
     fn anchored_scores_two_mem_chain_with_exact_gap() {
         // read exactly matches ref[100..160]; two MEMs with an exact gap between.
         let reference = gen_seq(400, 73);
@@ -692,6 +829,34 @@ mod tests {
         let a = align_chain(&read, &reference, &chain, &cfg).unwrap();
         assert_eq!(a.score, perfect_score(read.len(), &cfg), "got {}", a.score);
         assert!(a.valid);
+    }
+
+    #[test]
+    fn overlapping_mems_on_shifted_diagonals_incur_gap_penalty() {
+        // Two MEMs that overlap by 1 base in the read but by 4 in the reference
+        // (diagonals 3 apart) — a hidden 3 bp indel. This is the exact geometry
+        // observed for ERR188044.600028 vs ENST00000677249.1. Pre-fix the
+        // overlap branch scored it as a plain overlap (sum*match - max_overlap),
+        // silently absorbing the indel and inflating the score; now the residual
+        // is DP-aligned and the diagonal jump costs an affine gap.
+        let cfg = AlignConfig::default();
+        let query = gen_seq(76, 5);
+        let reference = gen_seq(900, 9);
+        // mem0: read[0..45]@ref790 (diag 745); mem1: read[44..76]@ref831 (diag 787).
+        // read_ov = 45-44 = 1 ; ref_ov = (790+45)-831 = 4  -> implied 3 bp indel.
+        let mems = vec![Mem::new(0, 790, 45), Mem::new(44, 831, 32)];
+        let m = cfg.match_score as i32;
+        let score = anchored_align_score(&query, &reference, &mems, &cfg);
+        // Old (buggy) behavior absorbed the indel as a 4-base overlap only:
+        let absorbed = (45 + 32) * m - 4 * m; // = 146
+                                              // Fixed: 73 matched bases minus a 3 bp affine gap (open + 3*extend).
+        let gap = cfg.gap_open_pen as i32 + 3 * cfg.gap_extend_pen as i32;
+        let expected = (45 + 32 - 4) * m - gap; // 146 - 12 = 134
+        assert_eq!(score, expected, "expected indel-penalized score");
+        assert!(
+            score < absorbed,
+            "indel was not penalized: {score} >= {absorbed}"
+        );
     }
 
     #[test]

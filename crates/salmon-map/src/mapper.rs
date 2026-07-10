@@ -12,7 +12,7 @@ use piscem_rs::mapping::hit_searcher::HitSearcher;
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
 use crate::align::{
-    align_chain, align_in_window, revcomp, AlignConfig, AlignTask, Aligner, Alignment, CpuAligner,
+    align_chain, align_in_window, revcomp, AlignConfig, AlignTask, Alignment,
 };
 use crate::collect::{
     best_per_target, collect_read_mems, consensus_filter, MappingCandidate, MemCollectorConfig,
@@ -23,18 +23,22 @@ use crate::extend::{collect_read_true_unimems, collect_read_unimems};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SeedMode {
     /// Sparse fixed-`k` k-mer anchors straight from piscem's skipping query
-    /// (one length-`k` anchor per unitig transition). The default.
-    #[default]
+    /// (one length-`k` anchor per unitig transition). Selected by `--sparseSeeds`.
     Sparse,
     /// Reference MEMs: each seed extended against the reference transcript,
     /// crossing unitig boundaries ([`crate::extend::collect_read_unimems`]).
     RefMem,
     /// True uni-MEMs: extension clamped to each seed's unitig, reproducing
     /// pufferfish's `expandHitEfficient` ([`crate::extend::collect_read_true_unimems`]).
+    /// The default — faster than and at least as accurate as sparse seeding.
+    #[default]
     UniMem,
 }
 use crate::pair::{join_reads_and_filter, JointMapping, PairingConfig};
-use crate::score::{finalize_mappings_counted, RawMapping, ScoreConfig, ScoredMapping};
+use crate::score::{
+    finalize_mappings_counted, finalize_mappings_counted_into, RawMapping, ScoreConfig,
+    ScoredMapping,
+};
 use salmon_core::RefProvider;
 
 /// Full mapper configuration.
@@ -112,27 +116,30 @@ pub fn map_single_read<'idx, R: RefProvider>(
     read: &[u8],
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
+    let mut out = Vec::new();
+    map_single_read_into(&mut out, index, hs, refs, read, cfg);
+    out
+}
+
+/// [`map_single_read`] writing into a caller-provided buffer (cleared first), so
+/// a per-thread `Vec` can be reused across reads instead of allocating per read.
+pub fn map_single_read_into<'idx, R: RefProvider>(
+    out: &mut Vec<ScoredMapping>,
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    refs: &R,
+    read: &[u8],
+    cfg: &MapConfig,
+) {
     let cands = consensus_filter(
         best_per_target(collect_candidates(index, hs, refs, read, true, cfg)),
         cfg.collect.consensus_fraction,
     );
     let had_candidates = !cands.is_empty();
-    // Collect one validation task per candidate, then score them as a batch. The
-    // CPU backend scores in place (identical to aligning each candidate inline);
-    // a batched backend fuses them into one dispatch.
-    let tasks: Vec<AlignTask> = cands
-        .iter()
-        .map(|c| AlignTask {
-            read,
-            ref_seq: refs.ref_seq(c.tid),
-            chain: &c.chain,
-        })
-        .collect();
-    let alns = CpuAligner.align_batch(&tasks, &cfg.align);
     let mut below = 0u32;
     let mut raw = Vec::with_capacity(cands.len());
-    for (c, aln) in cands.iter().zip(&alns) {
-        if let Some(aln) = aln {
+    for c in cands {
+        if let Some(aln) = align_chain(read, refs.ref_seq(c.tid), &c.chain, &cfg.align) {
             if aln.valid {
                 // single-end observed strandedness: sense if forward, else antisense
                 let strand = if c.is_fw {
@@ -146,6 +153,7 @@ pub fn map_single_read<'idx, R: RefProvider>(
                     status: MateStatus::SingleEnd,
                     score: aln.score,
                     fragment_len: 0,
+                    read_len: read.len() as i32,
                     is_decoy: refs.is_decoy(c.tid),
                     // 5' position: leftmost for a forward read, rightmost for a
                     // reverse read (orientation-aware sequence-bias context).
@@ -175,14 +183,202 @@ pub fn map_single_read<'idx, R: RefProvider>(
             below += 1;
         }
     }
-    let (maps, decoy_dominated, below_final) = finalize_mappings_counted(raw, &cfg.score);
+    let (decoy_dominated, below_final) = finalize_mappings_counted_into(out, raw, &cfg.score);
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,
         dovetail: false,
         alns_below_threshold: below + below_final,
     });
-    maps
+}
+
+/// Map a read pair to weighted equivalence-class members.
+pub fn map_read_pair<'idx, R: RefProvider>(
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    refs: &R,
+    r1: &[u8],
+    r2: &[u8],
+    cfg: &MapConfig,
+) -> Vec<ScoredMapping> {
+    let mut out = Vec::new();
+    map_read_pair_into(&mut out, index, hs, refs, r1, r2, cfg);
+    out
+}
+
+/// [`map_read_pair`] writing into a caller-provided buffer (cleared first), for
+/// per-thread `Vec` reuse across reads.
+pub fn map_read_pair_into<'idx, R: RefProvider>(
+    out: &mut Vec<ScoredMapping>,
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    refs: &R,
+    r1: &[u8],
+    r2: &[u8],
+    cfg: &MapConfig,
+) {
+    let cf = cfg.collect.consensus_fraction;
+    // NOTE: deliberately do NOT collapse to one chain per (tid, is_fw) before
+    // pairing. A mate can match a transcript at several positions (an internal
+    // repeat); `best_per_target` keeps only the highest-coverage chain, which may
+    // not be the placement that forms a valid concordant pair. `join_reads_and_filter`
+    // selects the pairing-compatible chain per target over all candidates, and
+    // de-duplicates orphans to one per (tid, is_fw) itself.
+    let left = consensus_filter(collect_candidates(index, hs, refs, r1, true, cfg), cf);
+    let right = consensus_filter(collect_candidates(index, hs, refs, r2, true, cfg), cf);
+    let joints = join_reads_and_filter(left, right, &cfg.pair);
+
+    let had_candidates = !joints.is_empty();
+    // Count this fragment toward num_dovetail_fragments when an otherwise-valid
+    // concordant pair was rejected only because the mates dovetail AND no
+    // concordant pair survived for any target — i.e. its only concordant pairing
+    // was a dovetail (salmon's diagnostic). The pair is dropped regardless; this
+    // just reports it. (Pairing already filtered dovetails, so the surviving
+    // PairedEndPaired joints below are never themselves dovetailed.)
+    let has_concordant_pair = joints
+        .iter()
+        .any(|j| matches!(j.status, MateStatus::PairedEndPaired));
+    let dovetail = crate::pair::dovetail_rejected() && !has_concordant_pair;
+    let mut below = 0u32;
+    let mut raw = Vec::new();
+    for j in joints {
+        match j.status {
+            MateStatus::PairedEndPaired => {
+                let l = j.left.as_ref().unwrap();
+                let r = j.right.as_ref().unwrap();
+                let refseq = refs.ref_seq(j.tid);
+                let al = align_chain(r1, refseq, &l.chain, &cfg.align);
+                let ar = align_chain(r2, refseq, &r.chain, &cfg.align);
+                if let (Some(al), Some(ar)) = (al, ar) {
+                    if al.valid && ar.valid {
+                        // positional bias (salmon's PAIRED_END_PAIRED case): only
+                        // opposite-strand pairs contribute. The 5' model is indexed
+                        // by the fragment 5' START and the 3' model by the fragment
+                        // 3' END, matching how the expected pos5/pos3 models are
+                        // built (by fragStartPos as start / as end). NOTE: this uses
+                        // the fragment 3' end, not the reverse mate's leftmost (which
+                        // is 3'end - readLen) — fixing a coordinate mismatch between
+                        // the observed and expected 3' positional models.
+                        let frag_start = l.chain.ref_start().min(r.chain.ref_start());
+                        let (fw_pos, rc_pos) = if l.is_fw != r.is_fw {
+                            (frag_start, frag_start + j.fragment_len - 1)
+                        } else {
+                            (-1, -1)
+                        };
+                        raw.push(RawMapping {
+                            tid: j.tid,
+                            is_fw: l.is_fw,
+                            status: MateStatus::PairedEndPaired,
+                            score: al.score + ar.score,
+                            fragment_len: j.fragment_len,
+                            read_len: 0, // proper pair: fragment_len carries the length signal
+                            is_decoy: refs.is_decoy(j.tid),
+                            ref_pos: l.chain.ref_start().min(r.chain.ref_start()),
+                            fw_pos,
+                            rc_pos,
+                            format: Some(j.format),
+                            r1_pos: l.chain.ref_start(),
+                            r2_pos: r.chain.ref_start(),
+                            r2_fw: r.is_fw,
+                            r1_score: al.score,
+                        });
+                    } else if al.valid {
+                        // The concordant pair was rejected because the *other* mate's
+                        // alignment fell below threshold (or the pairing was an
+                        // invalid orientation). Rescue the valid mate as an orphan —
+                        // salmon emits an `m1`/`m2` orphan here rather than dropping
+                        // the whole fragment. Forming the (failed) pair had otherwise
+                        // suppressed this mate's orphan in `join_reads_and_filter`.
+                        raw.push(orphan_raw(
+                            j.tid,
+                            l,
+                            al.score,
+                            true,
+                            refs.is_decoy(j.tid),
+                            r1.len() as i32,
+                        ));
+                        below += 1;
+                    } else if ar.valid {
+                        raw.push(orphan_raw(
+                            j.tid,
+                            r,
+                            ar.score,
+                            false,
+                            refs.is_decoy(j.tid),
+                            r2.len() as i32,
+                        ));
+                        below += 1;
+                    } else {
+                        below += 1;
+                    }
+                } else {
+                    below += 1;
+                }
+            }
+            MateStatus::PairedEndLeft => {
+                let anchor = j.left.as_ref().unwrap();
+                let refseq = index_seq(refs, j.tid);
+                let anchor_aln = align_chain(r1, refseq, &anchor.chain, &cfg.align);
+                push_orphan_or_recovered(
+                    &mut raw,
+                    refseq,
+                    r1,
+                    r2,
+                    anchor,
+                    true,
+                    refs,
+                    cfg,
+                    j.tid,
+                    anchor_aln,
+                );
+            }
+            MateStatus::PairedEndRight => {
+                let anchor = j.right.as_ref().unwrap();
+                let refseq = index_seq(refs, j.tid);
+                let anchor_aln = align_chain(r2, refseq, &anchor.chain, &cfg.align);
+                push_orphan_or_recovered(
+                    &mut raw,
+                    refseq,
+                    r2,
+                    r1,
+                    anchor,
+                    false,
+                    refs,
+                    cfg,
+                    j.tid,
+                    anchor_aln,
+                );
+            }
+            MateStatus::SingleEnd => {}
+        }
+    }
+    // Orphans are a *fallback*: if this fragment has a concordant (proper-pair)
+    // mapping to a *transcript*, discard all orphan mappings. A lone mate matching
+    // a paralog is weak evidence and would spuriously enlarge the equivalence class
+    // / leak count mass to the wrong transcript; the concordant transcript mapping
+    // is the trustworthy signal.
+    //
+    // A concordant pair to a *decoy* must NOT suppress a transcript orphan: a
+    // fragment that pairs on the genome but only orphans onto a transcript would
+    // otherwise lose its transcript evidence entirely (the decoy pair leaves no
+    // surviving non-decoy mapping, so `best_valid` is None and even
+    // `--allowDecoyOrphans` cannot rescue it). Instead we keep both and let the
+    // decoy-domination logic in `finalize_mappings_counted` adjudicate
+    // (default: drop the decoy-dominated transcript orphan; `--allowDecoyOrphans`:
+    // keep it), matching C++ salmon's orphan handling on a decoy-aware index.
+    if raw
+        .iter()
+        .any(|m| matches!(m.status, MateStatus::PairedEndPaired) && !m.is_decoy)
+    {
+        raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
+    }
+    let (decoy_dominated, below_final) = finalize_mappings_counted_into(out, raw, &cfg.score);
+    set_last_map_stats(MapStats {
+        had_candidates,
+        decoy_dominated,
+        dovetail,
+        alns_below_threshold: below + below_final,
+    });
 }
 
 /// A read pair after candidate collection and pairing, before alignment
@@ -197,7 +393,9 @@ pub struct PendingPair {
 }
 
 /// Collect and pair a read pair's candidates without aligning them, yielding a
-/// [`PendingPair`]. The alignment-free first half of [`map_read_pair`].
+/// [`PendingPair`]. The alignment-free first half of [`map_read_pair`] (matching
+/// [`map_read_pair_into`]'s collection/pairing exactly, so the batched `--gpu`
+/// path produces results identical to the inline CPU path).
 pub fn collect_pair<'idx, R: RefProvider>(
     index: &'idx ReferenceIndex,
     hs: &mut HitSearcher<'idx>,
@@ -207,33 +405,19 @@ pub fn collect_pair<'idx, R: RefProvider>(
     cfg: &MapConfig,
 ) -> PendingPair {
     let cf = cfg.collect.consensus_fraction;
-    let left = consensus_filter(
-        best_per_target(collect_candidates(index, hs, refs, r1, true, cfg)),
-        cf,
-    );
-    let right = consensus_filter(
-        best_per_target(collect_candidates(index, hs, refs, r2, true, cfg)),
-        cf,
-    );
+    // NOTE: deliberately do NOT collapse to one chain per (tid, is_fw) before
+    // pairing — see the rationale in [`map_read_pair_into`].
+    let left = consensus_filter(collect_candidates(index, hs, refs, r1, true, cfg), cf);
+    let right = consensus_filter(collect_candidates(index, hs, refs, r2, true, cfg), cf);
     let joints = join_reads_and_filter(left, right, &cfg.pair);
     let had_candidates = !joints.is_empty();
-    // Dovetail: opposite-strand mates where the downstream (reverse) mate starts
-    // upstream of the forward mate (salmon's `num_dovetail_fragments`). Derived
-    // from chain positions, so computed here without aligning — matching the
-    // previous inline check.
-    let mut dovetail = false;
-    for j in &joints {
-        if matches!(j.status, MateStatus::PairedEndPaired) {
-            let l = j.left.as_ref().unwrap();
-            let r = j.right.as_ref().unwrap();
-            if l.is_fw != r.is_fw {
-                let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
-                if rc.chain.ref_start() < fw.chain.ref_start() {
-                    dovetail = true;
-                }
-            }
-        }
-    }
+    // Dovetail diagnostic: computed here (after `join_reads_and_filter`) exactly as
+    // in [`map_read_pair_into`], so `dovetail_rejected()` reflects the most recent
+    // pairing of this fragment.
+    let has_concordant_pair = joints
+        .iter()
+        .any(|j| matches!(j.status, MateStatus::PairedEndPaired));
+    let dovetail = crate::pair::dovetail_rejected() && !has_concordant_pair;
     PendingPair {
         joints,
         had_candidates,
@@ -286,6 +470,12 @@ impl PendingPair {
     /// Finalize from pre-computed alignment results (`alns`, one per task from
     /// [`align_tasks`](Self::align_tasks), in the same order) into weighted
     /// equivalence-class members, recording the per-fragment [`MapStats`].
+    ///
+    /// This mirrors [`map_read_pair_into`]'s finalization exactly (same
+    /// `RawMapping` construction, orphan-rescue, decoy-aware suppression and
+    /// stats), substituting the inline `align_chain` calls with `alns[..]`
+    /// lookups indexed in `align_tasks` order — so the `--gpu` path produces
+    /// results identical to the CPU full-length path.
     pub fn finalize<R: RefProvider>(
         self,
         r1: &[u8],
@@ -329,6 +519,7 @@ impl PendingPair {
                                 status: MateStatus::PairedEndPaired,
                                 score: al.score + ar.score,
                                 fragment_len: j.fragment_len,
+                                read_len: 0, // proper pair: fragment_len carries the length signal
                                 is_decoy: refs.is_decoy(j.tid),
                                 ref_pos: l.chain.ref_start().min(r.chain.ref_start()),
                                 fw_pos,
@@ -346,10 +537,24 @@ impl PendingPair {
                             // salmon emits an `m1`/`m2` orphan here rather than dropping
                             // the whole fragment. Forming the (failed) pair had otherwise
                             // suppressed this mate's orphan in `join_reads_and_filter`.
-                            raw.push(orphan_raw(j.tid, l, al.score, true, refs.is_decoy(j.tid)));
+                            raw.push(orphan_raw(
+                                j.tid,
+                                l,
+                                al.score,
+                                true,
+                                refs.is_decoy(j.tid),
+                                r1.len() as i32,
+                            ));
                             below += 1;
                         } else if ar.valid {
-                            raw.push(orphan_raw(j.tid, r, ar.score, false, refs.is_decoy(j.tid)));
+                            raw.push(orphan_raw(
+                                j.tid,
+                                r,
+                                ar.score,
+                                false,
+                                refs.is_decoy(j.tid),
+                                r2.len() as i32,
+                            ));
                             below += 1;
                         } else {
                             below += 1;
@@ -395,14 +600,23 @@ impl PendingPair {
                 MateStatus::SingleEnd => {}
             }
         }
-        // Orphans are a *fallback*: if this fragment has any concordant (proper-pair)
-        // mapping, discard all orphan mappings. A lone mate matching a paralog is weak
-        // evidence and would spuriously enlarge the equivalence class / leak count mass
-        // to the wrong transcript; the concordant mappings are the trustworthy signal.
-        // Orphans are kept only when the fragment has *no* concordant mapping at all.
+        // Orphans are a *fallback*: if this fragment has a concordant (proper-pair)
+        // mapping to a *transcript*, discard all orphan mappings. A lone mate matching
+        // a paralog is weak evidence and would spuriously enlarge the equivalence class
+        // / leak count mass to the wrong transcript; the concordant transcript mapping
+        // is the trustworthy signal.
+        //
+        // A concordant pair to a *decoy* must NOT suppress a transcript orphan: a
+        // fragment that pairs on the genome but only orphans onto a transcript would
+        // otherwise lose its transcript evidence entirely (the decoy pair leaves no
+        // surviving non-decoy mapping, so `best_valid` is None and even
+        // `--allowDecoyOrphans` cannot rescue it). Instead we keep both and let the
+        // decoy-domination logic in `finalize_mappings_counted` adjudicate
+        // (default: drop the decoy-dominated transcript orphan; `--allowDecoyOrphans`:
+        // keep it), matching C++ salmon's orphan handling on a decoy-aware index.
         if raw
             .iter()
-            .any(|m| matches!(m.status, MateStatus::PairedEndPaired))
+            .any(|m| matches!(m.status, MateStatus::PairedEndPaired) && !m.is_decoy)
         {
             raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
         }
@@ -415,25 +629,6 @@ impl PendingPair {
         });
         maps
     }
-}
-
-/// Map a read pair to weighted equivalence-class members.
-pub fn map_read_pair<'idx, R: RefProvider>(
-    index: &'idx ReferenceIndex,
-    hs: &mut HitSearcher<'idx>,
-    refs: &R,
-    r1: &[u8],
-    r2: &[u8],
-    cfg: &MapConfig,
-) -> Vec<ScoredMapping> {
-    let pending = collect_pair(index, hs, refs, r1, r2, cfg);
-    // Score this fragment's tasks in place, then finalize. Tasks borrow
-    // `pending`, so they are scoped out before `finalize` consumes it.
-    let alns = {
-        let tasks = pending.align_tasks(r1, r2, refs);
-        CpuAligner.align_batch(&tasks, &cfg.align)
-    };
-    pending.finalize(r1, r2, refs, &alns, cfg)
 }
 
 #[inline]
@@ -450,6 +645,7 @@ fn orphan_raw(
     score: i32,
     is_left: bool,
     is_decoy: bool,
+    read_len: i32,
 ) -> RawMapping {
     let start = c.chain.ref_start();
     RawMapping {
@@ -462,6 +658,7 @@ fn orphan_raw(
         },
         score,
         fragment_len: 0,
+        read_len,
         is_decoy,
         ref_pos: start,
         fw_pos: if c.is_fw { start } else { -1 },
@@ -524,12 +721,15 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
 ///
 /// `anchor_read` is the mate that produced the chain (`anchor`), `partner_read`
 /// is the unmapped mate. `anchor_is_left` records which physical mate the
-/// anchor is, so the emitted orphan status is correct.
+/// anchor is, so the emitted orphan status is correct. `anchor_aln` is the
+/// pre-computed alignment of the anchor mate (from either the inline CPU path or
+/// the batched `--gpu` dispatch); `None` or invalid means the anchor did not
+/// validate and nothing is emitted.
 #[allow(clippy::too_many_arguments)]
 fn push_orphan_or_recovered<R: RefProvider>(
     raw: &mut Vec<RawMapping>,
     refseq: &[u8],
-    _anchor_read: &[u8],
+    anchor_read: &[u8],
     partner_read: &[u8],
     anchor: &MappingCandidate,
     anchor_is_left: bool,
@@ -554,6 +754,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 status: MateStatus::PairedEndPaired,
                 score: anchor_aln.score + partner_score,
                 fragment_len: frag_len,
+                read_len: 0, // recovered proper pair: fragment_len carries the length signal
                 is_decoy,
                 ref_pos: anchor.chain.ref_start(),
                 // orientation not re-derived for recovered pairs; attribute the
@@ -602,6 +803,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
         status,
         score: anchor_aln.score,
         fragment_len: 0,
+        read_len: anchor_read.len() as i32,
         is_decoy,
         ref_pos: anchor.chain.ref_start(),
         // orphan: leftmost coordinate attributed to its own strand.

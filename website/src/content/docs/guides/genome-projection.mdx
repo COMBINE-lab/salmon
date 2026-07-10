@@ -1,0 +1,83 @@
+---
+title: Genome-alignment quantification
+description: Quantify directly from a genome-aligned BAM + an annotation by projecting spliced alignments into transcriptome coordinates with bramble.
+---
+
+Most RNA-seq pipelines align reads to the **genome** (STAR, HISAT2, minimap2),
+producing *spliced* alignments. salmon's usual alignment mode (`-a`) expects a BAM
+aligned to the **transcriptome**, so using it would mean a second, transcriptome-
+centric alignment. Genome-alignment mode removes that step: give salmon a
+genome-aligned, name-grouped BAM plus a GTF/GFF annotation and it projects each
+spliced alignment into transcriptome coordinates — using
+[bramble](https://github.com/zrudnick/bramble) — then quantifies exactly as it
+would from a transcriptomic BAM.
+
+```sh
+salmon quant -a genome.bam --annotation anno.gtf -l A -p 16 -o out
+```
+
+The presence of `--annotation` is what switches the `-a` branch into
+genome-projection mode; without it, `-a` quantifies a transcriptomic BAM as
+before.
+
+## Requirements
+
+- **A name-grouped (query-sorted) BAM.** salmon needs a read's records adjacent,
+  so collate first: `samtools collate` (or `samtools sort -n`), or aligner output
+  in read order (e.g. STAR `--outSAMtype BAM Unsorted`). A coordinate-sorted BAM
+  is rejected.
+- **An annotation** (`--annotation <gtf|gff>`) whose transcript models match the
+  genome the reads were aligned to. Transcripts absent from the annotation (e.g.
+  ALT-haplotype/scaffold transcripts not in a primary-assembly GTF) cannot be
+  quantified — a real, inherent limit of genome-over-primary quantification, not
+  a projection artifact.
+
+## Options
+
+| Option | Description |
+| --- | --- |
+| `--annotation <gtf\|gff>` | **Required** for genome mode. Transcript models used to build the genome→transcriptome map. |
+| `--genome <fasta>` | Genome FASTA. Optional; supply it to enable bias correction — transcript sequences are reconstructed from exon slices so `--seqBias`/`--gcBias`/`--posBias` work. |
+| `--juncMissDiscount <f>` | Penalty for a spliced read whose junction is not supported by the annotation (bramble `junc_miss_discount`; default `1.0` = no penalty). |
+
+:::note[Short reads]
+Genome projection targets short-read (Illumina) data. For long reads (PacBio/ONT),
+use [oarfish](https://github.com/COMBINE-lab/oarfish), COMBINE-lab's dedicated
+long-read quantifier.
+:::
+
+## How it works
+
+bramble builds a genome→transcriptome index from the annotation and the BAM's
+`@SQ` reference names, then projects each fragment's genomic alignment onto every
+compatible transcript. salmon turns each projected placement into a RAD record
+(transcript id, transcript-relative position, fragment length, orientation, and a
+per-placement score derived from bramble's similarity), then hands the RAD to the
+same deterministic quantifier used everywhere else. As a result:
+
+- it is **inherently deterministic** — byte-identical across thread counts, like
+  the rest of RAD-based quantification;
+- it composes with the whole feature set for free — bias correction (with
+  `--genome`), `--numBootstraps`/`--numGibbsSamples`, `-g`/`--geneMap`, and `-l A`
+  library-type inference all run through the shared tail;
+- there is **no alignment error model** — bramble exposes no projected CIGAR, so
+  the projected similarity is the placement's quality signal (genome mode is
+  implicitly `--noErrorModel`).
+
+## Accuracy
+
+On simulated data with known truth, genome-projected quantification tracks
+direct transcriptomic quantification closely, and matches a reference genome→
+transcriptome projection (e.g. STAR's own `--quantMode TranscriptomeSAM`). The
+residual gap versus read-based transcriptome quantification is **inherent to
+genome alignment**: a transcriptomic aligner sees a read against an entire
+sequence-similar transcript family at once, whereas a genome aligner commits the
+read to a single locus, so paralogous/retained-intron isoforms are assigned
+differently. This gap is shared by any genome-projection tool and is not specific
+to bramble.
+
+:::note
+Genome mode reuses alignment mode's inference and output, so `quant.sf`,
+`quant.genes.sf` (with `-g`), and the inferential-replicate outputs are identical
+in format to every other mode.
+:::

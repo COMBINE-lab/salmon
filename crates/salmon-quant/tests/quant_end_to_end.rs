@@ -179,6 +179,176 @@ fn selective_alignment_quantification_tracks_truth() {
     assert_eq!(sf.lines().count(), 1 + res.names.len());
 }
 
+/// Regression test for the stranded-library mapped-count invariant.
+///
+/// A fragment must be counted in `num_mapped` only if it has a strand-compatible
+/// mapping that actually contributes to quantification. The mapped counter was
+/// incremented before the strand-compatibility filter, so on a stranded library a
+/// fragment whose every mapping was strand-incompatible (dropped, contributing no
+/// count) was still counted as mapped. That inflated `num_mapped` /
+/// `percent_mapped` / `num_compatible_fragments` and broke the mass-conservation
+/// invariant `Σ NumReads == num_mapped` (C++ salmon counts mapped post-filter, so
+/// `Σ NumReads == num_mapped` there). The simulated reads are inward FR (observed
+/// `ISF`): quantified under `ISF` they map and conserve mass; quantified under the
+/// opposite stranded type `ISR` every proper pair is incompatible and dropped, so
+/// `num_mapped` must fall to ~0 — not stay at the fragment total.
+#[test]
+fn stranded_num_mapped_matches_quantified_mass() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, truth) = simulate(tmp.path());
+    let total_truth: u64 = truth.values().sum();
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    // Mass conservation must hold for any library type: every fragment counted as
+    // mapped distributes its full unit of mass across transcripts.
+    let mass_conserved = |res: &salmon_quant::QuantResult| {
+        let sum_counts: f64 = res.counts.iter().sum();
+        let tol = 1.0 + 0.005 * res.num_mapped as f64;
+        assert!(
+            (res.num_mapped as f64 - sum_counts).abs() <= tol,
+            "mass not conserved: num_mapped={} but Σ counts={sum_counts:.3}",
+            res.num_mapped,
+        );
+    };
+
+    // Compatible stranded type: reads map and mass is conserved.
+    let out_isf = tmp.path().join("quant_isf");
+    let mut opts = QuantOptions::new(idx_dir.clone(), out_isf);
+    opts.mates1 = vec![r1.clone()];
+    opts.mates2 = vec![r2.clone()];
+    opts.lib_type = "ISF".to_string();
+    opts.num_threads = 1;
+    let res_isf = quantify(&opts).expect("quantify ISF");
+    assert!(
+        res_isf.num_mapped as f64 >= 0.9 * total_truth as f64,
+        "ISF: only {} / {} fragments mapped",
+        res_isf.num_mapped,
+        total_truth
+    );
+    mass_conserved(&res_isf);
+
+    // Opposite stranded type: every proper pair is strand-incompatible and
+    // dropped. The mapped count must reflect post-filter assignment (~0), and mass
+    // conservation must still hold.
+    let out_isr = tmp.path().join("quant_isr");
+    let mut opts = QuantOptions::new(idx_dir, out_isr);
+    opts.mates1 = vec![r1];
+    opts.mates2 = vec![r2];
+    opts.lib_type = "ISR".to_string();
+    opts.num_threads = 1;
+    let res_isr = quantify(&opts).expect("quantify ISR");
+    assert!(
+        (res_isr.num_mapped as f64) < 0.1 * total_truth as f64,
+        "ISR: strand-incompatible fragments counted as mapped: num_mapped={} of {}",
+        res_isr.num_mapped,
+        total_truth
+    );
+    mass_conserved(&res_isr);
+}
+
+/// Read back a salmon RAD file: detected profile, ref names, and all records.
+fn read_rad(
+    path: &Path,
+) -> (
+    salmon_rad::RadInputProfile,
+    Vec<String>,
+    Vec<salmon_rad::SalmonBulkRecord>,
+) {
+    use libradicl::chunk::Chunk;
+    use libradicl::header::RadPrelude;
+    use std::io::{Cursor, Read};
+
+    let mut data = Vec::new();
+    std::fs::File::open(path)
+        .unwrap()
+        .read_to_end(&mut data)
+        .unwrap();
+    let mut rc = Cursor::new(data);
+    let prelude = RadPrelude::from_bytes(&mut rc).unwrap();
+    let profile = salmon_rad::detect_input_profile(&prelude).unwrap();
+    let _ = prelude.file_tags.parse_tags_from_bytes(&mut rc).unwrap();
+    let ctx: salmon_rad::SalmonBulkContext = prelude.get_record_context().unwrap();
+    let mut recs = Vec::new();
+    for _ in 0..prelude.hdr.num_chunks {
+        let chunk = Chunk::<salmon_rad::SalmonBulkRecord>::from_bytes(&mut rc, &ctx);
+        recs.extend(chunk.reads);
+    }
+    (profile, prelude.hdr.ref_names, recs)
+}
+
+/// `--writeRad` produces a readable RAD file: one record per mapped fragment,
+/// ref table matches quant.sf, every hit references a valid transcript, and the
+/// profile (sketch vs selective-alignment, the latter carrying scores) round-
+/// trips. Runs multi-threaded to exercise the concurrent chunk writer.
+#[test]
+fn writes_rad_output_readable_and_complete() {
+    use salmon_rad::{RadInputProfile, RadProfile};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, _truth) = simulate(tmp.path());
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    // (sketch?, expected profile)
+    let cases = [
+        (true, RadInputProfile::Salmon(RadProfile::Sketch)),
+        (
+            false,
+            RadInputProfile::Salmon(RadProfile::SelectiveAlignment),
+        ),
+    ];
+    for (sketch, expected_profile) in cases {
+        let tag = if sketch { "sketch" } else { "sa" };
+        let out = tmp.path().join(format!("quant_rad_{tag}"));
+        let rad_path = tmp.path().join(format!("maps_{tag}.rad"));
+        let mut opts = QuantOptions::new(idx_dir.clone(), out);
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = "IU".to_string();
+        opts.num_threads = 4; // exercise the concurrent writer
+        opts.sketch = sketch;
+        opts.write_rad = Some(rad_path.clone());
+
+        let res = quantify(&opts).expect("quantify with --writeRad");
+        let (profile, ref_names, recs) = read_rad(&rad_path);
+
+        assert_eq!(profile, expected_profile, "{tag}: profile detection");
+        // one record per mapped fragment
+        assert_eq!(
+            recs.len() as u64,
+            res.num_mapped,
+            "{tag}: RAD record count must equal num_mapped"
+        );
+        // RAD reference table matches quant.sf order
+        assert_eq!(ref_names, res.names, "{tag}: ref names/order");
+        // every hit references a valid (non-out-of-range) transcript
+        for r in &recs {
+            assert!(!r.hits.is_empty(), "{tag}: mapped fragment must have hits");
+            for h in &r.hits {
+                assert!((h.tid as usize) < res.names.len(), "{tag}: tid in range");
+            }
+        }
+        // SA records carry a (nontrivial) score; sketch records do not persist one.
+        if !sketch {
+            assert!(
+                recs.iter().flat_map(|r| &r.hits).any(|h| h.score != 0),
+                "SA RAD should carry nonzero alignment scores"
+            );
+        } else {
+            assert!(
+                recs.iter().flat_map(|r| &r.hits).all(|h| h.score == 0),
+                "sketch RAD should not persist scores"
+            );
+        }
+    }
+}
+
 #[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();

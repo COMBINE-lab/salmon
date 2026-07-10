@@ -40,11 +40,15 @@ pub use extend::{
     collect_read_true_unimems, collect_read_unimems, extend_mem, extend_mem_within,
 };
 pub use mapper::{
-    collect_pair, debug_best_mapping, map_read_pair, map_single_read, take_last_map_stats,
-    DebugMapping, MapConfig, MapStats, PendingPair, SeedMode,
+    collect_pair, debug_best_mapping, map_read_pair, map_read_pair_into, map_single_read,
+    map_single_read_into, take_last_map_stats, DebugMapping, MapConfig, MapStats, PendingPair,
+    SeedMode,
 };
 pub use mem::Mem;
 pub use pair::{join_reads_and_filter, JointMapping, PairingConfig};
 pub use salmon_core::RefProvider;
-pub use score::{finalize_mappings, RawMapping, ScoreConfig, ScoredMapping};
-pub use sketch::{map_read_pair_sketch, map_single_read_sketch, SketchScratch};
+pub use score::{filter_sketch_decoys, finalize_mappings, RawMapping, ScoreConfig, ScoredMapping};
+pub use sketch::{
+    map_read_pair_sketch, map_read_pair_sketch_into, map_single_read_sketch,
+    map_single_read_sketch_into, SketchScratch,
+};

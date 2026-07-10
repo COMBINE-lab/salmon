@@ -11,8 +11,10 @@
 
 use salmon_core::atomic::AtomicF64;
 use salmon_core::math::{log_add, LOG_0, LOG_EPSILON};
+use salmon_core::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 use statrs::distribution::{Binomial, ContinuousCDF, Discrete, Normal};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 /// Tracks the observed distribution of fragment lengths.
 #[derive(Debug)]
@@ -35,6 +37,28 @@ pub struct FragmentLengthDistribution {
     /// cached CMF
     cached_cmf: Vec<f64>,
     have_cache: bool,
+
+    /// Periodically-refreshed snapshot of the (un-normalized) log-PMF used during
+    /// the *online* phase, indexed by raw length. Reading the live `hist`/`tot_mass`
+    /// directly (two separate atomic loads on a concurrently-updated distribution)
+    /// returns slightly different values for the same length across calls, which
+    /// breaks the weight symmetry of exact-duplicate transcripts and is then
+    /// amplified by the VBEM `α<1` prior. Mirroring C++ salmon (`cachedPMF_` +
+    /// `LogCMFCache`), worker threads instead capture an immutable snapshot of this
+    /// once per fragment ([`online_snapshot`](Self::online_snapshot)) so every
+    /// transcript of a given length in that fragment gets an identical value;
+    /// [`refresh_online`](Self::refresh_online) rebuilds it at mini-batch
+    /// boundaries.
+    online_pmf: RwLock<Arc<Vec<f64>>>,
+
+    /// Periodically-refreshed snapshot of the (normalized) log-CMF, the
+    /// cumulative companion to [`online_pmf`](Self::online_pmf). Used for the
+    /// ambiguous (orphan / single-end) fragment-length probability and for the
+    /// `pmf(flen) − cmf(txpLen)` length-conditioning of proper pairs, both of
+    /// which need cumulative mass. Rebuilt alongside `online_pmf` in
+    /// [`refresh_online`](Self::refresh_online); mirrors C++ salmon's
+    /// `LogCMFCache`.
+    online_cmf: RwLock<Arc<Vec<f64>>>,
 }
 
 impl FragmentLengthDistribution {
@@ -112,6 +136,8 @@ impl FragmentLengthDistribution {
             cached_pmf: Vec::new(),
             cached_cmf: Vec::new(),
             have_cache: false,
+            online_pmf: RwLock::new(Arc::new(Vec::new())),
+            online_cmf: RwLock::new(Arc::new(Vec::new())),
         }
     }
 
@@ -174,6 +200,59 @@ impl FragmentLengthDistribution {
             l = max_v;
         }
         self.hist[l].load() - self.tot_mass.load()
+    }
+
+    /// Rebuild the online log-PMF snapshot from the current histogram (one pass
+    /// over the length bins, with a single `tot_mass` read so the snapshot is
+    /// internally consistent). Call at mini-batch boundaries during the online
+    /// phase; no-op once the final [`cache`](Self::cache) has been taken. Cheap
+    /// relative to mapping a batch, and decouples per-fragment reads from the
+    /// concurrent `add_val` writes so identical lengths read identical values.
+    pub fn refresh_online(&self) {
+        if self.have_cache {
+            return;
+        }
+        let max_raw = self.max_val();
+        let max_v = max_raw / self.bin_size;
+        let tot = self.tot_mass.load();
+        // Per-bin cumulative mass (matches `cmf()`), so the snapshot CMF at raw
+        // index `raw` equals `cmf(raw)`. Built first, then both the PMF and CMF
+        // snapshots are expanded over raw indices from the same `tot` read so
+        // they are mutually consistent.
+        let mut bin_cum = Vec::with_capacity(max_v + 1);
+        let mut cum = LOG_0;
+        for b in 0..=max_v {
+            cum = log_add(cum, self.hist[b].load() - tot);
+            bin_cum.push(cum);
+        }
+        let mut v = Vec::with_capacity(max_raw + 1);
+        let mut c = Vec::with_capacity(max_raw + 1);
+        for raw in 0..=max_raw {
+            let l = (raw / self.bin_size).min(max_v);
+            v.push(self.hist[l].load() - tot);
+            c.push(bin_cum[l]);
+        }
+        *self.online_pmf.write().unwrap() = Arc::new(v);
+        *self.online_cmf.write().unwrap() = Arc::new(c);
+    }
+
+    /// Cheap (one `Arc` clone) immutable handle to the current online log-PMF
+    /// snapshot. Capture once per fragment and index by raw length: every
+    /// transcript of a given length then reads an identical value even if another
+    /// thread refreshes the shared snapshot meanwhile. Empty until the first
+    /// [`refresh_online`](Self::refresh_online) (the pre-burn-in window, where this
+    /// term is not folded into the eq-class weight anyway).
+    pub fn online_snapshot(&self) -> Arc<Vec<f64>> {
+        self.online_pmf.read().unwrap().clone()
+    }
+
+    /// Cheap (one `Arc` clone) immutable handle to the current online log-CMF
+    /// snapshot, the cumulative companion to [`online_snapshot`](Self::online_snapshot).
+    /// Capture once per fragment for the ambiguous (orphan / single-end)
+    /// fragment-length probability and the proper-pair length-conditioning.
+    /// Empty until the first [`refresh_online`](Self::refresh_online).
+    pub fn online_cmf_snapshot(&self) -> Arc<Vec<f64>> {
+        self.online_cmf.read().unwrap().clone()
     }
 
     /// Logged cumulative mass up to and including `len`.
@@ -255,6 +334,34 @@ impl FragmentLengthDistribution {
         self.have_cache = true;
     }
 
+    /// Reconstruct a *cached* distribution directly from a (log-space) PMF,
+    /// e.g. one serialized into a RAD header during a previous run. `log_pmf` is
+    /// indexed by raw length over `[0, log_pmf.len())`. The CMF, conditional
+    /// means, mean and sd are all re-derived from it via [`cache`](Self::cache),
+    /// so a reconstructed distribution is interchangeable with the original for
+    /// every read-side use. The masses need not be pre-normalized — `cache`
+    /// normalizes them — but a normalized PMF round-trips exactly.
+    pub fn from_log_pmf(log_pmf: &[f64]) -> Self {
+        let max_val = log_pmf.len().saturating_sub(1);
+        let mut d = Self::new(1.0, max_val, 0.0, 1.0, 4, 0.5, 1);
+        // Replace the prior histogram with the supplied masses and recompute the
+        // aggregate statistics (so `mean`/`sd` are consistent), then cache.
+        let mut tot = LOG_0;
+        let mut sm = LOG_0;
+        for (i, &p) in log_pmf.iter().enumerate() {
+            d.hist[i].store(p);
+            tot = log_add(tot, p);
+            if i > 0 {
+                sm = log_add(sm, (i as f64).ln() + p);
+            }
+        }
+        d.tot_mass.store(tot);
+        d.sum.store(sm);
+        d.min.store(0, Ordering::Relaxed);
+        d.cache();
+        d
+    }
+
     /// The cached, normalized log-PMF over `[0, max_val]`. Requires [`cache`](Self::cache).
     pub fn log_pmf(&self) -> &[f64] {
         debug_assert!(self.have_cache, "call cache() before log_pmf()");
@@ -286,6 +393,48 @@ impl FragmentLengthDistribution {
     }
 }
 
+/// Index a length into a (log) CMF snapshot, clamping out-of-range lengths to
+/// the last bin (which holds the total mass). Returns [`LOG_0`] for an empty
+/// snapshot.
+#[inline]
+fn cmf_at(cmf: &[f64], len: i32) -> f64 {
+    if cmf.is_empty() {
+        return LOG_0;
+    }
+    let i = (len.max(0) as usize).min(cmf.len() - 1);
+    cmf[i]
+}
+
+/// Logged ambiguous-fragment-length probability for an orphan / single-end
+/// read, given a (log) CMF snapshot. Direct port of C++ salmon's
+/// `LogCMFCache::getAmbigFragLengthProb` (`DistributionUtils.cpp`).
+///
+/// The mapped mate bounds the maximum possible fragment length: a forward read
+/// at `pos` can extend downstream to the transcript 3' end (`txp_len − pos`); a
+/// reverse read's outer (5') end sits at `pos + read_len`, bounding the upstream
+/// extent toward the 5' end. The weight is the FLD mass up to that bound,
+/// *conditioned* on the mass up to the full transcript length — i.e.
+/// `cmf(maxFragLen) − cmf(txpLen)` — so orphan weights sit on the same
+/// length-conditioned scale as proper pairs. Returns [`LOG_EPSILON`] when the
+/// transcript admits no representable fragment mass, and `LOG_1` (= 0) when no
+/// snapshot is available yet (pre-burn-in), leaving the weight unmodelled.
+pub fn ambig_frag_log_prob(cmf: &[f64], fwd: bool, pos: i32, read_len: i32, txp_len: i32) -> f64 {
+    if cmf.is_empty() {
+        return 0.0; // LOG_1: no model yet
+    }
+    let stxp = txp_len.max(0);
+    let max_frag_len = if fwd {
+        stxp - pos.clamp(0, stxp)
+    } else {
+        (pos + read_len).clamp(0, stxp)
+    };
+    let ref_cm = cmf_at(cmf, stxp);
+    if ref_cm <= LOG_0 {
+        return LOG_EPSILON;
+    }
+    cmf_at(cmf, max_frag_len) - ref_cm
+}
+
 /// salmon's base effective length (`computeSmoothedEffectiveLengths`):
 /// `effLen = refLen − E[L | L ≤ refLen]`, clamped back to `refLen` if it would
 /// fall below 1. `cond_means` is [`FragmentLengthDistribution::conditional_means`].
@@ -308,6 +457,125 @@ pub fn smoothed_effective_length(cond_means: &[f64], ref_len: usize) -> f64 {
         ref_len as f64
     } else {
         eff
+    }
+}
+
+/// Order-independent accumulator for *deriving* a fragment-length distribution
+/// (and library format) from uniquely-mapped proper pairs.
+///
+/// Unlike [`FragmentLengthDistribution`] — which accumulates in **log space** and
+/// is required for the online phase (it folds in per-fragment forgetting mass and
+/// is read per fragment) — this stores plain **integer counts** per length,
+/// bucketed by orientation. Integer increments are commutative, so the tallies
+/// are independent of thread / chunk order; the FLD is then built **once**,
+/// deterministically (fixed length order), in [`finish`](Self::finish). Keeping
+/// it a separate type means the online FLD's float/log-space accumulation is
+/// never disturbed, and no runtime dispatch is needed.
+#[derive(Debug)]
+pub struct DiscreteFld {
+    /// per-length counts for opposite-strand (inward/outward) proper pairs
+    opp: Vec<AtomicU64>,
+    /// per-length counts for same-strand proper pairs
+    same: Vec<AtomicU64>,
+    n_opp: AtomicU64,
+    n_same: AtomicU64,
+    /// observed-format tally (indexed by [`LibraryFormat::format_id`]) for
+    /// order-independent `-l A` auto-detection
+    fmt_counts: [AtomicU64; 12],
+    max_len: usize,
+}
+
+impl DiscreteFld {
+    /// Create an accumulator covering raw fragment lengths `[0, fld_max]`.
+    pub fn new(fld_max: usize) -> Self {
+        Self {
+            opp: (0..=fld_max).map(|_| AtomicU64::new(0)).collect(),
+            same: (0..=fld_max).map(|_| AtomicU64::new(0)).collect(),
+            n_opp: AtomicU64::new(0),
+            n_same: AtomicU64::new(0),
+            fmt_counts: std::array::from_fn(|_| AtomicU64::new(0)),
+            max_len: fld_max,
+        }
+    }
+
+    /// Record one uniquely-mapped proper pair from its mate strands: fragment
+    /// length, orientation bucket, and observed format (derived from `is_fw` /
+    /// `mate_fw`, mirroring the RAD reader's `rad_frag_format` so the mapping pass
+    /// and the RAD-derive path agree). Works in sketch mode, where no precomputed
+    /// `LibraryFormat` is available. Thread-safe and order-independent.
+    pub fn add(&self, len: usize, is_fw: bool, mate_fw: bool) {
+        let l = len.min(self.max_len);
+        // opposite-strand (inward/outward) vs same-strand, exactly as the RAD
+        // reader classifies placements.
+        let (orientation, strandedness) = if is_fw != mate_fw {
+            let s = if is_fw {
+                ReadStrandedness::SA
+            } else {
+                ReadStrandedness::AS
+            };
+            (ReadOrientation::Toward, s)
+        } else {
+            let s = if is_fw {
+                ReadStrandedness::S
+            } else {
+                ReadStrandedness::A
+            };
+            (ReadOrientation::Same, s)
+        };
+        if orientation == ReadOrientation::Same {
+            self.same[l].fetch_add(1, Ordering::Relaxed);
+            self.n_same.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.opp[l].fetch_add(1, Ordering::Relaxed);
+            self.n_opp.fetch_add(1, Ordering::Relaxed);
+        }
+        let fmt = LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness);
+        self.fmt_counts[fmt.format_id() as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Total unique proper pairs seen across both orientation buckets.
+    pub fn count(&self) -> u64 {
+        self.n_opp.load(Ordering::Relaxed) + self.n_same.load(Ordering::Relaxed)
+    }
+
+    /// Build the FLD from the majority-orientation bucket (deterministically, in
+    /// fixed length order) and infer the library format from the format tally.
+    /// `fld_mean`/`fld_sd` seed the prior. Returns the cached FLD and the detected
+    /// format (`None` when no proper pairs were seen).
+    pub fn finish(
+        &self,
+        fld_mean: f64,
+        fld_sd: f64,
+    ) -> (FragmentLengthDistribution, Option<LibraryFormat>) {
+        let n_opp = self.n_opp.load(Ordering::Relaxed);
+        let n_same = self.n_same.load(Ordering::Relaxed);
+        let chosen = if n_opp >= n_same {
+            &self.opp
+        } else {
+            &self.same
+        };
+        let mut fld =
+            FragmentLengthDistribution::new(1.0, self.max_len, fld_mean, fld_sd, 4, 0.5, 1);
+        // `add_val(len, ln count)` equals `count` unit `add_val(len, 0)` calls in
+        // log space, so this reproduces the per-fragment FLD — but deterministically.
+        for (len, c) in chosen.iter().enumerate() {
+            let c = c.load(Ordering::Relaxed);
+            if c > 0 {
+                fld.add_val(len, (c as f64).ln());
+            }
+        }
+        fld.cache();
+        let tally: Vec<u64> = self
+            .fmt_counts
+            .iter()
+            .map(|a| a.load(Ordering::Relaxed))
+            .collect();
+        let detected = if tally.iter().sum::<u64>() > 0 {
+            Some(crate::infer_format_from_counts(&tally, ReadType::PairedEnd))
+        } else {
+            None
+        };
+        (fld, detected)
     }
 }
 
@@ -374,6 +642,35 @@ mod tests {
         // below the 1.0 barrier the raw length is returned
         let tiny = smoothed_effective_length(&cm, 2);
         assert_eq!(tiny, 2.0, "tiny transcript should fall back to refLen");
+    }
+
+    #[test]
+    fn ambig_frag_prob_bounds_and_orientation() {
+        let mut fld = FragmentLengthDistribution::new(1000.0, 1000, 250.0, 25.0, 4, 0.5, 1);
+        fld.cache();
+        // Use the cached (frozen) CMF as a stand-in for the online snapshot.
+        let cmf = fld.cached_cmf.clone();
+        let txp_len = 2000i32;
+        // A forward read with ample downstream space (mate fits at the typical
+        // insert) should be near log(1) ≈ 0, since cmf(maxFrag) ≈ cmf(txpLen).
+        let ample = ambig_frag_log_prob(&cmf, true, 100, 75, txp_len);
+        assert!(ample > -0.01, "ample-space orphan logProb {ample} not ~0");
+        // A forward read crammed against the 3' end (little downstream space)
+        // implies an implausibly short fragment -> much smaller probability.
+        let crammed = ambig_frag_log_prob(&cmf, true, txp_len - 50, 75, txp_len);
+        assert!(
+            crammed < ample - 1.0,
+            "crammed orphan {crammed} not << ample {ample}"
+        );
+        // Reverse-strand orientation uses pos + read_len for the upstream bound:
+        // a reverse read whose outer end is near the 5' start is likewise crammed.
+        let rc_crammed = ambig_frag_log_prob(&cmf, false, 0, 50, txp_len);
+        assert!(
+            rc_crammed < ample - 1.0,
+            "rc crammed orphan {rc_crammed} not << ample {ample}"
+        );
+        // Empty snapshot -> unmodelled (LOG_1 = 0).
+        assert_eq!(ambig_frag_log_prob(&[], true, 100, 75, txp_len), 0.0);
     }
 
     #[test]

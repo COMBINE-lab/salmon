@@ -11,11 +11,13 @@
 //! - **VBEM**: replaces `alphaIn[t]` with `expTheta[t] = exp(digamma(alphaIn[t] +
 //!   prior_t) - digamma(sum_j(alphaIn[j] + prior_j)))`.
 //!
-//! Parallelization with rayon and SQUAREM acceleration are deferred; plain
-//! iteration converges to the same fixpoint.
+//! The M-steps run in parallel with rayon. Optional SQUAREM acceleration
+//! ([`EmAccel::Squarem`]) extrapolates over the plain iteration to reach the same
+//! fixpoint in far fewer M-steps.
 
 use salmon_eqclass::CollapsedEqClasses;
 
+mod daarem;
 mod online;
 mod packed;
 pub mod uncertainty;
@@ -23,6 +25,26 @@ pub mod uncertainty;
 pub use online::OnlineInference;
 pub use packed::PackedEqClasses;
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
+
+/// EM/VBEM acceleration scheme applied on top of the fixed-point map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmAccel {
+    /// Plain fixed-point iteration (one M-step per iteration). Default; the output
+    /// is unchanged from historical salmon.
+    #[default]
+    None,
+    /// SQUAREM (SqS3): extrapolate over two M-steps with a stabilizing third,
+    /// reaching the same fixpoint in far fewer M-steps. Not byte-identical to
+    /// `None` (a different iterate sequence, same fixpoint within `rel_diff_tol`).
+    Squarem,
+    /// DAAREM: damped Anderson acceleration with restarts and residual-monotonicity
+    /// control, extrapolating over a window of the last several iterates (a
+    /// multi-secant quasi-Newton step) rather than just two. Converges faster than
+    /// SQUAREM on high-dimensional, ill-conditioned problems. Same opt-in,
+    /// same-fixpoint semantics as [`EmAccel::Squarem`]; not byte-identical to
+    /// `None`. See [`daarem`].
+    Daarem,
+}
 
 /// Optimizer configuration. Defaults mirror salmon's command-line defaults.
 #[derive(Debug, Clone)]
@@ -43,6 +65,8 @@ pub struct EmOptions {
     /// instead of a flat per-transcript prior (salmon's `--perNucleotidePrior`;
     /// salmon's default is the per-transcript interpretation).
     pub per_nucleotide_prior: bool,
+    /// convergence acceleration scheme (default [`EmAccel::None`]).
+    pub accel: EmAccel,
 }
 
 impl Default for EmOptions {
@@ -56,6 +80,7 @@ impl Default for EmOptions {
             use_vbem: false,
             vb_prior: 1e-2,
             per_nucleotide_prior: false,
+            accel: EmAccel::None,
         }
     }
 }
@@ -69,12 +94,17 @@ pub struct EmResult {
     pub iters: u32,
     /// whether the relative-difference criterion was met before `max_iter`
     pub converged: bool,
+    /// total count in equivalence classes whose every transcript was truncated
+    /// below `min_alpha` in the final redistribution step — mass that could not be
+    /// reassigned to any surviving transcript (reported, not rescaled away). 0 in
+    /// the normal case.
+    pub dropped_mass: f64,
 }
 
 /// Relative-difference convergence check, matching salmon: the max over
 /// transcripts (with `alpha_in` above the cutoff) of
 /// `|alpha_out - alpha_in| / alpha_out`.
-fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
+pub(crate) fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
     let mut max_d = f64::NEG_INFINITY;
     for i in 0..alpha_in.len() {
         if alpha_in[i] > cutoff && alpha_out[i] > 0.0 {
@@ -138,7 +168,7 @@ pub fn optimize_packed_with_init(
     init_alphas: Option<&[f64]>,
     eff_lens: Option<&[f64]>,
 ) -> EmResult {
-    let (mut alphas, iters, converged) = run_em_counts(
+    let (alphas, iters, converged) = run_em_counts(
         p,
         &p.counts,
         opts,
@@ -147,17 +177,52 @@ pub fn optimize_packed_with_init(
         init_alphas,
         eff_lens,
     );
-    // truncate negligible abundances (matches salmon's cutoff)
-    for a in &mut alphas {
-        if *a < opts.min_alpha {
-            *a = 0.0;
-        }
-    }
+    // Truncate negligible abundances (matches salmon's cutoff), but rather than
+    // zero-and-rescale, redistribute the truncated mass to eq-class co-members via
+    // one masked final M-step (see `redistribute_truncated`). `min_alpha <= 0`
+    // (e.g. the bias warm-up) keeps the continuous vector untouched.
+    let (alphas, dropped_mass) =
+        finalize_truncate_redistribute(p, &p.counts, alphas, opts, eff_lens);
     EmResult {
         alphas,
         iters,
         converged,
+        dropped_mass,
     }
+}
+
+/// VBEM Dirichlet prior per transcript: flat `vb_prior`, or `vb_prior·max(1,effLen)`
+/// under `--perNucleotidePrior`.
+pub(crate) fn prior_alphas_vec(
+    opts: &EmOptions,
+    eff_lens: Option<&[f64]>,
+    num_txps: usize,
+) -> Vec<f64> {
+    match (opts.per_nucleotide_prior, eff_lens) {
+        (true, Some(el)) if el.len() == num_txps => {
+            el.iter().map(|&l| opts.vb_prior * l.max(1.0)).collect()
+        }
+        _ => vec![opts.vb_prior; num_txps],
+    }
+}
+
+/// Apply the post-convergence min-alpha truncation as a mass-preserving
+/// redistribution (not a rescale). Returns the finalized alphas and the mass that
+/// could not be redistributed (fully-truncated classes). A non-positive
+/// `min_alpha` is a no-op (used by the bias warm-up, whose alphas continue into
+/// the warm-started EM).
+pub(crate) fn finalize_truncate_redistribute(
+    p: &PackedEqClasses,
+    counts: &[u64],
+    alphas: Vec<f64>,
+    opts: &EmOptions,
+    eff_lens: Option<&[f64]>,
+) -> (Vec<f64>, f64) {
+    if opts.min_alpha <= 0.0 {
+        return (alphas, 0.0);
+    }
+    let prior = prior_alphas_vec(opts, eff_lens, p.num_txps);
+    packed::redistribute_truncated(p, counts, &alphas, &prior, opts.min_alpha, opts.use_vbem)
 }
 
 /// Run EM/VBEM to convergence on `p` with explicit per-class `counts`, returning
@@ -190,12 +255,7 @@ pub(crate) fn run_em_counts(
     let mut alphas_prime = vec![0.0f64; num_txps];
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
-    let prior_alphas = match (opts.per_nucleotide_prior, eff_lens) {
-        (true, Some(el)) if el.len() == num_txps => {
-            el.iter().map(|&l| opts.vb_prior * l.max(1.0)).collect()
-        }
-        _ => vec![opts.vb_prior; num_txps],
-    };
+    let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
     // Per-shard dense accumulators reused across all parallel M-steps (allocated
@@ -211,48 +271,175 @@ pub(crate) fn run_em_counts(
         Vec::new()
     };
 
+    // One fixed-point M-step `dst = F(src)`, dispatched by (VBEM?, parallel?) and
+    // reusing the once-allocated shard/scratch/exp_theta buffers. Both the plain
+    // and SQUAREM loops drive `F` through this closure, so the accelerated path
+    // reuses the exact same (already tuned) kernels.
+    let mut f = |src: &[f64], dst: &mut [f64]| match (opts.use_vbem, parallel) {
+        (false, true) => packed::em_step_par(p, counts, src, dst, &mut shards),
+        (false, false) => packed::em_step_seq(p, counts, src, dst, &mut scratch),
+        (true, true) => packed::vbem_step_par(
+            p,
+            counts,
+            &prior_alphas,
+            src,
+            dst,
+            &mut exp_theta,
+            &mut shards,
+        ),
+        (true, false) => packed::vbem_step_seq(
+            p,
+            counts,
+            &prior_alphas,
+            src,
+            dst,
+            &mut exp_theta,
+            &mut scratch,
+        ),
+    };
+
     let mut converged = false;
     let mut it = 0u32;
-    while it < opts.max_iter {
-        match (opts.use_vbem, parallel) {
-            (false, true) => {
-                packed::em_step_par(p, counts, &alphas, &mut alphas_prime, &mut shards)
+    match opts.accel {
+        EmAccel::None => {
+            while it < opts.max_iter {
+                f(&alphas, &mut alphas_prime);
+                it += 1;
+                if it >= min_iter {
+                    let d = max_rel_diff(&alphas, &alphas_prime, opts.alpha_check_cutoff);
+                    std::mem::swap(&mut alphas, &mut alphas_prime);
+                    if d.is_finite() && d < opts.rel_diff_tol {
+                        converged = true;
+                        break;
+                    }
+                } else {
+                    std::mem::swap(&mut alphas, &mut alphas_prime);
+                }
             }
-            (false, false) => {
-                packed::em_step_seq(p, counts, &alphas, &mut alphas_prime, &mut scratch)
-            }
-            (true, true) => packed::vbem_step_par(
-                p,
-                counts,
-                &prior_alphas,
-                &alphas,
-                &mut alphas_prime,
-                &mut exp_theta,
-                &mut shards,
-            ),
-            (true, false) => packed::vbem_step_seq(
-                p,
-                counts,
-                &prior_alphas,
-                &alphas,
-                &mut alphas_prime,
-                &mut exp_theta,
-                &mut scratch,
-            ),
         }
-        it += 1;
-        if it >= min_iter {
-            let d = max_rel_diff(&alphas, &alphas_prime, opts.alpha_check_cutoff);
-            std::mem::swap(&mut alphas, &mut alphas_prime);
-            if d.is_finite() && d < opts.rel_diff_tol {
-                converged = true;
-                break;
-            }
-        } else {
-            std::mem::swap(&mut alphas, &mut alphas_prime);
+        EmAccel::Squarem => {
+            converged = squarem_loop(
+                &mut f,
+                &mut alphas,
+                &mut alphas_prime,
+                num_txps,
+                opts,
+                min_iter,
+                &mut it,
+            );
+        }
+        EmAccel::Daarem => {
+            converged = daarem::daarem_loop(&mut f, &mut alphas, num_txps, opts, min_iter, &mut it);
         }
     }
     (alphas, it, converged)
+}
+
+/// SQUAREM (SqS3) acceleration of the fixed-point iteration.
+///
+/// Each cycle takes two M-steps (`x1 = F(x0)`, `x2 = F(x1)`), forms `r = x1 - x0`
+/// and `v = (x2 - x1) - r`, and extrapolates
+/// `xp = x0 - 2·alpha·r + alpha²·v` with steplength `alpha = -‖r‖/‖v‖` clamped to
+/// `alpha ≤ -1` (so it is never shorter than the plain double-step, for which
+/// `alpha = -1` gives exactly `xp = x2`). If any component of `xp` goes negative
+/// the steplength is halved back toward `-1` (salmon's non-negativity fallback;
+/// worst case `xp = x2`). A stabilizing third M-step `x_next = F(xp)` guarantees a
+/// valid EM iterate (non-negative, mass-conserving), and convergence is checked on
+/// the full cycle `x0 → x_next` with the same [`max_rel_diff`] criterion as the
+/// plain loop.
+///
+/// `x0` aliases the caller's `alphas` (updated in place to the final estimate) and
+/// `x_next` reuses the caller's `alphas_prime` scratch; the vector/norm math is
+/// done sequentially (over `num_txps`, cheap next to a per-class M-step) so the
+/// result is deterministic regardless of thread count. `it` accumulates the total
+/// M-step count (comparable to the plain loop's iteration count).
+#[allow(clippy::too_many_arguments)]
+fn squarem_loop(
+    f: &mut impl FnMut(&[f64], &mut [f64]),
+    x0: &mut Vec<f64>,
+    x_next: &mut Vec<f64>,
+    num_txps: usize,
+    opts: &EmOptions,
+    min_iter: u32,
+    it: &mut u32,
+) -> bool {
+    let n = num_txps;
+    let mut x1 = vec![0.0f64; n];
+    let mut x2 = vec![0.0f64; n];
+    let mut r = vec![0.0f64; n];
+    let mut v = vec![0.0f64; n];
+    let mut xp = vec![0.0f64; n];
+
+    while *it < opts.max_iter {
+        f(x0, &mut x1);
+        *it += 1;
+        f(&x1, &mut x2);
+        *it += 1;
+
+        // r = x1 - x0 ; v = (x2 - x1) - r ; and their squared norms.
+        let mut r_sq = 0.0f64;
+        let mut v_sq = 0.0f64;
+        for i in 0..n {
+            let ri = x1[i] - x0[i];
+            let vi = (x2[i] - x1[i]) - ri;
+            r[i] = ri;
+            v[i] = vi;
+            r_sq += ri * ri;
+            v_sq += vi * vi;
+        }
+
+        // Vanishing (or non-finite) second differences ⇒ at the fixpoint: take the
+        // plain step x2. `v_sq <= 0.0` is false for NaN, so the finiteness check
+        // also guards NaN/inf.
+        if v_sq <= 0.0 || !v_sq.is_finite() {
+            std::mem::swap(x0, &mut x2);
+            return true;
+        }
+
+        // SqS3 steplength, clamped so |alpha| ≥ 1 (alpha = -1 ⇒ xp = x2).
+        let mut alpha = -(r_sq.sqrt() / v_sq.sqrt());
+        if alpha > -1.0 {
+            alpha = -1.0;
+        }
+
+        // Extrapolate, backing off toward the double-step if a component < 0.
+        let mut tries = 0u32;
+        loop {
+            let a2 = alpha * alpha;
+            let mut ok = true;
+            for i in 0..n {
+                let val = x0[i] - 2.0 * alpha * r[i] + a2 * v[i];
+                xp[i] = val;
+                if val < 0.0 {
+                    ok = false;
+                }
+            }
+            if ok {
+                break;
+            }
+            if alpha >= -1.0 || tries >= 30 {
+                // Give up accelerating this cycle: fall back to the plain x2.
+                xp.copy_from_slice(&x2);
+                break;
+            }
+            alpha = (alpha - 1.0) / 2.0; // move toward -1
+            tries += 1;
+        }
+
+        // Stabilizing M-step, then converge-check on the whole cycle.
+        f(&xp, x_next);
+        *it += 1;
+        if *it >= min_iter {
+            let d = max_rel_diff(x0, x_next, opts.alpha_check_cutoff);
+            std::mem::swap(x0, x_next);
+            if d.is_finite() && d < opts.rel_diff_tol {
+                return true;
+            }
+        } else {
+            std::mem::swap(x0, x_next);
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -315,6 +502,263 @@ mod tests {
         // VBEM with a tiny prior stays very close to the EM total.
         assert!((total - 200.0).abs() < 1.0, "total={total}");
         assert!(res.alphas[1] > res.alphas[0]);
+    }
+
+    /// A moderately ambiguous eq-class set that takes the plain EM many iterations
+    /// to converge — enough that SQUAREM's acceleration is exercised and its
+    /// same-fixpoint guarantee is meaningfully tested.
+    fn ambiguous() -> CollapsedEqClasses {
+        build(
+            &[
+                (vec![0], 40),
+                (vec![1], 35),
+                (vec![2], 25),
+                (vec![0, 1], 300),
+                (vec![1, 2], 260),
+                (vec![0, 2], 180),
+                (vec![0, 1, 2], 500),
+            ],
+            3,
+        )
+    }
+
+    #[test]
+    fn squarem_matches_plain_em_fixpoint() {
+        let eq = ambiguous();
+        let plain = optimize(&eq, 3, &EmOptions::default(), None);
+        let sq = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Squarem,
+                ..Default::default()
+            },
+            None,
+        );
+        for t in 0..3 {
+            let rel = (sq.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
+            assert!(
+                rel < 1e-3,
+                "txp {t}: squarem {} vs plain {} (rel {rel})",
+                sq.alphas[t],
+                plain.alphas[t]
+            );
+        }
+        let tp: f64 = plain.alphas.iter().sum();
+        let ts: f64 = sq.alphas.iter().sum();
+        assert!((tp - ts).abs() < 1e-6, "totals differ: {tp} vs {ts}");
+        // Same fixpoint, but reached in no more M-steps than plain (usually far fewer).
+        assert!(
+            sq.iters <= plain.iters,
+            "squarem used more M-steps ({}) than plain ({})",
+            sq.iters,
+            plain.iters
+        );
+    }
+
+    #[test]
+    fn squarem_matches_plain_vbem_fixpoint() {
+        let eq = ambiguous();
+        let base = EmOptions {
+            use_vbem: true,
+            ..Default::default()
+        };
+        let plain = optimize(&eq, 3, &base, None);
+        let sq = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Squarem,
+                ..base.clone()
+            },
+            None,
+        );
+        for t in 0..3 {
+            let rel = (sq.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
+            assert!(
+                rel < 1e-3,
+                "vbem txp {t}: {} vs {}",
+                sq.alphas[t],
+                plain.alphas[t]
+            );
+        }
+    }
+
+    #[test]
+    fn squarem_conserves_total_count() {
+        let eq = ambiguous();
+        let res = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Squarem,
+                ..Default::default()
+            },
+            None,
+        );
+        let total: f64 = res.alphas.iter().sum();
+        // total input count = 40+35+25+300+260+180+500 = 1340
+        assert!((total - 1340.0).abs() < 1e-6, "total={total}");
+    }
+
+    #[test]
+    fn squarem_reduces_iters_on_large_ambiguous_case() {
+        // Two nearly-indistinguishable transcripts sharing a huge class, with tiny
+        // asymmetric unique evidence: the plain EM crawls from the 50/50 uniform
+        // start toward the ~25/75 unique ratio over many iterations. A tight
+        // tolerance makes that iteration count large, so SQUAREM's fewer-steps
+        // property is clearly exercised.
+        let ntxp = 2usize;
+        let eq = build(&[(vec![0], 1), (vec![1], 3), (vec![0, 1], 100_000)], ntxp);
+        let tight = EmOptions {
+            rel_diff_tol: 1e-5,
+            min_iter: 1,
+            alpha_check_cutoff: 1e-8,
+            ..Default::default()
+        };
+        let plain = optimize(&eq, ntxp, &tight, None);
+        let sq = optimize(
+            &eq,
+            ntxp,
+            &EmOptions {
+                accel: EmAccel::Squarem,
+                ..tight.clone()
+            },
+            None,
+        );
+        println!(
+            "squarem_reduces_iters: plain M-steps={} (converged={}) squarem M-steps={} (converged={})",
+            plain.iters, plain.converged, sq.iters, sq.converged
+        );
+        // Analytic fixpoint: the shared class splits proportionally to abundance, so
+        // f = a0/(a0+a1) solves f·100004 = 1 + 100000·f ⇒ f = 1/4, giving
+        // a0 = 25001, a1 = 75003. SQUAREM must land there.
+        assert!(sq.converged, "squarem did not converge");
+        assert!((sq.alphas[0] - 25001.0).abs() < 1.0, "a0={}", sq.alphas[0]);
+        assert!((sq.alphas[1] - 75003.0).abs() < 1.0, "a1={}", sq.alphas[1]);
+        // On this deliberately slow mixer the plain iteration has not converged even
+        // at the 10 000-step cap, while SQUAREM needs only a handful of M-steps.
+        assert!(
+            sq.iters * 20 < plain.iters,
+            "expected SQUAREM ({}) to need far fewer M-steps than plain ({})",
+            sq.iters,
+            plain.iters
+        );
+    }
+
+    #[test]
+    fn daarem_matches_plain_em_fixpoint() {
+        let eq = ambiguous();
+        let plain = optimize(&eq, 3, &EmOptions::default(), None);
+        let da = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Daarem,
+                ..Default::default()
+            },
+            None,
+        );
+        for t in 0..3 {
+            let rel = (da.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
+            assert!(
+                rel < 1e-3,
+                "txp {t}: daarem {} vs plain {} (rel {rel})",
+                da.alphas[t],
+                plain.alphas[t]
+            );
+        }
+        let tp: f64 = plain.alphas.iter().sum();
+        let td: f64 = da.alphas.iter().sum();
+        assert!((tp - td).abs() < 1e-6, "totals differ: {tp} vs {td}");
+        assert!(
+            da.iters <= plain.iters,
+            "daarem used more M-steps ({}) than plain ({})",
+            da.iters,
+            plain.iters
+        );
+    }
+
+    #[test]
+    fn daarem_matches_plain_vbem_fixpoint() {
+        let eq = ambiguous();
+        let base = EmOptions {
+            use_vbem: true,
+            ..Default::default()
+        };
+        let plain = optimize(&eq, 3, &base, None);
+        let da = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Daarem,
+                ..base.clone()
+            },
+            None,
+        );
+        for t in 0..3 {
+            let rel = (da.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
+            assert!(
+                rel < 1e-3,
+                "vbem txp {t}: {} vs {}",
+                da.alphas[t],
+                plain.alphas[t]
+            );
+        }
+    }
+
+    #[test]
+    fn daarem_conserves_total_count() {
+        let eq = ambiguous();
+        let res = optimize(
+            &eq,
+            3,
+            &EmOptions {
+                accel: EmAccel::Daarem,
+                ..Default::default()
+            },
+            None,
+        );
+        let total: f64 = res.alphas.iter().sum();
+        assert!((total - 1340.0).abs() < 1e-6, "total={total}");
+    }
+
+    #[test]
+    fn daarem_reduces_iters_on_slow_mixer() {
+        // Same slow-mixing case as the SQUAREM test: two near-indistinguishable
+        // transcripts, a huge shared class, tiny asymmetric unique evidence, tight
+        // tolerance. Analytic fixpoint a0=25001, a1=75003 (see SQUAREM test).
+        let ntxp = 2usize;
+        let eq = build(&[(vec![0], 1), (vec![1], 3), (vec![0, 1], 100_000)], ntxp);
+        let tight = EmOptions {
+            rel_diff_tol: 1e-5,
+            min_iter: 1,
+            alpha_check_cutoff: 1e-8,
+            ..Default::default()
+        };
+        let plain = optimize(&eq, ntxp, &tight, None);
+        let da = optimize(
+            &eq,
+            ntxp,
+            &EmOptions {
+                accel: EmAccel::Daarem,
+                ..tight.clone()
+            },
+            None,
+        );
+        println!(
+            "daarem_reduces_iters: plain M-steps={} (converged={}) daarem M-steps={} (converged={})",
+            plain.iters, plain.converged, da.iters, da.converged
+        );
+        assert!(da.converged, "daarem did not converge");
+        assert!((da.alphas[0] - 25001.0).abs() < 1.0, "a0={}", da.alphas[0]);
+        assert!((da.alphas[1] - 75003.0).abs() < 1.0, "a1={}", da.alphas[1]);
+        assert!(
+            da.iters * 20 < plain.iters,
+            "expected DAAREM ({}) to need far fewer M-steps than plain ({})",
+            da.iters,
+            plain.iters
+        );
     }
 
     #[test]

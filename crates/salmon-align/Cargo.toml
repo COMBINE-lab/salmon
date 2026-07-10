@@ -13,9 +13,18 @@ salmon-core = { workspace = true }
 salmon-eqclass = { workspace = true }
 salmon-infer = { workspace = true }
 salmon-model = { workspace = true }
+salmon-rad = { workspace = true }
+libradicl = { workspace = true }
+crossbeam-queue = "0.3"
 noodles-bam = "0.90"
 noodles-sam = "0.85"
 noodles-bgzf = "0.47"
+# Genome-alignment projection (spliced genome BAM -> transcriptome coords). Its
+# public API is plain structs, so it composes with salmon's own noodles for BAM
+# reading. bramble-rs 0.1.5 is on the same noodles 0.111 (sam 0.85 etc.) + ksw2rs
+# 0.2.0 as salmon (and libradicl 0.14.2), so the graph carries a single version
+# of each.
+bramble-rs = "0.1.5"
 rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 flate2 = { workspace = true }
