@@ -36,7 +36,8 @@ use serde::Serialize;
 
 use error_model::{AlignmentModel, AlnOp, SharedAlignmentModel};
 use salmon_core::{
-    is_compatible, LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType,
+    is_compatible, LibraryFormat, MateStatus, PhaseTimer, ReadOrientation, ReadStrandedness,
+    ReadType,
 };
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
 use salmon_infer::{optimize, optimize_with_init, EmOptions};
@@ -1459,6 +1460,7 @@ fn apply_bias_correction(
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();
+    let mut timer = PhaseTimer::new();
     let header = read_alignment_header(&opts.bam)?;
 
     // Reject coordinate-sorted input up front (header-only check, no per-record cost):
@@ -1631,6 +1633,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let mut collapsed = eq_builder.finish();
     collapsed.update_eff_lengths(&eff_lengths);
     let num_eq_classes = collapsed.len();
+    // BAM read + online equivalence-class build.
+    timer.mark("mapping");
 
     // Count-blended EM initialization (salmon's `CollapsedEMOptimizer::optimize`):
     // seed abundances with a linear combination of the online-phase abundance
@@ -1711,6 +1715,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
     let counts = em.alphas;
+    // Bias correction + EM/VBEM point estimate.
+    timer.mark("em_bias");
 
     let rates: Vec<f64> = (0..num_refs)
         .map(|i| {
@@ -1781,6 +1787,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     } else {
         Vec::new()
     };
+    // Posterior sampling (bootstrap / Gibbs); empty when neither is requested.
+    timer.mark("posterior");
 
     let result = AlignQuantResult {
         names,
@@ -1808,6 +1816,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         diagnostics,
     };
     write_outputs(opts, &result)?;
+    timer.mark("output");
     Ok(result)
 }
 
