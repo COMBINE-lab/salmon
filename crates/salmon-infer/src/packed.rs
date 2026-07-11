@@ -204,60 +204,107 @@ pub(crate) fn em_step_seq(
     }
 }
 
-/// Reduce per-shard dense accumulators into `alpha_out` (one writer per `tid`,
-/// no contention). Parallelized over transcripts.
-fn reduce_shards(shards: &[Vec<f64>], alpha_out: &mut [f64]) {
-    alpha_out.par_iter_mut().enumerate().for_each(|(tid, out)| {
-        let mut s = 0.0;
-        for buf in shards {
-            s += buf[tid];
-        }
-        *out = s;
-    });
+/// Per-shard M-step accumulators plus the metadata that makes the reduction
+/// cheap *and* deterministic.
+///
+/// Each shard owns a private dense `num_txps` buffer and processes a contiguous
+/// range of equivalence classes with plain (non-atomic) adds; the shards are
+/// then summed into `alpha_out`. The equivalence classes are fixed for the whole
+/// EM run, so [`ShardCtx::new`] precomputes, once, the sorted-unique transcript
+/// ids each shard's class range touches. Every M-step then zeroes and reduces
+/// only those entries — `O(incidences)` — instead of every shard's full
+/// `num_txps` buffer (`O(nshards * num_txps)`), which otherwise dominates when
+/// the shard count is fixed high for determinism.
+pub(crate) struct ShardCtx {
+    bufs: Vec<Vec<f64>>,
+    /// `tids[s]` = sorted-unique transcript ids in shard `s`'s class range.
+    tids: Vec<Vec<u32>>,
+    chunk: usize,
 }
 
-/// Parallel EM M-step. Each shard owns a private dense `num_txps` buffer and
-/// processes a contiguous slice of the classes with plain (non-atomic) adds;
-/// the shards are then summed into `alpha_out`. This avoids both the per-task
-/// allocation of a naive fold/reduce and the cross-thread CAS contention of a
-/// single shared `AtomicF64` array (which, on hot transcripts, dominated the
-/// M-step). The buffers are allocated once in [`run_em_counts`] and reused.
+impl ShardCtx {
+    pub(crate) fn new(p: &PackedEqClasses, num_txps: usize, nshards: usize) -> Self {
+        let nclasses = p.num_classes();
+        let nshards = nshards.max(1);
+        let chunk = nclasses.div_ceil(nshards);
+        let tids: Vec<Vec<u32>> = (0..nshards)
+            .map(|s| {
+                let start = s * chunk;
+                let end = ((s + 1) * chunk).min(nclasses);
+                let mut t: Vec<u32> = (start..end)
+                    .flat_map(|ci| p.class(ci).0.iter().copied())
+                    .collect();
+                t.sort_unstable();
+                t.dedup();
+                t
+            })
+            .collect();
+        Self {
+            bufs: vec![vec![0.0f64; num_txps]; nshards],
+            tids,
+            chunk,
+        }
+    }
+}
+
+/// Deterministic sparse reduce: `alpha_out[tid] = Σ_s bufs[s][tid]`, summed in
+/// shard order over only the shards that touched `tid`. Skipping a shard that
+/// left `tid` at 0 cannot change the f64 sum (`x + 0.0 == x`), so this is
+/// bit-identical to summing every shard — but it costs `O(incidences)` and, when
+/// `nshards` is fixed, the summation grouping is independent of the thread count.
+fn sparse_reduce(bufs: &[Vec<f64>], tids: &[Vec<u32>], alpha_out: &mut [f64]) {
+    alpha_out.iter_mut().for_each(|x| *x = 0.0);
+    for (buf, ts) in bufs.iter().zip(tids) {
+        for &tid in ts {
+            alpha_out[tid as usize] += buf[tid as usize];
+        }
+    }
+}
+
+/// Parallel EM M-step over a [`ShardCtx`]; see its docs for the sparse
+/// zero/reduce that keeps this fast at a fixed (thread-independent) shard count.
 pub(crate) fn em_step_par(
     p: &PackedEqClasses,
     counts: &[u64],
     alpha_in: &[f64],
     alpha_out: &mut [f64],
-    shards: &mut [Vec<f64>],
+    ctx: &mut ShardCtx,
 ) {
     let nclasses = p.num_classes();
-    let chunk = nclasses.div_ceil(shards.len().max(1));
-    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
-        buf.iter_mut().for_each(|x| *x = 0.0);
-        let start = s * chunk;
-        let end = ((s + 1) * chunk).min(nclasses);
-        for ci in start..end {
-            let count = counts[ci] as f64;
-            let (tids, ws) = p.class(ci);
-            if tids.len() > 1 {
-                let mut denom = 0.0;
-                for (&tid, &w) in tids.iter().zip(ws) {
-                    denom += alpha_in[tid as usize] * w;
-                }
-                if denom > MIN_EQ_CLASS_WEIGHT {
-                    let inv = count / denom;
+    let ShardCtx { bufs, tids, chunk } = ctx;
+    let chunk = *chunk;
+    bufs.par_iter_mut()
+        .zip(tids.par_iter())
+        .enumerate()
+        .for_each(|(s, (buf, my_tids))| {
+            for &tid in my_tids.iter() {
+                buf[tid as usize] = 0.0;
+            }
+            let start = s * chunk;
+            let end = ((s + 1) * chunk).min(nclasses);
+            for ci in start..end {
+                let count = counts[ci] as f64;
+                let (tids, ws) = p.class(ci);
+                if tids.len() > 1 {
+                    let mut denom = 0.0;
                     for (&tid, &w) in tids.iter().zip(ws) {
-                        let v = alpha_in[tid as usize] * w;
-                        if !v.is_nan() {
-                            buf[tid as usize] += v * inv;
+                        denom += alpha_in[tid as usize] * w;
+                    }
+                    if denom > MIN_EQ_CLASS_WEIGHT {
+                        let inv = count / denom;
+                        for (&tid, &w) in tids.iter().zip(ws) {
+                            let v = alpha_in[tid as usize] * w;
+                            if !v.is_nan() {
+                                buf[tid as usize] += v * inv;
+                            }
                         }
                     }
+                } else {
+                    buf[tids[0] as usize] += count;
                 }
-            } else {
-                buf[tids[0] as usize] += count;
             }
-        }
-    });
-    reduce_shards(shards, alpha_out);
+        });
+    sparse_reduce(bufs, tids, alpha_out);
 }
 
 /// `exp_theta[i] = exp(digamma(alpha_in[i]+prior_i) - digamma(Σ_j alpha_in[j]+prior_j))`,
@@ -321,42 +368,48 @@ pub(crate) fn vbem_step_par(
     alpha_in: &[f64],
     alpha_out: &mut [f64],
     exp_theta: &mut [f64],
-    shards: &mut [Vec<f64>],
+    ctx: &mut ShardCtx,
 ) {
     fill_exp_theta(alpha_in, prior_alphas, exp_theta);
     let nclasses = p.num_classes();
-    let chunk = nclasses.div_ceil(shards.len().max(1));
     let exp_theta: &[f64] = exp_theta;
-    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
-        buf.iter_mut().for_each(|x| *x = 0.0);
-        let start = s * chunk;
-        let end = ((s + 1) * chunk).min(nclasses);
-        for ci in start..end {
-            let count = counts[ci] as f64;
-            let (tids, ws) = p.class(ci);
-            if tids.len() > 1 {
-                let mut denom = 0.0;
-                for (&tid, &w) in tids.iter().zip(ws) {
-                    let et = exp_theta[tid as usize];
-                    if et > 0.0 {
-                        denom += et * w;
-                    }
-                }
-                if denom > MIN_EQ_CLASS_WEIGHT {
-                    let inv = count / denom;
+    let ShardCtx { bufs, tids, chunk } = ctx;
+    let chunk = *chunk;
+    bufs.par_iter_mut()
+        .zip(tids.par_iter())
+        .enumerate()
+        .for_each(|(s, (buf, my_tids))| {
+            for &tid in my_tids.iter() {
+                buf[tid as usize] = 0.0;
+            }
+            let start = s * chunk;
+            let end = ((s + 1) * chunk).min(nclasses);
+            for ci in start..end {
+                let count = counts[ci] as f64;
+                let (tids, ws) = p.class(ci);
+                if tids.len() > 1 {
+                    let mut denom = 0.0;
                     for (&tid, &w) in tids.iter().zip(ws) {
                         let et = exp_theta[tid as usize];
                         if et > 0.0 {
-                            buf[tid as usize] += et * w * inv;
+                            denom += et * w;
                         }
                     }
+                    if denom > MIN_EQ_CLASS_WEIGHT {
+                        let inv = count / denom;
+                        for (&tid, &w) in tids.iter().zip(ws) {
+                            let et = exp_theta[tid as usize];
+                            if et > 0.0 {
+                                buf[tid as usize] += et * w * inv;
+                            }
+                        }
+                    }
+                } else {
+                    buf[tids[0] as usize] += count;
                 }
-            } else {
-                buf[tids[0] as usize] += count;
             }
-        }
-    });
-    reduce_shards(shards, alpha_out);
+        });
+    sparse_reduce(bufs, tids, alpha_out);
 }
 
 #[cfg(test)]

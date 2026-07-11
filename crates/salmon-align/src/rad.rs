@@ -1002,6 +1002,15 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();
     let mut timer = PhaseTimer::new();
+    // RAD quantification is order-independent by construction; run the parallel
+    // M-step with a thread-count-independent reduction so the point estimate is
+    // byte-identical across `-p` (bootstrap already uses the sequential,
+    // deterministic M-step).
+    let det_em = {
+        let mut e = opts.em.clone();
+        e.deterministic_reduction = true;
+        e
+    };
 
     // Bias correction is computed from the REFERENCE sequence at each fragment's
     // RAD position (never the read bases). seq/GC need the reference bases;
@@ -1148,7 +1157,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         // lib type is resolved, then build uniform eq-classes for the rough EM.
         let mut c = eqb.finish(expected_format);
         c.update_eff_lengths(&eff_lengths);
-        let mut ro = opts.em.clone();
+        let mut ro = det_em.clone();
         ro.min_iter = opts.bias_seed_em_iters;
         ro.max_iter = opts.bias_seed_em_iters;
         ro.min_alpha = 0.0;
@@ -1358,9 +1367,9 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             opts.no_bias_length_threshold,
         );
         collapsed.update_eff_lengths(&eff_lengths);
-        salmon_infer::optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
+        salmon_infer::optimize(&collapsed, num_refs, &det_em, Some(&eff_lengths))
     } else {
-        let mut em = salmon_infer::optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+        let mut em = salmon_infer::optimize(&collapsed, num_refs, &det_em, Some(&eff_lengths));
         if bias_on {
             // Abundances weighting bias collection: baked prior if present, else
             // this run's (converged) first EM. (Reached only when no up-front
@@ -1426,7 +1435,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 opts.no_bias_length_threshold,
             );
             collapsed.update_eff_lengths(&eff_lengths);
-            em = salmon_infer::optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+            em = salmon_infer::optimize(&collapsed, num_refs, &det_em, Some(&eff_lengths));
         }
         em
     };

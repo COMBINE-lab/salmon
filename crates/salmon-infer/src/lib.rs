@@ -26,6 +26,13 @@ pub use online::OnlineInference;
 pub use packed::PackedEqClasses;
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
 
+/// Upper bound on the number of M-step accumulation shards. Fixed (not derived
+/// from the thread count) so the per-transcript reduction order — and thus the
+/// converged estimate to the last bit — is identical at any `-p`. 64 preserves
+/// accumulation parallelism up to 64 cores; problems with fewer classes use
+/// fewer shards.
+const EM_MAX_SHARDS: usize = 64;
+
 /// EM/VBEM acceleration scheme applied on top of the fixed-point map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EmAccel {
@@ -67,6 +74,12 @@ pub struct EmOptions {
     pub per_nucleotide_prior: bool,
     /// convergence acceleration scheme (default [`EmAccel::None`]).
     pub accel: EmAccel,
+    /// use a fixed, thread-count-independent M-step reduction so the converged
+    /// estimate is byte-identical across `-p`. Set by the deterministic input
+    /// paths (`--deterministic` / `--rad` / alignment mode); the default online
+    /// path leaves it `false` and shards by thread count (its output is not
+    /// thread-count-identical regardless, so it gains nothing from fixing it).
+    pub deterministic_reduction: bool,
 }
 
 impl Default for EmOptions {
@@ -81,6 +94,7 @@ impl Default for EmOptions {
             vb_prior: 1e-2,
             per_nucleotide_prior: false,
             accel: EmAccel::None,
+            deterministic_reduction: false,
         }
     }
 }
@@ -258,17 +272,28 @@ pub(crate) fn run_em_counts(
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
-    // Per-shard dense accumulators reused across all parallel M-steps (allocated
-    // once here, not per-task per-iteration). Each shard processes a contiguous
-    // slice of the classes with plain adds, then they are summed into `alpha_out`
-    // — avoiding the cross-thread CAS contention of a single shared atomic array.
-    // Capped at 64 shards: beyond that, the per-iteration zero/reduce overhead
-    // outweighs the extra accumulation parallelism.
-    let mut shards: Vec<Vec<f64>> = if parallel {
-        let nshards = rayon::current_num_threads().clamp(1, 64);
-        vec![vec![0.0f64; num_txps]; nshards]
+    // Per-shard dense accumulators (+ precomputed touched-tid lists) reused across
+    // all parallel M-steps, allocated once here. The M-step sums each transcript's
+    // mass across shards; f64 addition is non-associative, so the summation
+    // grouping — hence the last bit of the estimate — depends on the shard count.
+    let mut shard_ctx: Option<packed::ShardCtx> = if parallel {
+        let nshards = if opts.deterministic_reduction {
+            // Fixed, thread-count-INDEPENDENT shard count so the reduction
+            // grouping (and the result to the last bit) is identical at any
+            // `-p`. Required where output must be byte-identical across thread
+            // counts (`--deterministic` / `--rad` / `-a`); byte-identical on
+            // x86_64 without this too, but only by luck — it flakes on aarch64.
+            p.num_classes().clamp(1, EM_MAX_SHARDS)
+        } else {
+            // Default / online: match the thread count for load balancing. Online
+            // output is not thread-count-identical regardless (the FLD is built
+            // with a thread-dependent estimator), so nothing is lost, and the
+            // sparse zero/reduce keeps this at least as fast as before.
+            rayon::current_num_threads().clamp(1, EM_MAX_SHARDS)
+        };
+        Some(packed::ShardCtx::new(p, num_txps, nshards))
     } else {
-        Vec::new()
+        None
     };
 
     // One fixed-point M-step `dst = F(src)`, dispatched by (VBEM?, parallel?) and
@@ -276,7 +301,7 @@ pub(crate) fn run_em_counts(
     // and SQUAREM loops drive `F` through this closure, so the accelerated path
     // reuses the exact same (already tuned) kernels.
     let mut f = |src: &[f64], dst: &mut [f64]| match (opts.use_vbem, parallel) {
-        (false, true) => packed::em_step_par(p, counts, src, dst, &mut shards),
+        (false, true) => packed::em_step_par(p, counts, src, dst, shard_ctx.as_mut().unwrap()),
         (false, false) => packed::em_step_seq(p, counts, src, dst, &mut scratch),
         (true, true) => packed::vbem_step_par(
             p,
@@ -285,7 +310,7 @@ pub(crate) fn run_em_counts(
             src,
             dst,
             &mut exp_theta,
-            &mut shards,
+            shard_ctx.as_mut().unwrap(),
         ),
         (true, false) => packed::vbem_step_seq(
             p,

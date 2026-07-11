@@ -1461,6 +1461,14 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();
     let mut timer = PhaseTimer::new();
+    // Alignment-mode eq-classes are order-independent; run the parallel M-step
+    // with a thread-count-independent reduction so the point estimate is
+    // byte-identical across `-p`.
+    let det_em = {
+        let mut e = opts.em.clone();
+        e.deterministic_reduction = true;
+        e
+    };
     let header = read_alignment_header(&opts.bam)?;
 
     // Reject coordinate-sorted input up front (header-only check, no per-record cost):
@@ -1676,12 +1684,12 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
-        optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
+        optimize(&collapsed, num_refs, &det_em, Some(&eff_lengths))
     } else {
         optimize_with_init(
             &collapsed,
             num_refs,
-            &opts.em,
+            &det_em,
             init_alphas.as_deref(),
             Some(&eff_lengths),
         )
@@ -1710,7 +1718,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             opts.no_bias_length_threshold,
         );
         collapsed.update_eff_lengths(&eff_lengths);
-        em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+        em = optimize(&collapsed, num_refs, &det_em, Some(&eff_lengths));
     }
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
