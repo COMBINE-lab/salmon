@@ -392,7 +392,16 @@ fn frag_format(recs: &[FragRecord], idxs: &[usize]) -> (Option<LibraryFormat>, b
         )
     } else {
         let r = &recs[idxs[0]];
-        let status = if r.is_read1 {
+        // A record that is not part of a multi-segment template (`0x1` unset) is a
+        // genuine single-end read → SingleEnd. A paired read reported alone here is
+        // an orphan (its mate unmapped / not grouped), classified left/right by the
+        // `0x40` first-segment flag. Mirrors salmon's `hitType` and the genome
+        // projection path (`genome_project.rs`). Conflating single-end reads with
+        // PairedEndRight made strand filters (SF/SR) drop every single-end
+        // alignment (issue #1057).
+        let status = if !r.is_paired {
+            MateStatus::SingleEnd
+        } else if r.is_read1 {
             MateStatus::PairedEndLeft
         } else {
             MateStatus::PairedEndRight
@@ -472,6 +481,11 @@ struct FragRecord {
     is_reverse: bool,
     /// first mate of the pair (BAM `0x40` flag)
     is_read1: bool,
+    /// the read is part of a multi-segment template (BAM `0x1` "paired" flag).
+    /// `false` marks a genuine single-end read, distinguishing it from a
+    /// paired-end orphan (mate unmapped / absent) — the two are classified
+    /// differently by [`frag_format`] (SingleEnd vs PairedEndLeft/Right).
+    is_paired: bool,
     /// reference span (Σ ref-consuming CIGAR op lengths); the read's 3' end on
     /// the reference is `pos + ref_span − 1`
     ref_span: usize,
@@ -613,6 +627,7 @@ fn record_to_frag<R: sam::alignment::Record>(
     let frag_len = record.template_length().map(|t| t.abs()).unwrap_or(0);
     let is_reverse = flags.is_reverse_complemented();
     let is_read1 = flags.is_first_segment();
+    let is_paired = flags.is_segmented();
     // Mate linkage as the aligner recorded it (RNEXT/PNEXT); a mate that is
     // unmapped or absent leaves these `None`, making the record an orphan.
     let mate_tid = (!flags.is_mate_unmapped())
@@ -643,6 +658,7 @@ fn record_to_frag<R: sam::alignment::Record>(
             frag_len,
             is_reverse,
             is_read1,
+            is_paired,
             ref_span,
             mate_tid,
             mate_pos,
@@ -2073,5 +2089,68 @@ mod tests {
         assert_eq!(value_as_i32(&Value::UInt16(300)), Some(300));
         // a non-integer tag value (e.g. a character) has no integer reading
         assert_eq!(value_as_i32(&Value::Character(b'A')), None);
+    }
+
+    /// Minimal `FragRecord` for classification tests (only the flag-derived
+    /// fields matter to `frag_format`'s single-record branch).
+    fn frag(is_reverse: bool, is_read1: bool, is_paired: bool) -> FragRecord {
+        FragRecord {
+            tid: 0,
+            pos: 0,
+            read_2bit: Vec::new(),
+            ops: Vec::new(),
+            score: 0,
+            frag_len: 0,
+            is_reverse,
+            is_read1,
+            is_paired,
+            ref_span: 1,
+            mate_tid: None,
+            mate_pos: None,
+            hi: None,
+        }
+    }
+
+    /// A genuine single-end read (BAM `0x1` unset) is classified `SingleEnd`, so
+    /// the strand filters accept it per its own orientation — regression for
+    /// issue #1057 (single-end BAM dropped under `SF`/`SR`).
+    #[test]
+    fn single_end_record_is_single_end_and_strand_filters_apply() {
+        use salmon_core::LibraryFormat;
+        let sf = LibraryFormat::parse("SF").unwrap();
+        let sr = LibraryFormat::parse("SR").unwrap();
+        let u = LibraryFormat::parse("U").unwrap();
+
+        // forward single-end read (flags 0x0)
+        let fwd = vec![frag(false, false, false)];
+        let (obs, is_fw, status) = frag_format(&fwd, &[0]);
+        assert_eq!(status, MateStatus::SingleEnd);
+        assert!(is_fw);
+        assert!(obs.is_none());
+        assert!(is_compatible(sf, obs, is_fw, status)); // SF accepts forward
+        assert!(!is_compatible(sr, obs, is_fw, status)); // SR rejects forward
+        assert!(is_compatible(u, obs, is_fw, status)); // U accepts
+
+        // reverse single-end read (flags 0x10) — the reporter's case
+        let rev = vec![frag(true, false, false)];
+        let (obs, is_fw, status) = frag_format(&rev, &[0]);
+        assert_eq!(status, MateStatus::SingleEnd);
+        assert!(!is_fw);
+        assert!(!is_compatible(sf, obs, is_fw, status)); // SF rejects reverse
+        assert!(is_compatible(sr, obs, is_fw, status)); // SR accepts reverse
+        assert!(is_compatible(u, obs, is_fw, status)); // U accepts
+    }
+
+    /// A paired-end read reported alone (BAM `0x1` set) remains an orphan,
+    /// classified left/right by the first-segment (`0x40`) flag — unchanged.
+    #[test]
+    fn paired_orphan_keeps_left_right_status() {
+        let read1 = vec![frag(false, true, true)];
+        let (_, _, status) = frag_format(&read1, &[0]);
+        assert_eq!(status, MateStatus::PairedEndLeft);
+
+        let read2 = vec![frag(true, false, true)];
+        let (_, _, status) = frag_format(&read2, &[0]);
+        assert_eq!(status, MateStatus::PairedEndRight);
     }
 }
