@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-align"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "anyhow",
  "bramble-rs",
@@ -2550,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-cli"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -2569,7 +2569,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-core"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -2578,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-eqclass"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "dashmap",
  "salmon-core",
@@ -2588,7 +2588,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-index"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-infer"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "criterion",
  "rand 0.8.6",
@@ -2620,7 +2620,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-map"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "ahash",
  "ksw2rs",
@@ -2634,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-model"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "flate2",
  "rayon",
@@ -2646,7 +2646,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-quant"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "anyhow",
  "flate2",
@@ -2670,7 +2670,7 @@ dependencies = [
 
 [[package]]
 name = "salmon-rad"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "anyhow",
  "bio-types",
