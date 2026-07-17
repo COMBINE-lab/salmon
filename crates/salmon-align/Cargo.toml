@@ -21,10 +21,10 @@ noodles-sam = "0.85"
 noodles-bgzf = "0.47"
 # Genome-alignment projection (spliced genome BAM -> transcriptome coords). Its
 # public API is plain structs, so it composes with salmon's own noodles for BAM
-# reading. bramble-rs 0.1.5 is on the same noodles 0.111 (sam 0.85 etc.) + ksw2rs
+# reading. bramble-rs 0.1.6 is on the same noodles 0.111 (sam 0.85 etc.) + ksw2rs
 # 0.2.0 as salmon (and libradicl 0.14.2), so the graph carries a single version
-# of each.
-bramble-rs = "0.1.5"
+# of each. (0.1.5 was yanked upstream; 0.1.6 is the current non-yanked release.)
+bramble-rs = "0.1.6"
 rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 flate2 = { workspace = true }

@@ -278,9 +278,9 @@ dependencies = [
 
 [[package]]
 name = "bramble-rs"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8010bfc1fa9c732318daa1c05f1506a1642a6eb082eadd492dac33254d68d31f"
+checksum = "80b433fc159cabc64fd16be0632c88a4dc4b2aca01e5094794627b452439a88b"
 dependencies = [
  "ahash",
  "anyhow",
