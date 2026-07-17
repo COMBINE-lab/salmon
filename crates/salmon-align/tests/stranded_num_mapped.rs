@@ -44,6 +44,31 @@ fn write_sam(dir: &Path, n_fwd: usize, n_rev: usize) -> PathBuf {
     path
 }
 
+/// Write a tiny transcriptome SAM of *genuine single-end* records (BAM `0x1`
+/// unset, so neither `0x40` nor `0x80`) to `dir`. `n_fwd` reads align to the
+/// forward strand (flag `0x0`); `n_rev` to the reverse strand (flag `0x10`) —
+/// the flag-16-heavy shape reported in issue #1057. Returns the SAM path.
+fn write_single_end_sam(dir: &Path, n_fwd: usize, n_rev: usize) -> PathBuf {
+    let path = dir.join("se.sam");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:unsorted").unwrap();
+    writeln!(f, "@SQ\tSN:tx0\tLN:5000").unwrap();
+    // 0x0 = mapped forward single-end; 0x10 = mapped reverse single-end.
+    let emit = |f: &mut std::fs::File, name: &str, flag: u16, p: usize| {
+        writeln!(f, "{name}\t{flag}\ttx0\t{}\t60\t100M\t*\t0\t0\t*\t*", p + 1).unwrap();
+    };
+    let mut pos = 1usize;
+    for i in 0..n_fwd {
+        emit(&mut f, &format!("fwd{i}"), 0, pos);
+        pos += 200;
+    }
+    for i in 0..n_rev {
+        emit(&mut f, &format!("rev{i}"), 0x10, pos);
+        pos += 200;
+    }
+    path
+}
+
 fn run(sam: &Path, out: &Path, lib_type: &str) -> salmon_align::AlignQuantResult {
     let mut opts = AlignQuantOptions::new(sam.to_path_buf(), out.to_path_buf());
     opts.lib_type = lib_type.to_string();
@@ -92,4 +117,48 @@ fn stranded_align_num_mapped_matches_quantified_mass() {
         "ISF: only the forward (ISF-compatible) fragments should map"
     );
     mass_conserved(&isf, "ISF");
+}
+
+/// Regression for issue #1057: genuine single-end records (BAM `0x1` unset) must
+/// be classified `SingleEnd`, so the single-end strand filters accept them by
+/// their own alignment orientation. Before the fix they were mislabeled as
+/// paired-end right orphans and dropped under `SF`/`SR` (0 fragments mapped),
+/// leaving `U` as the only library type that worked.
+#[test]
+fn single_end_strand_filters_respect_alignment_orientation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (n_fwd, n_rev) = (12usize, 48usize); // flag-16-heavy, as reported
+    let sam = write_single_end_sam(tmp.path(), n_fwd, n_rev);
+    let total = (n_fwd + n_rev) as u64;
+
+    let mass_conserved = |res: &salmon_align::AlignQuantResult, tag: &str| {
+        let sum: f64 = res.counts.iter().sum();
+        assert!(
+            (res.num_mapped as f64 - sum).abs() <= 1e-6,
+            "{tag}: mass not conserved: num_mapped={} but Σ counts={sum:.6}",
+            res.num_mapped
+        );
+    };
+
+    // U (unstranded single-end): accepts both orientations -> all map.
+    let u = run(&sam, &tmp.path().join("u"), "U");
+    assert_eq!(u.num_processed, total, "U: num_processed");
+    assert_eq!(u.num_mapped, total, "U: every single-end read should map");
+    mass_conserved(&u, "U");
+
+    // SF (forward single-end): accepts only the forward reads.
+    let sf = run(&sam, &tmp.path().join("sf"), "SF");
+    assert_eq!(
+        sf.num_mapped, n_fwd as u64,
+        "SF: only forward-strand single-end reads should map (was 0 before #1057 fix)"
+    );
+    mass_conserved(&sf, "SF");
+
+    // SR (reverse single-end): accepts only the reverse reads (the reporter's case).
+    let sr = run(&sam, &tmp.path().join("sr"), "SR");
+    assert_eq!(
+        sr.num_mapped, n_rev as u64,
+        "SR: only reverse-strand single-end reads should map (was 0 before #1057 fix)"
+    );
+    mass_conserved(&sr, "SR");
 }
