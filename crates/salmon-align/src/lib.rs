@@ -1431,44 +1431,53 @@ fn apply_bias_correction(
         bias_dump.exp3_pos = masses(erc);
     }
 
-    for tid in 0..num_refs {
-        if alphas[tid] < 1e-8 {
-            continue;
-        }
-        let s = ref_bytes[tid].as_slice();
-        let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
-            pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
-                let lc = length_class.expect("positional bias requires length classes")[tid];
-                let rl = s.len();
-                let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
-                let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
-                ofw[lc].project_weights(&mut o5);
-                efw[lc].project_weights(&mut e5);
-                orc[lc].project_weights(&mut o3);
-                erc[lc].project_weights(&mut e3);
-                (
-                    salmon_model::positional_factor(&o5, &e5),
-                    salmon_model::positional_factor(&o3, &e3),
-                )
-            });
-        let bias = salmon_model::BiasInputs {
-            seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
-            gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
-            pos: pos_vecs
-                .as_ref()
-                .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
-        };
-        eff_lengths[tid] = salmon_model::corrected_effective_length_full(
-            s,
-            &fld_cdf,
-            fld_low,
-            fld_high,
-            &bias,
-            eff_lengths[tid],
-            bias_speed_samp,
-            no_bias_length_threshold,
-        );
-    }
+    // Each transcript's correction is independent. Reads mode already performs
+    // this sweep with rayon; doing the same here prevents RAD/alignment mode from
+    // serializing its dominant bias-correction phase. Each worker writes one
+    // disjoint effective length, and the arithmetic within a transcript is
+    // unchanged, so thread count cannot alter the numerical result.
+    use rayon::prelude::*;
+    eff_lengths[..num_refs]
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(tid, eff_length)| {
+            if alphas[tid] < 1e-8 {
+                return;
+            }
+            let s = ref_bytes[tid].as_slice();
+            let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
+                pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
+                    let lc = length_class.expect("positional bias requires length classes")[tid];
+                    let rl = s.len();
+                    let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
+                    let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
+                    ofw[lc].project_weights(&mut o5);
+                    efw[lc].project_weights(&mut e5);
+                    orc[lc].project_weights(&mut o3);
+                    erc[lc].project_weights(&mut e3);
+                    (
+                        salmon_model::positional_factor(&o5, &e5),
+                        salmon_model::positional_factor(&o3, &e3),
+                    )
+                });
+            let bias = salmon_model::BiasInputs {
+                seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
+                gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
+                pos: pos_vecs
+                    .as_ref()
+                    .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
+            };
+            *eff_length = salmon_model::corrected_effective_length_full(
+                s,
+                &fld_cdf,
+                fld_low,
+                fld_high,
+                &bias,
+                *eff_length,
+                bias_speed_samp,
+                no_bias_length_threshold,
+            );
+        });
     bias_dump
 }
 
