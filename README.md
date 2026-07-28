@@ -1,7 +1,12 @@
 # salmon
 
-[![CI](https://github.com/COMBINE-lab/salmon/actions/workflows/ci.yml/badge.svg?branch=rust-rewrite)](https://github.com/COMBINE-lab/salmon/actions/workflows/ci.yml)
+[![CI](https://github.com/COMBINE-lab/salmon/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/COMBINE-lab/salmon/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/COMBINE-lab/salmon)](https://github.com/COMBINE-lab/salmon/releases/latest)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat-square)](http://bioconda.github.io/recipes/salmon/README.html)
+[![Homebrew version](https://img.shields.io/homebrew/v/salmon)](https://formulae.brew.sh/formula/salmon)
+[![Docker pulls](https://img.shields.io/docker/pulls/combinelab/salmon)](https://hub.docker.com/r/combinelab/salmon)
+[![License: BSD-3-Clause](https://img.shields.io/github/license/COMBINE-lab/salmon)](https://github.com/COMBINE-lab/salmon/blob/master/LICENSE)
+[![DOI](https://img.shields.io/badge/DOI-10.1038%2Fnmeth.4197-blue)](https://doi.org/10.1038/nmeth.4197)
 
 > [!IMPORTANT]
 > **This is salmon 2.0 — a from-scratch Rust rewrite of salmon.** It keeps the
