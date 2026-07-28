@@ -32,6 +32,7 @@ use noodles_sam as sam;
 use noodles_sam::alignment::record::cigar::op::Kind;
 use noodles_sam::alignment::record::data::field::{Tag, Value};
 use noodles_sam::Header;
+use rayon::prelude::*;
 use serde::Serialize;
 
 use error_model::{AlignmentModel, AlnOp, SharedAlignmentModel};
@@ -1436,7 +1437,6 @@ fn apply_bias_correction(
     // serializing its dominant bias-correction phase. Each worker writes one
     // disjoint effective length, and the arithmetic within a transcript is
     // unchanged, so thread count cannot alter the numerical result.
-    use rayon::prelude::*;
     eff_lengths[..num_refs]
         .par_iter_mut()
         .enumerate()
