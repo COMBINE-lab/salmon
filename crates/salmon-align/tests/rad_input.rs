@@ -582,14 +582,8 @@ fn pos_bias_rad_runs() {
     );
 }
 
-/// Bias correction can take its reference sequences directly via
-/// `AlignQuantOptions::ref_seqs` instead of a `-t` FASTA — the path
-/// `--deterministic` uses to hand phase-2 the index's own sequences. No
-/// `transcripts` is set here.
-#[test]
-fn gc_bias_rad_uses_ref_seqs_without_transcripts() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rad = tmp.path().join("maps.rad");
+fn bias_ref_seq_fixture(tmp: &Path) -> (std::path::PathBuf, Vec<Vec<u8>>) {
+    let rad = tmp.join("maps.rad");
     let names = ["t0", "t1", "t2"];
     let lens = [3000u32, 3000, 3000];
     let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
@@ -607,6 +601,18 @@ fn gc_bias_rad_uses_ref_seqs_without_transcripts() {
         .map(|&l| (0..l).map(|j| b"ACGT"[(j as usize) % 4]).collect())
         .collect();
 
+    (rad, ref_seqs)
+}
+
+/// Bias correction can take its reference sequences directly via
+/// `AlignQuantOptions::ref_seqs` instead of a `-t` FASTA — the path
+/// `--deterministic` uses to hand phase-2 the index's own sequences. No
+/// `transcripts` is set here.
+#[test]
+fn gc_bias_rad_uses_ref_seqs_without_transcripts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (rad, ref_seqs) = bias_ref_seq_fixture(tmp.path());
+
     let mut o = opts_for(&tmp.path().join("quant"));
     o.gc_bias = true;
     o.ref_seqs = Some(ref_seqs);
@@ -620,5 +626,67 @@ fn gc_bias_rad_uses_ref_seqs_without_transcripts() {
     assert!(
         !res.bias_dump.obs_gc.is_empty() && !res.bias_dump.exp_gc.is_empty(),
         "GC bias dump should be populated from the supplied ref_seqs"
+    );
+}
+
+/// The per-transcript correction must produce finite, bit-identical results
+/// across thread counts.
+#[test]
+fn all_bias_rad_is_thread_invariant() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (rad, ref_seqs) = bias_ref_seq_fixture(tmp.path());
+
+    let run = |label: &str, threads: usize| {
+        let mut o = opts_for(&tmp.path().join(format!("quant_{label}")));
+        o.seq_bias = true;
+        o.gc_bias = true;
+        o.pos_bias = true;
+        o.ref_seqs = Some(ref_seqs.clone());
+        assert!(o.transcripts.is_none(), "this path must not need -t");
+        std::fs::create_dir_all(&o.output_dir).unwrap();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| quantify_rad(&o, &rad).expect("quantify_rad via ref_seqs"))
+    };
+
+    let single = run("bias_1t", 1);
+    let parallel = run("bias_8t", 8);
+    assert!(
+        single.eff_lengths.iter().all(|value| value.is_finite()),
+        "single-thread effective lengths must be finite"
+    );
+    assert!(
+        parallel.eff_lengths.iter().all(|value| value.is_finite()),
+        "parallel effective lengths must be finite"
+    );
+    assert_eq!(single.eff_lengths, parallel.eff_lengths);
+    assert_eq!(single.counts, parallel.counts);
+    assert_eq!(single.tpm, parallel.tpm);
+    assert_eq!(single.bias_dump.obs_gc, parallel.bias_dump.obs_gc);
+    assert_eq!(single.bias_dump.exp_gc, parallel.bias_dump.exp_gc);
+    assert_eq!(single.bias_dump.obs5_seq, parallel.bias_dump.obs5_seq);
+    assert_eq!(single.bias_dump.obs3_seq, parallel.bias_dump.obs3_seq);
+    assert_eq!(single.bias_dump.exp5_seq, parallel.bias_dump.exp5_seq);
+    assert_eq!(single.bias_dump.exp3_seq, parallel.bias_dump.exp3_seq);
+    assert_eq!(single.bias_dump.obs5_pos, parallel.bias_dump.obs5_pos);
+    assert_eq!(single.bias_dump.obs3_pos, parallel.bias_dump.obs3_pos);
+    assert_eq!(single.bias_dump.exp5_pos, parallel.bias_dump.exp5_pos);
+    assert_eq!(single.bias_dump.exp3_pos, parallel.bias_dump.exp3_pos);
+
+    let sum: f64 = parallel.counts.iter().sum();
+    assert!((sum - 600.0).abs() < 1.0, "Σcounts = {sum}");
+    assert_eq!(parallel.num_mapped, 600);
+    assert!(
+        !parallel.bias_dump.obs_gc.is_empty() && !parallel.bias_dump.exp_gc.is_empty(),
+        "GC bias dump should be populated from the supplied ref_seqs"
+    );
+    assert!(
+        !parallel.bias_dump.obs5_seq.is_empty()
+            && !parallel.bias_dump.exp5_seq.is_empty()
+            && !parallel.bias_dump.obs5_pos.is_empty()
+            && !parallel.bias_dump.exp5_pos.is_empty(),
+        "sequence and positional bias dumps should be populated"
     );
 }
