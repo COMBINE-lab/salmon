@@ -349,6 +349,87 @@ fn writes_rad_output_readable_and_complete() {
     }
 }
 
+fn read_sam_records(path: &Path) -> (noodles_sam::Header, Vec<noodles_sam::alignment::RecordBuf>) {
+    let file = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    let mut reader = noodles_sam::io::Reader::new(file);
+    let header = reader.read_header().unwrap();
+    let records = reader
+        .record_bufs(&header)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    (header, records)
+}
+
+fn read_bam_records(path: &Path) -> (noodles_sam::Header, Vec<noodles_sam::alignment::RecordBuf>) {
+    let mut reader = noodles_bam::io::Reader::new(std::fs::File::open(path).unwrap());
+    let header = reader.read_header().unwrap();
+    let records = reader
+        .record_bufs(&header)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    (header, records)
+}
+
+#[test]
+fn sam_and_bam_mapping_outputs_are_semantically_equal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, _truth) = simulate(tmp.path());
+    let index = tmp.path().join("idx");
+    let mut build_opts = IndexBuildOptions::new(vec![fasta], index.clone());
+    build_opts.threads = 1;
+    build(&build_opts).expect("build index");
+
+    let sam_path = tmp.path().join("mappings.sam");
+    let mut sam_opts = QuantOptions::new(index.clone(), tmp.path().join("quant_sam"));
+    sam_opts.mates1 = vec![r1.clone()];
+    sam_opts.mates2 = vec![r2.clone()];
+    sam_opts.lib_type = "IU".into();
+    sam_opts.num_threads = 4;
+    sam_opts.write_mappings = Some(sam_path.clone());
+    quantify(&sam_opts).expect("SAM-output quantification");
+
+    let bam_path = tmp.path().join("mappings.bam");
+    let mut bam_opts = QuantOptions::new(index, tmp.path().join("quant_bam"));
+    bam_opts.mates1 = vec![r1];
+    bam_opts.mates2 = vec![r2];
+    bam_opts.lib_type = "IU".into();
+    bam_opts.num_threads = 4;
+    bam_opts.write_bam = Some(bam_path.clone());
+    quantify(&bam_opts).expect("BAM-output quantification");
+
+    let (sam_header, sam_records) = read_sam_records(&sam_path);
+    let (bam_header, bam_records) = read_bam_records(&bam_path);
+    assert_eq!(
+        sam_header.reference_sequences(),
+        bam_header.reference_sequences()
+    );
+    // Worker completion order is intentionally unspecified. Compare the record
+    // multisets after parsing both formats into the same semantic type.
+    let mut sam_records: Vec<String> = sam_records
+        .iter()
+        .map(|record| format!("{record:?}"))
+        .collect();
+    let mut bam_records: Vec<String> = bam_records
+        .iter()
+        .map(|record| format!("{record:?}"))
+        .collect();
+    sam_records.sort_unstable();
+    bam_records.sort_unstable();
+    assert_eq!(sam_records, bam_records);
+    assert!(!bam_records.is_empty());
+    assert!(!bam_header.programs().as_ref().is_empty());
+}
+
+#[test]
+fn sam_and_bam_outputs_are_mutually_exclusive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut opts = QuantOptions::new(tmp.path().join("idx"), tmp.path().join("quant"));
+    opts.write_mappings = Some(tmp.path().join("mappings.sam"));
+    opts.write_bam = Some(tmp.path().join("mappings.bam"));
+    let error = quantify(&opts).unwrap_err().to_string();
+    assert!(error.contains("mutually exclusive"), "{error}");
+}
+
 #[test]
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();

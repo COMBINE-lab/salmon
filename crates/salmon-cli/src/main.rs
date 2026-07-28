@@ -413,8 +413,12 @@ struct QuantArgs {
     write_unmapped_names: bool,
     /// Write per-mapping SAM records to this file (spoofed CIGAR, like salmon's
     /// standard `--writeMappings`).
-    #[arg(short = 'z', long = "writeMappings")]
+    #[arg(short = 'z', long = "writeMappings", conflicts_with = "write_bam")]
     write_mappings: Option<PathBuf>,
+    /// Write per-mapping BAM records to this file. Mutually exclusive with
+    /// --writeMappings.
+    #[arg(long = "writeBam", conflicts_with = "write_mappings")]
+    write_bam: Option<PathBuf>,
     /// Write per-fragment mappings to a RAD file at this path. Sketch or
     /// selective-alignment profile is chosen automatically from the mapping
     /// mode. Quantification still runs; add --skipQuant to map only. The file is
@@ -1374,6 +1378,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.dump_eq_weights = args.dump_eq_weights;
     opts.write_unmapped_names = args.write_unmapped_names;
     opts.write_mappings = args.write_mappings;
+    opts.write_bam = args.write_bam;
     opts.write_rad = args.write_rad;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;

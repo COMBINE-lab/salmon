@@ -282,3 +282,10 @@ Two salmon-relevant details on top of the base format:
   (uncompressed)**, so every RAD produced before this feature, and every piscem
   RAD, reads as uncompressed automatically. Decompression happens in the reader,
   so record parsing downstream is identical for compressed and uncompressed RADs.
+## Mapping alignment output
+
+`salmon quant --writeMappings <FILE>` writes the retained mappings as unsorted
+SAM records. `--writeBam <FILE>` writes semantically equivalent records as
+BGZF-compressed BAM. The options are mutually exclusive. Mapping workers run in
+parallel, so record order is unspecified; sort the result when a downstream tool
+requires coordinate or query-name order.

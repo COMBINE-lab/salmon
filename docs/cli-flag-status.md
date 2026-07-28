@@ -51,7 +51,7 @@ misbehaves.
 
 | Flag | Status | Notes |
 |------|--------|-------|
-| `-l/--libType`, `-o/--output`, `-p/--threads`, `-z/--writeMappings` | ✅ | |
+| `-l/--libType`, `-o/--output`, `-p/--threads`, `-z/--writeMappings`, `--writeBam` | ✅ | `--writeMappings` and `--writeBam` are mutually exclusive. |
 | `--useEM` | ✅ | VBEM is the default; `--useEM` selects plain EM. |
 | `--meta` | ✅ | Metagenomic preset: plain EM, no range-factorized eq-classes, uniform init (the Rust EM already inits uniformly). Overrides `--useEM`/`--rangeFactorizationBins`. |
 | `--useVBOpt` | 🔁 | VBEM is already the default. |
