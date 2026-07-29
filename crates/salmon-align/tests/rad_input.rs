@@ -323,6 +323,77 @@ fn piscem_bulk_input_quantifies() {
     );
 }
 
+/// Regression test for the worker-drain race: a `quantify_rad` run must never
+/// silently return zero (or partial) counts.
+///
+/// `thread_count_invariant` cannot catch this. It asserts only that the three
+/// runs *agree*, so a fault that hits every run looks like a pass — with the
+/// race window forced open, all three returned `processed=0` and the test went
+/// green. This test asserts the absolute total instead, so a lost chunk fails
+/// regardless of how many runs it affects.
+///
+/// The race: libradicl's producer pushes every meta-chunk and only then sets
+/// `done`. A worker whose `pop()` came up empty just before that push would
+/// observe `done` and break, abandoning the queue.
+#[test]
+fn rad_quant_never_loses_fragments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let names = ["t0", "t1", "t2"];
+    let lens = [1000u32, 1000, 1000];
+
+    // 487 fragments across enough chunks that the reader has real work to hand
+    // out (write_rad flushes one chunk per 64 records).
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for (tid, n) in [(0u32, 137), (1, 211), (2, 89)] {
+        for _ in 0..n {
+            frags.push(vec![(tid, Some(200), 0)]);
+        }
+    }
+    for _ in 0..50 {
+        frags.push(vec![(0, Some(200), 0), (2, Some(200), 0)]);
+    }
+    let total = frags.len() as u64;
+    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags, None);
+
+    // A single worker is the worst case: with no sibling to drain the queue,
+    // one lost race loses the whole file.
+    for threads in [1usize, 1, 2, 8] {
+        let out = tmp.path().join(format!("q{threads}_{}", rand_suffix()));
+        std::fs::create_dir_all(&out).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        let res = pool.install(|| quantify_rad(&opts_for(&out), &rad).unwrap());
+
+        assert_eq!(
+            res.num_processed, total,
+            "-p {threads}: reader dropped fragments ({} of {total})",
+            res.num_processed
+        );
+        assert_eq!(res.num_mapped, total, "-p {threads}: mapped-count mismatch");
+        assert!(
+            res.num_eq_classes > 0,
+            "-p {threads}: no equivalence classes were built"
+        );
+        let sum: f64 = res.counts.iter().sum();
+        assert!(
+            (sum - total as f64).abs() < 1e-6,
+            "-p {threads}: mass not conserved: {sum} vs {total}"
+        );
+    }
+}
+
+/// Distinct output directories across loop iterations that reuse a thread count.
+fn rand_suffix() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+}
+
 #[test]
 fn thread_count_invariant() {
     let tmp = tempfile::tempdir().unwrap();

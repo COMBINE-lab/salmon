@@ -533,21 +533,31 @@ where
         for _ in 0..nthreads.max(1) {
             let queue = queue.clone();
             let done = done.clone();
-            s.spawn(move || loop {
-                if let Some(mc) = queue.pop() {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            let assigned = process_rad_fragment(&rec.placements(), cfg);
-                            num_processed.fetch_add(1, Ordering::Relaxed);
-                            if assigned {
-                                num_mapped.fetch_add(1, Ordering::Relaxed);
+            s.spawn(move || {
+                // Set once `done` is observed; see the drain comment below.
+                let mut draining = false;
+                loop {
+                    if let Some(mc) = queue.pop() {
+                        for chunk in mc.iter() {
+                            for rec in &chunk.reads {
+                                let assigned = process_rad_fragment(&rec.placements(), cfg);
+                                num_processed.fetch_add(1, Ordering::Relaxed);
+                                if assigned {
+                                    num_mapped.fetch_add(1, Ordering::Relaxed);
+                                }
                             }
                         }
+                    } else if draining {
+                        break;
+                    } else if done.load(Ordering::Acquire) {
+                        // `done` observed after an empty pop. The producer pushes
+                        // every meta-chunk before storing the flag, so anything it
+                        // enqueued between our failed pop and that store is still
+                        // waiting. Sweep once more before exiting.
+                        draining = true;
+                    } else {
+                        std::hint::spin_loop();
                     }
-                } else if done.load(Ordering::Acquire) {
-                    break;
-                } else {
-                    std::hint::spin_loop();
                 }
             });
         }
@@ -599,52 +609,62 @@ where
             let queue = queue.clone();
             let done = done.clone();
             let acc = &acc;
-            s.spawn(move || loop {
-                if let Some(mc) = queue.pop() {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            let pls = rec.placements();
-                            // Naive (kallisto-style) eq for the rough seed EM: the
-                            // compatible transcripts, orientation-tagged (so library-
-                            // incompatible placements can be dropped once the lib
-                            // type is known), no FLD/score weighting. Built in the
-                            // same read as the FLD counts; order-independent.
-                            if let Some(nb) = naive_eq {
-                                let sig: Vec<NaivePlacement> = pls
-                                    .iter()
-                                    .map(|p| {
-                                        let (obs, is_fw, status) = rad_frag_format(p);
-                                        NaivePlacement {
-                                            tid: p.tid,
-                                            fmt_id: obs
-                                                .map(|f| f.format_id())
-                                                .unwrap_or(NAIVE_NO_FMT),
-                                            is_fw,
-                                            status,
-                                        }
-                                    })
-                                    .collect();
-                                nb.add(sig);
+            s.spawn(move || {
+                // Set once `done` is observed; see the drain comment below.
+                let mut draining = false;
+                loop {
+                    if let Some(mc) = queue.pop() {
+                        for chunk in mc.iter() {
+                            for rec in &chunk.reads {
+                                let pls = rec.placements();
+                                // Naive (kallisto-style) eq for the rough seed EM: the
+                                // compatible transcripts, orientation-tagged (so library-
+                                // incompatible placements can be dropped once the lib
+                                // type is known), no FLD/score weighting. Built in the
+                                // same read as the FLD counts; order-independent.
+                                if let Some(nb) = naive_eq {
+                                    let sig: Vec<NaivePlacement> = pls
+                                        .iter()
+                                        .map(|p| {
+                                            let (obs, is_fw, status) = rad_frag_format(p);
+                                            NaivePlacement {
+                                                tid: p.tid,
+                                                fmt_id: obs
+                                                    .map(|f| f.format_id())
+                                                    .unwrap_or(NAIVE_NO_FMT),
+                                                is_fw,
+                                                status,
+                                            }
+                                        })
+                                        .collect();
+                                    nb.add(sig);
+                                }
+                                // "unique" = exactly one placement; only proper pairs
+                                // carry a meaningful fragment length.
+                                if pls.len() != 1 {
+                                    continue;
+                                }
+                                let p = &pls[0];
+                                if p.status != MateStatus::PairedEndPaired
+                                    || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
+                                    || p.frag_len == 0
+                                {
+                                    continue;
+                                }
+                                acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
                             }
-                            // "unique" = exactly one placement; only proper pairs
-                            // carry a meaningful fragment length.
-                            if pls.len() != 1 {
-                                continue;
-                            }
-                            let p = &pls[0];
-                            if p.status != MateStatus::PairedEndPaired
-                                || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
-                                || p.frag_len == 0
-                            {
-                                continue;
-                            }
-                            acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
                         }
+                    } else if draining {
+                        break;
+                    } else if done.load(Ordering::Acquire) {
+                        // `done` observed after an empty pop. The producer pushes
+                        // every meta-chunk before storing the flag, so anything it
+                        // enqueued between our failed pop and that store is still
+                        // waiting. Sweep once more before exiting.
+                        draining = true;
+                    } else {
+                        std::hint::spin_loop();
                     }
-                } else if done.load(Ordering::Acquire) {
-                    break;
-                } else {
-                    std::hint::spin_loop();
                 }
             });
         }
@@ -952,6 +972,8 @@ where
             let merged = &merged;
             s.spawn(move || {
                 let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+                // Set once `done` is observed; see the drain comment below.
+                let mut draining = false;
                 loop {
                     if let Some(mc) = queue.pop() {
                         for chunk in mc.iter() {
@@ -959,8 +981,15 @@ where
                                 collect_bias_fragment(&rec.placements(), cfg, &mut local);
                             }
                         }
-                    } else if done.load(Ordering::Acquire) {
+                    } else if draining {
                         break;
+                    } else if done.load(Ordering::Acquire) {
+                        // `done` observed after an empty pop. The producer
+                        // pushes every meta-chunk before storing the flag, so
+                        // anything enqueued between our failed pop and that
+                        // store is still waiting. Sweep once more before
+                        // exiting.
+                        draining = true;
                     } else {
                         std::hint::spin_loop();
                     }
@@ -1020,6 +1049,8 @@ where
             let merged = &merged;
             s.spawn(move || {
                 let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+                // Set once `done` is observed; see the drain comment below.
+                let mut draining = false;
                 loop {
                     if let Some(mc) = queue.pop() {
                         for chunk in mc.iter() {
@@ -1033,8 +1064,15 @@ where
                                 collect_bias_fragment(&pls, bias_cfg, &mut local);
                             }
                         }
-                    } else if done.load(Ordering::Acquire) {
+                    } else if draining {
                         break;
+                    } else if done.load(Ordering::Acquire) {
+                        // `done` observed after an empty pop. The producer
+                        // pushes every meta-chunk before storing the flag, so
+                        // anything enqueued between our failed pop and that
+                        // store is still waiting. Sweep once more before
+                        // exiting.
+                        draining = true;
                     } else {
                         std::hint::spin_loop();
                     }
