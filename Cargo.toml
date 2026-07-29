@@ -51,7 +51,6 @@ dashmap = "6"
 ahash = "0.8"
 # numerics
 nalgebra = "0.33"
-ndarray = "0.16"
 statrs = "0.18"
 # rng (PCG, matching salmon's pcg usage)
 rand = "0.8"
