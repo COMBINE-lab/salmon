@@ -579,6 +579,55 @@ impl DiscreteFld {
     }
 }
 
+/// Where a run's fragment-length distribution came from, reported as
+/// `frag_length_source` in `aux_info/meta_info.json`.
+///
+/// `--fldMean`/`--fldSD` are priors, so which of these applies decides whether
+/// they influenced the result at all: they fully determine [`Self::Prior`], seed
+/// [`Self::Reads`]/[`Self::Alignments`]/[`Self::RadDerived`] with weight 1
+/// against the observations, and are not consulted at all for the two baked
+/// variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FragLengthSource {
+    /// Trained during the read-mapping pass (reads mode).
+    Reads,
+    /// Derived from the input alignments (alignment mode, `-a`).
+    Alignments,
+    /// Read from the RAD header, where it was observed by the paired-end run
+    /// that wrote the file.
+    RadBaked,
+    /// Read from the RAD header, but written by a *single-end* run. No fragment
+    /// lengths existed to observe, so the baked distribution is that run's
+    /// `--fldMean`/`--fldSD` prior rather than an empirical distribution.
+    RadBakedPrior,
+    /// Derived at read time from this RAD's uniquely-mapped proper pairs
+    /// (a piscem RAD, or `--fldPolicy derive`).
+    RadDerived,
+    /// The `--fldMean`/`--fldSD` prior alone, with no observations folded in.
+    Prior,
+}
+
+impl FragLengthSource {
+    /// The `meta_info.json` spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reads => "reads",
+            Self::Alignments => "alignments",
+            Self::RadBaked => "rad_baked",
+            Self::RadBakedPrior => "rad_baked_prior",
+            Self::RadDerived => "rad_derived",
+            Self::Prior => "prior",
+        }
+    }
+
+    /// Whether `--fldMean`/`--fldSD`/`--fldMax` were consulted at all. False
+    /// only for the baked variants, which take the distribution verbatim from
+    /// the RAD header.
+    pub fn uses_fld_prior_args(self) -> bool {
+        !matches!(self, Self::RadBaked | Self::RadBakedPrior)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

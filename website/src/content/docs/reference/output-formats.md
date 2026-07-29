@@ -81,7 +81,8 @@ Pretty-printed JSON. tximport keys off several fields (`num_bootstraps`,
 | `num_libraries` | int | currently `1` |
 | `library_types` | string[] | detected/declared library type(s) |
 | `frag_dist_length` | int | number of FLD length bins |
-| `frag_length_mean` / `frag_length_sd` | float | observed fragment length stats |
+| `frag_length_mean` / `frag_length_sd` | float | fragment length stats |
+| `frag_length_source` | string | where the distribution above came from: `reads`, `alignments`, `rad_baked`, `rad_baked_prior`, `rad_derived`, or `prior` |
 | `seq_bias_correct` / `gc_bias_correct` / `pos_bias_correct` | bool | bias correction enabled (`--seqBias` / `--gcBias` / `--posBias`) |
 | `mapping_type` | string | `"mapping"` (SA) or `"pseudo"` (sketch) |
 | `keep_duplicates` | bool | index built with `--keepDuplicates` |

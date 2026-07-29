@@ -50,6 +50,50 @@ distribution, then quantifies). Bias correction (`--seqBias`, `--gcBias`,
 `--posBias`), `--numBootstraps`, `--numGibbsSamples`, and `-g/--geneMap` all work
 in RAD mode.
 
+### Fragment-length distribution (`--fldPolicy`)
+
+salmon's RAD writer always bakes its fragment-length distribution into the
+header — including under `--skipQuant`, which suppresses only the baked
+abundances. On read-back that distribution takes precedence, which is what makes
+a requant reproduce the writing run exactly.
+
+The consequence is that **`--fldMean`/`--fldSD`/`--fldMax` have no effect on a
+salmon-produced RAD by default.** They are priors, and a baked distribution
+replaces the prior outright rather than being blended with it. salmon warns when
+you supply one of these flags and a baked distribution supersedes it; a run that
+inherits their defaults stays quiet.
+
+`--fldPolicy` chooses where the distribution comes from:
+
+| Policy | Behavior |
+| --- | --- |
+| `baked` *(default)* | Use the RAD's baked distribution when present. Exact parity with the run that wrote the file. |
+| `derive` | Ignore the baked distribution; rebuild it from this RAD's own uniquely-mapped proper pairs, seeded by `--fldMean`/`--fldSD`. This is what a piscem RAD does automatically. |
+| `prior` | Ignore both the baked distribution and the RAD's fragment lengths; `--fldMean`/`--fldSD` alone determine it. |
+
+Use `prior` for a fragment-length sensitivity analysis — it is the only setting
+under which varying `--fldMean` changes the result:
+
+```sh
+for m in 150 250 350; do
+  salmon quant --rad mappings.rad -t transcripts.fa -l A \
+    --fldPolicy prior --fldMean $m --fldSD 25 -o out_fld_$m
+done
+```
+
+`aux_info/meta_info.json` records which path a run took in `frag_length_source`
+(`rad_baked`, `rad_derived`, or `prior`), so the provenance stays auditable after
+the fact.
+
+#### Single-end RADs
+
+A single-end run has no fragment lengths to measure, so the distribution it bakes
+is simply its own `--fldMean`/`--fldSD` prior. Reading such a RAD back therefore
+inherits *the writing run's* prior, and salmon reports `frag_length_source` as
+`rad_baked_prior` to distinguish this from an observed distribution. If you want
+your own values to apply, pass `--fldPolicy prior` (`derive` has nothing to
+derive from here).
+
 ### piscem interoperability
 
 A RAD produced by `piscem map-bulk` quantifies directly:

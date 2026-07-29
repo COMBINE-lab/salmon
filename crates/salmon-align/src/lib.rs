@@ -46,6 +46,64 @@ use salmon_model::FragmentLengthDistribution;
 
 const SALMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Where the fragment-length distribution comes from when quantifying a RAD
+/// (`--fldPolicy`).
+///
+/// salmon's own RAD writer always bakes its FLD into the header so a requant
+/// reproduces the writing run exactly. That default is right for reproduction
+/// but leaves no way to ask a different question of the same file, which is
+/// what the other two variants restore.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FldPolicy {
+    /// Use the FLD baked into the RAD header when present (exact parity with
+    /// the run that wrote the file); otherwise derive it, or fall back to the
+    /// prior for single-end libraries. The default.
+    #[default]
+    Baked,
+    /// Ignore any baked FLD and re-derive it from this RAD's uniquely-mapped
+    /// proper pairs, seeded by `--fldMean`/`--fldSD`.
+    Derive,
+    /// Ignore both the baked FLD and the observations; use `--fldMean`/`--fldSD`
+    /// alone. This is the only setting under which those flags fully determine
+    /// the distribution, so it is the one to use for a fragment-length
+    /// sensitivity analysis.
+    Prior,
+}
+
+/// Which fragment-length prior flags the user supplied explicitly, as opposed
+/// to inheriting their defaults.
+///
+/// salmon cannot warn "your `--fldMean` was ignored" without knowing the user
+/// actually typed it — every run has *some* value for these.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExplicitFldArgs {
+    pub mean: bool,
+    pub sd: bool,
+    pub max: bool,
+}
+
+impl ExplicitFldArgs {
+    /// True when at least one fragment-length prior flag was supplied.
+    pub fn any(self) -> bool {
+        self.mean || self.sd || self.max
+    }
+
+    /// The supplied flags, formatted for a message: `--fldMean/--fldSD`.
+    pub fn names(self) -> String {
+        let mut names = Vec::new();
+        if self.mean {
+            names.push("--fldMean");
+        }
+        if self.sd {
+            names.push("--fldSD");
+        }
+        if self.max {
+            names.push("--fldMax");
+        }
+        names.join("/")
+    }
+}
+
 /// Options for alignment-based quantification.
 #[derive(Debug, Clone)]
 pub struct AlignQuantOptions {
@@ -94,6 +152,14 @@ pub struct AlignQuantOptions {
     pub fld_mean: f64,
     pub fld_sd: f64,
     pub fld_max: usize,
+    /// RAD-input mode: where the fragment-length distribution comes from
+    /// (`--fldPolicy`). Ignored outside `--rad`, which has no baked FLD to
+    /// prefer.
+    pub fld_policy: FldPolicy,
+    /// which of `--fldMean`/`--fldSD`/`--fldMax` the user actually supplied.
+    /// Used only to warn when a baked FLD makes them ineffective, so that a
+    /// default-valued run stays quiet.
+    pub explicit_fld_args: ExplicitFldArgs,
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
     /// initialize the EM uniformly instead of with the online-estimate-blended
@@ -160,6 +226,8 @@ impl AlignQuantOptions {
             fld_mean: 250.0,
             fld_sd: 25.0,
             fld_max: 1000,
+            fld_policy: FldPolicy::default(),
+            explicit_fld_args: ExplicitFldArgs::default(),
             forgetting_factor: 0.65,
             init_uniform: false,
             sig_digits: 3,
@@ -196,6 +264,10 @@ pub struct AlignQuantResult {
     pub num_eq_classes: usize,
     pub frag_len_mean: f64,
     pub frag_len_sd: f64,
+    /// where the fragment-length distribution came from; reported as
+    /// `frag_length_source` in `meta_info.json` so a result's FLD provenance
+    /// stays auditable after the run
+    pub frag_len_source: salmon_model::FragLengthSource,
     pub length_classes: Vec<u32>,
     pub frag_len_dist: Vec<f64>,
     pub start_time: String,
@@ -1827,6 +1899,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         num_eq_classes,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
+        frag_len_source: salmon_model::FragLengthSource::Alignments,
         length_classes,
         frag_len_dist: fld.log_pmf().iter().map(|lp| lp.exp()).collect(),
         start_time,
@@ -1878,6 +1951,9 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         frag_dist_length: usize,
         frag_length_mean: f64,
         frag_length_sd: f64,
+        /// provenance of the two fields above: whether they came from observed
+        /// data or from the `--fldMean`/`--fldSD` prior (see `FragLengthSource`)
+        frag_length_source: &'static str,
         seq_bias_correct: bool,
         gc_bias_correct: bool,
         pos_bias_correct: bool,
@@ -1936,6 +2012,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         frag_dist_length: res.frag_len_dist.len(),
         frag_length_mean: res.frag_len_mean,
         frag_length_sd: res.frag_len_sd,
+        frag_length_source: res.frag_len_source.as_str(),
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
         pos_bias_correct: opts.pos_bias,
@@ -2161,5 +2238,44 @@ mod tests {
         let read2 = vec![frag(true, false, true)];
         let (_, _, status) = frag_format(&read2, &[0]);
         assert_eq!(status, MateStatus::PairedEndRight);
+    }
+
+    /// The warning in #1062 must name exactly the flags the user typed, so it
+    /// never claims a value was ignored that the user never supplied.
+    #[test]
+    fn explicit_fld_args_report_only_supplied_flags() {
+        assert!(!ExplicitFldArgs::default().any());
+        assert_eq!(ExplicitFldArgs::default().names(), "");
+
+        let mean_only = ExplicitFldArgs {
+            mean: true,
+            ..Default::default()
+        };
+        assert!(mean_only.any());
+        assert_eq!(mean_only.names(), "--fldMean");
+
+        let all = ExplicitFldArgs {
+            mean: true,
+            sd: true,
+            max: true,
+        };
+        assert_eq!(all.names(), "--fldMean/--fldSD/--fldMax");
+
+        let sd_max = ExplicitFldArgs {
+            mean: false,
+            sd: true,
+            max: true,
+        };
+        assert_eq!(sd_max.names(), "--fldSD/--fldMax");
+    }
+
+    /// Baked is the default, so an ordinary requant keeps reproducing the run
+    /// that wrote the RAD unless the user opts out.
+    #[test]
+    fn fld_policy_defaults_to_baked() {
+        assert_eq!(FldPolicy::default(), FldPolicy::Baked);
+        let opts = AlignQuantOptions::new("x.rad".into(), "out".into());
+        assert_eq!(opts.fld_policy, FldPolicy::Baked);
+        assert!(!opts.explicit_fld_args.any());
     }
 }

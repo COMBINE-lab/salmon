@@ -274,6 +274,11 @@ pub struct QuantResult {
     /// per-fragment candidate alignments dropped for scoring below threshold,
     /// summed over fragments that nonetheless mapped
     pub num_alignments_below_threshold_for_mapped_fragments_vm: u64,
+    /// where the fragment-length distribution came from; reported as
+    /// `frag_length_source` in `meta_info.json`. Always
+    /// [`FragLengthSource::Reads`] here — reads mode trains the FLD during the
+    /// mapping pass — but carried so every mode reports the field.
+    pub frag_len_source: salmon_model::FragLengthSource,
     pub frag_len_mean: f64,
     /// standard deviation of the observed fragment-length distribution
     pub frag_len_sd: f64,
@@ -1069,6 +1074,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_fragments_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),
         num_alignments_below_threshold_for_mapped_fragments_vm: num_below_threshold_vm
             .load(Ordering::Relaxed),
+        frag_len_source: salmon_model::FragLengthSource::Reads,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
         length_classes: salmon_model::compute_length_quantiles(

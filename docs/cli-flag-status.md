@@ -74,7 +74,8 @@ misbehaves.
 | Flag | Status | Notes |
 |------|--------|-------|
 | `--seqBias`, `--gcBias`, `--posBias` | ✅ | |
-| `--fldMean`, `--fldSD`, `--fldMax` | ✅ | |
+| `--fldMean`, `--fldSD`, `--fldMax` | ✅ | Priors. With `--rad` they are ignored unless `--fldPolicy` says otherwise (a salmon RAD bakes its FLD); salmon warns when an explicitly-supplied value is ignored. |
+| `--fldPolicy` | ✅ | `baked` (default) / `derive` / `prior`: where a RAD requant's fragment-length distribution comes from. Rust-port feature; not in this salmon build. |
 | `-f/--forgettingFactor` | ✅ | |
 | `--numAuxModelSamples` | ✅ | Online-phase model-training window. |
 | `--biasSpeedSamp` | ✅ | GC convolution fragment-length stride. |

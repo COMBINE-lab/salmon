@@ -283,6 +283,9 @@ struct MetaInfo {
     frag_dist_length: usize,
     frag_length_mean: f64,
     frag_length_sd: f64,
+    /// provenance of the two fields above: observed data or the
+    /// `--fldMean`/`--fldSD` prior (see `FragLengthSource`)
+    frag_length_source: &'static str,
     seq_bias_correct: bool,
     gc_bias_correct: bool,
     pos_bias_correct: bool,
@@ -360,6 +363,7 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         frag_dist_length: res.frag_len_dist.len(),
         frag_length_mean: res.frag_len_mean,
         frag_length_sd: res.frag_len_sd,
+        frag_length_source: res.frag_len_source.as_str(),
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
         pos_bias_correct: opts.pos_bias,
