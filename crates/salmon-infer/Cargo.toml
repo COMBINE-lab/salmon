@@ -20,7 +20,7 @@ rand_distr = { workspace = true }
 [dev-dependencies]
 # Bench harness for the EM/VBEM convergence loop (dev-only; no shipping impact).
 # `profile.bench` already carries thin-LTO. Used by `benches/em_step.rs`.
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "em_step"

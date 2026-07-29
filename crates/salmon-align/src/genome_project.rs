@@ -536,21 +536,23 @@ fn stream_project_pass(
             .unwrap_or(4)
             .clamp(1, 4);
         let bgzf_workers = std::num::NonZeroUsize::new(bgzf_workers).unwrap();
-        let decoder = noodles_bgzf::io::MultithreadedReader::with_worker_count(bgzf_workers, file);
-        let mut reader = bam::io::Reader::from(decoder);
-        let header = reader.read_header().context("reading BAM header")?;
-        run_project_pass(
-            reader.records(),
-            &header,
-            nthreads,
-            g2t,
-            cfg,
-            writer,
-            fld,
-            naive,
-            tx_is_minus,
-            is_short,
-        )
+        crate::with_bgzf_pool(bgzf_workers, || {
+            let decoder = noodles_bgzf::io::MultithreadedReader::new(file);
+            let mut reader = bam::io::Reader::from(decoder);
+            let header = reader.read_header().context("reading BAM header")?;
+            run_project_pass(
+                reader.records(),
+                &header,
+                nthreads,
+                g2t,
+                cfg,
+                writer,
+                fld,
+                naive,
+                tx_is_minus,
+                is_short,
+            )
+        })?
     }
 }
 

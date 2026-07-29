@@ -16,9 +16,9 @@ salmon-model = { workspace = true }
 salmon-rad = { workspace = true }
 libradicl = { workspace = true }
 crossbeam-queue = "0.3"
-noodles-bam = "0.90"
-noodles-sam = "0.85"
-noodles-bgzf = "0.47"
+noodles-bam = "0.92"
+noodles-sam = "0.87"
+noodles-bgzf = "0.49"
 # Genome-alignment projection (spliced genome BAM -> transcriptome coords). Its
 # public API is plain structs, so it composes with salmon's own noodles for BAM
 # reading. bramble-rs 0.1.6 is on the same noodles 0.111 (sam 0.85 etc.) + ksw2rs
