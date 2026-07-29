@@ -16,7 +16,7 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-needletail = "0.6"
+needletail = "0.7"
 sha2 = "0.10"
 ahash = { workspace = true }
 # cf1-rs -> simd-minimizers -> packed-seq -> ensure_simd guards against building
