@@ -282,3 +282,55 @@ Two salmon-relevant details on top of the base format:
   (uncompressed)**, so every RAD produced before this feature, and every piscem
   RAD, reads as uncompressed automatically. Decompression happens in the reader,
   so record parsing downstream is identical for compressed and uncompressed RADs.
+
+## Mapping alignment output
+
+`salmon quant --writeMappings <FILE>` (alias `--writeSam`) writes the retained
+mappings as unsorted SAM records. `--writeBam <FILE>` writes semantically
+equivalent records as BGZF-compressed BAM. The options are mutually exclusive,
+and `--writeSam` names the SAM format explicitly so both formats have a
+format-named flag. Both share one header and one record builder, so the two
+formats cannot drift apart.
+
+Both options apply to the read-mapping path only. In alignment mode (`-a`) and
+RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
+
+### Compression threads
+
+`--writeBam` compresses BGZF blocks on a small pool of threads that run
+alongside the `-p` mapping threads. `--bamCompressThreads <N>` sets the pool
+size; left unset, salmon derives it from measured throughput.
+
+One worker compresses about 165 MiB/s of BAM records, and one mapping thread
+produces at most about 52 MiB/s of them, so roughly **one compression worker per
+3 mapping threads** is the point at which compression stops limiting the run.
+That is the default, capped at 8 workers — already around three times the
+fastest record production measured at any thread count.
+
+The default deliberately errs upward but stops there. The two failure modes are
+not symmetric: one worker too few can halve throughput, because record output
+pins to a single worker's 165 MiB/s, while surplus workers simply block on an
+empty queue and cost nothing measurable. Going beyond the balance point,
+however, spends cores that would otherwise be mapping reads. Raise it if you are
+writing BAM to unusually fast storage and have cores to spare; there is no
+reason to lower it.
+
+### Record order
+
+Mapping workers run in parallel, and the output makes exactly one ordering
+guarantee:
+
+- **All records for a fragment are contiguous.** A worker encodes an entire
+  fragment before deciding to hand off its buffer, and buffers are written
+  whole, so a fragment is never split or interleaved with another worker's
+  records. Tools that stream a file and group by read name — the common reason
+  to want `samtools collate` — can read the output directly.
+- **Nothing else is ordered.** Fragments appear in whatever order workers finish
+  their buffers, which varies with thread count and scheduling. Sort the result
+  if a downstream tool needs coordinate or query-name order.
+
+The second point is deliberate rather than incidental: imposing a global record
+order would require workers to wait for one another. Only the parts that must be
+serial (copying bytes into BGZF blocks, and writing compressed blocks in
+submission order) are, while record encoding and block compression both run
+fully in parallel.

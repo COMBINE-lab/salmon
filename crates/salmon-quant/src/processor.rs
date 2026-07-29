@@ -124,6 +124,8 @@ pub(crate) struct Shared<'a> {
     pub unmapped_names: Option<&'a Mutex<Vec<String>>>,
     /// when set, write per-mapping SAM records (`--writeMappings`)
     pub sam: Option<&'a crate::sam::SamWriter>,
+    /// when set, encode per-mapping BAM records into reusable worker chunks
+    pub bam: Option<&'a crate::bam::BamOutput>,
     /// when set, write per-fragment mappings to a RAD file (`--writeRad`)
     pub rad: Option<&'a salmon_rad::RadOutputWriter>,
     /// `--deterministic` mode: collect an order-independent fragment-length
@@ -157,6 +159,10 @@ pub(crate) struct QuantProcessor<'a> {
     pub unmapped: Vec<String>,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
+    /// per-thread raw BAM record chunk; allocated only for `--writeBam`. Holds
+    /// its own borrow of the writer, so "have a chunk ⇒ have somewhere to send
+    /// it" is enforced by the type rather than re-checked at each use.
+    pub bam_scratch: Option<crate::bam::BamScratch<'a>>,
     /// per-thread RAD chunk buffer (flushed as one chunk per batch); `None`
     /// unless `--writeRad` is set
     pub rad_buf: Option<salmon_rad::FragmentChunkBuf>,
@@ -189,6 +195,7 @@ impl<'a> QuantProcessor<'a> {
             posbias,
             unmapped: Vec::new(),
             sam_buf: String::new(),
+            bam_scratch: shared.bam.map(|output| output.scratch()),
             rad_buf: shared.rad.map(|rad| {
                 salmon_rad::FragmentChunkBuf::with_capacity_codec(64 * 1024, rad.codec())
             }),
@@ -842,6 +849,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             posbias,
             unmapped,
             sam_buf,
+            bam_scratch,
             rad_buf,
         } = self;
         let sh = *shared;
@@ -925,6 +933,17 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     &maps,
                 );
             }
+            if let Some(scratch) = bam_scratch.as_mut() {
+                if !maps.is_empty() {
+                    scratch.write_fragment(
+                        sh.salmon,
+                        r1.id(),
+                        s1.as_ref(),
+                        Some((r2.id(), s2.as_ref())),
+                        &maps,
+                    )?;
+                }
+            }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !maps.is_empty() {
                     let rec = build_rad_record(&maps);
@@ -952,7 +971,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // next batch's per-fragment reads are stable (see `record`). No-op once the
         // final FLD cache is taken; amortized over the whole batch.
         self.shared.fld.refresh_online();
-        flush_sam(self);
+        flush_sam(self)?;
+        flush_bam(self)?;
         flush_rad(self);
         Ok(())
     }
@@ -960,7 +980,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_bias(self);
         merge_unmapped(self);
-        flush_sam(self);
+        flush_sam(self)?;
+        flush_bam(self)?;
         flush_rad(self);
         Ok(())
     }
@@ -980,6 +1001,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             posbias,
             unmapped,
             sam_buf,
+            bam_scratch,
             rad_buf,
         } = self;
         let sh = *shared;
@@ -1035,6 +1057,11 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if sh.sam.is_some() && !maps.is_empty() {
                 crate::sam::write_fragment(sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps);
             }
+            if let Some(scratch) = bam_scratch.as_mut() {
+                if !maps.is_empty() {
+                    scratch.write_fragment(sh.salmon, rec.id(), s.as_ref(), None, &maps)?;
+                }
+            }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !maps.is_empty() {
                     let radrec = build_rad_record(&maps);
@@ -1062,7 +1089,8 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // next batch's per-fragment reads are stable (see `record`). No-op once the
         // final FLD cache is taken; amortized over the whole batch.
         self.shared.fld.refresh_online();
-        flush_sam(self);
+        flush_sam(self)?;
+        flush_bam(self)?;
         flush_rad(self);
         Ok(())
     }
@@ -1070,20 +1098,31 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_bias(self);
         merge_unmapped(self);
-        flush_sam(self);
+        flush_sam(self)?;
+        flush_bam(self)?;
         flush_rad(self);
         Ok(())
     }
 }
 
 /// Flush this thread's accumulated SAM buffer to the shared writer (under lock).
-fn flush_sam(proc: &mut QuantProcessor) {
+fn flush_sam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
     if let Some(sw) = proc.shared.sam {
         if !proc.sam_buf.is_empty() {
-            let _ = sw.write_block(&proc.sam_buf);
+            sw.write_block(&proc.sam_buf)?;
             proc.sam_buf.clear();
         }
     }
+    Ok(())
+}
+
+/// Hand this thread's accumulated BAM chunk to the writer thread. No-op unless
+/// `--writeBam` is set; the scratch carries its own writer borrow.
+fn flush_bam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
+    if let Some(scratch) = proc.bam_scratch.as_mut() {
+        scratch.flush()?;
+    }
+    Ok(())
 }
 
 /// Build a salmon RAD record for one fragment's finalized, decoy-filtered

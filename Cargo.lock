@@ -2649,9 +2649,13 @@ name = "salmon-quant"
 version = "2.3.4"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "flate2",
  "jiff",
  "libradicl",
+ "noodles-bam",
+ "noodles-bgzf",
+ "noodles-sam",
  "paraseq",
  "piscem-rs",
  "rayon",

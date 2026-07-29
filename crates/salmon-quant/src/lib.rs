@@ -10,6 +10,8 @@
 //! Selective alignment is the default; set [`QuantOptions::sketch`] for the
 //! alignment-free pseudoalignment path.
 
+mod bam;
+mod mapping_record;
 mod output;
 mod processor;
 mod sam;
@@ -79,6 +81,14 @@ pub struct QuantOptions {
     /// write per-mapping SAM records to this path (`--writeMappings`); spoofed
     /// CIGAR (`<readLen>M` + end soft-clips), matching salmon's standard output
     pub write_mappings: Option<PathBuf>,
+    /// write per-mapping BAM records to this path (`--writeBam`); mutually
+    /// exclusive with [`Self::write_mappings`]
+    pub write_bam: Option<PathBuf>,
+    /// override the number of BGZF compression workers used by `--writeBam`
+    /// (`--bamCompressThreads`). `None` derives it from `num_threads` so that
+    /// compression just keeps up with record production; set it only to
+    /// benchmark or to compensate for unusually slow/fast storage.
+    pub bam_compress_threads: Option<std::num::NonZeroUsize>,
     /// write per-fragment mappings to this RAD file (`--writeRad`); sketch or
     /// selective-alignment profile is chosen from `sketch`. Quantification still
     /// runs; combine with `skip_quant` to map only.
@@ -187,6 +197,8 @@ impl QuantOptions {
             dump_eq_weights: false,
             write_unmapped_names: false,
             write_mappings: None,
+            write_bam: None,
+            bam_compress_threads: None,
             write_rad: None,
             deterministic_fld: false,
             seq_bias: false,
@@ -308,6 +320,10 @@ pub struct QuantResult {
 
 /// Run quantification end-to-end, writing outputs and returning the results.
 pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
+    anyhow::ensure!(
+        opts.write_mappings.is_none() || opts.write_bam.is_none(),
+        "--writeMappings and --writeBam are mutually exclusive"
+    );
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();
     let mut timer = PhaseTimer::new();
@@ -347,11 +363,28 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let unmapped_collector: Option<std::sync::Mutex<Vec<String>>> = opts
         .write_unmapped_names
         .then(|| std::sync::Mutex::new(Vec::new()));
+    let nthreads = if opts.num_threads == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    } else {
+        opts.num_threads
+    };
     // SAM sink for `--writeMappings` (header written here).
     let sam_writer: Option<sam::SamWriter> = match &opts.write_mappings {
         Some(path) => {
             let cmd = format!("salmon quant -i {}", opts.index_dir.display());
             Some(sam::SamWriter::create(path, &salmon, &cmd).context("opening SAM output")?)
+        }
+        None => None,
+    };
+    let bam_output: Option<bam::BamOutput> = match &opts.write_bam {
+        Some(path) => {
+            let cmd = format!("salmon quant -i {}", opts.index_dir.display());
+            Some(
+                bam::BamOutput::create(path, &salmon, &cmd, nthreads, opts.bam_compress_threads)
+                    .context("opening BAM output")?,
+            )
         }
         None => None,
     };
@@ -383,14 +416,6 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         }
         None => None,
     };
-    let nthreads = if opts.num_threads == 0 {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
-    } else {
-        opts.num_threads
-    };
-
     // Auto-detect the library type when requested (`-l A`).
     let auto_detect = LibraryFormat::is_auto(&opts.lib_type);
     let read_type = if opts.is_paired() {
@@ -546,6 +571,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             num_below_threshold_vm: &num_below_threshold_vm,
             unmapped_names: unmapped_collector.as_ref(),
             sam: sam_writer.as_ref(),
+            bam: bam_output.as_ref(),
             rad: rad_writer.as_ref(),
             discrete_fld: discrete_fld.as_ref(),
             naive_eq: naive_eq.as_ref(),
@@ -588,6 +614,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     timer.mark("mapping");
     if let Some(sw) = &sam_writer {
         sw.flush().context("flushing SAM output")?;
+    }
+    if let Some(output) = bam_output {
+        output.finish().context("finalizing BAM output")?;
     }
     // NB: `rad_writer` is finalized *after* EM below, so the cached FLD and the
     // abundance estimates can be baked into the header (single-pass deterministic
