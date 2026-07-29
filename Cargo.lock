@@ -301,7 +301,7 @@ dependencies = [
  "anyhow",
  "coitrees",
  "ksw2rs",
- "needletail 0.6.3",
+ "needletail",
  "noodles",
 ]
 
@@ -388,15 +388,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bzip2"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
-dependencies = [
- "libbz2-rs-sys",
-]
-
-[[package]]
 name = "bzip2-sys"
 version = "0.1.13+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -437,7 +428,7 @@ dependencies = [
  "crossbeam-channel",
  "itoa",
  "libc",
- "needletail 0.6.3",
+ "needletail",
  "nohash-hasher",
  "ph",
  "rayon",
@@ -1546,12 +1537,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libbz2-rs-sys"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34b357333733e8260735ba5894eb928c02ecc69c78715f01a8019e7fa7f2db4c"
-
-[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1823,21 +1808,6 @@ dependencies = [
  "buffer-redux",
  "bytecount",
  "bzip2 0.4.4",
- "flate2",
- "liblzma",
- "memchr",
- "zstd",
-]
-
-[[package]]
-name = "needletail"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "159c0519d18efd0c256a2284f396fa556c8f73a8572db1a3f7487921c26c76fa"
-dependencies = [
- "buffer-redux",
- "bytecount",
- "bzip2 0.6.1",
  "flate2",
  "liblzma",
  "memchr",
@@ -2789,7 +2759,7 @@ dependencies = [
  "anyhow",
  "cf1-rs",
  "ensure_simd",
- "needletail 0.7.3",
+ "needletail",
  "piscem-rs",
  "salmon-core",
  "serde",
@@ -3095,7 +3065,7 @@ dependencies = [
  "epserde",
  "mem_dbg 0.4.4",
  "memmap2",
- "needletail 0.6.3",
+ "needletail",
  "ph-temp",
  "rapidhash 4.4.0",
  "rayon",
