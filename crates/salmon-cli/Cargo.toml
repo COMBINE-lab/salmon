@@ -25,7 +25,7 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-indicatif = "0.17"
+indicatif = "0.18"
 
 [features]
 # Diagnostic: build with the system allocator instead of mimalloc.

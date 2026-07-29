@@ -585,7 +585,7 @@ fn stream_grouped<MK, W>(
     make_worker: MK,
 ) -> Result<Vec<W::Output>>
 where
-    MK: Fn() -> W + Sync,
+    MK: Fn() -> W + Sync + Send,
     W: GroupWorker,
 {
     if is_sam_path(bam_path) {
@@ -600,10 +600,12 @@ where
             .unwrap_or(4)
             .clamp(1, 4);
         let bgzf_workers = std::num::NonZeroUsize::new(bgzf_workers).unwrap();
-        let decoder = noodles_bgzf::io::MultithreadedReader::with_worker_count(bgzf_workers, file);
-        let mut reader = bam::io::Reader::from(decoder);
-        let header = reader.read_header().context("reading BAM header")?;
-        run_grouped(reader.records(), &header, nthreads, make_worker)
+        crate::with_bgzf_pool(bgzf_workers, || {
+            let decoder = noodles_bgzf::io::MultithreadedReader::new(file);
+            let mut reader = bam::io::Reader::from(decoder);
+            let header = reader.read_header().context("reading BAM header")?;
+            run_grouped(reader.records(), &header, nthreads, make_worker)
+        })?
     }
 }
 
