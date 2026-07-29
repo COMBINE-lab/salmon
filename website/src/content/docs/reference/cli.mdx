@@ -62,6 +62,7 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | `--genome <FASTA>` | Genome FASTA (genome mode); enables bias correction by reconstructing transcript sequences from exon slices. |
 | `--juncMissDiscount <f>` | Penalty for an unannotated splice junction in genome projection (default `1.0` = none). |
 | `--rad <RAD>` | RAD mode: quantify a RAD file of mappings (salmon `--writeRad` **or** piscem `map-bulk`/sketch output) directly. No `-i` needed — reference names travel in the RAD header. See [RAD I/O & deterministic quantification](../../guides/rad-and-determinism/). |
+| `--fldPolicy <baked\|derive\|prior>` | `--rad` only: where the fragment-length distribution comes from. `baked` (default) reproduces the run that wrote the RAD; `derive` rebuilds it from the RAD; `prior` puts `--fldMean`/`--fldSD` in sole control. See [RAD I/O & determinism](../../guides/rad-and-determinism/#fragment-length-distribution---fldpolicy). |
 | `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode). Enables the error model in ordinary alignment mode; supplies reference sequences for bias correction and (with `--errorModel`) the deterministic error model. |
 | `-l, --libType <TYPE>` | Library type (e.g. `IU`, `ISR`, `A` for auto). Default `A`. See [library types](../../guides/library-types/). |
 | `-1/-2, --mates1/2 <FASTQ>…` | Paired-end read files. |

@@ -20,7 +20,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use salmon_align::{
     project_genome_bam_to_rad, quantify_alignments, quantify_rad, AlignQuantOptions,
-    GenomeProjectOptions,
+    ExplicitFldArgs, FldPolicy, GenomeProjectOptions,
 };
 use salmon_index::{build as build_index, IndexBuildOptions};
 use salmon_quant::{quantify, ChunkCodec, EmAccel, ProgressCounters, QuantOptions};
@@ -167,6 +167,40 @@ impl From<EmAccelArg> for EmAccel {
             EmAccelArg::None => EmAccel::None,
             EmAccelArg::Squarem => EmAccel::Squarem,
             EmAccelArg::Daarem => EmAccel::Daarem,
+        }
+    }
+}
+
+/// Defaults for the fragment-length prior flags. Held here (rather than in
+/// `default_value_t`) so the flags can stay `Option` and salmon can distinguish
+/// a supplied value from an inherited one — the distinction issue #1062 needs in
+/// order to warn only when a value the user actually chose is being ignored.
+const DEFAULT_FLD_MEAN: f64 = 250.0;
+const DEFAULT_FLD_SD: f64 = 25.0;
+const DEFAULT_FLD_MAX: usize = 1000;
+
+/// CLI surface for [`FldPolicy`]: where a RAD requant's fragment-length
+/// distribution comes from.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum FldPolicyArg {
+    /// Prefer the distribution baked into the RAD header (exact parity with the
+    /// run that wrote it); otherwise derive it, or fall back to the prior.
+    #[default]
+    Baked,
+    /// Ignore any baked distribution; re-derive it from this RAD's own
+    /// uniquely-mapped proper pairs.
+    Derive,
+    /// Ignore both the baked distribution and the RAD's fragment lengths; use
+    /// `--fldMean`/`--fldSD` alone.
+    Prior,
+}
+
+impl From<FldPolicyArg> for FldPolicy {
+    fn from(p: FldPolicyArg) -> Self {
+        match p {
+            FldPolicyArg::Baked => FldPolicy::Baked,
+            FldPolicyArg::Derive => FldPolicy::Derive,
+            FldPolicyArg::Prior => FldPolicy::Prior,
         }
     }
 }
@@ -557,15 +591,36 @@ struct QuantArgs {
     /// far fewer M-steps but is not byte-identical to the default `none`.
     #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
     em_accel: EmAccelArg,
-    /// Mean of the fragment-length distribution prior.
-    #[arg(long = "fldMean", default_value_t = 250.0)]
-    fld_mean: f64,
-    /// Standard deviation of the fragment-length distribution prior.
-    #[arg(long = "fldSD", default_value_t = 25.0)]
-    fld_sd: f64,
-    /// Maximum fragment length tracked by the fragment-length distribution.
-    #[arg(long = "fldMax", default_value_t = 1000)]
-    fld_max: usize,
+    /// Mean of the fragment-length distribution prior [default: 250].
+    ///
+    /// A prior, not an override: wherever fragment lengths are observed, this
+    /// seeds the distribution with weight 1 and the observations dominate. With
+    /// `--rad` it is ignored entirely unless `--fldPolicy` says otherwise, since
+    /// a salmon RAD carries a baked distribution.
+    // `Option` rather than `default_value_t` so salmon can tell a supplied value
+    // from an inherited one, and warn only when a supplied one is ignored.
+    #[arg(long = "fldMean")]
+    fld_mean: Option<f64>,
+    /// Standard deviation of the fragment-length distribution prior [default: 25].
+    ///
+    /// Same prior semantics as `--fldMean`.
+    #[arg(long = "fldSD")]
+    fld_sd: Option<f64>,
+    /// Maximum fragment length tracked by the fragment-length distribution
+    /// [default: 1000].
+    #[arg(long = "fldMax")]
+    fld_max: Option<usize>,
+    /// Where the fragment-length distribution comes from when quantifying a RAD
+    /// (`--rad` only) [default: baked].
+    ///
+    /// salmon's RAD writer always bakes its fragment-length distribution into
+    /// the header, so by default a requant reproduces the writing run exactly
+    /// and `--fldMean`/`--fldSD` have no effect. Use `derive` to re-derive the
+    /// distribution from the RAD's own fragment lengths, or `prior` to use
+    /// `--fldMean`/`--fldSD` alone — `prior` is the setting that makes a
+    /// fragment-length sensitivity analysis actually vary anything.
+    #[arg(long = "fldPolicy", value_enum, default_value_t = FldPolicyArg::Baked)]
+    fld_policy: FldPolicyArg,
     /// Online-phase forgetting factor in (0.5, 1.0].
     #[arg(short = 'f', long = "forgettingFactor", default_value_t = 0.65)]
     forgetting_factor: f64,
@@ -1179,6 +1234,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             "alignment mode (-a)",
             "the input alignments already are the per-mapping records",
         );
+        warn_unsupported_fld_policy(args.fld_policy, "alignment mode (-a)");
         let mut opts = AlignQuantOptions::new(bam, args.output);
         opts.lib_type = args.lib_type;
         opts.em.use_vbem = use_vbem;
@@ -1195,9 +1251,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.em.accel = args.em_accel.into();
         opts.sig_digits = args.sig_digits;
-        opts.fld_mean = args.fld_mean;
-        opts.fld_sd = args.fld_sd;
-        opts.fld_max = args.fld_max;
+        opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
+        opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
+        opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
         opts.forgetting_factor = args.forgetting_factor;
         opts.init_uniform = args.init_uniform;
         opts.bias_speed_samp = args.bias_speed_samp;
@@ -1361,9 +1417,17 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.em.accel = args.em_accel.into();
         opts.sig_digits = args.sig_digits;
-        opts.fld_mean = args.fld_mean;
-        opts.fld_sd = args.fld_sd;
-        opts.fld_max = args.fld_max;
+        opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
+        opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
+        opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
+        opts.fld_policy = args.fld_policy.into();
+        // Only what the user actually typed, so a plain requant is not warned
+        // about flags it inherited (see `warn_baked_fld_overrides`).
+        opts.explicit_fld_args = ExplicitFldArgs {
+            mean: args.fld_mean.is_some(),
+            sd: args.fld_sd.is_some(),
+            max: args.fld_max.is_some(),
+        };
         opts.skip_quant = args.skip_quant;
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
@@ -1494,9 +1558,10 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.em.accel = args.em_accel.into();
     opts.sig_digits = args.sig_digits;
     opts.max_read_occ = args.max_read_occ;
-    opts.fld_mean = args.fld_mean;
-    opts.fld_sd = args.fld_sd;
-    opts.fld_max = args.fld_max;
+    opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
+    opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
+    opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
+    warn_unsupported_fld_policy(args.fld_policy, "reads mode");
     opts.forgetting_factor = args.forgetting_factor;
 
     // Deterministic mode: map once to an intermediate RAD, then quantify from it
@@ -1744,6 +1809,20 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
     Ok(())
 }
 
+/// `--fldPolicy` selects between a RAD's baked fragment-length distribution and
+/// recomputing one, so it means nothing where there is no RAD header to read.
+/// Say so rather than accepting it silently.
+fn warn_unsupported_fld_policy(policy: FldPolicyArg, mode: &str) {
+    if policy == FldPolicyArg::default() {
+        return;
+    }
+    tracing::warn!(
+        "--fldPolicy has no effect in {mode}: it chooses whether to use the \
+         fragment-length distribution baked into a RAD header, which only \
+         applies to --rad; ignoring it"
+    );
+}
+
 /// `--writeMappings`/`--writeSam`/`--writeBam` only apply to the read-mapping
 /// path. Rather than ignoring them silently in the alignment and RAD-input
 /// modes, say so — the repo's accept-and-warn policy for flags that are no-ops
@@ -1857,5 +1936,46 @@ mod tests {
                 "{sam_flag} + --bamCompressThreads"
             );
         }
+    }
+
+    /// #1062: salmon can only warn "your --fldMean was ignored" if it can tell a
+    /// supplied value from an inherited default, which is why these are `Option`
+    /// rather than `default_value_t`.
+    #[test]
+    fn fld_prior_args_distinguish_supplied_from_default() {
+        let bare = quant_args(&[]).unwrap();
+        assert_eq!(bare.fld_mean, None);
+        assert_eq!(bare.fld_sd, None);
+        assert_eq!(bare.fld_max, None);
+
+        let given = quant_args(&["--fldMean", "150", "--fldSD", "60"]).unwrap();
+        assert_eq!(given.fld_mean, Some(150.0));
+        assert_eq!(given.fld_sd, Some(60.0));
+        assert_eq!(given.fld_max, None, "--fldMax was not supplied");
+
+        // Supplying the default value explicitly still counts as supplying it:
+        // the user asked for it, so an ignored-value warning is warranted.
+        let explicit_default = quant_args(&["--fldMean", "250"]).unwrap();
+        assert_eq!(explicit_default.fld_mean, Some(DEFAULT_FLD_MEAN));
+    }
+
+    /// The policy must default to `baked` so an ordinary requant keeps
+    /// reproducing the run that wrote the RAD.
+    #[test]
+    fn fld_policy_defaults_to_baked_and_parses_all_variants() {
+        assert_eq!(quant_args(&[]).unwrap().fld_policy, FldPolicyArg::Baked);
+        for (arg, expected) in [
+            ("baked", FldPolicyArg::Baked),
+            ("derive", FldPolicyArg::Derive),
+            ("prior", FldPolicyArg::Prior),
+        ] {
+            let parsed = quant_args(&["--fldPolicy", arg]).unwrap().fld_policy;
+            assert_eq!(parsed, expected, "--fldPolicy {arg}");
+            assert_eq!(FldPolicy::from(parsed), FldPolicy::from(expected));
+        }
+        assert!(
+            quant_args(&["--fldPolicy", "bogus"]).map(|_| ()).is_err(),
+            "unknown policies must be rejected"
+        );
     }
 }

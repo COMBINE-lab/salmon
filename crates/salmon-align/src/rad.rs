@@ -58,11 +58,14 @@ use salmon_eqclass::{
     NAIVE_NO_FMT,
 };
 use salmon_model::{
-    DiscreteFld, FragmentLengthDistribution, GcFragModel, GcStore, SBModel, SimplePosBias,
+    DiscreteFld, FragLengthSource, FragmentLengthDistribution, GcFragModel, GcStore, SBModel,
+    SimplePosBias,
 };
 use salmon_rad::{RadInputProfile, SalmonBulkRecord};
 
-use crate::{asctime_now, logsumexp, AlignQuantOptions, AlignQuantResult};
+use crate::{
+    asctime_now, logsumexp, AlignQuantOptions, AlignQuantResult, ExplicitFldArgs, FldPolicy,
+};
 
 /// Floor for abundances feeding the bias-collection posterior (avoid `ln(0)`).
 const BIAS_MIN_ALPHA: f64 = 1e-8;
@@ -369,11 +372,65 @@ fn ref_lengths_from_tags(prelude: &RadPrelude, file_tag_map: &TagMap) -> Result<
     Ok(v)
 }
 
+/// Warn that a baked fragment-length distribution has made explicitly-supplied
+/// `--fldMean`/`--fldSD`/`--fldMax` ineffective (issue #1062).
+///
+/// Accepting those flags and then provably ignoring them is how a
+/// fragment-length sensitivity analysis silently becomes a no-op: every run
+/// produces byte-identical output, and nothing in the logs or `meta_info.json`
+/// says why. Naming the ignored flags and the remedy costs nothing and makes
+/// that failure impossible to miss.
+///
+/// Stays quiet when the user supplied none of them, so an ordinary requant —
+/// which inherits their defaults — is not nagged about flags it never used.
+fn warn_baked_fld_overrides(
+    explicit: &ExplicitFldArgs,
+    baked: &FragmentLengthDistribution,
+    source: FragLengthSource,
+) {
+    if !explicit.any() {
+        return;
+    }
+    // `derive` is only a real alternative for a paired-end RAD; single-end data
+    // has no fragment lengths to re-derive from, so offering it there would send
+    // the user straight back to the prior branch by a longer route.
+    let (provenance, remedy) = if source == FragLengthSource::RadBakedPrior {
+        (
+            "That distribution was baked by a single-end run, so it is itself an \
+             --fldMean/--fldSD prior rather than observed fragment lengths.",
+            "Pass `--fldPolicy prior` to use your values instead.",
+        )
+    } else {
+        (
+            "That distribution was observed by the run that wrote the RAD.",
+            "Pass `--fldPolicy prior` to use your values instead, or \
+             `--fldPolicy derive` to re-derive the distribution from this RAD's \
+             own fragment lengths.",
+        )
+    };
+    tracing::warn!(
+        "{} had no effect: this RAD carries a baked fragment-length distribution \
+         (mean={:.3}, sd={:.3}), which takes precedence. {} {}",
+        explicit.names(),
+        baked.mean(),
+        baked.sd(),
+        provenance,
+        remedy
+    );
+}
+
 /// Load a fragment-length distribution baked into the RAD header by salmon's
 /// writer, if present (the `baked_flags` byte has the FLD bit set and a non-empty
-/// `frag_length_dist` log-PMF tag exists). Returns `None` for piscem RAD or a
-/// salmon RAD written with `--skipQuant`, in which case the caller derives the FLD
-/// from unique fragments instead.
+/// `frag_length_dist` log-PMF tag exists).
+///
+/// Returns `None` only for RAD salmon did not write — piscem or third-party.
+/// salmon's writer bakes the FLD unconditionally (`--skipQuant` suppresses the
+/// *abundances*, not the FLD), so every salmon RAD takes this path and the
+/// caller's `--fldMean`/`--fldSD` go unused unless `--fldPolicy` says otherwise.
+///
+/// For a single-end write run the baked distribution is that run's own prior,
+/// since no fragment lengths existed to observe; the caller distinguishes this
+/// via the baked library format.
 fn load_baked_fld(file_tag_map: &TagMap) -> Option<FragmentLengthDistribution> {
     use libradicl::rad_types::TagValue;
     let flags = match file_tag_map.get(salmon_rad::BAKED_FLAGS_TAG) {
@@ -1058,25 +1115,49 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let nthreads = rayon::current_num_threads().max(1);
 
     // Fixed fragment-length distribution, acquired BEFORE eq-class assembly so the
-    // per-fragment weights (and hence the whole pass) are deterministic. Priority:
-    //   1. a salmon RAD that baked its FLD into the header — use it directly (one
-    //      pass, exact parity with the run that wrote the file);
+    // per-fragment weights (and hence the whole pass) are deterministic.
+    //
+    // Priority under the default `--fldPolicy baked`:
+    //   1. a RAD that baked its FLD into the header — use it directly (one pass,
+    //      exact parity with the run that wrote the file). NB salmon's writer
+    //      bakes the FLD *unconditionally*, `--skipQuant` included, so this is
+    //      every salmon-written RAD; only piscem/third-party RAD reach step 2;
     //   2. otherwise derive it in one order-independent pass from uniquely-mapped
-    //      proper pairs (piscem RAD, or salmon RAD written with `--skipQuant`);
+    //      proper pairs;
     //   3. single-end libraries have no fragment length — use the prior.
-    let fld_baked = load_baked_fld(&file_tag_map);
-    // When the FLD must be derived (piscem / unbaked) AND we need bias correction,
-    // build *naive* eq-classes in that same prepare read, so a rough EM can produce
-    // the up-front abundances that let pass-2 fuse — keeping this case to 2 RAD
-    // reads (prepare + fused quant) rather than 3.
-    let prepare_eqb = (bias_on && !opts.skip_quant && fld_baked.is_none() && paired_lib)
-        .then(NaiveEqBuilder::new);
+    //
+    // `--fldPolicy derive` skips step 1, and `--fldPolicy prior` skips steps 1
+    // and 2, which is what makes `--fldMean`/`--fldSD` meaningful on a RAD that
+    // carries a baked distribution.
+    let fld_baked = match opts.fld_policy {
+        FldPolicy::Baked => load_baked_fld(&file_tag_map),
+        FldPolicy::Derive | FldPolicy::Prior => None,
+    };
+    let derive_fld_pass = fld_baked.is_none() && paired_lib && opts.fld_policy != FldPolicy::Prior;
+    // When the FLD must be derived (piscem / unbaked / `--fldPolicy derive`) AND we
+    // need bias correction, build *naive* eq-classes in that same prepare read, so a
+    // rough EM can produce the up-front abundances that let pass-2 fuse — keeping
+    // this case to 2 RAD reads (prepare + fused quant) rather than 3.
+    let prepare_eqb = (bias_on && !opts.skip_quant && derive_fld_pass).then(NaiveEqBuilder::new);
 
     let mut detected_fmt: Option<LibraryFormat> = None;
-    let fld = if let Some(baked) = fld_baked {
+    let (fld, fld_source) = if let Some(baked) = fld_baked {
+        // A baked FLD written by a single-end run is not observed data: that run
+        // had no fragment lengths to measure, so what it baked is its *own*
+        // `--fldMean`/`--fldSD` prior. Distinguish the two, because it changes
+        // what the number means and how safe it is to override.
+        let baked_single_end = baked_libfmt
+            .map(|f| f.read_type == ReadType::SingleEnd)
+            .unwrap_or(!paired_lib);
+        let source = if baked_single_end {
+            FragLengthSource::RadBakedPrior
+        } else {
+            FragLengthSource::RadBaked
+        };
         tracing::info!("using fragment-length distribution baked in the RAD header");
-        baked
-    } else if paired_lib {
+        warn_baked_fld_overrides(&opts.explicit_fld_args, &baked, source);
+        (baked, source)
+    } else if derive_fld_pass {
         let (f, detected) = match profile {
             RadInputProfile::PiscemBulk => derive_fld::<PiscemBulkReadRecord>(
                 rad_path,
@@ -1096,8 +1177,16 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             )?,
         };
         detected_fmt = detected;
-        f
+        (f, FragLengthSource::RadDerived)
     } else {
+        if opts.fld_policy == FldPolicy::Prior && paired_lib {
+            tracing::info!(
+                "--fldPolicy prior: using the --fldMean/--fldSD prior alone \
+                 (mean={:.3}, sd={:.3}); no fragment lengths were read from the RAD",
+                opts.fld_mean,
+                opts.fld_sd
+            );
+        }
         let mut f = FragmentLengthDistribution::new(
             1.0,
             opts.fld_max,
@@ -1108,7 +1197,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             1,
         );
         f.cache();
-        f
+        (f, FragLengthSource::Prior)
     };
     // Resolve the `-l A` format: baked (authoritative) else auto-detected.
     if auto_lib {
@@ -1522,6 +1611,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         num_eq_classes,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
+        frag_len_source: fld_source,
         length_classes,
         frag_len_dist: fld.log_pmf().iter().map(|lp| lp.exp()).collect(),
         start_time,

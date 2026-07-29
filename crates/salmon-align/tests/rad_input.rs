@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use salmon_align::{quantify_rad, AlignQuantOptions};
+use salmon_align::{quantify_rad, AlignQuantOptions, FldPolicy};
 use salmon_rad::{
     frag_map_type, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile, SalmonBulkContext,
     FRAG_LEN_UNPAIRED,
@@ -89,6 +89,29 @@ fn opts_for(out: &Path) -> AlignQuantOptions {
     o.fld_mean = 200.0;
     o.fld_sd = 20.0;
     o
+}
+
+/// A RAD whose baked FLD (mean ~500) is deliberately far from the length its
+/// records imply (200), so which distribution a run used is unambiguous.
+/// 200 fragments on `t0`, 300 on `t1`, all unique proper pairs.
+fn write_baked_fld_rad(rad: &Path) {
+    let names = ["t0", "t1"];
+    let lens = [4000u32, 4000];
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for (tid, n) in [(0u32, 200), (1, 300)] {
+        for _ in 0..n {
+            frags.push(vec![(tid, Some(200), 0)]);
+        }
+    }
+    // Unnormalized Gaussian centered at 500; `from_log_pmf` normalizes. The
+    // reserved slot length is 1024 (see `write_rad`).
+    let baked: Vec<f64> = (0..1024)
+        .map(|l| {
+            let d = (l as f64 - 500.0) / 20.0;
+            -0.5 * d * d
+        })
+        .collect();
+    write_rad(rad, &names, &lens, RadProfile::Sketch, &frags, Some(&baked));
 }
 
 #[test]
@@ -400,6 +423,117 @@ fn baked_fld_is_used_not_derived() {
         (res.frag_len_mean - 500.0).abs() < 20.0,
         "expected baked FLD mean ~500, got {}",
         res.frag_len_mean
+    );
+}
+
+/// Regression for #1062: with a baked FLD in play, `--fldMean`/`--fldSD` are not
+/// consulted at all, so the run must at least say where its distribution came
+/// from.
+#[test]
+fn baked_fld_is_reported_as_the_frag_length_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let out = tmp.path().join("quant");
+    std::fs::create_dir_all(&out).unwrap();
+    write_baked_fld_rad(&rad);
+
+    let res = quantify_rad(&opts_for(&out), &rad).expect("quantify_rad");
+    assert_eq!(res.frag_len_source.as_str(), "rad_baked");
+}
+
+/// `--fldPolicy derive` must ignore the baked distribution and rebuild one from
+/// the RAD's own fragment lengths. The fixture bakes a mean of ~500 while every
+/// record implies 200, so the two are impossible to confuse.
+#[test]
+fn fld_policy_derive_ignores_the_baked_distribution() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let out = tmp.path().join("quant");
+    std::fs::create_dir_all(&out).unwrap();
+    write_baked_fld_rad(&rad);
+
+    let mut opts = opts_for(&out);
+    opts.fld_policy = FldPolicy::Derive;
+    let res = quantify_rad(&opts, &rad).expect("quantify_rad");
+
+    assert_eq!(res.frag_len_source.as_str(), "rad_derived");
+    assert!(
+        (res.frag_len_mean - 200.0).abs() < 20.0,
+        "expected the derived FLD (~200), got {}",
+        res.frag_len_mean
+    );
+    // Counts stay exact: the FLD does not affect uniquely-mapped fragments.
+    assert!(
+        (res.counts[0] - 200.0).abs() < 1.0,
+        "t0 = {}",
+        res.counts[0]
+    );
+    assert!(
+        (res.counts[1] - 300.0).abs() < 1.0,
+        "t1 = {}",
+        res.counts[1]
+    );
+}
+
+/// `--fldPolicy prior` must ignore both the baked distribution (mean ~500) and
+/// the records' implied lengths (200), leaving `--fldMean`/`--fldSD` in sole
+/// control — the setting that makes a fragment-length sensitivity analysis
+/// actually perturb the model.
+#[test]
+fn fld_policy_prior_puts_fld_args_in_control() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    let out = tmp.path().join("quant");
+    std::fs::create_dir_all(&out).unwrap();
+    write_baked_fld_rad(&rad);
+
+    let mut opts = opts_for(&out);
+    opts.fld_policy = FldPolicy::Prior;
+    opts.fld_mean = 350.0;
+    opts.fld_sd = 15.0;
+    let res = quantify_rad(&opts, &rad).expect("quantify_rad");
+
+    assert_eq!(res.frag_len_source.as_str(), "prior");
+    assert!(
+        (res.frag_len_mean - 350.0).abs() < 1.0,
+        "expected the supplied prior (350), got {}",
+        res.frag_len_mean
+    );
+}
+
+/// The point of the issue: under the default policy, two runs that differ only
+/// in their fragment-length prior are indistinguishable; under `prior` they are
+/// not. Effective lengths are what the FLD actually drives, so compare those.
+#[test]
+fn fld_policy_prior_makes_different_priors_produce_different_results() {
+    let run = |policy: FldPolicy, mean: f64| {
+        let tmp = tempfile::tempdir().unwrap();
+        let rad = tmp.path().join("maps.rad");
+        let out = tmp.path().join("quant");
+        std::fs::create_dir_all(&out).unwrap();
+        write_baked_fld_rad(&rad);
+        let mut opts = opts_for(&out);
+        opts.fld_policy = policy;
+        opts.fld_mean = mean;
+        opts.fld_sd = 20.0;
+        let res = quantify_rad(&opts, &rad).expect("quantify_rad");
+        (res.eff_lengths.clone(), res.frag_len_mean)
+    };
+
+    let (baked_lo, _) = run(FldPolicy::Baked, 150.0);
+    let (baked_hi, _) = run(FldPolicy::Baked, 450.0);
+    assert_eq!(
+        baked_lo, baked_hi,
+        "baked policy must stay reproducible regardless of the prior"
+    );
+
+    let (prior_lo, mean_lo) = run(FldPolicy::Prior, 150.0);
+    let (prior_hi, mean_hi) = run(FldPolicy::Prior, 450.0);
+    assert!((mean_lo - 150.0).abs() < 1.0, "{mean_lo}");
+    assert!((mean_hi - 450.0).abs() < 1.0, "{mean_hi}");
+    assert_ne!(
+        prior_lo, prior_hi,
+        "prior policy must let --fldMean change the effective lengths"
     );
 }
 

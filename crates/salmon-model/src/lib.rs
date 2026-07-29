@@ -35,6 +35,7 @@ pub mod spline;
 pub use bias::{
     build_expected_pos, corrected_effective_length_full, positional_factor, BiasInputs,
 };
+pub use fld::FragLengthSource;
 pub use fld::{
     ambig_frag_log_prob, smoothed_effective_length, DiscreteFld, FragmentLengthDistribution,
 };
