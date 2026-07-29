@@ -295,6 +295,26 @@ formats cannot drift apart.
 Both options apply to the read-mapping path only. In alignment mode (`-a`) and
 RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
 
+### Compression threads
+
+`--writeBam` compresses BGZF blocks on a small pool of threads that run
+alongside the `-p` mapping threads. `--bamCompressThreads <N>` sets the pool
+size; left unset, salmon derives it from measured throughput.
+
+One worker compresses about 165 MiB/s of BAM records, and one mapping thread
+produces at most about 52 MiB/s of them, so roughly **one compression worker per
+3 mapping threads** is the point at which compression stops limiting the run.
+That is the default, capped at 8 workers — already around three times the
+fastest record production measured at any thread count.
+
+The default deliberately errs upward but stops there. The two failure modes are
+not symmetric: one worker too few can halve throughput, because record output
+pins to a single worker's 165 MiB/s, while surplus workers simply block on an
+empty queue and cost nothing measurable. Going beyond the balance point,
+however, spends cores that would otherwise be mapping reads. Raise it if you are
+writing BAM to unusually fast storage and have cores to spare; there is no
+reason to lower it.
+
 ### Record order
 
 Mapping workers run in parallel, and the output makes exactly one ordering

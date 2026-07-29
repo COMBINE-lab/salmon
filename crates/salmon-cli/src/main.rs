@@ -425,10 +425,30 @@ struct QuantArgs {
     /// --writeMappings/--writeSam.
     #[arg(long = "writeBam", conflicts_with = "write_mappings")]
     write_bam: Option<PathBuf>,
-    /// BGZF compression workers for --writeBam. Defaults to the smallest count
-    /// that keeps up with record production (about one per seven mapping
-    /// threads); override only to benchmark or to suit unusual storage.
-    #[arg(long = "bamCompressThreads", requires = "write_bam", hide = true)]
+    /// BGZF compression workers for --writeBam [default: about one per 3
+    /// mapping threads, at most 8].
+    ///
+    /// These threads run alongside the -p mapping threads and do nothing but
+    /// compress BGZF blocks. The default balances the two stages from measured
+    /// throughput: one worker compresses ~165 MiB/s of BAM records, while one
+    /// mapping thread produces at most ~52 MiB/s of them, so roughly one worker
+    /// per 3 mapping threads keeps compression from becoming the bottleneck.
+    /// The result is capped at 8, which is already about 3x the fastest record
+    /// production measured at any thread count.
+    ///
+    /// The cost is very lopsided, so the default errs upward: one worker too
+    /// few can halve throughput, whereas surplus workers just block on an empty
+    /// queue and cost nothing measurable. It stops at the balance point rather
+    /// than going higher, because past that these cores do more good mapping
+    /// reads. Raise it if you are writing BAM to unusually fast storage and can
+    /// spare the cores; there is no reason to lower it.
+    // `requires` alone would let `--writeSam out.sam --bamCompressThreads 8`
+    // through and then quietly ignore it, since SAM has no compression stage.
+    #[arg(
+        long = "bamCompressThreads",
+        requires = "write_bam",
+        conflicts_with = "write_mappings"
+    )]
     bam_compress_threads: Option<std::num::NonZeroUsize>,
     /// Write per-fragment mappings to a RAD file at this path. Sketch or
     /// selective-alignment profile is chosen automatically from the mapping
@@ -1744,17 +1764,24 @@ fn warn_unsupported_mapping_output(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use super::*;
 
     /// Parse a minimal `salmon quant` invocation plus `extra`, returning the
     /// mapping-output flags only (`QuantArgs` itself is not `Debug`).
     fn write_flags(extra: &[&str]) -> Result<(Option<PathBuf>, Option<PathBuf>), clap::Error> {
+        quant_args(extra).map(|args| (args.write_mappings, args.write_bam))
+    }
+
+    /// Parse a minimal `salmon quant` invocation plus `extra`.
+    fn quant_args(extra: &[&str]) -> Result<QuantArgs, clap::Error> {
         let mut argv = vec![
             "salmon", "quant", "-i", "idx", "-l", "A", "-r", "r.fq", "-o", "out",
         ];
         argv.extend_from_slice(extra);
         match Cli::try_parse_from(argv)?.command {
-            Command::Quant(args) => Ok((args.write_mappings, args.write_bam)),
+            Command::Quant(args) => Ok(args),
             _ => unreachable!("parsed a non-quant subcommand"),
         }
     }
@@ -1782,6 +1809,52 @@ mod tests {
                 err.kind(),
                 clap::error::ErrorKind::ArgumentConflict,
                 "{sam_flag} + --writeBam"
+            );
+        }
+    }
+
+    /// `--bamCompressThreads` is user-facing but only meaningful with
+    /// `--writeBam`: unset means "derive it", and it must reject 0 rather than
+    /// silently starting no compression workers.
+    #[test]
+    fn bam_compress_threads_is_optional_and_positive() {
+        let derived = quant_args(&["--writeBam", "m.bam"]).unwrap();
+        assert_eq!(
+            derived.bam_compress_threads, None,
+            "unset must stay None so the derived default applies"
+        );
+
+        let explicit = quant_args(&["--writeBam", "m.bam", "--bamCompressThreads", "4"]).unwrap();
+        assert_eq!(
+            explicit.bam_compress_threads.map(NonZeroUsize::get),
+            Some(4)
+        );
+
+        let zero = quant_args(&["--writeBam", "m.bam", "--bamCompressThreads", "0"])
+            .map(|_| ())
+            .expect_err("0 compression workers is not a valid pool size");
+        assert_eq!(zero.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    /// Without `--writeBam` there is nothing to compress, so the flag is a
+    /// usage error rather than a silently ignored value.
+    #[test]
+    fn bam_compress_threads_requires_write_bam() {
+        let err = quant_args(&["--bamCompressThreads", "4"])
+            .map(|_| ())
+            .expect_err("--bamCompressThreads alone should be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+
+        // SAM output has no compression stage, so pairing the two is a
+        // conflict, not a silently ignored value.
+        for sam_flag in ["--writeMappings", "--writeSam", "-z"] {
+            let err = quant_args(&[sam_flag, "m.sam", "--bamCompressThreads", "4"])
+                .map(|_| ())
+                .expect_err("--bamCompressThreads needs --writeBam");
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{sam_flag} + --bamCompressThreads"
             );
         }
     }
