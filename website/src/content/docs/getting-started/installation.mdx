@@ -74,6 +74,31 @@ docker run --rm -v "$PWD:/data" -w /data combinelab/salmon:latest \
 
 Tags: `latest` (newest release), `X.Y` (e.g. `2.2`), and exact `X.Y.Z` (e.g.
 `2.2.1`) — pin `X.Y.Z` for reproducible pipelines.
+
+#### Use with Nextflow and other workflow managers
+
+The image ships `procps`, so `ps` is available and
+[Nextflow's container requirements](https://www.nextflow.io/docs/latest/container.html)
+are met — without it, every task fails with *"Command `ps` required by nextflow
+to collect task metrics cannot be found"*.
+
+One thing to be aware of: this image's entrypoint is `salmon`, which is what lets
+you run `docker run combinelab/salmon quant ...` above. A workflow manager
+instead supplies its own command, which the entrypoint would swallow:
+
+```console
+$ docker run --rm combinelab/salmon:latest /bin/bash -ue -c 'echo hi'
+error: unrecognized subcommand '/bin/bash'
+```
+
+So point the entrypoint at a shell for those runs. In Nextflow:
+
+```groovy
+docker {
+    enabled = true
+    entrypointOverride = true
+}
+```
   </TabItem>
 
   <TabItem label="From source">
