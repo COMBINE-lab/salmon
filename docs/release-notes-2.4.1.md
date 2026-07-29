@@ -1,12 +1,19 @@
 # salmon 2.4.1
 
 A bug-fix release on 2.4.0. It fixes a race in the RAD reader that could cause
-`salmon quant --rad` and alignment mode to **silently produce zero or partial
-counts** — an empty or short `quant.sf`, with no error and no warning.
+`salmon quant --rad` (and other paths that read a RAD) to **silently produce
+zero or partial counts** — an empty or short `quant.sf`, with no error and no
+warning.
 
-No index rebuild is required, and no other behavior changes. If your 2.4.0 runs
+No index rebuild is required, and no other behavior changes. If your runs
 produced sensible output, they were unaffected; the failure mode is conspicuous
 rather than subtle when it occurs.
+
+**This is not a regression introduced in 2.4.0.** The race dates to the commit
+that first added `salmon quant --rad` and has been present in every release
+since **2.2.0**. Nothing in 2.4.0 caused or worsened it — the same intermittent
+CI failure was observed as far back as the v2.3.3 release run. It surfaced now
+only because it was finally chased down rather than retried.
 
 ## Fix: RAD reader workers could exit with chunks still queued (#1071)
 
@@ -37,9 +44,16 @@ Rarely, but silently, which is why it is worth patching promptly:
   regardless of thread count — so a higher `-p` reduces the odds rather than
   eliminating them.
 
-Affected paths are `salmon quant --rad`, alignment mode (`-a`), and the
-`--deterministic` intermediate requant, all of which read RAD/BAM through the
-parallel reader. The reads-based mapping path does not use it.
+The affected code is reached only through `quantify_rad`, i.e. anything that
+reads a RAD through libradicl's parallel reader:
+
+| path | affected |
+| --- | --- |
+| `salmon quant --rad` | **yes** |
+| `--deterministic` (any mode — it writes an intermediate RAD, then requants) | **yes** |
+| genome projection (`-a --annotation`) | **yes** |
+| plain alignment mode (`-a`) | no — reads BAM directly, not via the RAD reader |
+| reads-based mapping (`-1`/`-2`/`-r`) | no |
 
 If you have 2.4.0 results you are unsure about, the signature is unambiguous:
 `num_processed` in `aux_info/meta_info.json` will be short of the fragments the
