@@ -52,9 +52,9 @@ ahash = "0.8"
 # numerics
 statrs = "0.19"
 # rng (PCG, matching salmon's pcg usage)
-rand = "0.8"
-rand_pcg = "0.3"
-rand_distr = "0.4"
+rand = "0.10"
+rand_pcg = "0.10"
+rand_distr = "0.6"
 # hashing
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 # compression
