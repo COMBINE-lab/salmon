@@ -58,6 +58,40 @@ pub struct AlignmentRecord<'a> {
     pub alignment_score: i32,
 }
 
+/// SAM version reported in `@HD VN:`. Shared by SAM and BAM so the two formats
+/// cannot drift; kept at `1.0` to match C++ salmon's `--writeMappings` header
+/// byte-for-byte.
+const SAM_VERSION: &str = "1.0";
+
+/// The header text shared by both mapping-output formats: `@HD`, one `@SQ` per
+/// reference (including decoys, matching salmon's full ref table), and `@PG`.
+///
+/// This is the single source of truth for the header, mirroring
+/// [`emit_fragment_records`] for record bodies. SAM writes the text verbatim;
+/// BAM stores it as the `text` block and then repeats the reference table in
+/// binary form (see `bam::encode_header`).
+pub fn header_text(salmon: &SalmonIndex, command: &str) -> String {
+    use std::fmt::Write as _;
+    // ~48 B/@SQ line for typical transcript names, plus the @HD and @PG lines.
+    let mut text = String::with_capacity(salmon.num_refs() * 48 + command.len() + 64);
+    let _ = writeln!(text, "@HD\tVN:{SAM_VERSION}\tSO:unknown");
+    for tid in 0..salmon.num_refs() {
+        let _ = writeln!(
+            text,
+            "@SQ\tSN:{}\tLN:{}",
+            salmon.ref_name(tid),
+            salmon.ref_len(tid)
+        );
+    }
+    let _ = writeln!(
+        text,
+        "@PG\tID:salmon\tPN:salmon\tVN:{}\tCL:{}",
+        crate::output::SALMON_VERSION,
+        command
+    );
+    text
+}
+
 pub fn read_name(id: &[u8]) -> &[u8] {
     let end = id
         .iter()

@@ -1,4 +1,32 @@
 //! Chunked `--writeBam` output.
+//!
+//! # Ordering contract
+//!
+//! Exactly one guarantee: **all records for a fragment are contiguous**. A
+//! worker encodes a whole fragment before testing the chunk-size threshold, and
+//! chunks are written whole, so a fragment can never be split across chunks and
+//! interleaved with another worker's output.
+//!
+//! Nothing else is ordered. Fragments appear in whatever order workers finish
+//! chunks, which varies with thread count and scheduling. That is deliberate:
+//! any stronger guarantee would mean making workers wait for each other.
+//!
+//! # Where the pipeline is (and is not) serial
+//!
+//! - Record encoding: fully parallel, into per-worker buffers, no shared state.
+//! - Handoff: a bounded channel; sending moves only the `Vec` descriptor, never
+//!   the bytes.
+//! - This module's writer thread: copies chunk bytes into BGZF-sized blocks.
+//!   Serial, but a `memcpy` — ~4% utilized at the ~410 MiB/s peak record rate
+//!   measured here.
+//! - Deflate: fully parallel across [`compression_worker_count`] workers. This
+//!   is the expensive part, and it is the part that scales.
+//! - noodles' frame writer: emits compressed blocks in submission order. Serial,
+//!   but only a `memcpy` plus the file write.
+//!
+//! So the only serialized work is proportional to bytes moved, not to
+//! compression effort, which is the most concurrency an ordered BGZF stream
+//! admits. Nothing waits on a *particular* worker at any point.
 
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
@@ -15,7 +43,81 @@ use crate::mapping_record::{self, AlignmentRecord, CigarKind};
 
 const CHUNK_TARGET: usize = 2 * 1024 * 1024;
 const INITIAL_CAPACITY: usize = 64 * 1024;
-const RETAIN_CAPACITY: usize = 8 * 1024 * 1024;
+/// A chunk only overshoots [`CHUNK_TARGET`] by one fragment's records, so this
+/// ceiling exists to drop pathological growth, not as a routine limit.
+const RETAIN_CAPACITY: usize = 2 * CHUNK_TARGET;
+
+/// Uncompressed BAM bytes one BGZF deflate worker consumes per second.
+///
+/// Measured with `noodles_bgzf::io::MultithreadedWriter` (zlib-rs backend,
+/// default level) over 1 GiB of real salmon BAM records: 168.5, 167.3, 167.6,
+/// 167.0, 165.1 and 153.9 MiB/s per worker at 1/2/4/8/16/32 workers. Flat, so
+/// deflate scales linearly and one constant describes it.
+const DEFLATE_MIB_PER_SEC: f64 = 165.0;
+
+/// Peak uncompressed BAM bytes one mapping thread produces per second.
+///
+/// Measured by sweeping the deflate worker count until compression stopped
+/// being the limit: record output plateaus at ~413 MiB/s across 8 mapping
+/// threads, i.e. ~52 MiB/s each. This is an intentionally pessimistic number —
+/// it comes from a tiny-transcriptome fixture where mapping is nearly free and
+/// almost every read yields several records, so real workloads (expensive
+/// mapping, same record volume) produce *less* per thread and need fewer
+/// deflate workers than this predicts.
+const RECORD_MIB_PER_SEC_PER_MAPPER: f64 = 52.0;
+
+/// Ceiling on deflate workers. `DEFLATE_MIB_PER_SEC * MAX_COMPRESSION_WORKERS`
+/// is ~1.3 GiB/s of compression, three times the fastest record production
+/// measured at any thread count, so past this point extra workers cannot be the
+/// thing standing between salmon and full throughput — they would only take
+/// cores from mapping.
+const MAX_COMPRESSION_WORKERS: usize = 8;
+
+/// How many BGZF deflate workers to run alongside `mapping_threads`.
+///
+/// Deflate is the only stage whose cost scales with output volume, and each
+/// worker is a core not mapping reads, so we provision the smallest number that
+/// stops compression being the bottleneck and no more. Production scales with
+/// the mapping threads and consumption with the deflate workers, so the balance
+/// point is
+///
+/// ```text
+/// workers = ceil(mapping_threads * 52 MiB/s / 165 MiB/s)  ~=  mapping_threads / 3
+/// ```
+///
+/// The sweep this comes from (2.4M fragments, mapping-phase time relative to a
+/// no-BAM-output run, best of 5):
+///
+/// ```text
+///  -p 8    C=1 2.32x   C=2 1.18x   C=3 1.09x   C=4 1.06x   C=6 1.00x   C=8 0.98x
+/// ```
+///
+/// At `-p 16` and `-p 32` only the `C=1` point reproduced cleanly (2.08x and
+/// 2.20x); every `C >= 2` point there fell within run-to-run noise on a shared
+/// machine, so the shape above is what the constants are fitted to.
+///
+/// The curve is sharply asymmetric, and that asymmetry is what this heuristic is
+/// shaped around: one worker too few costs >2x — record output pins to exactly
+/// one worker's 165 MiB/s — while extra workers past the balance point cost
+/// nothing measurable, because they simply block on an empty queue. So round up,
+/// and cap at [`MAX_COMPRESSION_WORKERS`].
+///
+/// The residual ~9% at `-p 8, C=3` is deliberately left on the table. Buying it
+/// back means spending cores that, on a workload where mapping is not nearly
+/// free, contribute more to mapping than to compression; `--bamCompressThreads`
+/// is there for anyone who wants to make that trade explicitly.
+///
+/// A low estimate also degrades gracefully rather than catastrophically: the
+/// chunk queue is bounded, so mapping workers block instead of growing memory.
+fn compression_worker_count(mapping_threads: usize) -> NonZeroUsize {
+    let mapping_threads = mapping_threads.max(1);
+    let balanced =
+        (mapping_threads as f64 * RECORD_MIB_PER_SEC_PER_MAPPER / DEFLATE_MIB_PER_SEC).ceil();
+    // Never more workers than mapping threads: below that ratio the pipeline is
+    // producer-limited no matter how much compression capacity is available.
+    let workers = (balanced as usize).clamp(1, MAX_COMPRESSION_WORKERS.min(mapping_threads));
+    NonZeroUsize::new(workers).expect("clamped to at least 1")
+}
 
 struct WriterFailure(Mutex<Option<String>>);
 
@@ -44,11 +146,15 @@ pub struct BamOutput {
 }
 
 impl BamOutput {
+    /// Open `path` and start the writer thread. `threads` is the mapping thread
+    /// count (`-p`); `compress_threads` overrides the derived BGZF worker count
+    /// (`--bamCompressThreads`) for benchmarking or unusual storage.
     pub fn create(
         path: &Path,
         salmon: &SalmonIndex,
         command: &str,
         threads: usize,
+        compress_threads: Option<NonZeroUsize>,
     ) -> anyhow::Result<Self> {
         use anyhow::Context as _;
         if let Some(parent) = path.parent() {
@@ -67,7 +173,13 @@ impl BamOutput {
         let failure = Arc::new(WriterFailure(Mutex::new(None)));
         let writer_failure = Arc::clone(&failure);
         let header = encode_header(salmon, command)?;
-        let compression_workers = NonZeroUsize::new((threads / 4).clamp(1, 4)).unwrap();
+        let compression_workers =
+            compress_threads.unwrap_or_else(|| compression_worker_count(threads));
+        tracing::debug!(
+            mapping_threads = threads,
+            bgzf_workers = compression_workers.get(),
+            "BAM output pipeline"
+        );
         let handle = std::thread::Builder::new()
             .name("salmon-bam-writer".into())
             .spawn(move || {
@@ -83,7 +195,14 @@ impl BamOutput {
                             let _ = recycle_sender.try_send(chunk);
                         }
                     }
-                    writer.finish()?;
+                    // `finish` hands back the inner writer after appending the
+                    // BGZF EOF block; that block is still sitting in the
+                    // `BufWriter`, and `BufWriter::drop` flushes only on a
+                    // best-effort basis and *discards* any error. Flush it here
+                    // so a failure at the very end of the run (ENOSPC, I/O
+                    // error) surfaces instead of silently truncating the BAM.
+                    let mut file = writer.finish()?;
+                    file.flush()?;
                     Ok(())
                 })();
                 if let Err(error) = &result {
@@ -99,13 +218,22 @@ impl BamOutput {
         })
     }
 
-    pub fn scratch(&self) -> BamScratch {
+    /// A per-worker encode buffer bound to this output. Tying the borrow into
+    /// the scratch makes "a scratch always has its writer" a type-level fact,
+    /// so callers never have to re-derive it.
+    pub fn scratch(&self) -> BamScratch<'_> {
         BamScratch {
-            buffer: self
-                .recycled
-                .try_recv()
-                .unwrap_or_else(|_| Vec::with_capacity(INITIAL_CAPACITY)),
+            output: self,
+            buffer: self.take_buffer(),
         }
+    }
+
+    /// A cleared chunk buffer: a recycled one if the writer has returned any,
+    /// otherwise a fresh modest allocation that grows toward `CHUNK_TARGET`.
+    fn take_buffer(&self) -> Vec<u8> {
+        self.recycled
+            .try_recv()
+            .unwrap_or_else(|_| Vec::with_capacity(INITIAL_CAPACITY))
     }
 
     fn send(&self, chunk: Vec<u8>) -> io::Result<()> {
@@ -139,14 +267,23 @@ impl Drop for BamOutput {
     }
 }
 
-pub struct BamScratch {
+/// One mapping worker's private BAM encode buffer, bound to the output it feeds.
+pub struct BamScratch<'a> {
+    output: &'a BamOutput,
     buffer: Vec<u8>,
 }
 
-impl BamScratch {
+impl BamScratch<'_> {
+    /// Encode every record for one fragment, then hand the chunk off if it has
+    /// reached the target size.
+    ///
+    /// The size check deliberately happens *after* the whole fragment is
+    /// encoded, never between its records: all records for a fragment are
+    /// therefore contiguous in one chunk, and chunks are written whole. That is
+    /// what keeps the output collated by fragment even though nothing else
+    /// about the record order is constrained.
     pub fn write_fragment(
         &mut self,
-        output: &BamOutput,
         salmon: &SalmonIndex,
         r1_id: &[u8],
         r1_seq: &[u8],
@@ -157,21 +294,20 @@ impl BamScratch {
             encode_record(&mut self.buffer, record)
         })?;
         if self.buffer.len() >= CHUNK_TARGET {
-            self.flush(output)?;
+            self.flush()?;
         }
         Ok(())
     }
 
-    pub fn flush(&mut self, output: &BamOutput) -> io::Result<()> {
+    /// Hand the accumulated chunk to the writer thread. Only the `Vec`
+    /// descriptor moves; the backing allocation is not copied.
+    pub fn flush(&mut self) -> io::Result<()> {
         if self.buffer.is_empty() {
             return Ok(());
         }
         let chunk = std::mem::take(&mut self.buffer);
-        output.send(chunk)?;
-        self.buffer = output
-            .recycled
-            .try_recv()
-            .unwrap_or_else(|_| Vec::with_capacity(INITIAL_CAPACITY));
+        self.output.send(chunk)?;
+        self.buffer = self.output.take_buffer();
         Ok(())
     }
 }
@@ -184,23 +320,10 @@ fn push_u32(buf: &mut Vec<u8>, value: u32) {
     buf.extend_from_slice(&value.to_le_bytes());
 }
 
+/// Encode the BAM header block: the shared SAM header text (byte-identical to
+/// what `--writeMappings` writes) followed by the binary reference table.
 fn encode_header(salmon: &SalmonIndex, command: &str) -> anyhow::Result<Vec<u8>> {
-    use std::fmt::Write as _;
-    let mut text = String::from("@HD\tVN:1.6\tSO:unknown\n");
-    for tid in 0..salmon.num_refs() {
-        writeln!(
-            text,
-            "@SQ\tSN:{}\tLN:{}",
-            salmon.ref_name(tid),
-            salmon.ref_len(tid)
-        )?;
-    }
-    writeln!(
-        text,
-        "@PG\tID:salmon\tPN:salmon\tVN:{}\tCL:{}",
-        crate::output::SALMON_VERSION,
-        command
-    )?;
+    let text = mapping_record::header_text(salmon, command);
     let mut buf = Vec::with_capacity(text.len() + salmon.num_refs() * 32);
     buf.extend_from_slice(b"BAM\x01");
     push_i32(&mut buf, i32::try_from(text.len())?);
@@ -332,4 +455,33 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
         .map_err(|_| io::Error::other("BAM record too large"))?;
     buf[block_start..block_start + 4].copy_from_slice(&block_size.to_le_bytes());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compression_workers_track_the_measured_balance_point() {
+        // One deflate worker per ~3 mapping threads (52 / 165 MiB/s).
+        for (threads, expected) in [(1, 1), (2, 1), (3, 1), (4, 2), (8, 3), (16, 6), (24, 8)] {
+            assert_eq!(
+                compression_worker_count(threads).get(),
+                expected,
+                "-p {threads}"
+            );
+        }
+    }
+
+    #[test]
+    fn compression_workers_are_bounded() {
+        // Never zero, never past the cap, and never more than the mapping
+        // threads they are meant to keep up with.
+        for threads in [0usize, 1, 7, 32, 64, 256, usize::MAX] {
+            let workers = compression_worker_count(threads).get();
+            assert!(workers >= 1);
+            assert!(workers <= MAX_COMPRESSION_WORKERS, "-p {threads}");
+            assert!(workers <= threads.max(1), "-p {threads}");
+        }
+    }
 }

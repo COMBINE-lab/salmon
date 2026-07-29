@@ -51,7 +51,7 @@ misbehaves.
 
 | Flag | Status | Notes |
 |------|--------|-------|
-| `-l/--libType`, `-o/--output`, `-p/--threads`, `-z/--writeMappings`, `--writeBam` | ✅ | `--writeMappings` and `--writeBam` are mutually exclusive. |
+| `-l/--libType`, `-o/--output`, `-p/--threads`, `-z/--writeMappings`, `--writeBam` | ✅ | `--writeSam` is a visible alias for `--writeMappings`. `--writeMappings`/`--writeSam` and `--writeBam` are mutually exclusive, and are warned-and-ignored in `-a`/`--rad` modes. Records for a fragment are contiguous; no other order is imposed. |
 | `--useEM` | ✅ | VBEM is the default; `--useEM` selects plain EM. |
 | `--meta` | ✅ | Metagenomic preset: plain EM, no range-factorized eq-classes, uniform init (the Rust EM already inits uniformly). Overrides `--useEM`/`--rangeFactorizationBins`. |
 | `--useVBOpt` | 🔁 | VBEM is already the default. |

@@ -84,6 +84,11 @@ pub struct QuantOptions {
     /// write per-mapping BAM records to this path (`--writeBam`); mutually
     /// exclusive with [`Self::write_mappings`]
     pub write_bam: Option<PathBuf>,
+    /// override the number of BGZF compression workers used by `--writeBam`
+    /// (`--bamCompressThreads`). `None` derives it from `num_threads` so that
+    /// compression just keeps up with record production; set it only to
+    /// benchmark or to compensate for unusually slow/fast storage.
+    pub bam_compress_threads: Option<std::num::NonZeroUsize>,
     /// write per-fragment mappings to this RAD file (`--writeRad`); sketch or
     /// selective-alignment profile is chosen from `sketch`. Quantification still
     /// runs; combine with `skip_quant` to map only.
@@ -193,6 +198,7 @@ impl QuantOptions {
             write_unmapped_names: false,
             write_mappings: None,
             write_bam: None,
+            bam_compress_threads: None,
             write_rad: None,
             deterministic_fld: false,
             seq_bias: false,
@@ -376,7 +382,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         Some(path) => {
             let cmd = format!("salmon quant -i {}", opts.index_dir.display());
             Some(
-                bam::BamOutput::create(path, &salmon, &cmd, nthreads)
+                bam::BamOutput::create(path, &salmon, &cmd, nthreads, opts.bam_compress_threads)
                     .context("opening BAM output")?,
             )
         }

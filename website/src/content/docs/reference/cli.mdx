@@ -123,8 +123,8 @@ See the [RAD I/O & deterministic quantification](../../guides/rad-and-determinis
 | --- | --- |
 | `--dumpEq` / `--dumpEqWeights` | Dump equivalence classes (with weights). |
 | `--writeUnmappedNames` | Write unmapped fragment names. |
-| `-z, --writeMappings <FILE>` | Write per-mapping SAM records. |
-| `--writeBam <FILE>` | Write the same per-mapping records as BGZF-compressed BAM. Mutually exclusive with `--writeMappings`; record order is unspecified. |
+| `-z, --writeMappings <FILE>` | Write per-mapping SAM records. `--writeSam` is an alias. |
+| `--writeBam <FILE>` | Write the same per-mapping records as BGZF-compressed BAM. Mutually exclusive with `--writeMappings`/`--writeSam`; record order is unspecified. |
 
 ```sh
 salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 16 -o out

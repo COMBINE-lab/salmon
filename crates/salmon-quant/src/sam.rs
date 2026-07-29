@@ -9,8 +9,6 @@ use salmon_map::ScoredMapping;
 
 use crate::mapping_record::{self, AlignmentRecord, CigarKind};
 
-const SAM_VERSION: &str = "1.0";
-
 pub struct SamWriter {
     inner: Mutex<Box<dyn Write + Send>>,
 }
@@ -28,21 +26,8 @@ impl SamWriter {
             .with_context(|| format!("creating SAM output {}", path.display()))?;
         let mut writer: Box<dyn Write + Send> =
             Box::new(std::io::BufWriter::with_capacity(1 << 20, file));
-        writeln!(writer, "@HD\tVN:{SAM_VERSION}\tSO:unknown")?;
-        for tid in 0..salmon.num_refs() {
-            writeln!(
-                writer,
-                "@SQ\tSN:{}\tLN:{}",
-                salmon.ref_name(tid),
-                salmon.ref_len(tid)
-            )?;
-        }
-        writeln!(
-            writer,
-            "@PG\tID:salmon\tPN:salmon\tVN:{}\tCL:{}",
-            crate::output::SALMON_VERSION,
-            cmd
-        )?;
+        // Same header text BAM embeds, so the two formats cannot drift.
+        writer.write_all(mapping_record::header_text(salmon, cmd).as_bytes())?;
         Ok(Self {
             inner: Mutex::new(writer),
         })

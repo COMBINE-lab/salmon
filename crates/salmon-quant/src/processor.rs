@@ -159,8 +159,10 @@ pub(crate) struct QuantProcessor<'a> {
     pub unmapped: Vec<String>,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
-    /// per-thread raw BAM record chunk; allocated only for `--writeBam`
-    pub bam_scratch: Option<crate::bam::BamScratch>,
+    /// per-thread raw BAM record chunk; allocated only for `--writeBam`. Holds
+    /// its own borrow of the writer, so "have a chunk ⇒ have somewhere to send
+    /// it" is enforced by the type rather than re-checked at each use.
+    pub bam_scratch: Option<crate::bam::BamScratch<'a>>,
     /// per-thread RAD chunk buffer (flushed as one chunk per batch); `None`
     /// unless `--writeRad` is set
     pub rad_buf: Option<salmon_rad::FragmentChunkBuf>,
@@ -934,7 +936,6 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if let Some(scratch) = bam_scratch.as_mut() {
                 if !maps.is_empty() {
                     scratch.write_fragment(
-                        sh.bam.unwrap(),
                         sh.salmon,
                         r1.id(),
                         s1.as_ref(),
@@ -1058,14 +1059,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             }
             if let Some(scratch) = bam_scratch.as_mut() {
                 if !maps.is_empty() {
-                    scratch.write_fragment(
-                        sh.bam.unwrap(),
-                        sh.salmon,
-                        rec.id(),
-                        s.as_ref(),
-                        None,
-                        &maps,
-                    )?;
+                    scratch.write_fragment(sh.salmon, rec.id(), s.as_ref(), None, &maps)?;
                 }
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
@@ -1122,9 +1116,11 @@ fn flush_sam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
     Ok(())
 }
 
+/// Hand this thread's accumulated BAM chunk to the writer thread. No-op unless
+/// `--writeBam` is set; the scratch carries its own writer borrow.
 fn flush_bam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
-    if let (Some(output), Some(scratch)) = (proc.shared.bam, proc.bam_scratch.as_mut()) {
-        scratch.flush(output)?;
+    if let Some(scratch) = proc.bam_scratch.as_mut() {
+        scratch.flush()?;
     }
     Ok(())
 }

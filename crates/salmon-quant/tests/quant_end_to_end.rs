@@ -64,11 +64,19 @@ impl FastqWriters {
 /// Build a transcriptome FASTA + simulated inward paired reads. Returns the
 /// fasta path, the two read files, and the true fragment counts per name.
 fn simulate(dir: &Path) -> (PathBuf, PathBuf, PathBuf, HashMap<String, u64>) {
+    simulate_scaled(dir, 1)
+}
+
+/// [`simulate`] with `scale` times as many fragments per transcript. Tests that
+/// depend on more than one mapping worker actually running need enough
+/// fragments to fill several paraseq batches (16384 records each) — at `scale`
+/// 1 the whole fixture is a single batch handled by a single worker.
+fn simulate_scaled(dir: &Path, scale: u64) -> (PathBuf, PathBuf, PathBuf, HashMap<String, u64>) {
     // (name, length seed, length, true fragment count)
     let specs = [
-        ("t0", 11u64, 600usize, 300u64),
-        ("t1", 22, 900, 100),
-        ("t2", 33, 1200, 600),
+        ("t0", 11u64, 600usize, 300 * scale),
+        ("t1", 22, 900, 100 * scale),
+        ("t2", 33, 1200, 600 * scale),
     ];
 
     let fasta = dir.join("txome.fa");
@@ -370,8 +378,192 @@ fn read_bam_records(path: &Path) -> (noodles_sam::Header, Vec<noodles_sam::align
     (header, records)
 }
 
+/// Total order over records that is independent of which worker emitted them.
+/// Every field the two encoders could disagree on is in the key, so sorting by
+/// it and comparing element-wise gives a structural diff on failure rather than
+/// "these two big vectors differ".
+fn record_sort_key(
+    record: &noodles_sam::alignment::RecordBuf,
+) -> (Vec<u8>, u16, Option<usize>, Option<usize>, u8) {
+    (
+        record.name().map(|n| n.to_vec()).unwrap_or_default(),
+        record.flags().bits(),
+        record.reference_sequence_id(),
+        record.alignment_start().map(usize::from),
+        record.mapping_quality().map_or(255, |q| q.get()),
+    )
+}
+
+/// Quantify `reads` once per output format and return the parsed results.
+fn quant_to_sam_and_bam(
+    tmp: &Path,
+    threads: usize,
+    scale: u64,
+) -> (
+    (noodles_sam::Header, Vec<noodles_sam::alignment::RecordBuf>),
+    (noodles_sam::Header, Vec<noodles_sam::alignment::RecordBuf>),
+) {
+    let (fasta, r1, r2, _truth) = simulate_scaled(tmp, scale);
+    let index = tmp.join("idx");
+    let mut build_opts = IndexBuildOptions::new(vec![fasta], index.clone());
+    build_opts.threads = 1;
+    build(&build_opts).expect("build index");
+
+    let quant = |out: &str, set: &dyn Fn(&mut QuantOptions)| {
+        let mut opts = QuantOptions::new(index.clone(), tmp.join(out));
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = "IU".into();
+        opts.num_threads = threads;
+        set(&mut opts);
+        quantify(&opts).unwrap_or_else(|e| panic!("{out} quantification: {e}"));
+    };
+
+    let sam_path = tmp.join("mappings.sam");
+    quant("quant_sam", &|o: &mut QuantOptions| {
+        o.write_mappings = Some(sam_path.clone())
+    });
+    let bam_path = tmp.join("mappings.bam");
+    quant("quant_bam", &|o: &mut QuantOptions| {
+        o.write_bam = Some(bam_path.clone())
+    });
+
+    (read_sam_records(&sam_path), read_bam_records(&bam_path))
+}
+
 #[test]
 fn sam_and_bam_mapping_outputs_are_semantically_equal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ((sam_header, mut sam_records), (bam_header, mut bam_records)) =
+        quant_to_sam_and_bam(tmp.path(), 4, 1);
+
+    // The header is built once and shared by both encoders, so it must match in
+    // full — not just the reference sequences.
+    assert_eq!(sam_header, bam_header);
+    assert!(!bam_header.programs().as_ref().is_empty());
+
+    // Worker completion order is intentionally unspecified, so compare the
+    // record multisets. `RecordBuf: PartialEq` covers flags, coordinates, MAPQ,
+    // CIGAR, mate fields, template length, sequence, qualities, and every tag.
+    assert!(!bam_records.is_empty(), "no BAM records were written");
+    assert_eq!(sam_records.len(), bam_records.len());
+    sam_records.sort_by_key(record_sort_key);
+    bam_records.sort_by_key(record_sort_key);
+    for (i, (sam, bam)) in sam_records.iter().zip(&bam_records).enumerate() {
+        assert_eq!(sam, bam, "record {i} differs between SAM and BAM");
+    }
+}
+
+/// The one ordering guarantee the BAM path makes: every record for a fragment
+/// is contiguous. Workers encode a whole fragment before the chunk-size check,
+/// and chunks are written whole, so a fragment can never be split across chunks
+/// and interleaved with another worker's output.
+///
+/// Nothing stronger is promised: the order the fragments themselves appear in
+/// is whatever order the workers happen to finish chunks in, which is why
+/// [`bam_content_is_independent_of_thread_count`] compares multisets and not
+/// sequences.
+#[test]
+fn bam_records_for_a_fragment_are_collated() {
+    let tmp = tempfile::tempdir().unwrap();
+    // paraseq hands out 16384-record batches, so the fixture must be several
+    // batches deep before more than one worker ever runs — at the default scale
+    // the entire input is one batch and this test would pass vacuously.
+    const THREADS: usize = 8;
+    let (_, (_, bam_records)) = quant_to_sam_and_bam(tmp.path(), THREADS, 100);
+    assert!(!bam_records.is_empty());
+
+    let mut seen: HashMap<Vec<u8>, usize> = HashMap::new();
+    let mut current: Option<Vec<u8>> = None;
+    for (i, record) in bam_records.iter().enumerate() {
+        let name = record.name().map(|n| n.to_vec()).unwrap_or_default();
+        if current.as_ref() != Some(&name) {
+            // Starting a new run: this name must not have appeared before.
+            if let Some(first) = seen.insert(name.clone(), i) {
+                panic!(
+                    "records for {} are split: a run starts at {i} but an earlier \
+                     run started at {first}",
+                    String::from_utf8_lossy(&name)
+                );
+            }
+            current = Some(name);
+        }
+    }
+    // Sanity: the fixture really does produce multi-record fragments, otherwise
+    // collation would hold vacuously.
+    assert!(
+        bam_records.len() > seen.len(),
+        "fixture has no fragment with more than one record; collation is untested"
+    );
+}
+
+/// Thread count changes the order chunks land in, but must not change what is
+/// written. Comparing a 1-thread run against an 8-thread run as multisets is
+/// the strongest claim the design supports — and asserting no more than that is
+/// deliberate, since imposing a global record order would mean serializing the
+/// writer.
+#[test]
+fn bam_content_is_independent_of_thread_count() {
+    let mut runs = Vec::new();
+    for threads in [1usize, 8] {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fasta, r1, r2, _truth) = simulate(tmp.path());
+        let index = tmp.path().join("idx");
+        let mut build_opts = IndexBuildOptions::new(vec![fasta], index.clone());
+        build_opts.threads = 1;
+        build(&build_opts).expect("build index");
+
+        let bam_path = tmp.path().join("mappings.bam");
+        let mut opts = QuantOptions::new(index, tmp.path().join("quant"));
+        opts.mates1 = vec![r1];
+        opts.mates2 = vec![r2];
+        opts.lib_type = "IU".into();
+        opts.num_threads = threads;
+        opts.write_bam = Some(bam_path.clone());
+        quantify(&opts).expect("BAM-output quantification");
+
+        let (_, mut records) = read_bam_records(&bam_path);
+        records.sort_by_key(record_sort_key);
+        runs.push(records);
+        // `tmp` must outlive the read above.
+    }
+
+    let (single, many) = (&runs[0], &runs[1]);
+    assert!(!single.is_empty());
+    assert_eq!(
+        single.len(),
+        many.len(),
+        "1-thread and 8-thread runs wrote different record counts"
+    );
+    for (i, (a, b)) in single.iter().zip(many).enumerate() {
+        assert_eq!(a, b, "record {i} differs between 1- and 8-thread runs");
+    }
+    // Both runs must still be well-formed BAM with names on every record.
+    assert!(many.iter().all(|record| record.name().is_some()));
+}
+
+/// A BAM that could not be written must not be reported as success.
+///
+/// The BGZF EOF block is the last thing to land in the writer's 1 MiB
+/// `BufWriter`, and `BufWriter::drop` flushes only on a best-effort basis and
+/// discards the error. Without an explicit flush, a full disk silently produced
+/// a truncated BAM and an exit status of 0.
+///
+/// `/dev/full` accepts the open and fails every write with `ENOSPC`. The
+/// fixture's BAM is well under 1 MiB, so nothing reaches the device until that
+/// final flush — exactly the path being guarded.
+#[cfg(target_os = "linux")]
+#[test]
+fn bam_write_failure_is_reported() {
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .is_err()
+    {
+        eprintln!("skipping: /dev/full is not writable here");
+        return;
+    }
+
     let tmp = tempfile::tempdir().unwrap();
     let (fasta, r1, r2, _truth) = simulate(tmp.path());
     let index = tmp.path().join("idx");
@@ -379,45 +571,19 @@ fn sam_and_bam_mapping_outputs_are_semantically_equal() {
     build_opts.threads = 1;
     build(&build_opts).expect("build index");
 
-    let sam_path = tmp.path().join("mappings.sam");
-    let mut sam_opts = QuantOptions::new(index.clone(), tmp.path().join("quant_sam"));
-    sam_opts.mates1 = vec![r1.clone()];
-    sam_opts.mates2 = vec![r2.clone()];
-    sam_opts.lib_type = "IU".into();
-    sam_opts.num_threads = 4;
-    sam_opts.write_mappings = Some(sam_path.clone());
-    quantify(&sam_opts).expect("SAM-output quantification");
+    let mut opts = QuantOptions::new(index, tmp.path().join("quant"));
+    opts.mates1 = vec![r1];
+    opts.mates2 = vec![r2];
+    opts.lib_type = "IU".into();
+    opts.num_threads = 2;
+    opts.write_bam = Some(PathBuf::from("/dev/full"));
 
-    let bam_path = tmp.path().join("mappings.bam");
-    let mut bam_opts = QuantOptions::new(index, tmp.path().join("quant_bam"));
-    bam_opts.mates1 = vec![r1];
-    bam_opts.mates2 = vec![r2];
-    bam_opts.lib_type = "IU".into();
-    bam_opts.num_threads = 4;
-    bam_opts.write_bam = Some(bam_path.clone());
-    quantify(&bam_opts).expect("BAM-output quantification");
-
-    let (sam_header, sam_records) = read_sam_records(&sam_path);
-    let (bam_header, bam_records) = read_bam_records(&bam_path);
-    assert_eq!(
-        sam_header.reference_sequences(),
-        bam_header.reference_sequences()
+    let error = quantify(&opts).expect_err("writing to /dev/full must fail");
+    let chain = format!("{error:#}");
+    assert!(
+        chain.contains("No space left on device"),
+        "expected the ENOSPC to propagate, got: {chain}"
     );
-    // Worker completion order is intentionally unspecified. Compare the record
-    // multisets after parsing both formats into the same semantic type.
-    let mut sam_records: Vec<String> = sam_records
-        .iter()
-        .map(|record| format!("{record:?}"))
-        .collect();
-    let mut bam_records: Vec<String> = bam_records
-        .iter()
-        .map(|record| format!("{record:?}"))
-        .collect();
-    sam_records.sort_unstable();
-    bam_records.sort_unstable();
-    assert_eq!(sam_records, bam_records);
-    assert!(!bam_records.is_empty());
-    assert!(!bam_header.programs().as_ref().is_empty());
 }
 
 #[test]

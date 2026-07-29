@@ -412,13 +412,24 @@ struct QuantArgs {
     #[arg(long = "writeUnmappedNames")]
     write_unmapped_names: bool,
     /// Write per-mapping SAM records to this file (spoofed CIGAR, like salmon's
-    /// standard `--writeMappings`).
-    #[arg(short = 'z', long = "writeMappings", conflicts_with = "write_bam")]
+    /// standard `--writeMappings`). `--writeSam` is an accepted alias, naming
+    /// the format explicitly to pair with `--writeBam`.
+    #[arg(
+        short = 'z',
+        long = "writeMappings",
+        visible_alias = "writeSam",
+        conflicts_with = "write_bam"
+    )]
     write_mappings: Option<PathBuf>,
     /// Write per-mapping BAM records to this file. Mutually exclusive with
-    /// --writeMappings.
+    /// --writeMappings/--writeSam.
     #[arg(long = "writeBam", conflicts_with = "write_mappings")]
     write_bam: Option<PathBuf>,
+    /// BGZF compression workers for --writeBam. Defaults to the smallest count
+    /// that keeps up with record production (about one per seven mapping
+    /// threads); override only to benchmark or to suit unusual storage.
+    #[arg(long = "bamCompressThreads", requires = "write_bam", hide = true)]
+    bam_compress_threads: Option<std::num::NonZeroUsize>,
     /// Write per-fragment mappings to a RAD file at this path. Sketch or
     /// selective-alignment profile is chosen automatically from the mapping
     /// mode. Quantification still runs; add --skipQuant to map only. The file is
@@ -1142,6 +1153,12 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     }
     // Alignment-based mode: quantify directly from a BAM.
     if let Some(bam) = args.alignments {
+        warn_unsupported_mapping_output(
+            &args.write_mappings,
+            &args.write_bam,
+            "alignment mode (-a)",
+            "the input alignments already are the per-mapping records",
+        );
         let mut opts = AlignQuantOptions::new(bam, args.output);
         opts.lib_type = args.lib_type;
         opts.em.use_vbem = use_vbem;
@@ -1298,6 +1315,12 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
 
     // RAD-input mode: quantify directly from a RAD file of mappings, in parallel.
     if let Some(rad_path) = args.rad {
+        warn_unsupported_mapping_output(
+            &args.write_mappings,
+            &args.write_bam,
+            "RAD-input mode (--rad)",
+            "a RAD carries no read names or sequences, so SAM/BAM records cannot be reconstructed",
+        );
         // The RAD reuses alignment mode's inference/output; AlignQuantOptions
         // carries the relevant knobs (lib type, EM/VBEM, score-exp, FLD prior,
         // bootstrap/Gibbs). `bam` is unused by the RAD path.
@@ -1379,6 +1402,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.write_unmapped_names = args.write_unmapped_names;
     opts.write_mappings = args.write_mappings;
     opts.write_bam = args.write_bam;
+    opts.bam_compress_threads = args.bam_compress_threads;
     opts.write_rad = args.write_rad;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
@@ -1698,4 +1722,67 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `--writeMappings`/`--writeSam`/`--writeBam` only apply to the read-mapping
+/// path. Rather than ignoring them silently in the alignment and RAD-input
+/// modes, say so — the repo's accept-and-warn policy for flags that are no-ops
+/// in the selected mode.
+fn warn_unsupported_mapping_output(
+    write_mappings: &Option<PathBuf>,
+    write_bam: &Option<PathBuf>,
+    mode: &str,
+    why: &str,
+) {
+    let flag = match (write_mappings, write_bam) {
+        (Some(_), _) => "--writeMappings/--writeSam",
+        (_, Some(_)) => "--writeBam",
+        _ => return,
+    };
+    tracing::warn!("{flag} has no effect in {mode}: {why}; ignoring it");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse a minimal `salmon quant` invocation plus `extra`, returning the
+    /// mapping-output flags only (`QuantArgs` itself is not `Debug`).
+    fn write_flags(extra: &[&str]) -> Result<(Option<PathBuf>, Option<PathBuf>), clap::Error> {
+        let mut argv = vec![
+            "salmon", "quant", "-i", "idx", "-l", "A", "-r", "r.fq", "-o", "out",
+        ];
+        argv.extend_from_slice(extra);
+        match Cli::try_parse_from(argv)?.command {
+            Command::Quant(args) => Ok((args.write_mappings, args.write_bam)),
+            _ => unreachable!("parsed a non-quant subcommand"),
+        }
+    }
+
+    /// `--writeSam` is a spelling of `--writeMappings`, giving SAM output a
+    /// format-named flag to match `--writeBam`.
+    #[test]
+    fn write_sam_is_an_alias_for_write_mappings() {
+        let expected = Some(PathBuf::from("m.sam"));
+        for sam_flag in ["--writeMappings", "--writeSam", "-z"] {
+            let (mappings, bam) = write_flags(&[sam_flag, "m.sam"]).unwrap();
+            assert_eq!(mappings, expected, "{sam_flag} should set write_mappings");
+            assert_eq!(bam, None, "{sam_flag} should not set write_bam");
+        }
+    }
+
+    /// The alias shares `write_mappings`' arg id, so it inherits the
+    /// `--writeBam` conflict rather than silently allowing both formats.
+    #[test]
+    fn write_sam_conflicts_with_write_bam() {
+        for sam_flag in ["--writeMappings", "--writeSam", "-z"] {
+            let err = write_flags(&[sam_flag, "m.sam", "--writeBam", "m.bam"])
+                .expect_err("should conflict with --writeBam");
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{sam_flag} + --writeBam"
+            );
+        }
+    }
 }

@@ -282,10 +282,35 @@ Two salmon-relevant details on top of the base format:
   (uncompressed)**, so every RAD produced before this feature, and every piscem
   RAD, reads as uncompressed automatically. Decompression happens in the reader,
   so record parsing downstream is identical for compressed and uncompressed RADs.
+
 ## Mapping alignment output
 
-`salmon quant --writeMappings <FILE>` writes the retained mappings as unsorted
-SAM records. `--writeBam <FILE>` writes semantically equivalent records as
-BGZF-compressed BAM. The options are mutually exclusive. Mapping workers run in
-parallel, so record order is unspecified; sort the result when a downstream tool
-requires coordinate or query-name order.
+`salmon quant --writeMappings <FILE>` (alias `--writeSam`) writes the retained
+mappings as unsorted SAM records. `--writeBam <FILE>` writes semantically
+equivalent records as BGZF-compressed BAM. The options are mutually exclusive,
+and `--writeSam` names the SAM format explicitly so both formats have a
+format-named flag. Both share one header and one record builder, so the two
+formats cannot drift apart.
+
+Both options apply to the read-mapping path only. In alignment mode (`-a`) and
+RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
+
+### Record order
+
+Mapping workers run in parallel, and the output makes exactly one ordering
+guarantee:
+
+- **All records for a fragment are contiguous.** A worker encodes an entire
+  fragment before deciding to hand off its buffer, and buffers are written
+  whole, so a fragment is never split or interleaved with another worker's
+  records. Tools that stream a file and group by read name — the common reason
+  to want `samtools collate` — can read the output directly.
+- **Nothing else is ordered.** Fragments appear in whatever order workers finish
+  their buffers, which varies with thread count and scheduling. Sort the result
+  if a downstream tool needs coordinate or query-name order.
+
+The second point is deliberate rather than incidental: imposing a global record
+order would require workers to wait for one another. Only the parts that must be
+serial (copying bytes into BGZF blocks, and writing compressed blocks in
+submission order) are, while record encoding and block compression both run
+fully in parallel.
