@@ -1,5 +1,26 @@
 //! Library format types and parsing.
 //!
+//! # What a "library type" is
+//!
+//! An RNA-seq protocol makes specific promises about how the sequenced reads
+//! relate to the original RNA molecule, and salmon uses those promises to reject
+//! placements that could not have arisen. There are three independent facts:
+//!
+//! 1. **Read type** — one read per fragment (single-end) or two (paired-end).
+//! 2. **Orientation** — for pairs, how the two mates point relative to each
+//!    other: toward each other (`I`, the Illumina default), away (`O`), or the
+//!    same way (`M`).
+//! 3. **Strandedness** — whether the protocol preserved which strand the RNA came
+//!    from. An *unstranded* protocol (`U`) loses that information; a *stranded*
+//!    one records it, so read 1 is expected on the sense strand (`SF`) or the
+//!    antisense strand (`SR`).
+//!
+//! Written together these give the familiar salmon strings: `IU` (inward,
+//! unstranded), `ISR` (inward, read 1 antisense), `SF` (single-end, sense), and
+//! so on. Getting this wrong is one of the most common causes of a bad
+//! quantification, which is why salmon can also detect it automatically (`-l A`)
+//! and warns when an explicit setting disagrees with what it observes.
+//!
 //! Mirrors salmon's `LibraryFormat` (defined in the vendored RapMap/pufferfish
 //! headers) and the `parseLibraryFormatStringNew` logic in
 //! `src/util/LibraryTypeUtils.cpp`. A library format is the triple of read
@@ -32,6 +53,8 @@ pub enum ReadOrientation {
 }
 
 /// Strand from which fragments are expected to originate.
+///
+/// "Sense" means the same strand as the transcript; "antisense" the opposite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ReadStrandedness {
     /// read 1 sense, read 2 antisense
@@ -42,7 +65,8 @@ pub enum ReadStrandedness {
     S,
     /// antisense (single-end / matching)
     A,
-    /// unstranded
+    /// unstranded — the protocol did not preserve strand information, so both
+    /// orientations are acceptable
     U,
 }
 
@@ -55,6 +79,10 @@ pub struct LibraryFormat {
 }
 
 impl LibraryFormat {
+    /// Assemble a format from its three parts.
+    ///
+    /// `const fn` means this can be evaluated at compile time, which is what
+    /// lets the defaults below be constants.
     pub const fn new(
         read_type: ReadType,
         orientation: ReadOrientation,
@@ -67,7 +95,9 @@ impl LibraryFormat {
         }
     }
 
-    /// Default paired-end format used by salmon (`IU`).
+    /// Default paired-end format used by salmon (`IU`): inward-facing mates,
+    /// no strand information assumed. The safest default, since it rejects the
+    /// least.
     pub const fn paired_default() -> Self {
         Self::new(
             ReadType::PairedEnd,
@@ -87,7 +117,14 @@ impl LibraryFormat {
 
     /// Parse a library-type string (case-insensitive), e.g. `"IU"`, `"ISR"`,
     /// `"SF"`. Mirrors `parseLibraryFormatStringNew`.
+    ///
+    /// Only these 12 strings are accepted. The exhaustive table is deliberate:
+    /// the alternative — parsing the letters independently — would accept
+    /// nonsense like `OSS` and silently build a format no protocol produces.
     pub fn parse(s: &str) -> Result<Self, SalmonError> {
+        // `use` inside a function pulls the variant names into scope just for
+        // this block, so the table below reads as `Toward` rather than
+        // `ReadOrientation::Toward` twelve times over.
         use ReadOrientation::*;
         use ReadStrandedness::*;
         use ReadType::*;
@@ -112,11 +149,17 @@ impl LibraryFormat {
 
     /// Is this the `A`/`a` auto-detect sentinel? (handled by the caller, not a
     /// real [`LibraryFormat`]).
+    ///
+    /// `A` is not a format at all — it means "work it out from the data" — so it
+    /// cannot be represented by this type and is tested for separately.
     pub fn is_auto(s: &str) -> bool {
         s.eq_ignore_ascii_case("a")
     }
 
     /// The canonical string for this format, e.g. `"ISR"`.
+    ///
+    /// The exact inverse of [`Self::parse`] for the 12 real formats. Matching on
+    /// the triple at once is what makes the mapping total.
     pub fn canonical(&self) -> &'static str {
         use ReadOrientation::*;
         use ReadStrandedness::*;
@@ -131,10 +174,13 @@ impl LibraryFormat {
             (PairedEnd, Same, U) => "MU",
             (PairedEnd, Same, S) => "MSF",
             (PairedEnd, Same, A) => "MSR",
+            // Single-end has no meaningful orientation, so `_` ignores it.
             (SingleEnd, _, U) => "U",
             (SingleEnd, _, S) => "SF",
             (SingleEnd, _, A) => "SR",
             // Any non-canonical combination collapses to unstranded of its type.
+            // Reachable only if a format is assembled field-by-field rather than
+            // parsed; degrading to the permissive default beats panicking.
             (PairedEnd, _, _) => "IU",
             (SingleEnd, _, _) => "U",
         }
@@ -142,6 +188,10 @@ impl LibraryFormat {
 
     /// Stable integer id for the 12 canonical formats. Useful as a dense index
     /// (e.g. for `lib_format_counts.json` accounting).
+    ///
+    /// "Dense" means the ids are exactly `0..=11` with no gaps, so they can index
+    /// straight into a fixed-size array instead of needing a hash map. The ids
+    /// are also written into RAD files, so they must never be renumbered.
     pub fn format_id(&self) -> u8 {
         match self.canonical() {
             "IU" => 0,
@@ -156,10 +206,14 @@ impl LibraryFormat {
             "U" => 9,
             "SF" => 10,
             "SR" => 11,
+            // `unreachable!` documents an invariant: `canonical()` returns one of
+            // the strings above by construction, so reaching here would mean the
+            // two functions had drifted apart.
             _ => unreachable!("canonical() only returns the 12 known formats"),
         }
     }
 
+    /// Whether this format describes paired-end reads.
     pub fn is_paired(&self) -> bool {
         matches!(self.read_type, ReadType::PairedEnd)
     }
@@ -168,6 +222,9 @@ impl LibraryFormat {
     pub const MAX_FORMAT_ID: u8 = 11;
 
     /// Inverse of [`format_id`](Self::format_id). Mirrors `formatFromID`.
+    ///
+    /// Panics on an unknown id: these come from salmon's own files, so an
+    /// out-of-range value means the input is corrupt rather than merely unusual.
     pub fn from_format_id(id: u8) -> Self {
         let s = match id {
             0 => "IU",
@@ -188,6 +245,8 @@ impl LibraryFormat {
     }
 }
 
+// `Display` is the standard trait for user-facing text, so a format can be
+// dropped straight into a log line or a `format!` string.
 impl fmt::Display for LibraryFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.canonical())
@@ -198,6 +257,11 @@ impl fmt::Display for LibraryFormat {
 /// with the `expected` library format. Ports salmon's `compatibleHit(expected,
 /// observed)`: orientations must match, and the expected strandedness must be
 /// unstranded or equal to the observed.
+///
+/// The asymmetry is the point: an *unstranded expectation* accepts any observed
+/// strandedness (the protocol never promised one), while a *stranded
+/// expectation* accepts only its own. Orientation, by contrast, is a physical
+/// property of the protocol and must always agree.
 pub fn compatible_paired(expected: LibraryFormat, observed: LibraryFormat) -> bool {
     if expected.orientation != observed.orientation {
         return false;
@@ -208,11 +272,18 @@ pub fn compatible_paired(expected: LibraryFormat, observed: LibraryFormat) -> bo
 /// Whether a single-end or orphan mapping (mapping forward = `is_forward`, with
 /// the given mate status) is compatible with the `expected` format. Ports
 /// salmon's `compatibleHit(expected, start, isForward, ms)`.
+///
+/// With only one end observed there is no pair orientation to compare, so
+/// compatibility reduces to: does this read's strand match what the protocol
+/// promises *for that mate*? Note read 1 and read 2 have mirrored expectations,
+/// which is why the two orphan cases below swap `SA` and `AS`.
 pub fn compatible_single(expected: LibraryFormat, is_forward: bool, status: MateStatus) -> bool {
     use ReadStrandedness::*;
     let es = expected.strandedness;
     let same = expected.orientation == ReadOrientation::Same;
     match status {
+        // Single-end: sense expects forward, antisense expects reverse,
+        // unstranded accepts either.
         MateStatus::SingleEnd => {
             if is_forward {
                 es == U || es == S
@@ -220,19 +291,25 @@ pub fn compatible_single(expected: LibraryFormat, is_forward: bool, status: Mate
                 es == U || es == A
             }
         }
+        // Left (read 1) orphan.
         MateStatus::PairedEndLeft => {
             if same {
+                // `M` protocols use the single-ended S/A vocabulary, since both
+                // mates share a strand.
                 es == U || (es == S && is_forward) || (es == A && !is_forward)
             } else if is_forward {
+                // Forward read 1 is what `SA` ("read 1 sense") promises.
                 es == U || es == SA
             } else {
                 es == U || es == AS
             }
         }
+        // Right (read 2) orphan: the mirror image of the left case.
         MateStatus::PairedEndRight => {
             if same {
                 es == U || (es == S && is_forward) || (es == A && !is_forward)
             } else if is_forward {
+                // A forward read 2 means read 1 was antisense, i.e. `AS`.
                 es == U || es == AS
             } else {
                 es == U || es == SA
@@ -248,6 +325,14 @@ pub fn compatible_single(expected: LibraryFormat, is_forward: bool, status: Mate
 /// (`Toward`); same strands are `Same`. The strandedness follows read-1's strand
 /// (`SA`/`AS` for inward, `S`/`A` for same). Shared by fragment-length-derivation
 /// and naive-eq orientation tagging so they classify orientation identically.
+///
+/// This is the "what did we actually see" side of the comparison, versus the
+/// "what did the user promise" side held in the expected format.
+///
+/// Note that `Away` is never produced: outward-facing pairs are indistinguishable
+/// from inward ones by strand alone (the difference is which mate is leftmost),
+/// so this function reports the inward reading and callers that care about `O`
+/// protocols compare positions themselves.
 pub fn observed_paired_format(is_fw: bool, mate_fw: bool) -> LibraryFormat {
     let (orientation, strandedness) = if is_fw != mate_fw {
         (
@@ -274,6 +359,9 @@ pub fn observed_paired_format(is_fw: bool, mate_fw: bool) -> LibraryFormat {
 /// Unified compatibility check: dispatches to [`compatible_paired`] for a
 /// properly-paired mapping (using its `observed` format) and to
 /// [`compatible_single`] otherwise.
+///
+/// `observed == None` on a proper pair means the caller did not record an
+/// orientation; rather than guess, the mapping is accepted.
 pub fn is_compatible(
     expected: LibraryFormat,
     observed: Option<LibraryFormat>,
@@ -294,6 +382,8 @@ pub fn is_compatible(
 mod tests {
     use super::*;
 
+    /// `parse` and `canonical` must be exact inverses for all 12 formats,
+    /// otherwise a format could change identity on a round trip through text.
     #[test]
     fn roundtrip_all_formats() {
         for s in [
@@ -304,6 +394,7 @@ mod tests {
         }
     }
 
+    /// Users type `-l isr` as often as `-l ISR`.
     #[test]
     fn parse_is_case_insensitive() {
         assert_eq!(
@@ -312,11 +403,13 @@ mod tests {
         );
     }
 
+    /// A typo must be an error, not a silently-accepted default.
     #[test]
     fn unknown_format_errors() {
         assert!(LibraryFormat::parse("ZZ").is_err());
     }
 
+    /// `A` is the auto-detect request and must not be confused with a format.
     #[test]
     fn auto_detection_sentinel() {
         assert!(LibraryFormat::is_auto("A"));
@@ -324,6 +417,8 @@ mod tests {
         assert!(!LibraryFormat::is_auto("IU"));
     }
 
+    /// The ids index arrays directly and are written into RAD files, so they
+    /// must stay unique and gap-free.
     #[test]
     fn format_ids_are_unique_and_dense() {
         let formats = [
@@ -337,12 +432,16 @@ mod tests {
         assert_eq!(ids, (0..12).collect::<Vec<_>>());
     }
 
+    /// Pin the defaults, since they decide what an unspecified run assumes.
     #[test]
     fn defaults() {
         assert_eq!(LibraryFormat::paired_default().canonical(), "IU");
         assert_eq!(LibraryFormat::single_default().canonical(), "U");
     }
 
+    /// The three rules of paired compatibility: unstranded accepts anything of
+    /// its orientation, stranded accepts only its own strandedness, and a
+    /// different orientation is always fatal.
     #[test]
     fn paired_compatibility() {
         let isf = LibraryFormat::parse("ISF").unwrap();
@@ -359,6 +458,7 @@ mod tests {
         assert!(!compatible_paired(isf, osf));
     }
 
+    /// Single-end compatibility is purely a strand test.
     #[test]
     fn single_compatibility() {
         let sf = LibraryFormat::parse("SF").unwrap(); // single sense
