@@ -1,11 +1,29 @@
 //! The salmon RAD output writer.
 //!
-//! A single [`RadOutputWriter`] is created per output file; it writes the
-//! prelude + file-tag values up front and exposes a thread-safe
+//! # The concurrency shape
+//!
+//! Mapping runs on many threads at once, and all of them produce records for the
+//! same output file. Having every thread lock the file per record would serialize
+//! the whole run, so the work is split in two:
+//!
+//! * each worker thread owns a private [`FragmentChunkBuf`] and serializes its
+//!   records into it with no locking at all;
+//! * when that buffer is big enough the worker turns it into one self-contained,
+//!   already-compressed RAD *chunk* and hands the finished bytes to the shared
+//!   [`RadOutputWriter`], which appends it under a brief lock.
+//!
+//! So the expensive parts (serialization and compression) are fully parallel, and
+//! the shared writer only ever does a bulk append.
+//!
+//! A single [`RadOutputWriter`] is created per output file; it writes the prelude
+//! + file-tag values up front and exposes a thread-safe
 //! [`append_chunk_bytes`](RadOutputWriter::append_chunk_bytes) for worker
-//! threads. Each worker accumulates records into a per-thread
-//! [`FragmentChunkBuf`] and flushes it (one RAD chunk per flush) to the shared
-//! writer. [`finalize`](RadOutputWriter::finalize) backpatches the chunk count.
+//! threads. [`finalize`](RadOutputWriter::finalize) backpatches the chunk count.
+//!
+//! Because chunks land in whatever order the threads finish, chunk order in the
+//! file is not deterministic — which is fine, since a reader treats chunks as an
+//! unordered bag and salmon's determinism comes from order-independent
+//! aggregation downstream, not from file order.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -22,9 +40,14 @@ use crate::{schema, RadProfile, BAKED_ABUND, BAKED_FLD, BAKED_LIBFMT, BAKED_SCOR
 
 /// Shared, thread-safe RAD output sink for one file.
 pub struct RadOutputWriter {
+    /// The underlying file, wrapped so that appends from many threads are safe.
     ccw: ConcurrentChunkWriter<BufWriter<File>>,
+    /// Which profile records are written in (decides the per-hit layout).
     ctx: SalmonBulkContext,
     /// reserved-slot lengths, so baked values are padded/truncated to fit exactly.
+    ///
+    /// Backpatching overwrites bytes in place, so a baked array must be exactly
+    /// as long as the placeholder reserved in the header.
     fld_len: usize,
     num_refs: usize,
     /// values to backpatch at finalize (set after the pass; `None` ⇒ placeholder).
@@ -55,13 +78,18 @@ impl RadOutputWriter {
     ) -> anyhow::Result<Self> {
         let (prelude, file_tag_map): (RadPrelude, _) =
             schema::build_prelude(profile, is_paired, ref_names, ref_lengths, fld_len, codec);
+        // `BufWriter` batches small writes into large ones; without it every
+        // chunk append would become a separate system call.
         let file = BufWriter::new(File::create(path)?);
+        // Writing the prelude here means the file is valid (if empty) from the
+        // moment it is created.
         let fw = RadFileWriter::new(file, &prelude, &file_tag_map)?;
         Ok(Self {
             ccw: ConcurrentChunkWriter::new(fw),
             ctx: SalmonBulkContext { profile },
             fld_len,
             num_refs: ref_names.len(),
+            // Nothing is baked until the run finishes.
             pending_fld: None,
             pending_abund: None,
             pending_libfmt: None,
@@ -71,12 +99,14 @@ impl RadOutputWriter {
     }
 
     /// The chunk compression codec for this file. Worker buffers must compress
-    /// with this codec (see [`FragmentChunkBuf::with_capacity_codec`]).
+    /// with this codec (see [`FragmentChunkBuf::with_capacity_codec`]), because
+    /// the header advertises exactly one codec for the whole file.
     pub fn codec(&self) -> ChunkCodec {
         self.codec
     }
 
     /// The parsing/serialization context (profile) for records in this file.
+    /// Workers need it to serialize records the same way the header promises.
     pub fn context(&self) -> &SalmonBulkContext {
         &self.ctx
     }
@@ -110,25 +140,36 @@ impl RadOutputWriter {
     }
 
     /// Append a fully-framed chunk (from [`FragmentChunkBuf::take_bytes`]) to the
-    /// file. Thread-safe.
+    /// file. Thread-safe: takes `&self`, so every worker can call it directly.
     pub fn append_chunk_bytes(&self, bytes: &[u8]) -> anyhow::Result<()> {
         self.ccw.append_chunk_bytes(bytes)
     }
 
     /// Backpatch any baked FLD / abundances + the `baked_flags` marker, then flush
-    /// and finalize (backpatching the chunk count). Call after all workers have
-    /// flushed and dropped their references.
+    /// and finalize (backpatching the chunk count).
+    ///
+    /// Takes `self` by value, so the type system enforces that nothing can be
+    /// appended afterwards. Call after all workers have flushed and dropped their
+    /// references.
     pub fn finalize(self) -> anyhow::Result<()> {
+        // Move the fields out before consuming `self.ccw` below.
         let fld_len = self.fld_len;
         let num_refs = self.num_refs;
         let pending_fld = self.pending_fld;
         let pending_abund = self.pending_abund;
         let pending_libfmt = self.pending_libfmt;
         let pending_score_kind = self.pending_score_kind;
+        // Unwrap the concurrent wrapper back into a plain writer; this succeeds
+        // only once every worker handle is gone, which is what makes the
+        // in-place patching below safe.
         let mut w = self.ccw.into_writer()?;
+        // Accumulates which slots we actually filled, recorded in the header so a
+        // reader can tell real data from an untouched placeholder.
         let mut flags: u8 = 0;
         if let Some(mut pmf) = pending_fld {
             // pad with -inf (log 0) / truncate to the reserved slot length.
+            // -inf is the log of probability zero, so padding adds impossible
+            // lengths rather than uniformly likely ones.
             pmf.resize(fld_len, f64::NEG_INFINITY);
             w.backpatch_file_tag_value(crate::FRAG_LENGTH_DIST_TAG, &TagValue::ArrayF64(pmf))?;
             flags |= BAKED_FLD;
@@ -153,14 +194,19 @@ impl RadOutputWriter {
         if flags != 0 {
             w.backpatch_file_tag_value(crate::BAKED_FLAGS_TAG, &TagValue::U8(flags))?;
         }
+        // Writes the final chunk count into the header and flushes the file.
         w.finalize()?;
         Ok(())
     }
 }
 
 /// Per-thread accumulator of salmon RAD records, flushed as one chunk.
+///
+/// Private to one thread, so none of this needs locking.
 pub struct FragmentChunkBuf {
     buf: ChunkBuf,
+    /// Capacity to give the replacement buffer after a flush, so a long run
+    /// stops reallocating after the first chunk.
     cap: usize,
     codec: ChunkCodec,
 }
@@ -187,7 +233,8 @@ impl FragmentChunkBuf {
         self.buf.write_record(rec, ctx)
     }
 
-    /// Number of records accumulated so far.
+    /// Number of records accumulated so far. Callers use it, with
+    /// [`Self::byte_len`], to decide when a chunk is worth flushing.
     pub fn nrec(&self) -> u32 {
         self.buf.nrec()
     }
@@ -202,12 +249,17 @@ impl FragmentChunkBuf {
     /// the buffer for reuse. Fails only if compression fails (e.g. a zstd codec
     /// in a libradicl built without the `zstd` feature).
     pub fn take_bytes(&mut self) -> anyhow::Result<Vec<u8>> {
+        // `mem::replace` swaps a fresh buffer into place and hands back the old
+        // one, so the caller gets ownership of the finished bytes without
+        // copying and this buffer is immediately usable again.
         std::mem::replace(&mut self.buf, ChunkBuf::with_capacity(self.cap))
             .into_bytes_with_codec(self.codec)
     }
 }
 
 impl Default for FragmentChunkBuf {
+    /// 64 KiB: large enough that chunk framing and lock overhead are negligible,
+    /// small enough that many worker threads' buffers stay cheap.
     fn default() -> Self {
         Self::with_capacity(64 * 1024)
     }
