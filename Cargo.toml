@@ -60,6 +60,8 @@ xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 # compression
 flate2 = "1"
 zstd = "0.13"
+# parallel gzip decoding for FASTQ input (COMBINE-lab port of rapidgzip)
+rapidgzip-core = "0.1"
 # logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -69,6 +69,7 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | `-r, --unmatedReads <FASTQ>…` | Single-end read files. |
 | `-o, --output <DIR>` | Output directory. **Required.** |
 | `-p, --threads <N>` | Worker threads (`0` = all cores). |
+| `--gzipDecompressThreads <N>` | Worker budget for the parallel gzip decoder ([rapidgzip](https://github.com/COMBINE-lab/rapidgzip-rust)) used on `.gz` FASTQ input. The budget covers the whole run and is split across the input files, which are read concurrently; it defaults to `--threads`, bounded by the cores the process can run on and capped at 8. Pass `0` for the single-threaded decoder. Gzipped input that is not a regular file (process substitution, a FIFO, `/dev/stdin`) always takes the single-threaded path, since the parallel decoder needs positional access to a stable file. |
 | `-g, --geneMap <FILE>` | Transcript-to-gene map (GTF/GFF or 2-column TSV); also writes `quant.genes.sf`. |
 
 ### Mapping

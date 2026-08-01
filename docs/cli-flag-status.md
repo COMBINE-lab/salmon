@@ -53,6 +53,7 @@ misbehaves.
 |------|--------|-------|
 | `-l/--libType`, `-o/--output`, `-p/--threads`, `-z/--writeMappings`, `--writeBam` | ✅ | `--writeSam` is a visible alias for `--writeMappings`. `--writeMappings`/`--writeSam` and `--writeBam` are mutually exclusive, and are warned-and-ignored in `-a`/`--rad` modes. Records for a fragment are contiguous; no other order is imposed. |
 | `--bamCompressThreads` | ✅ | BGZF compression pool for `--writeBam`; defaults to ~1 worker per 3 mapping threads (max 8), balancing measured deflate throughput against record production. Rust-port feature; not in this salmon build. |
+| `--gzipDecompressThreads` | ✅ | Worker budget for the parallel gzip decoder (rapidgzip) on `.gz` FASTQ input; whole-run budget split across the concurrently-read input files, defaulting to `--threads`, bounded by the cores the process can run on and capped at 8. `0` selects the serial flate2 decoder, which is also the automatic fallback for gzipped input that is not a regular file. Rust-port feature; not in this salmon build. |
 | `--useEM` | ✅ | VBEM is the default; `--useEM` selects plain EM. |
 | `--meta` | ✅ | Metagenomic preset: plain EM, no range-factorized eq-classes, uniform init (the Rust EM already inits uniformly). Overrides `--useEM`/`--rangeFactorizationBins`. |
 | `--useVBOpt` | 🔁 | VBEM is already the default. |

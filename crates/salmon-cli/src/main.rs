@@ -484,6 +484,20 @@ struct QuantArgs {
         conflicts_with = "write_mappings"
     )]
     bam_compress_threads: Option<std::num::NonZeroUsize>,
+    /// Maximum worker threads used to decompress gzipped FASTQ input, which
+    /// salmon decodes in parallel with rapidgzip. The budget covers the whole
+    /// run and is split across the input files, since they are read
+    /// concurrently. The default derives from --threads, bounded by the cores
+    /// this process can run on and capped at 8: one worker already decodes far
+    /// more FASTQ than one mapping thread consumes, so beyond that the cores do
+    /// more good mapping reads. An explicit value is used as given.
+    ///
+    /// Pass 0 to fall back to the single-threaded gzip decoder. Uncompressed
+    /// FASTQ, and gzipped input that is not a regular file (process
+    /// substitution, a FIFO, /dev/stdin), are unaffected: the parallel decoder
+    /// needs positional access to a stable file.
+    #[arg(long = "gzipDecompressThreads")]
+    gzip_decompress_threads: Option<usize>,
     /// Write per-fragment mappings to a RAD file at this path. Sketch or
     /// selective-alignment profile is chosen automatically from the mapping
     /// mode. Quantification still runs; add --skipQuant to map only. The file is
@@ -1487,6 +1501,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.write_mappings = args.write_mappings;
     opts.write_bam = args.write_bam;
     opts.bam_compress_threads = args.bam_compress_threads;
+    opts.gzip_decompress_threads = args.gzip_decompress_threads;
     opts.write_rad = args.write_rad;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
@@ -1913,6 +1928,25 @@ mod tests {
             .map(|_| ())
             .expect_err("0 compression workers is not a valid pool size");
         assert_eq!(zero.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    /// `--gzipDecompressThreads` is unset by default (the budget is derived
+    /// from `--threads`), and unlike `--bamCompressThreads` it accepts 0 —
+    /// that is the documented opt-out into the serial gzip decoder, not an
+    /// empty worker pool.
+    #[test]
+    fn gzip_decompress_threads_is_optional_and_accepts_zero() {
+        let derived = quant_args(&[]).unwrap();
+        assert_eq!(
+            derived.gzip_decompress_threads, None,
+            "unset must stay None so the derived default applies"
+        );
+
+        let explicit = quant_args(&["--gzipDecompressThreads", "4"]).unwrap();
+        assert_eq!(explicit.gzip_decompress_threads, Some(4));
+
+        let off = quant_args(&["--gzipDecompressThreads", "0"]).unwrap();
+        assert_eq!(off.gzip_decompress_threads, Some(0));
     }
 
     /// Without `--writeBam` there is nothing to compress, so the flag is a

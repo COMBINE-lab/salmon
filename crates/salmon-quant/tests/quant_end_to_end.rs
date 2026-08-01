@@ -633,3 +633,68 @@ fn pseudoalignment_quantification_tracks_truth() {
         );
     }
 }
+
+/// Gzip `src` into `dst` as two concatenated members split at a record
+/// boundary, the shape produced by `cat lane1.fq.gz lane2.fq.gz`.
+fn gzip_as_two_members(src: &Path, dst: &Path) {
+    use std::io::Write;
+
+    let plain = std::fs::read(src).unwrap();
+    let lines: Vec<&[u8]> = plain.split_inclusive(|&b| b == b'\n').collect();
+    let split_line = (lines.len() / 2) / 4 * 4; // keep whole 4-line records
+    let split = lines[..split_line].iter().map(|l| l.len()).sum::<usize>();
+
+    let mut out = std::fs::File::create(dst).unwrap();
+    for member in [&plain[..split], &plain[split..]] {
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(1));
+        enc.write_all(member).unwrap();
+        out.write_all(&enc.finish().unwrap()).unwrap();
+    }
+    out.flush().unwrap();
+}
+
+/// Gzipped FASTQ input must quantify exactly like the uncompressed input, and
+/// the parallel (rapidgzip) and serial (flate2) decoders must agree, since the
+/// decoder only changes how the bytes arrive. Mapping stays single-threaded so
+/// any difference has to come from decompression.
+#[test]
+fn gzipped_reads_quantify_identically_to_plain_reads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, _truth) = simulate(tmp.path());
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let r1gz = tmp.path().join("reads_1.fq.gz");
+    let r2gz = tmp.path().join("reads_2.fq.gz");
+    gzip_as_two_members(&r1, &r1gz);
+    gzip_as_two_members(&r2, &r2gz);
+
+    let quant = |tag: &str, m1: &Path, m2: &Path, gz_threads: Option<usize>| {
+        let mut opts = QuantOptions::new(idx_dir.clone(), tmp.path().join(tag));
+        opts.mates1 = vec![m1.to_path_buf()];
+        opts.mates2 = vec![m2.to_path_buf()];
+        opts.lib_type = "IU".to_string();
+        opts.num_threads = 1;
+        opts.gzip_decompress_threads = gz_threads;
+        quantify(&opts).expect("quantify")
+    };
+
+    let plain = quant("plain", &r1, &r2, None);
+    assert!(plain.num_mapped > 0, "fixture mapped nothing");
+
+    for (tag, gz_threads) in [("gz_parallel", None), ("gz_serial", Some(0))] {
+        let got = quant(tag, &r1gz, &r2gz, gz_threads);
+        assert_eq!(got.num_mapped, plain.num_mapped, "{tag}: num_mapped");
+        assert_eq!(got.names, plain.names, "{tag}: transcript names");
+        for (name, (a, b)) in plain
+            .names
+            .iter()
+            .zip(got.counts.iter().zip(plain.counts.iter()))
+        {
+            assert!((a - b).abs() < 1e-9, "{tag}: {name} count {a} != {b}");
+        }
+    }
+}

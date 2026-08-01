@@ -89,6 +89,13 @@ pub struct QuantOptions {
     /// compression just keeps up with record production; set it only to
     /// benchmark or to compensate for unusually slow/fast storage.
     pub bam_compress_threads: Option<std::num::NonZeroUsize>,
+    /// worker budget for the parallel gzip decoder used on `.gz` FASTQ input
+    /// (`--gzipDecompressThreads`). `None` derives it from `num_threads`
+    /// bounded by the available cores; `Some(0)` falls back to the serial
+    /// `flate2` decoder. The budget is a whole-run ceiling and is split across
+    /// the input files, which paraseq reads concurrently. See
+    /// [`gz_worker_budget`].
+    pub gzip_decompress_threads: Option<usize>,
     /// write per-fragment mappings to this RAD file (`--writeRad`); sketch or
     /// selective-alignment profile is chosen from `sketch`. Quantification still
     /// runs; combine with `skip_quant` to map only.
@@ -199,6 +206,7 @@ impl QuantOptions {
             write_mappings: None,
             write_bam: None,
             bam_compress_threads: None,
+            gzip_decompress_threads: None,
             write_rad: None,
             deterministic_fld: false,
             seq_bias: false,
@@ -591,9 +599,20 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             }
         );
         if opts.is_paired() {
-            run_paired(&opts.mates1, &opts.mates2, &mut proc, nthreads)?;
+            run_paired(
+                &opts.mates1,
+                &opts.mates2,
+                &mut proc,
+                nthreads,
+                opts.gzip_decompress_threads,
+            )?;
         } else {
-            run_single(&opts.unmated, &mut proc, nthreads)?;
+            run_single(
+                &opts.unmated,
+                &mut proc,
+                nthreads,
+                opts.gzip_decompress_threads,
+            )?;
         }
     }
     // `--deterministic`: replace the (untrained) online FLD with one built ONCE,
@@ -1177,21 +1196,99 @@ fn dump_eq_classes(
     Ok(())
 }
 
-/// Open a (optionally gzipped) read file as a boxed reader.
-fn open_reader(path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
-    let f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    if path.extension().and_then(|e| e.to_str()) == Some("gz") {
-        Ok(Box::new(MultiGzDecoder::new(f)))
-    } else {
-        Ok(Box::new(f))
-    }
+/// Ceiling on the derived whole-run gzip worker budget.
+///
+/// rapidgzip creates workers lazily and retires them under consumer
+/// backpressure, so this is a cap and not an allocation, but there is no point
+/// raising it: one worker decodes far more FASTQ than one mapping thread
+/// consumes, so past a handful of workers decompression has already stopped
+/// being the bottleneck and the remaining cores do more good mapping reads.
+const MAX_DERIVED_GZ_THREADS: usize = 8;
+
+/// Cores this process can actually run on, falling back to 1.
+fn available_cpus() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
 }
 
-fn run_single(paths: &[PathBuf], proc: &mut QuantProcessor, nthreads: usize) -> Result<()> {
+/// Per-file worker budget for the parallel gzip decoder.
+///
+/// `setting` is [`QuantOptions::gzip_decompress_threads`]: `None` derives the
+/// budget, `Some(0)` disables the parallel decoder entirely. The whole-run
+/// budget is split across `n_files` because paraseq opens every input file up
+/// front and decodes them concurrently, so a per-file ceiling would multiply by
+/// the number of files.
+///
+/// The derived budget is the mapping thread count bounded by `cpus`, the cores
+/// this process can actually run on: `--threads` is a request, not a promise,
+/// and paraseq itself caps its mapping pool at the core count, so deriving from
+/// an oversized `--threads` would hand the decoder workers that have no core to
+/// run on and would only contend with mapping. An explicit `setting` is taken
+/// as given — it is the knob for deliberately overriding this.
+fn gz_worker_budget(setting: Option<usize>, nthreads: usize, cpus: usize, n_files: usize) -> usize {
+    let total = match setting {
+        Some(0) => return 0,
+        Some(n) => n,
+        None => nthreads.min(cpus).clamp(1, MAX_DERIVED_GZ_THREADS),
+    };
+    (total / n_files.max(1)).max(1)
+}
+
+/// Open a (optionally gzipped) read file as a boxed reader.
+///
+/// A `.gz` input is decoded by rapidgzip's parallel decoder with at most
+/// `gz_threads` workers. That decoder needs positional (`pread`) access to a
+/// stable file, so it is used only for regular files: process substitution,
+/// FIFOs and `/dev/stdin` fall back to the serial [`MultiGzDecoder`], as does
+/// any input whose framing rapidgzip rejects up front — flate2 then produces
+/// the same error it always did for genuinely malformed input. Failures found
+/// mid-stream (a bad CRC or member footer) surface as read errors and cannot
+/// fall back; pass `--gzipDecompressThreads 0` to take the serial path for the
+/// whole run.
+fn open_reader(path: &Path, gz_threads: usize) -> Result<Box<dyn std::io::Read + Send>> {
+    if path.extension().and_then(|e| e.to_str()) != Some("gz") {
+        let f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        return Ok(Box::new(f));
+    }
+
+    let is_regular_file = std::fs::metadata(path).is_ok_and(|m| m.is_file());
+    if gz_threads > 0 && is_regular_file {
+        match rapidgzip_core::Decoder::builder()
+            .decoder_threads(gz_threads)
+            .build()
+            .map_err(anyhow::Error::from)
+            .and_then(|d| d.open(path).map_err(anyhow::Error::from))
+        {
+            Ok(reader) => {
+                tracing::debug!(
+                    "decoding {} with rapidgzip ({gz_threads} worker(s))",
+                    path.display()
+                );
+                return Ok(Box::new(reader));
+            }
+            Err(e) => tracing::debug!(
+                "rapidgzip declined {}: {e}; falling back to serial gzip",
+                path.display()
+            ),
+        }
+    }
+
+    let f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    Ok(Box::new(MultiGzDecoder::new(f)))
+}
+
+fn run_single(
+    paths: &[PathBuf],
+    proc: &mut QuantProcessor,
+    nthreads: usize,
+    gz_setting: Option<usize>,
+) -> Result<()> {
+    let gz_threads = gz_worker_budget(gz_setting, nthreads, available_cpus(), paths.len());
     let mut readers = Vec::with_capacity(paths.len());
     for p in paths {
         readers.push(
-            reader_with_batch_size(open_reader(p)?)
+            reader_with_batch_size(open_reader(p, gz_threads)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", p.display()))?,
         );
     }
@@ -1208,19 +1305,26 @@ fn run_paired(
     mates2: &[PathBuf],
     proc: &mut QuantProcessor,
     nthreads: usize,
+    gz_setting: Option<usize>,
 ) -> Result<()> {
     anyhow::ensure!(
         mates1.len() == mates2.len(),
         "mates1 and mates2 must have the same number of files"
     );
+    let gz_threads = gz_worker_budget(
+        gz_setting,
+        nthreads,
+        available_cpus(),
+        mates1.len() + mates2.len(),
+    );
     let mut readers = Vec::with_capacity(mates1.len() * 2);
     for (a, b) in mates1.iter().zip(mates2.iter()) {
         readers.push(
-            reader_with_batch_size(open_reader(a)?)
+            reader_with_batch_size(open_reader(a, gz_threads)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", a.display()))?,
         );
         readers.push(
-            reader_with_batch_size(open_reader(b)?)
+            reader_with_batch_size(open_reader(b, gz_threads)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", b.display()))?,
         );
     }
@@ -1230,4 +1334,100 @@ fn run_paired(
         .process_parallel_paired(proc, nthreads, None)
         .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gz_worker_budget, open_reader, MAX_DERIVED_GZ_THREADS};
+    use std::io::{Read, Write};
+
+    #[test]
+    fn gz_budget_is_split_across_concurrently_read_files() {
+        // Derived from the mapping threads, then divided: paraseq decodes every
+        // input file at once, so a per-file ceiling would multiply by the file
+        // count and oversubscribe the machine.
+        assert_eq!(gz_worker_budget(None, 8, 16, 2), 4);
+        assert_eq!(gz_worker_budget(None, 8, 16, 1), 8);
+        // Never below one worker, however many files there are.
+        assert_eq!(gz_worker_budget(None, 2, 16, 8), 1);
+        // The derived budget is capped, and never exceeds the cores the process
+        // can actually run on however large --threads is.
+        assert_eq!(gz_worker_budget(None, 64, 16, 1), MAX_DERIVED_GZ_THREADS);
+        assert_eq!(gz_worker_budget(None, 64, 4, 1), 4);
+        assert_eq!(gz_worker_budget(None, 8, 1, 1), 1);
+        // An explicit budget is taken as given: neither cap applies.
+        assert_eq!(gz_worker_budget(Some(32), 4, 4, 1), 32);
+        // 0 is the opt-out into the serial decoder.
+        assert_eq!(gz_worker_budget(Some(0), 8, 16, 1), 0);
+    }
+
+    /// Both decoders must yield the same bytes, including across the member
+    /// boundary of a concatenated (multi-member) gzip file — the shape produced
+    /// by `cat lane1.fq.gz lane2.fq.gz`.
+    #[test]
+    fn parallel_and_serial_gzip_decode_identically() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain: Vec<u8> = (0..2000)
+            .flat_map(|i| format!("@r{i}\nACGTACGTAC\n+\nIIIIIIIIII\n").into_bytes())
+            .collect();
+        let (first, second) = plain.split_at(plain.len() / 2);
+
+        let path = dir.path().join("reads.fq.gz");
+        let mut out = std::fs::File::create(&path).unwrap();
+        for member in [first, second] {
+            let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(1));
+            enc.write_all(member).unwrap();
+            out.write_all(&enc.finish().unwrap()).unwrap();
+        }
+        out.flush().unwrap();
+        drop(out);
+
+        let read_all = |threads| {
+            let mut buf = Vec::new();
+            open_reader(&path, threads)
+                .unwrap()
+                .read_to_end(&mut buf)
+                .unwrap();
+            buf
+        };
+        assert_eq!(read_all(0), plain, "serial decode");
+        assert_eq!(read_all(4), plain, "parallel decode");
+    }
+
+    /// A gzipped input that is not a regular file has no positional access, so
+    /// it must fall back to the serial decoder instead of failing.
+    #[cfg(unix)]
+    #[test]
+    fn non_regular_gzip_input_falls_back_to_serial() {
+        use std::os::unix::fs::FileTypeExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("reads.fq.gz");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(status.success());
+        assert!(std::fs::metadata(&fifo).unwrap().file_type().is_fifo());
+
+        let plain = b"@r0\nACGT\n+\nIIII\n".to_vec();
+        let writer = {
+            let fifo = fifo.clone();
+            let plain = plain.clone();
+            std::thread::spawn(move || {
+                let f = std::fs::OpenOptions::new().write(true).open(fifo).unwrap();
+                let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::new(1));
+                enc.write_all(&plain).unwrap();
+                enc.finish().unwrap();
+            })
+        };
+
+        let mut buf = Vec::new();
+        open_reader(&fifo, 4)
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        writer.join().unwrap();
+        assert_eq!(buf, plain);
+    }
 }

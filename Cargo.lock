@@ -1650,6 +1650,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libz-rs-sys"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50474818739ccab820cd57bca432d6b02d090b47f9e85501d963cd05851f82eb"
+dependencies = [
+ "zlib-rs",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2467,6 +2476,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rapidgzip-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c8915419d173342f3f9f104024f8f67a378944fdef494958d2ebdd756fe4e8a"
+dependencies = [
+ "crossbeam-deque",
+ "libz-rs-sys",
+]
+
+[[package]]
 name = "rapidhash"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2770,6 +2789,7 @@ dependencies = [
  "noodles-sam",
  "paraseq",
  "piscem-rs",
+ "rapidgzip-core",
  "rayon",
  "salmon-core",
  "salmon-eqclass",
