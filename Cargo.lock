@@ -2249,8 +2249,6 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "piscem-rs"
 version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d22949be8fb80f58c9507cca3eb628d83b4db83ff71864de02f0fa9c0046653"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2874,8 +2872,6 @@ checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
 [[package]]
 name = "seq_geom_parser"
 version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8c95f700367e275cebf0698ab89aa8ce184bb0ef1ff2fdc31f741befa208921"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -3002,8 +2998,6 @@ checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 [[package]]
 name = "sshash-lib"
 version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcc9837c822b81ee638778a09aba6e4192ce3ddff64ecbcd1f09bda5fb3afe87"
 dependencies = [
  "anyhow",
  "epserde",

@@ -117,3 +117,12 @@ lto = "thin"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# TEMPORARY (bucket-cache branch): build against local sshash-rs / piscem-rs
+# checkouts carrying the bucket-bounds memoization. Cargo only honours a
+# [patch] table from the workspace root, so piscem-rs's own patch section does
+# not apply transitively and sshash-lib has to be redirected here as well.
+# Revert to the published versions once the change is released.
+[patch.crates-io]
+piscem-rs = { path = "/scratch1/rob/alevin-fry-ecosystem/piscem-rs" }
+sshash-lib = { path = "/scratch1/rob/alevin-fry-ecosystem/sshash-rs-dev/crates/sshash-lib" }
