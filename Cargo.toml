@@ -126,3 +126,7 @@ lto = "thin"
 [patch.crates-io]
 piscem-rs = { path = "/scratch1/rob/alevin-fry-ecosystem/piscem-rs" }
 sshash-lib = { path = "/scratch1/rob/alevin-fry-ecosystem/sshash-rs-dev/crates/sshash-lib" }
+# TESTING ONLY — libradicl and bramble-rs bumped to noodles 0.114 upstream but
+# not yet published. Remove both once 0.16 / 0.1.8 are on crates.io.
+libradicl = { path = "/scratch2/rob/salmon-rewrite/libradicl/libradicl" }
+bramble-rs = { path = "/scratch2/rob/salmon-rewrite/bramble/bramble-rs" }

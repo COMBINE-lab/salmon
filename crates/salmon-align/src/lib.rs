@@ -1017,12 +1017,12 @@ fn stream_online_pass(bam_path: &Path, cfg: &PassCfg, acc: &mut PassAccum) -> Re
             .unwrap_or(4)
             .clamp(1, 4);
         let workers = std::num::NonZeroUsize::new(workers).unwrap();
-        with_bgzf_pool(workers, || {
-            let decoder = noodles_bgzf::io::MultithreadedReader::new(file);
+        {
+            let decoder = noodles_bgzf::io::MultithreadedReader::with_worker_count(workers, file);
             let mut reader = bam::io::Reader::from(decoder);
             let header = reader.read_header().context("reading BAM header")?;
             run_online_pass(reader.records(), &header, cfg, acc)
-        })?
+        }
     }
 }
 
@@ -1553,35 +1553,6 @@ fn apply_bias_correction(
             );
         });
     bias_dump
-}
-
-/// Run `f` with a dedicated rayon pool of `workers` threads installed as the
-/// current pool.
-///
-/// noodles 0.48 deprecated `MultithreadedReader/Writer::with_worker_count` and
-/// made it a no-op: BGZF block work is now dispatched via `rayon::spawn`, which
-/// resolves to `Registry::current()`. Without an installed pool that is
-/// salmon's *global* rayon pool — sized to `-p` and already busy — so the
-/// requested worker count would silently control nothing. Installing a pool
-/// around the read/write keeps the count meaningful and keeps BGZF work off the
-/// mapping threads.
-pub(crate) fn with_bgzf_pool<T>(
-    workers: std::num::NonZeroUsize,
-    f: impl FnOnce() -> T + Send,
-) -> anyhow::Result<T>
-where
-    T: Send,
-{
-    // `+ 1`: `install` occupies one pool thread with `f` itself, while noodles
-    // spawns block work into the same pool and blocks awaiting it. Sizing the
-    // pool exactly to `workers` leaves nothing to run that work on and deadlocks
-    // at a worker count of 1.
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers.get() + 1)
-        .thread_name(|i| format!("salmon-bgzf-{i}"))
-        .build()
-        .context("building the BGZF thread pool")?;
-    Ok(pool.install(f))
 }
 
 /// Run alignment-based quantification end-to-end.
