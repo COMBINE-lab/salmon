@@ -23,7 +23,7 @@ noodles-bgzf = "0.51"
 # public API is plain structs, so it composes with salmon's own noodles for BAM
 # reading. bramble-rs is kept on the same noodles as salmon and libradicl so the
 # graph carries a single version of each noodles crate.
-bramble-rs = "0.1.7"
+bramble-rs = "0.1.8"
 rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 flate2 = { workspace = true }

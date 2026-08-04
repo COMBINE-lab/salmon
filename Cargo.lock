@@ -318,7 +318,9 @@ dependencies = [
 
 [[package]]
 name = "bramble-rs"
-version = "0.1.7"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bbb960b069a74163a4997b9b84e867b56efdd05a200065601cb2e63a8a2fbbc"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1612,7 +1614,9 @@ dependencies = [
 
 [[package]]
 name = "libradicl"
-version = "0.15.0"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94299a663c37ed5a8ad1d759cae19af9b9bbd520aa90d8997457efe2bb5bd5ce"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1637,7 +1641,9 @@ dependencies = [
 
 [[package]]
 name = "libradicl-macros"
-version = "0.15.0"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9705ac0ed56e352381bec395e8822831b922f32a3857b04edf04017e912cb5a4"
 dependencies = [
  "proc-macro2",
  "quote",

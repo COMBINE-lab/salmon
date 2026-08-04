@@ -72,7 +72,7 @@ cf1-rs = "0.5"
 piscem-rs = "0.6.4"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
-libradicl = { version = "0.15", features = ["zstd"] }
+libradicl = { version = "0.16", features = ["zstd"] }
 
 # dev / test helpers
 tempfile = "3"
@@ -126,7 +126,3 @@ lto = "thin"
 [patch.crates-io]
 piscem-rs = { path = "/scratch1/rob/alevin-fry-ecosystem/piscem-rs" }
 sshash-lib = { path = "/scratch1/rob/alevin-fry-ecosystem/sshash-rs-dev/crates/sshash-lib" }
-# TESTING ONLY — libradicl and bramble-rs bumped to noodles 0.114 upstream but
-# not yet published. Remove both once 0.16 / 0.1.8 are on crates.io.
-libradicl = { path = "/scratch2/rob/salmon-rewrite/libradicl/libradicl" }
-bramble-rs = { path = "/scratch2/rob/salmon-rewrite/bramble/bramble-rs" }
