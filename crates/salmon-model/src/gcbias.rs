@@ -1,13 +1,29 @@
 //! Fragment-GC bias model (`GCFragModel`).
 //!
+//! # The effect being modelled
+//!
+//! PCR amplification, which every library prep relies on, does not copy all
+//! fragments equally well. Fragments that are very GC-rich or very GC-poor
+//! amplify less efficiently than middling ones, so they end up under-represented
+//! in the sequencer's output. A transcript with unusual GC content therefore
+//! looks less abundant than it is — an artefact of chemistry, not biology.
+//!
 //! A port of salmon's `GCFragModel` (`include/.../model/GCFragModel.hpp`): a
 //! `condBins × numGCBins` table of fragment counts, where a fragment is keyed by
 //! its **GC fraction** (0–100, → `numGCBins` bins) and a **conditioning context**
-//! (a coarse sequence/context fraction, → `condBins` bins). An *observed* model
-//! (from mapped fragments) and an *expected* model (from the transcriptome) are
-//! each normalized per conditioning row into a distribution, then divided —
-//! [`gc_ratio`] — to give the per-`(context, GC)` bias factor used to weight
-//! fragments in the bias-corrected effective length.
+//! (a coarse sequence/context fraction, → `condBins` bins).
+//!
+//! **Why condition on the context.** GC content immediately *around* a fragment's
+//! ends also affects priming and ligation. Splitting the table by that context
+//! keeps the GC effect from absorbing what is really a sequence-composition
+//! effect at the ends.
+//!
+//! An *observed* model (from mapped fragments) and an *expected* model (from the
+//! transcriptome) are each normalized per conditioning row into a distribution,
+//! then divided — [`gc_ratio`] — to give the per-`(context, GC)` bias factor used
+//! to weight fragments in the bias-corrected effective length. The expected model
+//! answers "what GC contents would we see if there were no GC bias at all, given
+//! these transcripts and abundances?", so the ratio isolates the bias itself.
 //!
 //! salmon accumulates the observed model in log space and the expected in linear
 //! space, but both are normalized to linear distributions before the ratio is
@@ -21,12 +37,23 @@ pub const DEFAULT_COND_BINS: usize = 3;
 /// (`salmon::defaults::numFragGCBins`).
 pub const DEFAULT_GC_BINS: usize = 25;
 /// salmon's `ratio()` clamp (`gcBias = gcCounts.ratio(transcriptGCDist, 1000.0)`).
+///
+/// A GC bin observed a handful of times against a near-zero expectation would
+/// otherwise produce an enormous factor from pure noise; the clamp bounds how
+/// far any single cell can move a transcript's effective length.
 pub const GC_MAX_RATIO: f64 = 1000.0;
 /// salmon's per-row normalization prior.
+///
+/// A pseudocount added to every bin before normalizing, so an unobserved GC bin
+/// gets a small probability instead of exactly zero (which would make its ratio a
+/// division by zero).
 const NORM_PRIOR: f64 = 0.1;
 
 /// Bin a 0–100 fraction into `n` bins (salmon's `GCDesc::fragBin(n)`/`contextBin(n)`:
 /// `min(n-1, floor(frac / (100/n)))`). With `n == 101` this is the identity.
+///
+/// Binning trades resolution for statistical strength: 25 bins each see plenty of
+/// fragments, whereas 101 would be noisy on a small sample.
 #[inline]
 pub fn bin_frac(frac: i32, n: usize) -> usize {
     if n == 101 {
@@ -129,6 +156,10 @@ impl GcFragModel {
 
     /// Normalize each conditioning row into a distribution over GC bins, with a
     /// pseudocount `prior` (salmon's default 0.1). Idempotent.
+    ///
+    /// Per *row*, not over the whole table: the ratio compares like with like
+    /// within one context, so each context's GC distribution must sum to 1 on its
+    /// own.
     pub fn normalize(&mut self) {
         if self.normalized {
             return;
@@ -155,6 +186,12 @@ impl GcFragModel {
 
 /// Per-cell bias ratio `observed / expected`, clamped to `[1/max_ratio, max_ratio]`
 /// (salmon's `GCFragModel::ratio`). Both models are normalized first.
+///
+/// A value above 1 means fragments of that GC/context were seen *more* often than
+/// chance predicts, so such fragments are easy to sequence; below 1 means they are
+/// suppressed. The effective-length convolution multiplies each candidate fragment
+/// by its factor, so a transcript made of suppressed fragments gets a smaller
+/// effective length and therefore a higher inferred abundance.
 pub fn gc_ratio(
     observed: &mut GcFragModel,
     expected: &mut GcFragModel,
@@ -227,6 +264,10 @@ fn lrint(x: f64) -> i32 {
 
 /// Cumulative G+C counts (salmon's `Transcript::GCCount_`): `prefix[p]` is the
 /// number of `G`/`C` bases in `seq[0..=p]`.
+///
+/// A *prefix sum*: with it, the GC count of any interval is one subtraction
+/// (`prefix[b] - prefix[a-1]`) instead of a scan. The convolution asks that
+/// question for every (start, length) pair, so the difference is decisive.
 pub fn gc_prefix(seq: &[u8]) -> Vec<u32> {
     let mut prefix = Vec::with_capacity(seq.len());
     let mut acc = 0u32;
@@ -262,6 +303,11 @@ pub fn gc_frac(prefix: &[u32], s: i32, e: i32) -> i32 {
 /// per-transcript dense cumulative-GC arrays (`Vec<Vec<u32>>`, 4 bytes/base) with
 /// one bitvector (~1 bit/base + 25% rank overhead) — GC in any interval is a
 /// difference of two O(1) ranks. Build once over the whole transcriptome.
+///
+/// A *rank* query answers "how many bits are set before position `i`?" in
+/// constant time, using a small precomputed table of block counts. That is
+/// exactly a prefix sum, at roughly 1/25th of the memory: on a human
+/// transcriptome plus genome decoy, ~300 MB becomes ~12 MB.
 pub struct GcRank {
     rank: sux::rank_sel::Rank9,
 }
@@ -299,6 +345,10 @@ impl GcRank {
 /// (default) or a window of the shared [`GcRank`] (`--reduceGCMemory`). Both
 /// return the *same* cumulative counts, so results are identical; `cum(p)` is
 /// the number of G/C bases in transcript-local `[0, p]`.
+///
+/// An enum rather than a trait object: the choice is made once per run, and this
+/// keeps the call a predictable branch instead of an indirect jump on a path
+/// taken billions of times.
 #[derive(Clone, Copy)]
 pub enum GcView<'a> {
     Dense(&'a [u32]),
@@ -370,6 +420,11 @@ impl<'a> GcStore<'a> {
 /// content over a 5-base 5' window `[s−3, s+1]` and a 5-base 3' window
 /// `[e−1, e+3]` (edge-clamped). Returns `None` when the context window is empty
 /// (matching salmon's `valid = false`).
+///
+/// The two returned numbers are exactly the table's two axes: how GC-rich the
+/// fragment is overall, and how GC-rich the short windows straddling its two ends
+/// are. The windows deliberately extend a few bases *outside* the fragment,
+/// because priming and ligation see the sequence just beyond the cut as well.
 #[inline]
 pub fn gc_desc(v: &GcView, s: i32, e: i32) -> Option<(i32, i32)> {
     let last = v.ref_len() as i32 - 1;
@@ -508,6 +563,16 @@ impl GcContext {
 /// sequence-bias model. `k` is the leading offset salmon excludes from the
 /// fragment-start loop (`9` with `--seqBias`, `1` otherwise); `stride` subsamples
 /// fragment lengths ([`GC_SAMP_STRIDE`]).
+///
+/// In words: enumerate every fragment that *could* have been sequenced, weight it
+/// by how abundant its transcript is and how likely its length is, and tally its
+/// GC content. The result is the GC distribution an unbiased protocol would have
+/// produced. Weighting by abundance matters because a highly expressed transcript
+/// dominates the observed distribution and must dominate the expected one too.
+///
+/// `stride` is a pure speed knob: the fragment-length distribution is smooth, so
+/// sampling every fifth length changes the model negligibly while cutting the
+/// work fivefold.
 #[allow(clippy::too_many_arguments)]
 pub fn build_expected_gc<'a, FS, FP>(
     num_targets: usize,
@@ -601,6 +666,9 @@ where
 ///
 /// `gc_bias` is the normalized observed/expected ratio model ([`gc_ratio`]).
 /// `seq_models` is `(obs_fw, exp_fw, obs_rc, exp_rc)` when `--seqBias` is also on.
+///
+/// This is the GC-specific sibling of [`crate::bias::corrected_effective_length_full`];
+/// see that function for what the convolution and the lower barrier are doing.
 #[allow(clippy::too_many_arguments)]
 pub fn gc_corrected_effective_length(
     seq: &[u8],
@@ -700,6 +768,7 @@ pub fn gc_corrected_effective_length(
 mod tests {
     use super::*;
 
+    /// 101 bins over a 0-100 fraction is one bin per value, i.e. no binning.
     #[test]
     fn bin_frac_identity_at_101() {
         assert_eq!(bin_frac(0, 101), 0);
@@ -707,6 +776,8 @@ mod tests {
         assert_eq!(bin_frac(100, 101), 100);
     }
 
+    /// Coarse binning must floor, and must clamp 100 into the last bin rather
+    /// than overflowing past it.
     #[test]
     fn bin_frac_coarse() {
         // 3 bins: width 33.33 -> [0,33),[33,66),[66,100]
@@ -717,6 +788,8 @@ mod tests {
         assert_eq!(bin_frac(100, 3), 2); // clamped to n-1
     }
 
+    /// Each conditioning row is an independent distribution, so each must sum to
+    /// 1 on its own.
     #[test]
     fn normalize_makes_rows_sum_to_one() {
         let mut m = GcFragModel::new(2, 5);
@@ -728,6 +801,8 @@ mod tests {
         assert!((row0 - 1.0).abs() < 1e-9, "row0 sum = {row0}");
     }
 
+    /// No bias in the data must mean no correction: observed identical to
+    /// expected has to give a factor of exactly 1 everywhere.
     #[test]
     fn ratio_of_identical_models_is_one() {
         let mut obs = GcFragModel::new(1, 101);
@@ -774,6 +849,9 @@ mod tests {
         assert_eq!(ff, gc_frac(&p, 10, 29));
     }
 
+    /// The lookup table is a performance substitution for the divide-based
+    /// formula, so it has to agree bit-for-bit on every input the model can see,
+    /// including out-of-range ones that must clamp identically.
     #[test]
     fn idx_lut_matches_bin_frac() {
         // The LUT-based idx must equal the original divide-based formula for
@@ -790,6 +868,8 @@ mod tests {
         }
     }
 
+    /// Same obligation for the hoisted per-position context cache: it exists only
+    /// to be faster, so any disagreement with the direct computation is a bug.
     #[test]
     fn gc_context_matches_gc_desc() {
         // Cached context (GcContext::desc) must be bit-identical to the
@@ -814,6 +894,9 @@ mod tests {
         }
     }
 
+    /// And for the rank-bitvector representation: --reduceGCMemory must change
+    /// memory use and nothing else. The offset window also checks the transcript
+    /// is located correctly inside the concatenated buffer.
     #[test]
     fn gc_rank_view_matches_dense() {
         // The rank-bitvector view must return identical cumulative GC (and hence
@@ -842,6 +925,8 @@ mod tests {
         }
     }
 
+    /// Pin the exact window geometry by making only those windows GC-rich: if the
+    /// offsets were off by one the fraction would not come out at exactly 100.
     #[test]
     fn gc_desc_context_window_geometry() {
         // Make the 5' context window [s-3, s+1] all GC and the rest AT, so the
@@ -859,6 +944,8 @@ mod tests {
         assert_eq!(cf, 100, "contextFrac");
     }
 
+    /// A cell enriched in one model and absent from the other would give an
+    /// unbounded factor; the clamp must contain it.
     #[test]
     fn ratio_clamped() {
         let mut obs = GcFragModel::new(1, 2);
