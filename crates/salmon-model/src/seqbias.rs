@@ -1,12 +1,33 @@
 //! Sequence-specific bias model (`SBModel`).
 //!
+//! # The effect being modelled
+//!
+//! RNA-seq protocols fragment and prime with enzymes and random hexamers that
+//! are not indifferent to sequence. Certain short motifs are cut or primed far
+//! more readily than others, so fragments *start* at some sequences much more
+//! often than at others. A transcript rich in favoured motifs yields more
+//! fragments at the same abundance — again chemistry, not biology.
+//!
+//! # How it is measured
+//!
 //! A faithful port of salmon's `SBModel` (`src/model/SBModel.cpp`): a
 //! variable-order Markov model over the 9-base sequence context surrounding a
 //! fragment's start position (3 bases before the start, the start, and 5 after).
-//! Per-position Markov orders are `{0,1,2,2,2,2,2,2,2}`. Counts are accumulated
-//! from observed fragment-start contexts (the *observed* model) and from the
-//! transcriptome (the *expected* model); the ratio of the two scores the
-//! sequence bias at any position, which is used to correct effective lengths.
+//! Per-position Markov orders are `{0,1,2,2,2,2,2,2,2}`.
+//!
+//! **What "variable-order Markov" means here.** Rather than one probability for
+//! each of the 4^9 possible 9-mers — which would need far more data than exists —
+//! the model predicts each position from a few preceding ones: position 0 from
+//! nothing (order 0), position 1 from its predecessor (order 1), and the rest
+//! from their two predecessors (order 2). The context's probability is then the
+//! product of nine small conditional probabilities. That is enough structure to
+//! capture real motif preference while keeping the parameter count at 64 per
+//! position, which a run easily estimates.
+//!
+//! Counts are accumulated from observed fragment-start contexts (the *observed*
+//! model) and from the transcriptome (the *expected* model); the ratio of the two
+//! scores the sequence bias at any position, which is used to correct effective
+//! lengths.
 //!
 //! The 2-bit base encoding only needs to be self-consistent (the bias is a
 //! ratio of two models built with the same encoding), so we use A=0, C=1,
@@ -26,6 +47,17 @@ thread_local! {
 /// real FFT (zero-padded so `b` beyond its length contributes 0 — i.e. linear,
 /// not circular, correlation). Correlation theorem: `corr(a,b) =
 /// IFFT(conj(FFT(a))·FFT(b))`. rustfft is unnormalized, so divide by `n`.
+///
+/// **Why this is here.** The effective-length sweep asks, for every fragment
+/// length Δ, "what is the total of (start factor × end factor) over all
+/// positions?". Done directly that is O(L) work per length and O(L²) overall —
+/// prohibitive for a 100 kb transcript. A cross-correlation computes the answer
+/// for *every* Δ at once, and the correlation theorem turns it into three FFTs,
+/// giving O(L log L).
+///
+/// The zero padding matters: without it the FFT would wrap around, so fragments
+/// running off the right end would fold back onto the left end (circular rather
+/// than linear correlation) and produce fragments that do not exist.
 fn xcorr_fft(fw: &[f64], rc: &[f64], max_lag: usize) -> Vec<f64> {
     let l = fw.len();
     debug_assert_eq!(l, rc.len());
@@ -53,6 +85,9 @@ fn xcorr_fft(fw: &[f64], rc: &[f64], max_lag: usize) -> Vec<f64> {
 }
 
 /// Per-position Markov orders (salmon's "simple" model). Length is the context.
+///
+/// The first positions necessarily have lower order — there is nothing before
+/// position 0 to condition on, and only one base before position 1.
 const ORDER: [u32; 9] = [0, 1, 2, 2, 2, 2, 2, 2, 2];
 /// Context length (= ORDER.len()): 3 left + start + 5 right.
 pub const CONTEXT_LENGTH: usize = 9;
@@ -61,10 +96,19 @@ pub const CONTEXT_LEFT: usize = 3;
 /// Bases at/after the fragment-start position.
 pub const CONTEXT_RIGHT: usize = 5;
 /// Rows in the probability table: 4^(maxOrder+1) = 4^3.
+///
+/// One row per (two-base context, predicted base) combination; lower-order
+/// positions use only the first few rows.
 const ROWS: usize = 64;
 /// Pseudocount prior.
+///
+/// Keeps an unobserved transition from being exactly zero, which would make its
+/// log negative infinity and poison every context containing it.
 const PRIOR: f64 = 1e-10;
 /// Floor used when taking the log of a zero probability.
+///
+/// A finite floor rather than -inf, so a single impossible transition cannot
+/// annihilate an otherwise plausible context.
 const LOG_SMALL: f64 = -11.512_925_464_970_229; // ln(1e-5)
 
 /// 2-bit encode an ASCII base (non-ACGT -> 0).
@@ -130,6 +174,9 @@ impl SBModel {
 
     /// Encode a 9-base context (`CONTEXT_LENGTH` bytes) into a 2-bit-per-base
     /// integer with base 0 in the high bits. `rev_comp` reverse-complements it.
+    ///
+    /// Packing the whole context into one `u32` means every per-position lookup
+    /// below is a shift and a mask rather than a slice access.
     fn encode(context: &[u8], rev_comp: bool) -> u32 {
         debug_assert_eq!(context.len(), CONTEXT_LENGTH);
         let mut mer = 0u32;
@@ -171,6 +218,11 @@ impl SBModel {
 
     /// Convert accumulated counts into conditional log-probabilities. Idempotent
     /// guard: a model can only be normalized once.
+    ///
+    /// Two steps: divide each group of four counts (the four possible bases given
+    /// one preceding context) by their total, turning counts into conditional
+    /// probabilities; then take logs so `evaluate_log` can add instead of
+    /// multiply.
     pub fn normalize(&mut self) {
         if self.trained {
             return;
@@ -204,6 +256,9 @@ impl SBModel {
     }
 
     /// Log-probability the (normalized) model assigns to a context.
+    ///
+    /// A sum of nine per-position log-probabilities, which is the product of the
+    /// nine conditional probabilities — the chain rule for a Markov model.
     pub fn evaluate_log(&self, context: &[u8], rev_comp: bool) -> f64 {
         debug_assert!(self.trained, "evaluate_log requires a normalized model");
         let mer = Self::encode(context, rev_comp);
@@ -232,6 +287,10 @@ impl SBModel {
 }
 
 /// Reverse-complement a DNA byte slice (ACGT; other bases map to `A`).
+///
+/// DNA is double-stranded: reading the other strand means walking backwards and
+/// swapping each base for its pair. The 3' end of a fragment is sequenced from
+/// that strand, so its bias is scored against the reverse complement.
 pub(crate) fn revcomp_bytes(seq: &[u8]) -> Vec<u8> {
     seq.iter()
         .rev()
@@ -257,6 +316,10 @@ pub const FLD_SAMP_STRIDE: usize = 5;
 /// Linear cumulative fragment-length distribution plus the `[low, high]`
 /// fragment-length quantile bounds (0.5% / 99.5%), mirroring the `cdf`,
 /// `fldLow`, `fldHigh` salmon computes in `updateEffectiveLengths`.
+///
+/// The bounds bracket the lengths worth iterating over: the outer 1% of the
+/// distribution contributes almost nothing to the convolution but would extend
+/// the sweep over a long tail of near-zero-probability lengths.
 pub fn fld_cdf_and_bounds(pmf_lin: &[f64]) -> (Vec<f64>, usize, usize) {
     let mut cdf = vec![0.0f64; pmf_lin.len()];
     let mut acc = 0.0;
@@ -281,6 +344,10 @@ pub fn fld_cdf_and_bounds(pmf_lin: &[f64]) -> (Vec<f64>, usize, usize) {
 /// `conditionalCDF(x) = (x > cdfMaxArg) ? 1.0 : cdf[x] / cdfMaxVal`, where
 /// `cdfMaxArg = min(cdf.len()-1, refLen)` normalizes the FLD to the fragment
 /// lengths that fit in this transcript.
+///
+/// A 500-base transcript cannot host a 700-base fragment, so its length
+/// distribution is the global one restricted to what fits, renormalized to sum to
+/// 1 — otherwise short transcripts would appear to be missing probability mass.
 #[inline]
 pub(crate) fn conditional_cdf(cdf: &[f64], cdf_max_arg: usize, cdf_max_val: f64, x: i32) -> f64 {
     if x > cdf_max_arg as i32 {
@@ -297,6 +364,12 @@ pub(crate) fn conditional_cdf(cdf: &[f64], cdf_max_arg: usize, cdf_max_val: f64,
 /// transcript's abundance density (`alpha / effLen`) times the conditional FLD
 /// mass that can start there (`conditionalCDF(maxFragLen)`), matching salmon's
 /// expected-model construction in `updateEffectiveLengths`.
+///
+/// The "expected" model answers: if fragmentation were indifferent to sequence,
+/// which 9-mers would we see at fragment starts, given these transcripts and
+/// these abundances? Dividing the observed model by it leaves the protocol's
+/// sequence preference alone. Weighting by abundance is essential — a motif that
+/// is common in a highly expressed transcript should be expected to be common.
 pub fn build_expected<'a, F>(
     num_targets: usize,
     seq_of: F,
@@ -469,6 +542,10 @@ pub fn corrected_effective_length(
 /// factor); GC bias is *not* separable (its windowed-GC binning couples start
 /// and length) and stays on the scalar convolution.
 ///
+/// "Separable" means a fragment's weight depends on where it starts and where it
+/// ends, but not on the two jointly. That is exactly the condition under which
+/// the length sweep becomes a cross-correlation and the FFT applies.
+///
 /// The length sweep `mass(fl) = Σ_k a[k]·b[k+fl-1]` is then the cross-correlation
 /// of `a` and `b` evaluated at every lag, computed once via [`xcorr_fft`] in
 /// `O(L log L)` instead of `O(L · n_len)`. `a`/`b` must both have length
@@ -601,6 +678,10 @@ pub fn corrected_effective_length_fft(
 /// Log bias of `observed` relative to `expected` for a context:
 /// `log P_obs(context) - log P_exp(context)`. The fragment-level bias weight is
 /// `exp` of this.
+///
+/// A difference of logs is a ratio of probabilities: how much more often this
+/// context was seen at a fragment start than chance predicts. Above 1 means the
+/// protocol favours it.
 pub fn log_bias(observed: &SBModel, expected: &SBModel, context: &[u8], rev_comp: bool) -> f64 {
     observed.evaluate_log(context, rev_comp) - expected.evaluate_log(context, rev_comp)
 }
@@ -661,6 +742,10 @@ mod tests {
 
     // Build a realistic-ish trained obs/exp pair: expected from a sweep of the
     // transcript, observed = expected with a few enriched contexts.
+    //
+    // Starting the observed model as a copy of the expected one means the tests
+    // measure exactly the injected enrichment, with no incidental background
+    // difference between the two.
     fn trained_pair(seq: &[u8]) -> (SBModel, SBModel) {
         let rc = revcomp_bytes(seq);
         let mut exp = SBModel::new();
@@ -678,6 +763,9 @@ mod tests {
         (obs, exp)
     }
 
+    /// A profiling harness rather than a correctness test (hence `#[ignore]`):
+    /// it times the successive optimizations of the per-position factor build,
+    /// which is the dominant cost of the seqBias sweep.
     #[test]
     #[ignore = "profiling bench; run with --ignored --nocapture"]
     fn bench_factor_build() {
@@ -794,6 +882,8 @@ mod tests {
         eprintln!("V2 diff-table (reassoc)     : {v2:.3}s   acc={acc_v2:.3}  max|Δ|={max_d2:.3e}  speedup={:.2}x", v0 / v2);
     }
 
+    /// No enrichment in, no correction out: identical observed and expected
+    /// models must score every context at log-bias ~0 (factor ~1).
     #[test]
     fn uniform_contexts_give_near_zero_bias() {
         // Both models trained on the same uniform set of contexts -> bias ~ 0.
@@ -818,6 +908,8 @@ mod tests {
         }
     }
 
+    /// And the converse: a context deliberately over-represented in the observed
+    /// model must score positively, so the correction actually responds to bias.
     #[test]
     fn enriched_context_has_positive_bias() {
         // observed enriched for a specific context vs a uniform expected model
@@ -852,6 +944,9 @@ mod tests {
         );
     }
 
+    /// With no bias to correct, the corrected effective length must collapse to
+    /// the ordinary one — the correction may not shift results merely by being
+    /// switched on.
     #[test]
     fn unbiased_correction_reduces_to_standard_eff_len() {
         // obs == exp -> all bias factors 1 -> corrected effLen == standard
@@ -877,6 +972,9 @@ mod tests {
         assert!((eff - 300.0).abs() < 1e-6, "got {eff}");
     }
 
+    /// The FFT path exists purely to be faster, so it has to agree with the
+    /// direct scalar convolution to within floating-point round-off — including
+    /// the fiddly boundary term the scalar loop excludes and the FFT includes.
     #[test]
     fn fft_matches_exact_scalar_corrected_eff_len() {
         // Build a genuinely biased obs/exp pair (so per-position factors != 1),
@@ -928,6 +1026,8 @@ mod tests {
         }
     }
 
+    /// Same obligation for the shared cross-correlation core when sequence and
+    /// positional factors are fused into one start/end array pair.
     #[test]
     fn eff_len_from_xcorr_matches_scalar_combined_factors() {
         // The generic core handles ANY separable per-fragment factor
@@ -995,6 +1095,9 @@ mod tests {
         }
     }
 
+    /// The 3' factor is scored against the reverse complement, so encoding a
+    /// context reverse-complemented must equal encoding its reverse complement
+    /// directly; otherwise the two ends would be scored against different models.
     #[test]
     fn revcomp_encoding_is_consistent() {
         // RC of a context evaluated forward equals the context evaluated as RC.
@@ -1013,6 +1116,8 @@ mod tests {
         assert_eq!(SBModel::encode(&ctx, true), SBModel::encode(&rc, false));
     }
 
+    /// Decoys sit past `num_targets` and must never enter the expected model: a
+    /// genome decoy swept as a transcript would dominate the background.
     #[test]
     fn build_expected_respects_num_targets_bound() {
         // Five real transcripts plus a sixth "decoy" with a very distinctive
