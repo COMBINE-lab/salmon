@@ -3,9 +3,26 @@
 //! conditional-FLD convolution whose per-fragment factor is the product of the
 //! enabled bias terms.
 //!
+//! # What this computes, in words
+//!
+//! An uncorrected effective length counts how many positions a fragment *could*
+//! start at. A bias-corrected one counts how many positions a fragment could
+//! start at **weighted by how likely a fragment there is to actually be
+//! sequenced**. A transcript whose sequence, GC content and geometry all
+//! discourage sequencing has a smaller corrected effective length, so the same
+//! number of observed fragments implies a higher abundance.
+//!
+//! So the calculation sweeps every (start, length) pair, multiplies together the
+//! bias factors that apply to that particular fragment, and weights the result by
+//! how probable that fragment length is:
+//!
 //! `fragFactor = seqFW[fragStart]·seqRC[fragEnd] · gcBias({fragFrac, ctxFrac}) ·
 //! posFW[fragStart]·posRC[fragEnd]`, summed over fragment starts and convolved
 //! with the conditional fragment-length distribution.
+//!
+//! "Conditional" because a transcript shorter than the longest possible fragment
+//! can only host part of the length distribution, so the distribution is
+//! renormalized to the lengths that actually fit.
 
 use crate::gcbias::{GcContext, GcFragModel, GcView};
 use crate::posbias::{length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS};
@@ -15,6 +32,8 @@ use crate::seqbias::{
 };
 
 /// salmon's `EPSILON` (mass cutoff for adding positional expected mass).
+/// Contributions below it cannot affect a normalized 20-bin model, so skipping
+/// them saves work without changing the result.
 const EPSILON: f64 = 0.375e-10;
 
 /// Additive (Laplace) smoothing fraction for the positional-bias factor: the
@@ -29,11 +48,17 @@ const POS_SMOOTH_FRAC: f64 = 0.1;
 /// both: `factor = (obs + c) / (exp + c)`. Where the expected density is
 /// substantial the ratio is preserved; where it vanishes (uninformative tails)
 /// the factor shrinks to 1 (no bias), which is the correct default.
+///
+/// This is the standard fix for a ratio of two noisy estimates: adding the same
+/// constant to numerator and denominator leaves well-measured ratios essentially
+/// unchanged while pulling ill-measured ones toward the neutral value.
 pub fn positional_factor(obs: &[f64], exp: &[f64]) -> Vec<f64> {
     let n = exp.len();
     if n == 0 {
         return Vec::new();
     }
+    // Scaling the constant to the mean makes the smoothing strength independent
+    // of the arbitrary units the densities happen to be in.
     let mean_exp: f64 = exp.iter().sum::<f64>() / n as f64;
     let c = (POS_SMOOTH_FRAC * mean_exp).max(f64::MIN_POSITIVE);
     obs.iter()
@@ -43,6 +68,10 @@ pub fn positional_factor(obs: &[f64], exp: &[f64]) -> Vec<f64> {
 }
 
 /// The enabled bias terms for one transcript's effective-length correction.
+///
+/// Each field is `Option`, so "this correction is off" is represented in the type
+/// rather than by a neutral all-ones table — which lets the hot loops below skip
+/// the work entirely instead of multiplying by 1.
 #[derive(Clone, Copy, Default)]
 pub struct BiasInputs<'a> {
     /// `(fw, rc)` precomputed `obs − exp` log-bias tables for the 5′/3′
@@ -55,6 +84,8 @@ pub struct BiasInputs<'a> {
 }
 
 impl BiasInputs<'_> {
+    /// Whether any correction is enabled at all; if not, the whole computation is
+    /// skipped.
     fn any(&self) -> bool {
         self.seq.is_some() || self.gc.is_some() || self.pos.is_some()
     }
@@ -66,6 +97,10 @@ impl BiasInputs<'_> {
 /// `no_length_threshold` is set (salmon's `--noBiasLengthThreshold`), in which
 /// case the corrected length is accepted outright (floored only at 1.0) or the
 /// uncorrected length is kept.
+///
+/// The floor exists because effective length is a *divisor*: an unluckily small
+/// corrected length would inflate that transcript's abundance without bound, so
+/// the correction is allowed to shrink the length only so far.
 #[allow(clippy::too_many_arguments)]
 pub fn corrected_effective_length_full(
     seq: &[u8],
@@ -80,18 +115,25 @@ pub fn corrected_effective_length_full(
     if !bias.any() {
         return elen;
     }
+    // Sequence bias needs a full context window at each end; without it a single
+    // base suffices as the minimum workable length.
     let k = if bias.seq.is_some() {
         CONTEXT_LENGTH
     } else {
         1
     };
     let ref_len = seq.len();
+    // How much of the transcript the uncorrected effective length has "used up";
+    // also the floor's basis below.
     let unprocessed = (ref_len as i32 - elen as i32).max(0);
     let cdf_max_arg = (cdf.len() - 1).min(ref_len);
     let cdf_max_val = cdf[cdf_max_arg];
+    // Bail out when there is nothing meaningful to correct: too short for a
+    // context, no headroom, or almost no fragment-length mass fits at all.
     if ref_len < k || unprocessed <= 0 || cdf_max_val < MIN_CDF_MASS {
         return elen;
     }
+    // The fragment-length CDF renormalized to lengths this transcript can host.
     let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
 
     // Per-position sequence-bias factors. Only built (and applied in the inner
@@ -105,8 +147,12 @@ pub fn corrected_effective_length_full(
         fw = vec![1.0f64; ref_len];
         rc = vec![1.0f64; ref_len];
         let cu = CONTEXT_LEFT;
+        // The 3' factor reads the reverse complement, because the second read of
+        // a pair is sequenced from the opposite strand.
         let rc_seq = revcomp_bytes(seq);
         for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
+            // The factor is indexed by the *read* start, which sits `CONTEXT_LEFT`
+            // bases into the context window.
             let read_start = frag_start + cu;
             if read_start < ref_len {
                 fw[read_start] = tab_fw
@@ -117,6 +163,8 @@ pub fn corrected_effective_length_full(
                     .exp();
             }
         }
+        // `rc` was filled in reverse-complement coordinates; flipping it puts it
+        // back in forward coordinates so both arrays index the same way.
         rc.reverse();
     }
 
@@ -137,6 +185,13 @@ pub fn corrected_effective_length_full(
     // GC's windowed-GC binning couples start×length and is not separable, so any
     // GC run stays on the scalar path below. (`fw`/`rc` are length `ref_len` when
     // `have_seq`, else empty; the positional factors are length `ref_len`.)
+    //
+    // "Separable" is the key word: if a fragment's weight is (something about its
+    // start) × (something about its end), then summing over all fragments of a
+    // given length is exactly a cross-correlation of the two arrays — and a
+    // cross-correlation at every offset at once is what an FFT computes cheaply.
+    // GC breaks this because a fragment's GC content depends on start *and*
+    // length jointly.
     if gc_model.is_none() && (have_seq || pos_fw.is_some()) {
         let mut a = vec![1.0f64; ref_len];
         let mut b = vec![1.0f64; ref_len];
@@ -144,6 +199,8 @@ pub fn corrected_effective_length_full(
             a.copy_from_slice(&fw);
             b.copy_from_slice(&rc);
         }
+        // Fold the positional factors into the same two arrays, so the FFT sees
+        // one combined start array and one combined end array.
         if let (Some(pf), Some(pr)) = (pos_fw, pos_rc) {
             for (((ai, bi), &pfi), &pri) in
                 a.iter_mut().zip(b.iter_mut()).zip(pf.iter()).zip(pr.iter())
@@ -165,18 +222,24 @@ pub fn corrected_effective_length_full(
         );
     }
 
+    // Scalar path: sweep fragment lengths, and for each, every start position.
     let stride = stride.max(1) as i32;
+    // No fragment can be longer than the transcript, nor than the FLD's support.
     let max_len = (ref_len as i32).min(fld_high as i32 + 1);
     let mut fl = fld_low as i32;
     let mut done = fl >= max_len;
     let sp = if fl > 0 { fl - 1 } else { 0 };
+    // Running CDF value, so each length's probability is one subtraction rather
+    // than a fresh lookup pair.
     let mut prev_mass = cond(sp);
     let mut eff = 0.0f64;
     while !done {
+        // With a stride > 1 the last step can overshoot; clamp and finish.
         if fl >= max_len {
             done = true;
             fl = max_len - 1;
         }
+        // Probability of exactly this fragment length = CDF difference.
         let fl_weight = cond(fl) - prev_mass;
         prev_mass = cond(fl);
         let mut mass = 0.0f64;
@@ -190,6 +253,8 @@ pub fn corrected_effective_length_full(
         // re-testing every bias model's presence per fragment: the common
         // `--gcBias`-only case gets a tight loop with no per-fragment branches.
         match (have_seq, gc_model.zip(gc_ctx.as_ref()), pos_fw.zip(pos_rc)) {
+            // Specialized GC-only loop: one lookup per fragment, no branches on
+            // absent models.
             (false, Some((gc, ctx)), None) => {
                 let mut kstart = 0i32;
                 while kstart < kmax {
@@ -197,11 +262,13 @@ pub fn corrected_effective_length_full(
                     if let Some((ff, cf)) = ctx.desc(kstart, frag_end) {
                         mass += gc.get(ff, cf);
                     } else {
+                        // No usable GC context (too close to an end): neutral.
                         mass += 1.0;
                     }
                     kstart += 1;
                 }
             }
+            // General loop: multiply in whichever factors are present.
             _ => {
                 let mut kstart = 0i32;
                 while kstart < kmax {
@@ -225,6 +292,8 @@ pub fn corrected_effective_length_full(
                 }
             }
         }
+        // Weight this length's total start-position mass by the length's own
+        // probability, and accumulate — this is the convolution.
         eff += fl_weight * mass;
         fl += stride;
     }
@@ -239,6 +308,8 @@ pub fn corrected_effective_length_full(
             elen
         }
     } else {
+        // The lower barrier: never shrink below `min(elen, unprocessed)`, so a
+        // pathological correction cannot blow up the abundance that divides by it.
         let offset = (unprocessed as f64).max(1.0);
         eff.max(elen.min(offset))
     }
@@ -249,6 +320,11 @@ pub fn corrected_effective_length_full(
 /// for each expressed transcript and fragment start, add `log(weight·density)`
 /// to the length-class bin (forward density = fragments that can start here,
 /// reverse density = fragments that can end here). Models are finalized.
+///
+/// This is the "expected" half of observed-vs-expected: what the positional
+/// histogram would look like with *no* positional bias at all, given only the
+/// transcripts' lengths, their abundances and the fragment-length distribution.
+/// Dividing the observed histogram by this isolates the bias itself.
 #[allow(clippy::too_many_arguments)]
 pub fn build_expected_pos<FL>(
     num_targets: usize,
@@ -285,6 +361,8 @@ where
     let (sum5, sum3) = (0..num_targets)
         .into_par_iter()
         .fold(empty, |mut acc, tid| {
+            // Skip transcripts that cannot contribute: unexpressed, degenerate,
+            // too short for a context, or with no headroom.
             if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
                 return acc;
             }
@@ -301,10 +379,16 @@ where
             if cdf_max_val < MIN_CDF_MASS {
                 return acc;
             }
+            // Fragments per position: abundance spread over the positions that can
+            // host a fragment. This is what makes an abundant transcript dominate
+            // the expected model, exactly as it dominates the observed one.
             let weight = alphas[tid] / eff_lens[tid];
             let lc = length_class_index(quantiles, ref_len as u32);
             let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
             for frag_start in 0..(ref_len - k as i32) {
+                // How much room is left to the right (for a fragment starting
+                // here) and to the left (for one ending here); the CDF turns that
+                // room into a probability.
                 let max_fw = ref_len - frag_start + 1;
                 let max_rc = frag_start;
                 let density_fw = cond(max_fw);
@@ -353,6 +437,8 @@ mod tests {
 
     type PosModels = (Vec<SimplePosBias>, Vec<SimplePosBias>);
 
+    /// Total absolute difference between two sets of positional models, used as a
+    /// scalar "did this change anything?" measure.
     fn mass_diff(a: &PosModels, b: &PosModels) -> f64 {
         a.0.iter()
             .chain(a.1.iter())
@@ -367,6 +453,10 @@ mod tests {
             .sum()
     }
 
+    /// Decoys sit past `num_targets` and must never enter the expected model — a
+    /// 250 Mb genome decoy swept in as a "transcript" would swamp it. The
+    /// zero-alpha half of the test confirms the other guard (unexpressed
+    /// transcripts) works independently.
     #[test]
     fn build_expected_pos_respects_num_targets_bound() {
         // Five 200 nt transcripts plus a 400 nt "decoy". The decoy must change the
@@ -376,6 +466,7 @@ mod tests {
         let num_refs = lens.len();
         let alphas = vec![1.0; num_refs];
         let eff_lens = vec![150.0; num_refs];
+        // A point-mass fragment-length distribution keeps the arithmetic simple.
         let mut pmf = vec![0.0; 200];
         pmf[100] = 1.0;
         let (cdf, _lo, _hi) = fld_cdf_and_bounds(&pmf);
