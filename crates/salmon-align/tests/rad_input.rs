@@ -115,6 +115,8 @@ fn write_baked_fld_rad(rad: &Path) {
 }
 
 #[test]
+/// With no ambiguity there is nothing to infer, so the counts must come back
+/// exactly as given.
 fn unique_mappings_recover_exact_counts() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -153,6 +155,8 @@ fn unique_mappings_recover_exact_counts() {
 }
 
 #[test]
+/// Ambiguous fragments must follow the unique evidence, which is the core EM
+/// behaviour reaching through the RAD path.
 fn multimapping_resolves_toward_higher_abundance() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -193,6 +197,7 @@ fn multimapping_resolves_toward_higher_abundance() {
 /// RAD (the reader decompresses chunks in its reader thread). This exercises the
 /// full `quantify_rad` -> `ParallelRadReader` decompression path.
 #[test]
+/// Chunk compression is a storage choice and must not change a single number.
 fn compressed_rad_quantifies_identically() {
     use salmon_rad::ChunkCodec;
     let names = ["t0", "t1", "t2"];
@@ -233,6 +238,8 @@ fn compressed_rad_quantifies_identically() {
 /// triple `compressed_ori_ref`/`pos`/`frag_len`, no `frag_name_hash`) and confirm
 /// salmon detects the piscem-bulk profile and quantifies it.
 #[test]
+/// A RAD written by piscem rather than salmon must quantify too — the format is
+/// shared, and this is what makes the two tools interoperate.
 fn piscem_bulk_input_quantifies() {
     use libradicl::header::{RadHeader, RadPrelude};
     use libradicl::rad_types::{RadIntId, RadType, TagDesc, TagSection, TagSectionLabel, TagValue};
@@ -336,6 +343,8 @@ fn piscem_bulk_input_quantifies() {
 /// `done`. A worker whose `pop()` came up empty just before that push would
 /// observe `done` and break, abandoning the queue.
 #[test]
+/// Every input fragment must be accounted for; a silent loss would understate
+/// abundances with no visible symptom.
 fn rad_quant_never_loses_fragments() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -395,6 +404,8 @@ fn rand_suffix() -> u64 {
 }
 
 #[test]
+/// The headline guarantee of the RAD path: the answer cannot depend on how many
+/// threads happened to be used.
 fn thread_count_invariant() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -444,6 +455,8 @@ fn thread_count_invariant() {
 /// one. The records imply fragment length 200, but we bake a distribution peaked
 /// at 500; if the baked FLD is used, the reported mean is ~500 (not ~200).
 #[test]
+/// A baked fragment-length distribution must be taken verbatim, or a requant
+/// would quietly differ from the run that produced the file.
 fn baked_fld_is_used_not_derived() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -501,6 +514,8 @@ fn baked_fld_is_used_not_derived() {
 /// consulted at all, so the run must at least say where its distribution came
 /// from.
 #[test]
+/// And the metadata must say so, so a user can tell where the distribution came
+/// from.
 fn baked_fld_is_reported_as_the_frag_length_source() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -516,6 +531,8 @@ fn baked_fld_is_reported_as_the_frag_length_source() {
 /// the RAD's own fragment lengths. The fixture bakes a mean of ~500 while every
 /// record implies 200, so the two are impossible to confuse.
 #[test]
+/// `--fldPolicy derive` must genuinely re-derive rather than falling back to the
+/// baked values.
 fn fld_policy_derive_ignores_the_baked_distribution() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -551,6 +568,7 @@ fn fld_policy_derive_ignores_the_baked_distribution() {
 /// control — the setting that makes a fragment-length sensitivity analysis
 /// actually perturb the model.
 #[test]
+/// `prior` must hand control to --fldMean/--fldSD alone.
 fn fld_policy_prior_puts_fld_args_in_control() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -576,6 +594,8 @@ fn fld_policy_prior_puts_fld_args_in_control() {
 /// in their fragment-length prior are indistinguishable; under `prior` they are
 /// not. Effective lengths are what the FLD actually drives, so compare those.
 #[test]
+/// And those arguments must actually matter under that policy — otherwise the
+/// mode would appear to work while doing nothing.
 fn fld_policy_prior_makes_different_priors_produce_different_results() {
     let run = |policy: FldPolicy, mean: f64| {
         let tmp = tempfile::tempdir().unwrap();
@@ -613,6 +633,8 @@ fn fld_policy_prior_makes_different_priors_produce_different_results() {
 /// length 200 and 60 same-strand pairs imply length 800; the FLD must reflect the
 /// majority (≈200), excluding the minority bucket's 800s.
 #[test]
+/// Orientation is decided by majority: the minority bucket is mis-mapping noise
+/// and must not pollute the fragment-length distribution.
 fn auto_orientation_derives_fld_from_majority_bucket() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -687,6 +709,8 @@ fn auto_orientation_derives_fld_from_majority_bucket() {
 /// baked ISR makes every placement strand-incompatible, so all are filtered out.
 /// Proves the reader consults the baked format rather than re-inferring.
 #[test]
+/// A baked library format was determined by the run that saw the reads, so under
+/// `-l A` it must win over re-detection from the RAD.
 fn baked_library_format_is_authoritative_under_auto() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -742,6 +766,8 @@ fn baked_library_format_is_authoritative_under_auto() {
 /// re-EM — and confirm it runs, conserves mass, and populates the positional bias
 /// dump. (`-t` is required for any `--rad` bias model, as in reads mode.)
 #[test]
+/// Positional bias correction must work from RAD input, which carries positions
+/// but no sequence.
 fn pos_bias_rad_runs() {
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("maps.rad");
@@ -814,6 +840,8 @@ fn bias_ref_seq_fixture(tmp: &Path) -> (std::path::PathBuf, Vec<Vec<u8>>) {
 /// `--deterministic` uses to hand phase-2 the index's own sequences. No
 /// `transcripts` is set here.
 #[test]
+/// GC correction needs sequence, which the index can supply — so it must work
+/// without the user re-passing a transcriptome FASTA.
 fn gc_bias_rad_uses_ref_seqs_without_transcripts() {
     let tmp = tempfile::tempdir().unwrap();
     let (rad, ref_seqs) = bias_ref_seq_fixture(tmp.path());
@@ -837,6 +865,8 @@ fn gc_bias_rad_uses_ref_seqs_without_transcripts() {
 /// The per-transcript correction must produce finite, bit-identical results
 /// across thread counts.
 #[test]
+/// Thread invariance must survive with every bias model enabled, which is where
+/// the order-independent accumulators are actually exercised.
 fn all_bias_rad_is_thread_invariant() {
     let tmp = tempfile::tempdir().unwrap();
     let (rad, ref_seqs) = bias_ref_seq_fixture(tmp.path());
