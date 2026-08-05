@@ -547,7 +547,7 @@ pub fn corrected_effective_length(
 /// the length sweep becomes a cross-correlation and the FFT applies.
 ///
 /// The length sweep `mass(fl) = Σ_k a[k]·b[k+fl-1]` is then the cross-correlation
-/// of `a` and `b` evaluated at every lag, computed once via [`xcorr_fft`] in
+/// of `a` and `b` evaluated at every lag, computed once via a real FFT in
 /// `O(L log L)` instead of `O(L · n_len)`. `a`/`b` must both have length
 /// `ref_len`; `cond` is the conditional fragment-length CMF; `unprocessed` is
 /// `max(0, ref_len − elen)`. Mirrors the scalar loop's `stride` (biasSpeedSamp)

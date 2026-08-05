@@ -62,7 +62,7 @@ pub enum EmAccel {
     /// multi-secant quasi-Newton step) rather than just two. Converges faster than
     /// SQUAREM on high-dimensional, ill-conditioned problems. Same opt-in,
     /// same-fixpoint semantics as [`EmAccel::Squarem`]; not byte-identical to
-    /// `None`. See [`daarem`].
+    /// `None`. See the `daarem` module.
     Daarem,
 }
 
@@ -192,7 +192,7 @@ pub fn optimize_with_init(
 /// rayon M-step (for the single main run) vs. the sequential one (used by
 /// bootstrap, which parallelizes across replicates instead). The per-class
 /// `counts` are the packed structure's own (bootstrap passes resampled counts
-/// through [`run_em_counts`]).
+/// through the private `run_em_counts`).
 ///
 /// Parallelizing at only one level is deliberate: nesting a parallel M-step
 /// inside parallel replicates would oversubscribe the machine and slow both down.

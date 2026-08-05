@@ -56,7 +56,7 @@ pub struct AlignConfig {
     pub full_length_alignment: bool,
     /// allow soft-clipping read ends in flank extension (salmon's `--softclip`):
     /// a read flank takes `max(mqe, mte, 0)` instead of requiring full
-    /// consumption (`mqe`). Implies [`softclip_overhangs`].
+    /// consumption (`mqe`). Implies [`Self::softclip_overhangs`].
     pub softclip: bool,
     /// allow soft-clipping only read bases that overhang a transcript end
     /// (salmon's `--softclipOverhangs`): a read flank takes `max(mqe, mte)`.

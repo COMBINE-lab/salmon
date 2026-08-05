@@ -18,7 +18,7 @@
 //! concordant pair when their fragment length is within bounds and (optionally)
 //! they are not dovetailed; the observed [`LibraryFormat`] (orientation +
 //! strandedness) is derived from the mates' strands and relative positions so a
-//! [`LibraryTypeDetector`](salmon_model::LibraryTypeDetector) can sample it.
+//! `salmon_model::LibraryTypeDetector` can sample it.
 //! References that yield no concordant pair fall back to orphan mappings when
 //! orphans are allowed. Mirrors pufferfish/salmon's `joinReadsAndFilter`.
 
@@ -188,7 +188,7 @@ thread_local! {
 }
 
 /// Whether the most recent [`join_reads_and_filter`] rejected an otherwise-valid
-/// concordant pair as a dovetail (see [`DOVETAIL_REJECTED`]).
+/// concordant pair as a dovetail (see the private `DOVETAIL_REJECTED` flag).
 pub fn dovetail_rejected() -> bool {
     DOVETAIL_REJECTED.with(|c| c.get())
 }

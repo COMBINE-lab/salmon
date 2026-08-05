@@ -62,7 +62,7 @@ const INDEX_PREFIX: &str = "index";
 const INFO_FILE: &str = "info.json";
 /// Concatenated reference sequences (forward strand), in transcript-id order.
 const REFSEQ_FILE: &str = "refseq.bin";
-/// Per-reference offsets into [`REFSEQ_FILE`] (`num_refs + 1` entries).
+/// Per-reference offsets into `REFSEQ_FILE` (`num_refs + 1` entries).
 const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 
 /// On-disk salmon index *format* version written into `info.json` by this build.
@@ -129,7 +129,7 @@ pub struct IndexBuildOptions {
     /// Odd is required so a k-mer can never equal its own reverse complement,
     /// which would make the canonical form ambiguous.
     pub k: usize,
-    /// minimizer length; `0` selects [`default_minimizer_len`]
+    /// minimizer length; `0` selects a default derived from `k`
     pub m: usize,
     /// worker threads; `0` means all available cores
     pub threads: usize,
@@ -1087,7 +1087,7 @@ pub struct SalmonIndex {
 
 /// Load just the per-reference forward sequences from an index directory, in
 /// transcript-id order (decoys included), without loading the (multi-GB) SSHash
-/// dictionary. Reads only [`REFSEQ_FILE`] + [`REFSEQ_OFFSETS_FILE`]. Used to feed
+/// dictionary. Reads only `refseq.bin` + `refseq_offsets.json`. Used to feed
 /// bias models a requant pass (e.g. `--deterministic`) the reference sequences
 /// the index already stores, so the user need not re-supply a transcript FASTA.
 pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<Vec<Vec<u8>>> {

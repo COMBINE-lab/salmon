@@ -92,7 +92,7 @@ impl LibraryTypeDetector {
     }
 
     /// Mid-run resolution (salmon's prefix-detect-then-apply): once enough
-    /// samples have been collected ([`can_guess`]), infer and **lock in** the
+    /// samples have been collected ([`Self::can_guess`]), infer and **lock in** the
     /// library format (one writer wins the CAS), stop sampling, and return it;
     /// idempotent thereafter. Returns `None` while still sampling. The caller
     /// applies the returned format as a strand-compatibility filter for the rest

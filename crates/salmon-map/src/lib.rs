@@ -42,7 +42,8 @@
 //! - [`mapper`] — the assembled selective-alignment mapper (single & paired,
 //!   with orphan recovery).
 //! - [`sketch`] — the alignment-free pseudoalignment-only mode.
-//! - [`refprovider`] — reference-sequence access for alignment.
+//! - `refprovider` (re-exported from `salmon-core`) — reference-sequence
+//!   access for alignment.
 
 pub mod align;
 pub mod chain;

@@ -15,8 +15,8 @@
 //!
 //! * a transcriptome BAM (this module),
 //! * a genome BAM plus an annotation, projected into transcript coordinates
-//!   ([`genome_project`]),
-//! * a RAD file of mappings ([`rad`]).
+//!   (the `genome_project` module),
+//! * a RAD file of mappings (the `rad` module).
 //!
 //! The BAM must be *name-grouped*: all records for one read adjacent, so a
 //! fragment's placements can be gathered in one pass without holding the whole

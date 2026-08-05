@@ -83,7 +83,7 @@ impl SimplePosBias {
         }
     }
 
-    /// A model with masses at `log(0) = -inf` — the true [`log_add`] identity, so
+    /// A model with masses at `log(0) = -inf` — the true log-add identity, so
     /// it carries *no* pseudocount. Used as the per-thread accumulator when
     /// building an expected model in parallel: partials accumulate pure observed
     /// log-mass and merge associatively via [`combine`](Self::combine); the single

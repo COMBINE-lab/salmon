@@ -15,8 +15,8 @@
 //! So the expensive parts (serialization and compression) are fully parallel, and
 //! the shared writer only ever does a bulk append.
 //!
-//! A single [`RadOutputWriter`] is created per output file; it writes the prelude
-//! + file-tag values up front and exposes a thread-safe
+//! A single [`RadOutputWriter`] is created per output file; it writes the
+//! prelude and file-tag values up front and exposes a thread-safe
 //! [`append_chunk_bytes`](RadOutputWriter::append_chunk_bytes) for worker
 //! threads. [`finalize`](RadOutputWriter::finalize) backpatches the chunk count.
 //!

@@ -6,7 +6,7 @@
 //! profile salmon adds a per-hit `alignment_score`.
 //!
 //! On-disk record layout (little-endian), matching the order of the read- and
-//! alignment-level [`TagSection`](libradicl::rad_types::TagSection)s in
+//! alignment-level [`TagSection`]s in
 //! [`crate::schema::build_prelude`]:
 //! ```text
 //! na: u32

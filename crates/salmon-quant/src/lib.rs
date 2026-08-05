@@ -5,7 +5,7 @@
 //! equivalence classes ([`salmon_eqclass`]) and fragment lengths
 //! ([`salmon_model`]) → compute effective lengths → estimate abundances by EM
 //! ([`salmon_infer`]) → write `quant.sf` and the JSON metadata
-//! ([`output`]).
+//! (the `output` module).
 //!
 //! Selective alignment is the default; set [`QuantOptions::sketch`] for the
 //! alignment-free pseudoalignment path.
@@ -307,7 +307,7 @@ pub struct QuantResult {
     pub num_alignments_below_threshold_for_mapped_fragments_vm: u64,
     /// where the fragment-length distribution came from; reported as
     /// `frag_length_source` in `meta_info.json`. Always
-    /// [`FragLengthSource::Reads`] here — reads mode trains the FLD during the
+    /// `FragLengthSource::Reads` here — reads mode trains the FLD during the
     /// mapping pass — but carried so every mode reports the field.
     pub frag_len_source: salmon_model::FragLengthSource,
     pub frag_len_mean: f64,
