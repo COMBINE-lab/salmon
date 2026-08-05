@@ -30,6 +30,10 @@ impl Lcg {
     }
 }
 
+// Compares the scalar effective-length convolution against the FFT
+// cross-correlation. The two must agree numerically (there are tests for that);
+// this measures where the crossover in cost lies, which is what justifies keeping
+// both paths.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(100_000);

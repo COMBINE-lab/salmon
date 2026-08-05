@@ -11,6 +11,9 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let index_dir = args.next().expect("index dir");
     let out_path = args.next().expect("out fasta");
+    // Read the sequences back out of the index rather than the original FASTA:
+    // the index holds the *post-processing* set (duplicates collapsed, poly-A
+    // clipped), which is what a simulator must draw from for the truth to line up.
     let idx = SalmonIndex::load(index_dir).expect("load index");
     let n = idx.num_refs();
     let f = std::fs::File::create(&out_path).expect("create out");

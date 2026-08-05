@@ -72,6 +72,9 @@ fn time_it(label: &str, cases: &[(Vec<u8>, Vec<u8>, MemChain)], cfg: &AlignConfi
     );
 }
 
+// Times the alignment kernel in isolation. Alignment is the expensive stage, but
+// in a real run it is entangled with seeding and chaining, so measuring it alone
+// is the only way to attribute a change to the kernel itself.
 fn main() {
     for &rl in &[51usize, 100, 150] {
         for &nm in &[0usize, 2] {
