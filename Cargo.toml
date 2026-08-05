@@ -69,7 +69,7 @@ clap = { version = "4", features = ["derive"] }
 sha2 = "0.11"
 # COMBINE-lab dependencies, from crates.io.
 cf1-rs = "0.5"
-piscem-rs = "0.6.4"
+piscem-rs = "0.7.0"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
 libradicl = { version = "0.16", features = ["zstd"] }
@@ -117,12 +117,3 @@ lto = "thin"
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-# TEMPORARY (bucket-cache branch): build against local sshash-rs / piscem-rs
-# checkouts carrying the bucket-bounds memoization. Cargo only honours a
-# [patch] table from the workspace root, so piscem-rs's own patch section does
-# not apply transitively and sshash-lib has to be redirected here as well.
-# Revert to the published versions once the change is released.
-[patch.crates-io]
-piscem-rs = { path = "/scratch1/rob/alevin-fry-ecosystem/piscem-rs" }
-sshash-lib = { path = "/scratch1/rob/alevin-fry-ecosystem/sshash-rs-dev/crates/sshash-lib" }
