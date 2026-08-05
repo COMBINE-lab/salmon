@@ -1,5 +1,21 @@
 //! Genome-alignment quantification via bramble projection.
 //!
+//! # The problem this solves
+//!
+//! salmon quantifies transcripts, so it needs to know where a read sits *within a
+//! transcript*. A genome aligner instead reports where the read sits on a
+//! chromosome, often spanning an intron. Those are different coordinate systems,
+//! and the genome one does not by itself say which transcript a read supports.
+//!
+//! *Projection* converts between them: given an annotation describing each
+//! transcript's exons, a genomic alignment is translated into the transcript
+//! coordinates of every transcript whose exon structure it is consistent with.
+//! A read spanning an exon junction is strong evidence, because only transcripts
+//! containing that junction can explain it.
+//!
+//! This lets an existing genome BAM — the common output of a standard pipeline —
+//! be quantified without re-aligning anything.
+//!
 //! `salmon quant -a <genome.bam> --annotation <gtf|gff>` reads a name-collated
 //! genome BAM, projects each read group into transcriptome coordinates with
 //! `bramble-rs`, and writes a salmon RAD (selective-alignment profile) that the

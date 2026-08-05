@@ -1,6 +1,26 @@
 //! Alignment error model — a port of salmon's `AlignmentModel`
 //! (`src/alignment/AlignmentModel.cpp`).
 //!
+//! # What it is for
+//!
+//! In alignment mode the aligner's own score (`AS`) is the only quality signal,
+//! and different aligners compute it differently — so weighting placements by it
+//! makes results depend on the aligner's scoring scheme. This model replaces it
+//! with salmon's own judgement: given a reference sequence, how *likely* is this
+//! particular pattern of matches, mismatches and gaps?
+//!
+//! The idea is that real sequencing errors have structure. They are not uniformly
+//! distributed along the read (later cycles are worse), they depend on which base
+//! was expected and which was seen, and they cluster. A model learned from the
+//! data itself therefore distinguishes "a read from this transcript with typical
+//! errors" from "a read from somewhere else that happens to align" far better
+//! than a fixed penalty can.
+//!
+//! The score handed downstream is a *log-likelihood ratio*: how much more likely
+//! the observed alignment is under the error model than under a perfect-match
+//! baseline. That is a quantity salmon defines, so it is comparable across
+//! aligners and reproducible.
+//!
 //! A position-binned, first-order Markov model over per-base *alignment states*.
 //! Each aligned position is the pair `(refBase, readBase)` encoded as
 //! `refBase*9 + readBase` over the 9 symbols {A,C,G,T,DASH,SOFT,HARD,PAD,REF_SKIP}
@@ -536,6 +556,8 @@ mod tests {
     }
 
     #[test]
+    /// Once trained on real alignments, a clean alignment must score above a
+    /// mismatched one — the basic property the whole model exists to provide.
     fn matches_score_higher_than_mismatches_after_training() {
         let mut m = AlignmentModel::new(1.0, 4);
         let (read, refs, ops) = perfect();
@@ -560,6 +582,8 @@ mod tests {
     }
 
     #[test]
+    /// Before training the model must not express a preference, so an early
+    /// fragment is not scored against an opinion the model has not yet earned.
     fn untrained_model_is_neutral() {
         // With no training every transition is the uniform prior, so fg == bg
         // (score 0): no alignment is preferred until errors are observed.
@@ -570,6 +594,7 @@ mod tests {
     }
 
     #[test]
+    /// Same obligation for the deterministic counting variant.
     fn counting_model_prefers_matches_after_training() {
         // The integer counting model, once normalized, ranks a clean match above
         // a mismatch just like the float model.
@@ -592,6 +617,8 @@ mod tests {
     }
 
     #[test]
+    /// Per-thread models must merge to the same result whatever order the threads
+    /// finish in; otherwise the deterministic mode would not be deterministic.
     fn counting_model_merge_is_order_independent() {
         // Splitting the same observations across two counters and merging in
         // either order yields byte-identical normalized transition tables — the
