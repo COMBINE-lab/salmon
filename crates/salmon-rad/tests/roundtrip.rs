@@ -118,6 +118,8 @@ fn check_roundtrip(profile: RadProfile, expected_detect: RadInputProfile) {
 }
 
 #[test]
+/// What is written must read back identically: the writer and reader are separate
+/// implementations of one binary layout.
 fn sketch_roundtrip() {
     check_roundtrip(
         RadProfile::Sketch,
@@ -128,6 +130,7 @@ fn sketch_roundtrip() {
 /// The `chunk_codec` file tag is absent for uncompressed output (so pre-feature
 /// readers are unaffected) and carries the codec id (1=lz4, 2=zstd) otherwise.
 #[test]
+/// A compressed file must announce its codec, or a reader cannot decode it.
 fn chunk_codec_tag_advertised() {
     use libradicl::CHUNK_CODEC_TAG;
     let recs = sample_records(RadProfile::Sketch);
@@ -156,6 +159,8 @@ fn chunk_codec_tag_advertised() {
 }
 
 #[test]
+/// The selective-alignment profile adds a per-hit score field, which must survive
+/// the round trip.
 fn sa_roundtrip_carries_scores() {
     check_roundtrip(
         RadProfile::SelectiveAlignment,
@@ -171,6 +176,7 @@ fn sa_roundtrip_carries_scores() {
 }
 
 #[test]
+/// Many threads append concurrently, so no chunk may be lost or double-counted.
 fn concurrent_writer_counts_chunks() {
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let names = ["t0", "t1", "t2"];

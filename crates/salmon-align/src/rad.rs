@@ -1,5 +1,14 @@
 //! Parallel RAD-format input quantification (`salmon quant --rad`).
 //!
+//! # Why quantify from a RAD file
+//!
+//! Mapping is the expensive half of a salmon run; the statistics are cheap. A RAD
+//! file stores the mapping result compactly, so it can be re-quantified many
+//! times — with different bias settings, priors or bootstrap counts — without
+//! touching the reads again. It is also how `--deterministic` gets its guarantee:
+//! map once, bake the learned models into the header, and every later requant
+//! reproduces the same numbers exactly.
+//!
 //! Quantifies from a RAD file of mappings instead of FASTQ/BAM, taking a path
 //! analogous to alignment mode: each fragment's placements are turned into a
 //! weighted equivalence class, then the shared inference (EM/VBEM + bootstrap/

@@ -1,4 +1,25 @@
 //! Format-neutral borrowed alignment records shared by SAM and BAM output.
+//!
+//! # Why this module exists
+//!
+//! salmon can write its per-fragment mappings as text (SAM) or as the equivalent
+//! compressed binary (BAM). The two formats encode exactly the same information,
+//! so if each writer derived flags, CIGARs, positions and tags for itself the two
+//! would inevitably drift apart. Instead this module derives every field once, in
+//! [`emit_fragment_records`], and hands each format a borrowed record to
+//! serialize. The header is shared the same way, via [`header_text`].
+//!
+//! "Borrowed" means the record points at the caller's read name and sequence
+//! rather than copying them, so emitting a mapping allocates nothing.
+//!
+//! # Background: SAM records
+//!
+//! A SAM record describes one read's placement: which reference, at what
+//! position, in which orientation, and how the read's bases line up with the
+//! reference. The alignment shape is a CIGAR string — here only `M` (bases
+//! consuming both read and reference) and `S` (soft-clipped: present in the read,
+//! not aligned). salmon does not compute a base-level alignment, so it emits a
+//! spoofed `<readLen>M` with soft clips where the read overhangs a transcript end.
 
 use std::io;
 
@@ -7,13 +28,26 @@ use salmon_core::RefProvider as _;
 use salmon_index::SalmonIndex;
 use salmon_map::ScoredMapping;
 
+// SAM FLAG bits (a bitfield in field 2 of every record). Each names one yes/no
+// property of the alignment; a record's flags are these OR-ed together.
+/// The read is part of a pair.
 pub const PAIRED: u16 = 0x1;
+/// Both mates placed consistently (right orientation, plausible distance).
 pub const PROPER_PAIR: u16 = 0x2;
+/// This read's mate did not map (an orphan).
 pub const MATE_UNMAPPED: u16 = 0x8;
+/// This read aligns to the reverse strand, so its stored sequence is the
+/// reverse complement of what the sequencer produced.
 pub const IS_RC: u16 = 0x10;
+/// The mate aligns to the reverse strand.
 pub const MATE_RC: u16 = 0x20;
+/// This is read 1 of the pair.
 pub const READ1: u16 = 0x40;
+/// This is read 2 of the pair.
 pub const READ2: u16 = 0x80;
+/// An additional, non-primary placement of the same fragment. Exactly one
+/// placement per fragment lacks this bit; downstream tools count primaries to
+/// avoid counting a multi-mapping fragment several times.
 pub const SECONDARY: u16 = 0x100;
 
 #[derive(Clone, Copy)]
@@ -28,6 +62,11 @@ pub struct CigarOp {
     pub len: usize,
 }
 
+/// A CIGAR of at most two operations, stored inline.
+///
+/// salmon's spoofed alignments never need more than two (`M`, or a clip plus a
+/// match at an overhanging end), so a fixed array avoids allocating one `Vec` per
+/// emitted record.
 #[derive(Clone, Copy)]
 pub struct Cigar {
     ops: [CigarOp; 2],
@@ -40,6 +79,8 @@ impl Cigar {
     }
 }
 
+/// One read's placement, with every field already in the form both writers need.
+/// The `'a` lifetime ties the borrowed name and sequence to the caller's buffers.
 pub struct AlignmentRecord<'a> {
     pub name: &'a [u8],
     pub flags: u16,
@@ -92,6 +133,12 @@ pub fn header_text(salmon: &SalmonIndex, command: &str) -> String {
     text
 }
 
+/// The read name to report: the FASTQ header up to the first space or tab, with
+/// a trailing `/1` or `/2` mate suffix removed.
+///
+/// Both mates of a pair must carry the *same* name for a SAM/BAM reader to pair
+/// them up, but many FASTQ files distinguish them with that suffix — so it has to
+/// go.
 pub fn read_name(id: &[u8]) -> &[u8] {
     let end = id
         .iter()
@@ -106,6 +153,8 @@ pub fn read_name(id: &[u8]) -> &[u8] {
     }
 }
 
+/// Complement one base (unknown bases become `N`), used when emitting a
+/// reverse-strand read's sequence.
 pub fn complement(base: u8) -> u8 {
     match base {
         b'A' | b'a' => b'T',
@@ -116,6 +165,14 @@ pub fn complement(base: u8) -> u8 {
     }
 }
 
+/// The CIGAR and clamped position for a read placed at `pos` on a transcript of
+/// length `txp_len`.
+///
+/// A read can hang off either end of a transcript — the mapper places it by seed
+/// position, and the fragment may genuinely extend past the annotated boundary.
+/// SAM cannot express a negative position or an alignment past the reference end,
+/// so the overhanging bases are soft-clipped and the position clamped into range.
+/// Returns the CIGAR and the position to report.
 fn overhang_cigar(pos: i32, read_len: i32, txp_len: i32) -> (Cigar, i32) {
     let read_len = read_len.max(0) as usize;
     let empty = CigarOp {
@@ -171,6 +228,12 @@ fn overhang_cigar(pos: i32, read_len: i32, txp_len: i32) -> (Cigar, i32) {
 
 /// Emit borrowed records immediately; no record, name, sequence, CIGAR, or tag
 /// allocation is retained between callback invocations.
+///
+/// This is the single source of truth for record bodies: one call per fragment
+/// produces every record that fragment implies (two per placement for a proper
+/// pair, one otherwise), and the caller's closure serializes them as SAM text or
+/// BAM binary. The callback style is what keeps it allocation-free — nothing is
+/// collected into a vector to be handed back.
 pub fn emit_fragment_records(
     salmon: &SalmonIndex,
     r1_id: &[u8],
@@ -184,10 +247,15 @@ pub fn emit_fragment_records(
     let nh = maps.len();
 
     for (index, mapping) in maps.iter().enumerate() {
+        // The first placement is primary; the rest are marked secondary so a
+        // downstream counter does not count this fragment once per placement.
         let secondary = if index == 0 { 0 } else { SECONDARY };
+        // HI is 1-based, unlike the loop index.
         let hi = index + 1;
         let tid = mapping.tid as usize;
         let txp_len = salmon.ref_len(tid) as i32;
+        // salmon's XT tag: `T` for a transcript placement, `D` for a decoy, so a
+        // reader can tell which placements were sinks rather than real targets.
         let xt = if salmon.is_decoy(mapping.tid) {
             b'D'
         } else {
@@ -198,11 +266,15 @@ pub fn emit_fragment_records(
             MateStatus::PairedEndPaired => {
                 let (c1, p1) = overhang_cigar(mapping.r1_pos, r1_seq.len() as i32, txp_len);
                 let (c2, p2) = overhang_cigar(mapping.r2_pos, r2_seq.len() as i32, txp_len);
+                // TLEN is the observed template (fragment) length, truncated at
+                // the transcript end for the same reason positions are clamped.
                 let mut fragment_length = mapping.fragment_len;
                 let min_pos = mapping.r1_pos.min(mapping.r2_pos);
                 if min_pos + fragment_length > txp_len {
                     fragment_length = txp_len - min_pos;
                 }
+                // SAM signs TLEN: positive on the leftmost mate, negative on the
+                // rightmost, so the two records sum to zero.
                 let tlen1 = if mapping.r1_pos <= mapping.r2_pos {
                     fragment_length
                 } else {
@@ -210,6 +282,8 @@ pub fn emit_fragment_records(
                 };
                 let mut f1 = PAIRED | PROPER_PAIR | READ1 | secondary;
                 let mut f2 = PAIRED | PROPER_PAIR | READ2 | secondary;
+                // Each mate's own strand sets its IS_RC bit and the *other*
+                // record's MATE_RC bit, so the pair stays mutually consistent.
                 if !mapping.is_fw {
                     f1 |= IS_RC;
                     f2 |= MATE_RC;
@@ -274,6 +348,9 @@ pub fn emit_fragment_records(
                     alignment_score: mapping.r1_score,
                 })?;
             }
+            // Orphan: one mate placed, the other not. One record is emitted, for
+            // whichever mate mapped, flagged so a reader knows the pair is
+            // incomplete rather than that this read is single-end.
             MateStatus::PairedEndLeft | MateStatus::PairedEndRight => {
                 let left = mapping.status == MateStatus::PairedEndLeft;
                 let (name, sequence, position, forward, score, read_flag) = if left {

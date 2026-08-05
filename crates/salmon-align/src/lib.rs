@@ -1,5 +1,27 @@
 //! `salmon-align`: alignment-based (BAM) quantification.
 //!
+//! # When you would use this
+//!
+//! salmon's usual input is raw reads, which it maps itself. But sometimes the
+//! alignments already exist: another tool produced them, a pipeline requires a
+//! specific aligner, or the reads were aligned to the genome and projected. In
+//! those cases the expensive half of the work is already done, and salmon only
+//! needs to do the statistics.
+//!
+//! So this crate is the mapping stage replaced by a reader. Everything after it —
+//! equivalence classes, the fragment-length distribution, bias models, the EM,
+//! the output files — is the same code the reads path uses. The three entry
+//! points differ only in where the placements come from:
+//!
+//! * a transcriptome BAM (this module),
+//! * a genome BAM plus an annotation, projected into transcript coordinates
+//!   (the `genome_project` module),
+//! * a RAD file of mappings (the `rad` module).
+//!
+//! The BAM must be *name-grouped*: all records for one read adjacent, so a
+//! fragment's placements can be gathered in one pass without holding the whole
+//! file in memory.
+//!
 //! The alternative to mapping FASTQ reads: take a BAM of reads already aligned
 //! to the *transcriptome* (each `@SQ` is a transcript) and quantify directly
 //! from those alignments. References and their lengths come from the BAM
@@ -2200,6 +2222,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// The `AS` tag can be stored in any of BAM's integer widths, so all of them
+    /// must decode; a missed case would silently score placements as zero.
     fn alignment_score_value_decoding() {
         assert_eq!(value_as_i32(&Value::Int32(-12)), Some(-12));
         assert_eq!(value_as_i32(&Value::Int8(0)), Some(0));
@@ -2232,6 +2256,8 @@ mod tests {
     /// the strand filters accept it per its own orientation — regression for
     /// issue #1057 (single-end BAM dropped under `SF`/`SR`).
     #[test]
+    /// A single-end record must be classified as such and still be subject to the
+    /// library-type strand filter.
     fn single_end_record_is_single_end_and_strand_filters_apply() {
         use salmon_core::LibraryFormat;
         let sf = LibraryFormat::parse("SF").unwrap();
@@ -2261,6 +2287,8 @@ mod tests {
     /// A paired-end read reported alone (BAM `0x1` set) remains an orphan,
     /// classified left/right by the first-segment (`0x40`) flag — unchanged.
     #[test]
+    /// An orphan must record *which* mate placed: read 1 and read 2 have mirrored
+    /// strand expectations, so losing that would misapply the filter.
     fn paired_orphan_keeps_left_right_status() {
         let read1 = vec![frag(false, true, true)];
         let (_, _, status) = frag_format(&read1, &[0]);
@@ -2274,6 +2302,8 @@ mod tests {
     /// The warning in #1062 must name exactly the flags the user typed, so it
     /// never claims a value was ignored that the user never supplied.
     #[test]
+    /// The warning about ignored fragment-length arguments must name only the flags
+    /// the user actually passed.
     fn explicit_fld_args_report_only_supplied_flags() {
         assert!(!ExplicitFldArgs::default().any());
         assert_eq!(ExplicitFldArgs::default().names(), "");
@@ -2303,6 +2333,8 @@ mod tests {
     /// Baked is the default, so an ordinary requant keeps reproducing the run
     /// that wrote the RAD unless the user opts out.
     #[test]
+    /// The default must reproduce the run that wrote the RAD, rather than
+    /// re-deriving a distribution and quietly changing the answer.
     fn fld_policy_defaults_to_baked() {
         assert_eq!(FldPolicy::default(), FldPolicy::Baked);
         let opts = AlignQuantOptions::new("x.rad".into(), "out".into());

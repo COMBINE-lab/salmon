@@ -1,5 +1,14 @@
 //! Chunked `--writeBam` output.
 //!
+//! # What BAM is
+//!
+//! BAM is the binary form of SAM: the same records, encoded as fixed-layout
+//! little-endian structures and then compressed with BGZF — gzip applied to
+//! independent ~64 KiB blocks, so a reader can jump into the middle of a large
+//! file instead of decompressing it from the start. This module owns the binary
+//! encoding and the compression pipeline; every field value comes from
+//! [`crate::mapping_record`], shared with the SAM writer.
+//!
 //! # Ordering contract
 //!
 //! Exactly one guarantee: **all records for a fragment are contiguous**. A
@@ -41,7 +50,11 @@ use salmon_map::ScoredMapping;
 
 use crate::mapping_record::{self, AlignmentRecord, CigarKind};
 
+/// Hand a chunk to the writer once it reaches this size. Large enough that the
+/// per-chunk handoff is negligible, small enough to bound queued memory.
 const CHUNK_TARGET: usize = 2 * 1024 * 1024;
+/// Starting size of a fresh encode buffer; it grows toward [`CHUNK_TARGET`] and
+/// is then recycled rather than reallocated.
 const INITIAL_CAPACITY: usize = 64 * 1024;
 /// A chunk only overshoots [`CHUNK_TARGET`] by one fragment's records, so this
 /// ceiling exists to drop pathological growth, not as a routine limit.
@@ -119,6 +132,11 @@ fn compression_worker_count(mapping_threads: usize) -> NonZeroUsize {
     NonZeroUsize::new(workers).expect("clamped to at least 1")
 }
 
+/// The first error the writer thread hit, if any.
+///
+/// The writer runs on its own thread, so a failure there (a full disk, say) has
+/// to be surfaced to the mapping workers that keep sending it chunks. Only the
+/// first error is kept — later ones are usually consequences of it.
 struct WriterFailure(Mutex<Option<String>>);
 
 impl WriterFailure {
@@ -138,8 +156,13 @@ impl WriterFailure {
     }
 }
 
+/// The BAM output pipeline: a bounded queue into a dedicated writer thread.
 pub struct BamOutput {
+    /// Chunks to compress. `Option` so `finish`/`drop` can close it, which is
+    /// what tells the writer thread to stop.
     sender: Option<Sender<Vec<u8>>>,
+    /// Buffers the writer has finished with, returned for reuse so steady-state
+    /// operation allocates nothing.
     recycled: Receiver<Vec<u8>>,
     failure: Arc<WriterFailure>,
     handle: Option<JoinHandle<io::Result<()>>>,
@@ -268,6 +291,9 @@ impl BamOutput {
         })
     }
 
+    /// Close the queue, wait for the writer to drain and finalize the file, and
+    /// report any error it hit. Takes `self` by value so nothing can be written
+    /// afterwards.
     pub fn finish(mut self) -> anyhow::Result<()> {
         drop(self.sender.take());
         self.handle
@@ -279,6 +305,8 @@ impl BamOutput {
     }
 }
 
+// If `finish` was never called (an error path unwinding, say), still close the
+// queue and wait, so the writer thread cannot outlive the run.
 impl Drop for BamOutput {
     fn drop(&mut self) {
         drop(self.sender.take());
@@ -333,6 +361,7 @@ impl BamScratch<'_> {
     }
 }
 
+// BAM stores every integer little-endian, regardless of the host's byte order.
 fn push_i32(buf: &mut Vec<u8>, value: i32) {
     buf.extend_from_slice(&value.to_le_bytes());
 }
@@ -364,6 +393,13 @@ fn encode_header(salmon: &SalmonIndex, command: &str) -> anyhow::Result<Vec<u8>>
     Ok(buf)
 }
 
+/// The BAM index "bin" for an alignment spanning `[start, end)`.
+///
+/// BAM files carry a hierarchical index: the reference is cut into nested
+/// intervals of 512 Mb, 64 Mb, 8 Mb, 1 Mb and 16 kb, and each alignment is filed
+/// under the smallest bin that wholly contains it. A region query then only has
+/// to look in the bins overlapping it. The magic constants are the bin numbering
+/// fixed by the SAM specification; the shifts are the log2 of each level's size.
 fn reg2bin(start: i32, end: i32) -> u16 {
     let start = start.max(0) as u32;
     let end = end.max(start as i32 + 1) as u32 - 1;
@@ -382,6 +418,9 @@ fn reg2bin(start: i32, end: i32) -> u16 {
     }
 }
 
+/// BAM's 4-bit base encoding. The codes are bit flags (A=1, C=2, G=4, T=8) so
+/// that ambiguity codes are unions of them; 15 means "any base". Two bases pack
+/// into each byte, halving the space a read's sequence takes.
 fn base_code(base: u8) -> u8 {
     match base.to_ascii_uppercase() {
         b'A' => 1,
@@ -392,6 +431,8 @@ fn base_code(base: u8) -> u8 {
     }
 }
 
+/// Base `index` of the read as BAM must store it: on the reference's forward
+/// strand, so a reverse-strand alignment is read backwards and complemented.
 fn record_base(record: &AlignmentRecord<'_>, index: usize) -> u8 {
     if record.reverse_complement {
         mapping_record::complement(record.sequence[record.sequence.len() - 1 - index])
@@ -400,6 +441,12 @@ fn record_base(record: &AlignmentRecord<'_>, index: usize) -> u8 {
     }
 }
 
+/// Append an optional integer tag, choosing the narrowest type that fits.
+///
+/// BAM tags are self-describing: a two-letter name, a one-letter type code, then
+/// the value. Picking the smallest of `C/c/S/s/I/i` (unsigned/signed 8, 16, 32
+/// bits) keeps a tag like `NH:i:1` down to a single byte of payload, which
+/// matters across billions of records.
 fn push_aux_i64(buf: &mut Vec<u8>, tag: [u8; 2], value: i64) {
     buf.extend_from_slice(&tag);
     if let Ok(value) = u8::try_from(value) {
@@ -423,7 +470,13 @@ fn push_aux_i64(buf: &mut Vec<u8>, tag: [u8; 2], value: i64) {
     }
 }
 
+/// Encode one record in BAM's binary layout: a fixed 32-byte header, then the
+/// variable-length name, CIGAR, packed sequence, qualities and tags.
+///
+/// The field order below is fixed by the format and must not be rearranged.
 fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<()> {
+    // The record begins with its own length, which is only known at the end;
+    // reserve the four bytes now and patch them in below.
     let block_start = buf.len();
     push_u32(buf, 0);
     push_i32(buf, record.reference_id as i32);
@@ -466,12 +519,16 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
         };
         buf.push((high << 4) | low);
     }
+    // Base qualities, one byte per base. salmon does not retain them, and 0xff is
+    // the format's "quality unavailable" marker (SAM writes `*` for the same).
     buf.resize(buf.len() + record.sequence.len(), 0xff);
     push_aux_i64(buf, *b"NH", record.nh as i64);
     push_aux_i64(buf, *b"HI", record.hi as i64);
     buf.extend_from_slice(b"XTA");
     buf.push(record.xt);
     push_aux_i64(buf, *b"AS", record.alignment_score as i64);
+    // Patch the reserved length field now the record's extent is known (`- 4`
+    // because the length itself is not counted).
     let block_size = u32::try_from(buf.len() - block_start - 4)
         .map_err(|_| io::Error::other("BAM record too large"))?;
     buf[block_start..block_start + 4].copy_from_slice(&block_size.to_le_bytes());
@@ -482,6 +539,9 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
 mod tests {
     use super::*;
 
+    /// Pin the sizing heuristic to the measured balance point, so a future edit
+    /// to the constants cannot silently change how many cores BAM output takes
+    /// away from mapping.
     #[test]
     fn compression_workers_track_the_measured_balance_point() {
         // One deflate worker per ~3 mapping threads (52 / 165 MiB/s).
@@ -494,6 +554,9 @@ mod tests {
         }
     }
 
+    /// The invariants that must hold for any input, including the degenerate and
+    /// absurd ones: at least one worker (zero would deadlock), never past the
+    /// cap, and never more workers than there are producers to keep up with.
     #[test]
     fn compression_workers_are_bounded() {
         // Never zero, never past the cap, and never more than the mapping

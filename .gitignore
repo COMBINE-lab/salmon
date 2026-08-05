@@ -43,3 +43,6 @@
 /realdata/
 # Compiled C++ unit-test binary (sources under tests/ are tracked)
 /tests/unitTests
+
+# macOS finder metadata
+.DS_Store

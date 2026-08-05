@@ -69,6 +69,8 @@ fn quant_counts(out: &Path) -> Vec<(String, f64)> {
 }
 
 #[test]
+/// The two-pass contract: the first pass must produce a RAD with the models
+/// fully baked, so the second pass is single-shot and conserves mass.
 fn deterministic_bam_writes_rad_and_quantifies() {
     let dir = tempfile::tempdir().unwrap();
     let sam = write_sam(dir.path());
@@ -170,6 +172,8 @@ fn write_seq_fixture(dir: &Path) -> (PathBuf, PathBuf) {
 }
 
 #[test]
+/// The error model must prefer the alignment that really matches, and must do so
+/// identically on every run.
 fn deterministic_bam_error_model_prefers_correct_and_reproduces() {
     let dir = tempfile::tempdir().unwrap();
     let (sam, fasta) = write_seq_fixture(dir.path());
@@ -220,6 +224,7 @@ fn deterministic_bam_error_model_prefers_correct_and_reproduces() {
 }
 
 #[test]
+/// The whole point of the mode: identical input must give identical output.
 fn deterministic_bam_is_reproducible() {
     let dir = tempfile::tempdir().unwrap();
     let sam = write_sam(dir.path());

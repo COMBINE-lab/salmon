@@ -1,5 +1,33 @@
 //! `salmon-map`: selective-alignment mapping for the salmon Rust port.
 //!
+//! # What "mapping" has to decide
+//!
+//! For each sequenced fragment, which transcripts could it have come from, and
+//! how well does it fit each one? Answering that for hundreds of millions of
+//! fragments against a hundred thousand transcripts is the bulk of a salmon run,
+//! so the work is staged from cheap and approximate to expensive and exact:
+//!
+//! 1. **Seed.** Look up the fragment's k-mers in the index. Each hit says "this
+//!    31-base window occurs here". Cheap, and most transcripts are eliminated
+//!    outright because they share no k-mer at all.
+//! 2. **Anchor.** Extend the k-mer hits into *MEMs*: maximal stretches that match
+//!    exactly. A handful of long anchors is a much better summary of the
+//!    evidence than a scatter of k-mer hits.
+//! 3. **Chain.** Group anchors that could belong to one alignment — same
+//!    transcript, consistent order, plausible gaps — into candidate chains. This
+//!    is where a real placement is separated from coincidental shared k-mers.
+//! 4. **Align.** Only for surviving candidates, compute an actual base-level
+//!    alignment score. This is the expensive step, which is why so much is done
+//!    to avoid reaching it.
+//! 5. **Pair, score, filter.** Combine the two mates, discard placements that are
+//!    too poor relative to the best, drop decoys, and emit weighted mappings.
+//!
+//! *Selective alignment* is the name for this whole approach: unlike
+//! pseudoalignment it does verify candidates by alignment, but unlike a
+//! traditional aligner it only ever aligns the few candidates chaining could not
+//! rule out. [`sketch`] provides the alignment-free path for when even that is
+//! more than a run needs.
+//!
 //! This crate implements the selective-alignment path: extracting MEM anchors
 //! from piscem k-mer hits, chaining them into colinear mapping candidates,
 //! recovering orphans, and validating candidates with alignment. It is built
@@ -14,7 +42,8 @@
 //! - [`mapper`] — the assembled selective-alignment mapper (single & paired,
 //!   with orphan recovery).
 //! - [`sketch`] — the alignment-free pseudoalignment-only mode.
-//! - [`refprovider`] — reference-sequence access for alignment.
+//! - `refprovider` (re-exported from `salmon-core`) — reference-sequence
+//!   access for alignment.
 
 pub mod align;
 pub mod chain;

@@ -94,6 +94,8 @@ fn write_fasta(dir: &Path, name: &str, seq: &[u8]) -> PathBuf {
 }
 
 #[test]
+/// A read and its reverse complement must both map back to where they came
+/// from — against a real index, not a stub.
 fn maps_forward_and_revcomp_reads() {
     let tmp = tempfile::tempdir().unwrap();
     let transcript = gen_seq(300, 0xC0FFEE);
@@ -154,6 +156,8 @@ fn maps_forward_and_revcomp_reads() {
 }
 
 #[test]
+/// A candidate the collector produces must survive alignment validation; the
+/// two stages have to agree about what a good placement is.
 fn collected_candidate_validates_by_alignment() {
     let tmp = tempfile::tempdir().unwrap();
     let transcript = gen_seq(300, 0xBEEF);
@@ -199,6 +203,7 @@ fn collected_candidate_validates_by_alignment() {
 }
 
 #[test]
+/// The full single-end pipeline end to end.
 fn assembled_single_read_mapper() {
     let transcript = gen_seq(600, 0xA11CE);
     let (idx, _tmp) = build_index_for(&transcript);
@@ -219,6 +224,7 @@ fn assembled_single_read_mapper() {
 }
 
 #[test]
+/// And the paired one, which must recognize a concordant pair.
 fn assembled_paired_read_mapper_concordant() {
     let transcript = gen_seq(600, 0xB0B);
     let (idx, _tmp) = build_index_for(&transcript);
@@ -242,6 +248,9 @@ fn assembled_paired_read_mapper_concordant() {
 }
 
 #[test]
+/// When one mate maps and the other is seed-poor, direct search must recover it
+/// and promote the placement to a pair — the evidence is real, the seeds just
+/// missed it.
 fn orphan_recovery_promotes_to_pair() {
     let transcript = gen_seq(700, 0x0CEA1);
     let (idx, _tmp) = build_index_for(&transcript);
@@ -274,6 +283,7 @@ fn orphan_recovery_promotes_to_pair() {
 }
 
 #[test]
+/// The alignment-free path must map the same easy read the full path does.
 fn pseudoalignment_only_mode() {
     let transcript = gen_seq(600, 0x5EED);
     let (idx, _tmp) = build_index_for(&transcript);
@@ -318,6 +328,8 @@ fn pseudoalignment_only_mode() {
 }
 
 #[test]
+/// Dovetailed pairs are artefacts by default but legitimate in some protocols,
+/// so the flag must genuinely change the outcome.
 fn dovetail_pair_rejected_by_default_accepted_with_flag() {
     // A dovetailed fragment: insert (50) shorter than the read length (100), so
     // the mates overhang each other. mate1 forward with 5' at 200, mate2
@@ -400,6 +412,8 @@ fn dovetail_pair_rejected_by_default_accepted_with_flag() {
 }
 
 #[test]
+/// A read from nowhere must produce nothing — no forced placement onto whichever
+/// transcript it resembles most.
 fn unmappable_read_yields_no_candidates() {
     let tmp = tempfile::tempdir().unwrap();
     let transcript = gen_seq(300, 0x1234);

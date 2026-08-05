@@ -1,11 +1,32 @@
 //! Fragment-length distribution.
 //!
+//! # What it is and why it matters
+//!
+//! Library preparation shears RNA into fragments whose lengths vary around some
+//! protocol-specific typical size (often ~200-300 bases). Two things depend on
+//! knowing that distribution:
+//!
+//! * **Effective length.** A transcript can only host a fragment that fits
+//!   inside it, so the number of usable start positions depends on how long
+//!   fragments actually are. That is the divisor turning fragment counts into
+//!   abundances.
+//! * **Mapping plausibility.** If a paired mapping implies a 900-base fragment
+//!   in a library whose fragments are 250 bases, that mapping is probably wrong,
+//!   and its weight should reflect that.
+//!
 //! Direct port of salmon's `FragmentLengthDistribution`
 //! (`src/model/FragmentLengthDistribution.cpp`): a log-space histogram seeded
 //! with a Gaussian (or uniform) prior, updated by adding a binomial smoothing
-//! kernel around each observed length. All masses and probabilities are in log
-//! space. Updates are lock-free so worker threads can call [`add_val`] with a
-//! shared reference, matching the C++ design.
+//! kernel around each observed length.
+//!
+//! **Why a smoothing kernel.** Each observation is spread over neighbouring
+//! lengths rather than dropped into one bin, because a fragment observed at 249
+//! bases is evidence that 248 and 250 are plausible too. Without smoothing the
+//! histogram would be spiky and a length that happened not to be observed would
+//! get probability zero.
+//!
+//! All masses and probabilities are in log space. Updates are lock-free so worker
+//! threads can call [`add_val`] with a shared reference, matching the C++ design.
 //!
 //! [`add_val`]: FragmentLengthDistribution::add_val
 
@@ -26,6 +47,9 @@ pub struct FragmentLengthDistribution {
     /// logged total observed mass (including pseudo-counts)
     tot_mass: AtomicF64,
     /// logged sum of length*mass, for fast mean computation
+    ///
+    /// Maintained incrementally so the mean is a subtraction rather than a sweep
+    /// over every bin.
     sum: AtomicF64,
     /// minimum observed length (bin units)
     min: AtomicUsize,
@@ -49,6 +73,10 @@ pub struct FragmentLengthDistribution {
     /// transcript of a given length in that fragment gets an identical value;
     /// [`refresh_online`](Self::refresh_online) rebuilds it at mini-batch
     /// boundaries.
+    ///
+    /// This is a real correctness issue, not a micro-optimization: two transcripts
+    /// that are byte-identical must receive byte-identical weights, or the EM will
+    /// split them unevenly for no reason.
     online_pmf: RwLock<Arc<Vec<f64>>>,
 
     /// Periodically-refreshed snapshot of the (normalized) log-CMF, the
@@ -71,6 +99,10 @@ impl FragmentLengthDistribution {
     /// * `kernel_n` – binomial kernel trials; must be even (after binning).
     /// * `kernel_p` – binomial kernel success probability.
     /// * `bin_size` – internal length binning (use 1 for no binning).
+    ///
+    /// The prior is what the distribution believes before seeing any data; a
+    /// paired-end run quickly overwhelms it with observations, while a single-end
+    /// run (which observes no fragment lengths at all) keeps it.
     pub fn new(
         alpha: f64,
         max_val: usize,
@@ -81,8 +113,10 @@ impl FragmentLengthDistribution {
         bin_size: usize,
     ) -> Self {
         assert!(bin_size >= 1, "bin_size must be >= 1");
+        // Everything below works in *bin* units, so convert once here.
         let max_val = max_val / bin_size;
         let kernel_n = kernel_n / bin_size;
+        // An even kernel has a well-defined centre bin to place the observation at.
         assert!(
             kernel_n.is_multiple_of(2),
             "kernel_n must be even after binning"
@@ -102,10 +136,14 @@ impl FragmentLengthDistribution {
             hist = (0..=max_val).map(|_| AtomicF64::new(LOG_0)).collect();
             tot_mass = LOG_0;
             for (i, slot) in hist.iter().enumerate() {
+                // Discretize the continuous Gaussian: the mass of bin `i` is the
+                // area between `i - 0.5` and `i + 0.5`.
                 let norm_mass = norm.cdf(i as f64 + 0.5) - norm.cdf(i as f64 - 0.5);
                 let mass = if norm_mass != 0.0 {
                     tot + norm_mass.ln()
                 } else {
+                    // Far tail underflowed to exactly zero; use the finite
+                    // "effectively zero" value so later arithmetic stays defined.
                     LOG_EPSILON
                 };
                 slot.store(mass);
@@ -116,13 +154,18 @@ impl FragmentLengthDistribution {
             // uniform prior
             let per = tot - (max_val as f64).ln();
             hist = (0..=max_val).map(|_| AtomicF64::new(per)).collect();
+            // Length 0 is impossible.
             hist[0].store(LOG_0);
+            // Closed form for Σ l·mass with a flat mass: mass · n(n+1)/2.
             let h1 = hist.get(1).map(|a| a.load()).unwrap_or(per);
             sum = h1 + ((max_val * (max_val + 1)) as f64).ln() - 2.0_f64.ln();
             tot_mass = tot;
         }
 
         // binomial smoothing kernel
+        //
+        // A binomial PMF is a discrete bell curve, so each observation is spread
+        // over its neighbours with the centre weighted most.
         let binom = Binomial::new(kernel_p, kernel_n as u64).expect("valid binomial kernel");
         let kernel: Vec<f64> = (0..=kernel_n).map(|i| binom.pmf(i as u64).ln()).collect();
 
@@ -131,6 +174,7 @@ impl FragmentLengthDistribution {
             hist,
             tot_mass: AtomicF64::new(tot_mass),
             sum: AtomicF64::new(sum),
+            // Seeded at the maximum so the first `fetch_min` wins.
             min: AtomicUsize::new(max_val),
             bin_size,
             cached_pmf: Vec::new(),
@@ -143,14 +187,20 @@ impl FragmentLengthDistribution {
 
     /// salmon's default fragment-length distribution: pseudo-count 1.0, max
     /// length 1000, no Gaussian prior (uniform), kernel `n=4, p=0.5`.
+    ///
+    /// A uniform prior for paired-end data because the observations will supply
+    /// the shape; the prior only has to avoid ruling anything out.
     pub fn default_for_paired() -> Self {
         Self::new(1.0, 1000, 0.0, 0.0, 4, 0.5, 1)
     }
 
+    /// Largest representable raw length.
     pub fn max_val(&self) -> usize {
         (self.hist.len() - 1) * self.bin_size
     }
 
+    /// Smallest observed length; 1 when nothing has been observed (the sentinel
+    /// initial value is the last bin).
     pub fn min_val(&self) -> usize {
         let m = self.min.load(Ordering::Relaxed);
         if m == self.hist.len() - 1 {
@@ -166,6 +216,7 @@ impl FragmentLengthDistribution {
     pub fn add_val(&self, len: usize, mass: f64) {
         let mut len = len / self.bin_size;
         let max_v = self.max_val() / self.bin_size;
+        // An implausibly long fragment saturates rather than being dropped.
         if len > max_v {
             len = max_v;
         }
@@ -173,10 +224,14 @@ impl FragmentLengthDistribution {
 
         let half = self.kernel.len() / 2;
         // offset can go negative conceptually; use isize math then bound-check.
+        // Centring the kernel on `len` means the observation contributes most to
+        // its own bin and progressively less to its neighbours.
         let mut offset = len as isize - half as isize;
         for &k in &self.kernel {
             if offset > 0 && (offset as usize) < self.hist.len() {
                 let o = offset as usize;
+                // Adding logs multiplies the observation's mass by the kernel
+                // weight.
                 let k_mass = mass + k;
                 self.hist[o].log_add_assign(k_mass);
                 self.sum.log_add_assign((o as f64).ln() + k_mass);
@@ -188,6 +243,7 @@ impl FragmentLengthDistribution {
 
     /// Logged probability of observing a fragment of length `len`.
     pub fn pmf(&self, len: usize) -> f64 {
+        // Once frozen, this is a direct array read with no normalization work.
         if self.have_cache {
             return *self
                 .cached_pmf
@@ -199,6 +255,7 @@ impl FragmentLengthDistribution {
         if l > max_v {
             l = max_v;
         }
+        // Normalizing in log space is a subtraction.
         self.hist[l].load() - self.tot_mass.load()
     }
 
@@ -214,6 +271,8 @@ impl FragmentLengthDistribution {
         }
         let max_raw = self.max_val();
         let max_v = max_raw / self.bin_size;
+        // One read, reused for every bin: mixing two reads of a concurrently
+        // updated total is exactly the inconsistency this snapshot exists to avoid.
         let tot = self.tot_mass.load();
         // Per-bin cumulative mass (matches `cmf()`), so the snapshot CMF at raw
         // index `raw` equals `cmf(raw)`. Built first, then both the PMF and CMF
@@ -225,6 +284,7 @@ impl FragmentLengthDistribution {
             cum = log_add(cum, self.hist[b].load() - tot);
             bin_cum.push(cum);
         }
+        // Expand from bin indices to raw lengths, so lookups need no division.
         let mut v = Vec::with_capacity(max_raw + 1);
         let mut c = Vec::with_capacity(max_raw + 1);
         for raw in 0..=max_raw {
@@ -232,6 +292,8 @@ impl FragmentLengthDistribution {
             v.push(self.hist[l].load() - tot);
             c.push(bin_cum[l]);
         }
+        // Publishing a fresh `Arc` rather than mutating in place means readers
+        // holding the old snapshot keep a consistent view.
         *self.online_pmf.write().unwrap() = Arc::new(v);
         *self.online_cmf.write().unwrap() = Arc::new(c);
     }
@@ -256,6 +318,9 @@ impl FragmentLengthDistribution {
     }
 
     /// Logged cumulative mass up to and including `len`.
+    ///
+    /// The uncached path re-sums from zero each call, which is why the online
+    /// phase uses the precomputed snapshot instead.
     pub fn cmf(&self, len: usize) -> f64 {
         if self.have_cache {
             return *self
@@ -281,12 +346,18 @@ impl FragmentLengthDistribution {
     }
 
     /// Mean observed length.
+    ///
+    /// `Σ l·mass / Σ mass`, which in log space is one subtraction of the two
+    /// running accumulators.
     pub fn mean(&self) -> f64 {
         (self.sum.load() - self.tot_mass.load()).exp()
     }
 
     /// Standard deviation of the observed length distribution, computed from the
     /// cached normalized PMF (call after [`cache`](Self::cache)).
+    ///
+    /// Two passes — mean, then squared deviations — rather than the one-pass
+    /// `E[X²] − E[X]²` form, which loses precision when the two terms are close.
     pub fn sd(&self) -> f64 {
         let lp = self.log_pmf();
         if lp.is_empty() {
@@ -301,11 +372,15 @@ impl FragmentLengthDistribution {
             let d = l as f64 - mean;
             var += d * d * p.exp();
         }
+        // `.max(0.0)` guards a tiny negative variance from rounding.
         var.max(0.0).sqrt()
     }
 
     /// Freeze the distribution and precompute normalized PMF/CMF for fast,
     /// allocation-free lookup. Call once after updates have stopped.
+    ///
+    /// After this, every lookup is an array index; before it, each one does
+    /// atomic loads and (for the CMF) a running sum.
     pub fn cache(&mut self) {
         if self.have_cache {
             return;
@@ -319,6 +394,8 @@ impl FragmentLengthDistribution {
             pmf.push(p);
             tot = log_add(tot, p);
         }
+        // Renormalize: binning and clamping mean the per-bin values need not sum
+        // to exactly 1 on their own.
         for p in &mut pmf {
             *p -= tot;
         }
@@ -341,6 +418,9 @@ impl FragmentLengthDistribution {
     /// so a reconstructed distribution is interchangeable with the original for
     /// every read-side use. The masses need not be pre-normalized — `cache`
     /// normalizes them — but a normalized PMF round-trips exactly.
+    ///
+    /// This is what makes a RAD requant reproduce the original run: the exact
+    /// distribution is restored rather than re-estimated.
     pub fn from_log_pmf(log_pmf: &[f64]) -> Self {
         let max_val = log_pmf.len().saturating_sub(1);
         let mut d = Self::new(1.0, max_val, 0.0, 1.0, 4, 0.5, 1);
@@ -351,6 +431,7 @@ impl FragmentLengthDistribution {
         for (i, &p) in log_pmf.iter().enumerate() {
             d.hist[i].store(p);
             tot = log_add(tot, p);
+            // Skip `i == 0`: `ln(0)` is -inf and length zero carries no mass.
             if i > 0 {
                 sm = log_add(sm, (i as f64).ln() + p);
             }
@@ -372,6 +453,11 @@ impl FragmentLengthDistribution {
     /// salmon's `correctionFactorsFromMass` (`DistributionUtils.cpp`):
     /// `cm[i] = (Σ_{l≤i} l·pmf[l]) / (Σ_{l≤i} pmf[l])`.
     ///
+    /// Read `cm[i]` as: given a transcript of length `i`, how long is a typical
+    /// fragment it can host? Subtracting that from the reference length is the
+    /// smoothed effective length — the transcript loses the tail where no fragment
+    /// of typical length could start.
+    ///
     /// These are the per-length correction factors `computeSmoothedEffectiveLengths`
     /// subtracts from the reference length to get the base effective length. The
     /// ratio is invariant to the PMF normalization, so the cached (normalized) PMF
@@ -381,6 +467,7 @@ impl FragmentLengthDistribution {
         debug_assert!(self.have_cache, "call cache() before conditional_means()");
         let n = self.cached_pmf.len();
         let mut cms = vec![0.0f64; n];
+        // Running numerator and denominator, so the whole vector is one pass.
         let mut vals = 0.0; // Σ l·pmf[l]
         let mut mult = 0.0; // Σ pmf[l]
         for i in 0..n {
@@ -409,20 +496,26 @@ fn cmf_at(cmf: &[f64], len: i32) -> f64 {
 /// read, given a (log) CMF snapshot. Direct port of C++ salmon's
 /// `LogCMFCache::getAmbigFragLengthProb` (`DistributionUtils.cpp`).
 ///
-/// The mapped mate bounds the maximum possible fragment length: a forward read
-/// at `pos` can extend downstream to the transcript 3' end (`txp_len − pos`); a
-/// reverse read's outer (5') end sits at `pos + read_len`, bounding the upstream
-/// extent toward the 5' end. The weight is the FLD mass up to that bound,
-/// *conditioned* on the mass up to the full transcript length — i.e.
-/// `cmf(maxFragLen) − cmf(txpLen)` — so orphan weights sit on the same
-/// length-conditioned scale as proper pairs. Returns [`LOG_EPSILON`] when the
-/// transcript admits no representable fragment mass, and `LOG_1` (= 0) when no
-/// snapshot is available yet (pre-burn-in), leaving the weight unmodelled.
+/// **The idea.** With only one end observed, the fragment length is unknown — but
+/// not unconstrained. The mapped mate bounds the maximum possible fragment
+/// length: a forward read at `pos` can extend downstream to the transcript 3' end
+/// (`txp_len − pos`); a reverse read's outer (5') end sits at `pos + read_len`,
+/// bounding the upstream extent toward the 5' end. So instead of a point
+/// probability we take the FLD mass up to that bound — "the fragment was at most
+/// this long" — which is exactly a CMF lookup.
+///
+/// The weight is then *conditioned* on the mass up to the full transcript length
+/// — i.e. `cmf(maxFragLen) − cmf(txpLen)` — so orphan weights sit on the same
+/// length-conditioned scale as proper pairs and the two are comparable. Returns
+/// [`LOG_EPSILON`] when the transcript admits no representable fragment mass, and
+/// `LOG_1` (= 0) when no snapshot is available yet (pre-burn-in), leaving the
+/// weight unmodelled.
 pub fn ambig_frag_log_prob(cmf: &[f64], fwd: bool, pos: i32, read_len: i32, txp_len: i32) -> f64 {
     if cmf.is_empty() {
         return 0.0; // LOG_1: no model yet
     }
     let stxp = txp_len.max(0);
+    // How much room the observed mate leaves for the unobserved one.
     let max_frag_len = if fwd {
         stxp - pos.clamp(0, stxp)
     } else {
@@ -432,6 +525,8 @@ pub fn ambig_frag_log_prob(cmf: &[f64], fwd: bool, pos: i32, read_len: i32, txp_
     if ref_cm <= LOG_0 {
         return LOG_EPSILON;
     }
+    // Division in log space: the conditional probability given that the fragment
+    // fits in the transcript at all.
     cmf_at(cmf, max_frag_len) - ref_cm
 }
 
@@ -441,18 +536,22 @@ pub fn ambig_frag_log_prob(cmf: &[f64], fwd: bool, pos: i32, read_len: i32, txp_
 ///
 /// This replaces the truncated-PMF `Σ pmf(l)·(refLen−l+1)` estimate (which falls
 /// back to the raw `refLen` for any transcript shorter than the FLD mean), matching
-/// salmon's behaviour exactly.
+/// salmon's behaviour exactly. The difference matters for short transcripts, where
+/// the truncated sum has almost no mass to work with and silently degrades to no
+/// correction at all.
 pub fn smoothed_effective_length(cond_means: &[f64], ref_len: usize) -> f64 {
     if cond_means.is_empty() {
         return ref_len as f64;
     }
     let max_len = cond_means.len();
+    // A transcript longer than the FLD's support uses the last conditional mean.
     let cf = if ref_len >= max_len {
         cond_means[max_len - 1]
     } else {
         cond_means[ref_len]
     };
     let eff = ref_len as f64 - cf;
+    // A non-positive effective length would be a nonsensical divisor.
     if eff < 1.0 {
         ref_len as f64
     } else {
@@ -471,11 +570,17 @@ pub fn smoothed_effective_length(cond_means: &[f64], ref_len: usize) -> f64 {
 /// deterministically (fixed length order), in [`finish`](Self::finish). Keeping
 /// it a separate type means the online FLD's float/log-space accumulation is
 /// never disturbed, and no runtime dispatch is needed.
+///
+/// This is what `--deterministic` uses: same input, byte-identical distribution,
+/// whatever the thread count.
 #[derive(Debug)]
 pub struct DiscreteFld {
     /// per-length counts for opposite-strand (inward/outward) proper pairs
     opp: Vec<AtomicU64>,
     /// per-length counts for same-strand proper pairs
+    ///
+    /// Kept separate because a library has one true geometry; mixing the two
+    /// would blend a real distribution with mis-mapped noise.
     same: Vec<AtomicU64>,
     n_opp: AtomicU64,
     n_same: AtomicU64,
@@ -503,6 +608,9 @@ impl DiscreteFld {
     /// `mate_fw`, mirroring the RAD reader's `rad_frag_format` so the mapping pass
     /// and the RAD-derive path agree). Works in sketch mode, where no precomputed
     /// `LibraryFormat` is available. Thread-safe and order-independent.
+    ///
+    /// *Uniquely* mapped, because an ambiguous pair's implied fragment length
+    /// depends on which transcript it really came from — unknown at this stage.
     pub fn add(&self, len: usize, is_fw: bool, mate_fw: bool) {
         let l = len.min(self.max_len);
         // opposite-strand (inward/outward) vs same-strand, exactly as the RAD
@@ -549,6 +657,8 @@ impl DiscreteFld {
     ) -> (FragmentLengthDistribution, Option<LibraryFormat>) {
         let n_opp = self.n_opp.load(Ordering::Relaxed);
         let n_same = self.n_same.load(Ordering::Relaxed);
+        // The library's real geometry is the majority one; the minority bucket is
+        // mis-mapping noise and is discarded.
         let chosen = if n_opp >= n_same {
             &self.opp
         } else {
@@ -558,6 +668,8 @@ impl DiscreteFld {
             FragmentLengthDistribution::new(1.0, self.max_len, fld_mean, fld_sd, 4, 0.5, 1);
         // `add_val(len, ln count)` equals `count` unit `add_val(len, 0)` calls in
         // log space, so this reproduces the per-fragment FLD — but deterministically.
+        // Adding `ln(count)` once is exact, whereas `count` separate additions
+        // would accumulate rounding in an order-dependent way.
         for (len, c) in chosen.iter().enumerate() {
             let c = c.load(Ordering::Relaxed);
             if c > 0 {
@@ -581,6 +693,9 @@ impl DiscreteFld {
 
 /// Where a run's fragment-length distribution came from, reported as
 /// `frag_length_source` in `aux_info/meta_info.json`.
+///
+/// Recorded because the distribution's provenance changes how much to trust it,
+/// and because it decides whether the user's `--fldMean`/`--fldSD` mattered.
 ///
 /// `--fldMean`/`--fldSD` are priors, so which of these applies decides whether
 /// they influenced the result at all: they fully determine [`Self::Prior`], seed
@@ -623,6 +738,9 @@ impl FragLengthSource {
     /// Whether `--fldMean`/`--fldSD`/`--fldMax` were consulted at all. False
     /// only for the baked variants, which take the distribution verbatim from
     /// the RAD header.
+    ///
+    /// Used to warn when a user supplies those flags in a mode that ignores them,
+    /// rather than silently discarding the request.
     pub fn uses_fld_prior_args(self) -> bool {
         !matches!(self, Self::RadBaked | Self::RadBakedPrior)
     }
@@ -632,6 +750,8 @@ impl FragLengthSource {
 mod tests {
     use super::*;
 
+    /// A probability distribution must sum to 1; this catches an error in the
+    /// uniform prior's closed-form initialization.
     #[test]
     fn uniform_prior_pmf_normalizes() {
         let mut fld = FragmentLengthDistribution::new(1.0, 200, 0.0, 0.0, 4, 0.5, 1);
@@ -640,6 +760,8 @@ mod tests {
         assert!((total - 1.0).abs() < 1e-9, "pmf sums to {total}");
     }
 
+    /// And the Gaussian prior must actually be centred where it was asked to be,
+    /// which exercises the continuous-to-discrete conversion.
     #[test]
     fn gaussian_prior_mean_is_near_mu() {
         let fld = FragmentLengthDistribution::new(1000.0, 1000, 250.0, 25.0, 4, 0.5, 1);
@@ -647,6 +769,8 @@ mod tests {
         assert!((m - 250.0).abs() < 5.0, "mean {m} not near 250");
     }
 
+    /// Data must be able to overrule the prior: enough observations at 400 have to
+    /// pull a distribution primed at 250 across.
     #[test]
     fn observations_shift_the_distribution() {
         let mut fld = FragmentLengthDistribution::new(1.0, 1000, 250.0, 25.0, 4, 0.5, 1);
@@ -663,6 +787,9 @@ mod tests {
         assert!(p400 > p250, "p(400)={p400} not > p(250)={p250}");
     }
 
+    /// The behaviour the smoothed estimator exists for: a short transcript must be
+    /// shrunk rather than silently left uncorrected, a long one barely touched,
+    /// and a degenerate one fall back to its raw length.
     #[test]
     fn smoothed_efflen_shrinks_short_transcripts() {
         // Gaussian prior mean 250: a transcript far shorter than the mean should
@@ -693,6 +820,8 @@ mod tests {
         assert_eq!(tiny, 2.0, "tiny transcript should fall back to refLen");
     }
 
+    /// The orphan weight must respond to how much room the mate leaves, in both
+    /// orientations, and stay neutral when no model exists yet.
     #[test]
     fn ambig_frag_prob_bounds_and_orientation() {
         let mut fld = FragmentLengthDistribution::new(1000.0, 1000, 250.0, 25.0, 4, 0.5, 1);
@@ -722,6 +851,8 @@ mod tests {
         assert_eq!(ambig_frag_log_prob(&[], true, 100, 75, txp_len), 0.0);
     }
 
+    /// A cumulative distribution can only increase, and must reach exactly
+    /// probability 1 at the end — the two properties every consumer relies on.
     #[test]
     fn cmf_is_monotonic() {
         let mut fld = FragmentLengthDistribution::new(1000.0, 500, 200.0, 30.0, 4, 0.5, 1);

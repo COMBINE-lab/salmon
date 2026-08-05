@@ -1,5 +1,23 @@
 //! Alignment validation of mapping candidates.
 //!
+//! # Why candidates are verified
+//!
+//! Chaining says a read *could* align here; it does not say how well. Transcripts
+//! sharing a repeat, a domain or a low-complexity stretch produce plausible
+//! chains for reads that did not come from them. Alignment settles it by lining
+//! the read's bases up against the reference and scoring the result: matches earn
+//! points, mismatches and gaps cost them.
+//!
+//! A candidate is kept only if it scores close enough to a perfect alignment,
+//! which is what makes salmon's mapping *selective* — sensitive enough to keep
+//! genuine multi-mappings, strict enough to reject coincidental ones.
+//!
+//! # Affine gaps, briefly
+//!
+//! A gap of length `n` costs `gapo + gape * n`, not `n` times a flat penalty.
+//! The one-off opening cost makes a single long gap much cheaper than several
+//! short ones, which matches how insertions and deletions actually occur.
+//!
 //! Salmon's selective alignment doesn't trust a MEM chain on its own — it
 //! validates each candidate by aligning the read against the reference window
 //! the chain implies, and keeps the candidate only if the alignment score
@@ -38,7 +56,7 @@ pub struct AlignConfig {
     pub full_length_alignment: bool,
     /// allow soft-clipping read ends in flank extension (salmon's `--softclip`):
     /// a read flank takes `max(mqe, mte, 0)` instead of requiring full
-    /// consumption (`mqe`). Implies [`softclip_overhangs`].
+    /// consumption (`mqe`). Implies [`Self::softclip_overhangs`].
     pub softclip: bool,
     /// allow soft-clipping only read bases that overhang a transcript end
     /// (salmon's `--softclipOverhangs`): a read flank takes `max(mqe, mte)`.
@@ -648,6 +666,8 @@ mod tests {
     use crate::mem::Mem;
 
     #[test]
+    /// A read hanging off a transcript end must be soft-clipped rather than scored
+    /// as mismatches, or a legitimate placement at a boundary would be rejected.
     fn flank_softclip_recovers_read_overhang() {
         // Read flank (10 b) matches the reference flank (5 b) then overhangs the
         // end. Without soft-clipping the full read must align (mqe); with overhang
@@ -693,6 +713,8 @@ mod tests {
     }
 
     #[test]
+    /// A read identical to its reference window must reach exactly the perfect
+    /// score, which is the denominator every acceptance threshold is relative to.
     fn exact_match_scores_perfect() {
         let reference = gen_seq(300, 7);
         let read = &reference[50..130]; // 80 bp exact
@@ -705,6 +727,8 @@ mod tests {
     }
 
     #[test]
+    /// The cheap anchored alignment and the full one must agree on an easy read;
+    /// the anchored path is an optimization, not a different answer.
     fn anchored_and_full_agree_on_clean_read() {
         let reference = gen_seq(300, 71);
         let read = &reference[50..130];
@@ -721,6 +745,8 @@ mod tests {
     }
 
     #[test]
+    /// A deletion must cost something, or a stitched-together alignment would
+    /// score as well as a contiguous one.
     fn read_overlap_with_reference_gap_penalizes_deletion() {
         // Divergent-paralog geometry (read ERR/sim mate vs a partial paralog):
         // two exact MEMs that overlap by 1 base in the read but are separated by a
@@ -745,6 +771,8 @@ mod tests {
     }
 
     #[test]
+    /// A chain whose anchors are separated by an exactly-matching stretch should
+    /// score as one clean alignment.
     fn anchored_scores_two_mem_chain_with_exact_gap() {
         // read exactly matches ref[100..160]; two MEMs with an exact gap between.
         let reference = gen_seq(400, 73);
@@ -761,6 +789,8 @@ mod tests {
     }
 
     #[test]
+    /// Anchors on different diagonals imply an indel between them, which must be
+    /// charged for.
     fn overlapping_mems_on_shifted_diagonals_incur_gap_penalty() {
         // Two MEMs that overlap by 1 base in the read but by 4 in the reference
         // (diagonals 3 apart) — a hidden 3 bp indel. This is the exact geometry
@@ -789,6 +819,8 @@ mod tests {
     }
 
     #[test]
+    /// One sequencing error must lower the score without disqualifying the read —
+    /// the whole point of a fractional threshold rather than requiring perfection.
     fn single_mismatch_reduces_score_but_stays_valid() {
         let reference = gen_seq(300, 11);
         let mut read = reference[50..130].to_vec();
@@ -810,6 +842,8 @@ mod tests {
     }
 
     #[test]
+    /// A read from the opposite strand must align just as well once transformed
+    /// into the reference's frame.
     fn reverse_complement_read_aligns_in_fw_frame() {
         let reference = gen_seq(300, 13);
         let window = &reference[50..130];
@@ -823,6 +857,8 @@ mod tests {
     }
 
     #[test]
+    /// The rejection case: a read that did not come from here must fail the
+    /// threshold, which is what makes the alignment check worth doing.
     fn unrelated_sequence_is_invalid() {
         let reference = gen_seq(300, 17);
         let foreign = gen_seq(80, 999); // unrelated
@@ -836,6 +872,8 @@ mod tests {
     }
 
     #[test]
+    /// Window-fitting must locate the read within the window rather than assuming
+    /// it starts at the window's edge.
     fn fitting_window_places_read_in_middle() {
         // Read exactly matches window[40..120]; free ref-start must find it and
         // report the read's end column (120) with a perfect score.
@@ -854,6 +892,7 @@ mod tests {
     }
 
     #[test]
+    /// Same, with a sequencing error present.
     fn fitting_window_one_mismatch() {
         let window = gen_seq(200, 92);
         let mut read = window[40..120].to_vec();
@@ -868,6 +907,7 @@ mod tests {
     }
 
     #[test]
+    /// And it must still reject a read that does not belong in the window.
     fn fitting_window_rejects_unrelated() {
         let window = gen_seq(200, 93);
         let foreign = gen_seq(80, 54321);
@@ -881,6 +921,8 @@ mod tests {
     }
 
     #[test]
+    /// A short indel must fall inside the alignment band; too narrow a band would
+    /// silently miss legitimate alignments.
     fn small_deletion_in_read_handled_by_band() {
         // Read equals ref window with a 2bp deletion in the middle.
         let reference = gen_seq(400, 23);

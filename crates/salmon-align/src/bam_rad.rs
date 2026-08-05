@@ -1,5 +1,15 @@
 //! Deterministic alignment-mode RAD producer.
 //!
+//! # What "deterministic" means here
+//!
+//! An ordinary run learns its models *while* mapping, from whichever fragments
+//! each thread happened to see first, so tiny differences accumulate and the
+//! output depends on the thread count. `--deterministic` splits the run in two:
+//! a first pass that only reads alignments and accumulates order-independent
+//! integer tallies, and a second that quantifies from those fixed models. This
+//! module is the first pass — it converts a BAM into a RAD with everything the
+//! second pass needs already baked into the header.
+//!
 //! `salmon quant -a <bam> --deterministic` runs over a name-grouped
 //! transcriptome BAM, pairs each fragment's records (reusing the alignment-mode
 //! [`crate::pair_records`] / [`crate::frag_format`]), writes the placements as a

@@ -1,5 +1,22 @@
 //! Scoring, deduplication, and filtering of validated mappings.
 //!
+//! # The last stage
+//!
+//! Alignment leaves a pile of scored placements, possibly several per transcript
+//! and including decoys. This module reduces that to what the statistical model
+//! consumes: at most one mapping per transcript, decoys removed, and each
+//! survivor carrying a *soft weight*.
+//!
+//! The weight is the important part. A fragment compatible with several
+//! transcripts should not count equally for all of them: a placement scoring far
+//! below the best is much less likely to be the true origin. Weighting by score
+//! difference, rather than keeping only the best, is what lets the EM apportion
+//! ambiguous fragments sensibly instead of committing to a guess.
+//!
+//! Decoy handling is the same logic in the limit: a fragment that aligns *best*
+//! to a decoy probably did not come from any transcript, so it is dropped rather
+//! than forced onto whichever transcript it resembles most.
+//!
 //! After each mapping candidate is aligned, salmon collapses the alignments to
 //! one per transcript (best score), drops the read if it aligns best to a
 //! decoy, and assigns each surviving mapping a soft weight based on how far its
@@ -314,6 +331,8 @@ mod tests {
     }
 
     #[test]
+    /// Equally good placements must be weighted equally — the EM decides between
+    /// them, not the mapper.
     fn equal_scores_both_weight_one() {
         let m = finalize_mappings(
             vec![raw(0, 100, false), raw(1, 100, false)],
@@ -324,6 +343,8 @@ mod tests {
     }
 
     #[test]
+    /// A worse placement must earn a smaller weight, and a far worse one must drop
+    /// out entirely.
     fn lower_score_decays_and_can_be_filtered() {
         // score_exp 1.0: a score 10 below best -> weight exp(-10) ~ 4.5e-5
         let cfg = ScoreConfig::default();
@@ -342,6 +363,8 @@ mod tests {
     }
 
     #[test]
+    /// One mapping per transcript, the best; several would count the same evidence
+    /// repeatedly.
     fn dedup_per_transcript_keeps_best() {
         let m = finalize_mappings(
             vec![raw(0, 80, false), raw(0, 100, false), raw(0, 60, false)],
@@ -352,6 +375,8 @@ mod tests {
     }
 
     #[test]
+    /// A read aligning best to a decoy probably did not come from any transcript,
+    /// so it must be discarded rather than forced onto the nearest one.
     fn decoy_domination_drops_read() {
         // decoy scores higher than the best transcript -> read dropped
         let m = finalize_mappings(
@@ -362,6 +387,7 @@ mod tests {
     }
 
     #[test]
+    /// A decoy that aligns worse than a transcript is not evidence against it.
     fn decoy_below_threshold_is_ignored() {
         let m = finalize_mappings(
             vec![raw(0, 100, false), raw(1, 80, true)],
@@ -372,6 +398,8 @@ mod tests {
     }
 
     #[test]
+    /// `--hardFilter` must discard the soft weights and keep only the best
+    /// placements.
     fn hard_filter_keeps_only_best() {
         let cfg = ScoreConfig {
             hard_filter: true,
@@ -386,6 +414,7 @@ mod tests {
     }
 
     #[test]
+    /// A fragment whose only placement is a decoy counts as unmapped.
     fn only_decoy_is_unmapped() {
         let m = finalize_mappings(vec![raw(0, 100, true)], &ScoreConfig::default());
         assert!(m.is_empty());
@@ -428,6 +457,8 @@ mod tests {
     }
 
     #[test]
+    /// The same decoy logic on the alignment-free path, which has no scores to
+    /// compare and so must filter by identity.
     fn sketch_drops_decoy_tids_but_keeps_transcripts() {
         // tids 0,1 transcript; tid 2 decoy. Transcript outscores decoy.
         let refs = DecoyAt(2);
@@ -439,6 +470,7 @@ mod tests {
     }
 
     #[test]
+    /// Sketch mode must also recognize a decoy-only fragment as unmapped.
     fn sketch_decoy_only_is_decoy_dominated() {
         let refs = DecoyAt(0); // everything is a decoy
         let mut maps = vec![scored(0, 30), scored(1, 25)];
@@ -448,6 +480,7 @@ mod tests {
     }
 
     #[test]
+    /// And a dominating decoy must still win in sketch mode.
     fn sketch_decoy_dominates_higher_score() {
         // decoy (tid 2) scores higher than the best transcript -> dropped.
         let refs = DecoyAt(2);
@@ -458,6 +491,8 @@ mod tests {
     }
 
     #[test]
+    /// With decoy orphans allowed, a genuine transcript placement must survive
+    /// alongside the decoy rather than being suppressed by it.
     fn sketch_allow_decoy_orphans_keeps_transcript() {
         // Same as above but --allowDecoyOrphans keeps the transcript hit even
         // though the decoy scores higher (the mate maps to the decoy).

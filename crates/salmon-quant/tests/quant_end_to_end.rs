@@ -2,6 +2,14 @@
 //! transcripts, simulate paired-end reads at known abundances, quantify, and
 //! check the recovered counts track the truth — for both the selective and
 //! pseudoalignment paths.
+//!
+//! # Why simulate
+//!
+//! With real data there is no ground truth to compare against, so a test can
+//! only check that nothing crashed. Simulating reads from transcripts at chosen
+//! abundances makes the right answer known in advance, which is the only way to
+//! test that the pipeline as a whole — index, mapping, models, EM, output —
+//! actually recovers it.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -293,6 +301,8 @@ fn read_rad(
 /// profile (sketch vs selective-alignment, the latter carrying scores) round-
 /// trips. Runs multi-threaded to exercise the concurrent chunk writer.
 #[test]
+/// `--writeRad` must produce a file another tool can actually read, with every
+/// fragment present — a truncated or malformed RAD would only surface much later.
 fn writes_rad_output_readable_and_complete() {
     use salmon_rad::{RadInputProfile, RadProfile};
 
@@ -432,6 +442,9 @@ fn quant_to_sam_and_bam(
 }
 
 #[test]
+/// SAM and BAM are two encodings of the same records, so the two writers must
+/// agree record for record; they share the field derivation precisely so that
+/// they cannot drift, and this is what proves it.
 fn sam_and_bam_mapping_outputs_are_semantically_equal() {
     let tmp = tempfile::tempdir().unwrap();
     let ((sam_header, mut sam_records), (bam_header, mut bam_records)) =
@@ -464,6 +477,9 @@ fn sam_and_bam_mapping_outputs_are_semantically_equal() {
 /// [`bam_content_is_independent_of_thread_count`] compares multisets and not
 /// sequences.
 #[test]
+/// The one ordering guarantee BAM output makes: a fragment's records are
+/// contiguous. Readers rely on it, and it is what the chunk-boundary logic exists
+/// to preserve.
 fn bam_records_for_a_fragment_are_collated() {
     let tmp = tempfile::tempdir().unwrap();
     // paraseq hands out 16384-record batches, so the fixture must be several
@@ -503,6 +519,8 @@ fn bam_records_for_a_fragment_are_collated() {
 /// deliberate, since imposing a global record order would mean serializing the
 /// writer.
 #[test]
+/// The records themselves must not depend on the thread count, even though their
+/// order does.
 fn bam_content_is_independent_of_thread_count() {
     let mut runs = Vec::new();
     for threads in [1usize, 8] {
@@ -554,6 +572,8 @@ fn bam_content_is_independent_of_thread_count() {
 /// final flush — exactly the path being guarded.
 #[cfg(target_os = "linux")]
 #[test]
+/// A write failure on the writer thread must reach the caller. Silently
+/// truncating a BAM at the end of a long run would be the worst possible outcome.
 fn bam_write_failure_is_reported() {
     if std::fs::OpenOptions::new()
         .write(true)
@@ -587,6 +607,7 @@ fn bam_write_failure_is_reported() {
 }
 
 #[test]
+/// Asking for both formats is a usage error, caught rather than half-honoured.
 fn sam_and_bam_outputs_are_mutually_exclusive() {
     let tmp = tempfile::tempdir().unwrap();
     let mut opts = QuantOptions::new(tmp.path().join("idx"), tmp.path().join("quant"));
@@ -597,6 +618,8 @@ fn sam_and_bam_outputs_are_mutually_exclusive() {
 }
 
 #[test]
+/// The alignment-free path must recover the same known abundances: it is a
+/// speed trade, not a different answer.
 fn pseudoalignment_quantification_tracks_truth() {
     let tmp = tempfile::tempdir().unwrap();
     let (fasta, r1, r2, truth) = simulate(tmp.path());

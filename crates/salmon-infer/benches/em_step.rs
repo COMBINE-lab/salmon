@@ -19,6 +19,10 @@ use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
 use salmon_infer::{optimize_packed, EmAccel, EmOptions, PackedEqClasses};
 
 /// Deterministic splitmix64 PRNG — no external rng dependency, fully reproducible.
+///
+/// A benchmark must measure the same work every run, so the fixture cannot come
+/// from a real random source. splitmix64 is a few lines of arithmetic with good
+/// enough statistical properties for generating a plausible workload.
 struct Rng(u64);
 impl Rng {
     fn next_u64(&mut self) -> u64 {
@@ -38,12 +42,23 @@ impl Rng {
 
 /// Zipf-ish transcript sampler: square a uniform to skew draws toward low ids, so a
 /// small set of transcripts recurs across many classes.
+///
+/// This shape is the point of the benchmark. Real expression is highly skewed —
+/// a few transcripts dominate — so a handful of "hot" transcripts appear in a
+/// large share of classes. That is exactly the pattern that makes a shared
+/// accumulator contend, and what the sharded M-step exists to handle. A uniform
+/// fixture would measure a workload salmon never sees.
 fn pick(rng: &mut Rng, num_txps: u32) -> u32 {
     let u = rng.unit();
     (((u * u) * num_txps as f64) as u32) % num_txps
 }
 
 /// Synthetic packed eq-class set: `num_txps` transcripts, `num_classes` classes.
+///
+/// Built through the ordinary public builder rather than by constructing the
+/// packed form directly, so the fixture is guaranteed to be one the real pipeline
+/// could produce.
+///
 /// ~70% singletons; the rest span 2..=8 transcripts drawn with the hot-transcript
 /// bias above. Effective lengths spread over a realistic range so the
 /// multiplicative update does real work.

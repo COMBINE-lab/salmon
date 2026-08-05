@@ -99,6 +99,9 @@ fn dump_kmers(idx: &salmon_index::SalmonIndex, hs: &mut HitSearcher, read: &[u8]
     })
 }
 
+// Reads are traced one at a time through the same stages the mapper runs, with
+// the intermediate state printed after each, so a read that fails to map can be
+// attributed to a specific stage rather than to the pipeline as a whole.
 fn main() {
     let mut args = std::env::args().skip(1);
     let index_dir = args.next().expect("index dir");
