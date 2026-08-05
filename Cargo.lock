@@ -2248,9 +2248,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.6.4"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d22949be8fb80f58c9507cca3eb628d83b4db83ff71864de02f0fa9c0046653"
+checksum = "7f6e9058c77c33b01a4cd9c03b9c823aae7331c30645a790e66509e2b2ac40ae"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2260,6 +2260,7 @@ dependencies = [
  "epserde",
  "flate2",
  "indicatif",
+ "libc",
  "mem_dbg",
  "mimalloc",
  "niffler",
@@ -2270,6 +2271,7 @@ dependencies = [
  "smallvec",
  "sshash-lib",
  "sux",
+ "sysinfo",
  "tiny-dict",
  "tracing",
  "tracing-subscriber",
@@ -3001,9 +3003,9 @@ checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
 name = "sshash-lib"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcc9837c822b81ee638778a09aba6e4192ce3ddff64ecbcd1f09bda5fb3afe87"
+checksum = "cb8f526b725d9c9972d7184bd8ed45743396255d3f274f4c65e1f37b7a98ce49"
 dependencies = [
  "anyhow",
  "epserde",
@@ -3296,9 +3298,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-dict"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e48fbdf3dd09c5c21d65c88742f1629714e4e30b9b83121f4766b728e591c3"
+checksum = "123aff4b050eb8cdc1ca954cdb548b77b201f15cbe9335152e84695251291e3d"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.1",
