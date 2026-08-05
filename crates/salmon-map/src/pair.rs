@@ -1,5 +1,18 @@
 //! Paired-end joining: `joinReadsAndFilter`.
 //!
+//! # What pairing adds
+//!
+//! Each mate is mapped independently, which leaves two lists of candidates. A
+//! placement is far more convincing when *both* mates land on the same transcript
+//! in the right relative orientation and at a plausible distance: that is a
+//! "concordant pair", and it also pins down the fragment's length, which nothing
+//! else can.
+//!
+//! Transcripts where only one mate placed yield "orphan" mappings — usable, but
+//! weaker evidence and with no fragment length. "Dovetailed" pairs, where the
+//! mates extend past one another instead of facing inward, are usually artefacts
+//! and are rejected by default.
+//!
 //! Given the per-mate mapping candidates produced by [`collect`](crate::collect),
 //! pair them into fragment mappings. Two candidates on the same reference form a
 //! concordant pair when their fragment length is within bounds and (optionally)
@@ -495,6 +508,8 @@ mod tests {
     }
 
     #[test]
+    /// An implausible fragment length means the two mates did not come from one
+    /// fragment here, so they must be reported as orphans rather than as a pair.
     fn fragment_too_long_falls_back_to_orphans() {
         let left = vec![cand(0, true, 100, 50)];
         let right = vec![cand(0, false, 5000, 50)];
@@ -507,6 +522,8 @@ mod tests {
     }
 
     #[test]
+    /// A concordant pair beats a higher-coverage single mate: agreement between the
+    /// mates is stronger evidence than coverage on one of them.
     fn pairs_repeat_position_chain_over_higher_coverage_nonpairing() {
         // mate1 matches tid 0 at two positions: a higher-coverage chain too far
         // from mate2 to pair, and a lower-coverage chain that pairs. Pairing over
@@ -527,6 +544,8 @@ mod tests {
     }
 
     #[test]
+    /// Genuinely tied placements must all survive; arbitrarily picking one would
+    /// bias the abundance estimate.
     fn emits_all_coverage_tied_pairs_per_target() {
         // mate1 matches tid 0 at two equal-coverage repeat loci (100 and 200),
         // both forming a valid concordant pair with mate2 at 300. Pairing is
@@ -556,6 +575,7 @@ mod tests {
     }
 
     #[test]
+    /// One mate placed still constitutes evidence and must be kept.
     fn orphan_when_only_one_mate_maps() {
         let left = vec![cand(7, true, 100, 50)];
         let right = vec![];
@@ -567,6 +587,7 @@ mod tests {
     }
 
     #[test]
+    /// But only when orphans are allowed.
     fn orphans_suppressed_when_disabled() {
         let cfg = PairingConfig {
             allow_orphans: false,
@@ -578,6 +599,8 @@ mod tests {
     }
 
     #[test]
+    /// Where a concordant pair exists on a transcript, the weaker orphan
+    /// interpretation of the same evidence must not also be emitted.
     fn pair_preferred_over_orphans_on_same_tid() {
         // tid 0 has a concordant pair AND an extra left candidate; the pair wins
         // and no orphan is emitted for tid 0.
@@ -589,6 +612,8 @@ mod tests {
     }
 
     #[test]
+    /// A concordant pair that covers very little of the reads is still a poor
+    /// placement and must be pruned.
     fn post_merge_prunes_low_coverage_concordant_pair() {
         // tid 0: high-coverage concordant pair (cov 50+50=100); tid 1: low (10+10=20).
         let left = vec![cand(0, true, 100, 50), cand(1, true, 100, 10)];
@@ -614,6 +639,8 @@ mod tests {
     }
 
     #[test]
+    /// Dovetailed pairs are usually artefacts, so they are rejected unless the user
+    /// asks for them.
     fn dovetail_filtered_by_default_but_kept_when_enabled() {
         // Inward pair (fw 5′=150 ≤ rc 5′=160) but the forward mate starts after
         // the reverse mate (150 > 100): the mates overhang -> dovetail.
@@ -648,6 +675,7 @@ mod tests {
     }
 
     #[test]
+    /// Same for outward-facing pairs, which the common protocols do not produce.
     fn outward_pair_filtered_by_default_but_kept_when_enabled() {
         // OUTWARD (AWAY) pair: the forward mate lies entirely downstream of the
         // reverse mate (fw 5′=714 > rc 5′=236). This is the real-data sim.617247
@@ -688,6 +716,8 @@ mod tests {
     }
 
     #[test]
+    /// Mates on the same strand cannot be the two ends of one fragment under an
+    /// inward protocol.
     fn same_strand_pair_is_not_concordant() {
         // Both mates on the SAME strand (R1 fw, R2 fw). This is the real-data
         // sim.356845 case — a fragment that is a proper opposite-strand inward
@@ -714,6 +744,8 @@ mod tests {
     }
 
     #[test]
+    /// The dovetail test must not fire on an ordinary pair — a false positive here
+    /// would discard good data.
     fn normal_inward_pair_is_not_dovetailed() {
         let j = join_reads_and_filter(
             vec![cand(0, true, 100, 50)],
@@ -725,6 +757,8 @@ mod tests {
     }
 
     #[test]
+    /// Pairing is per transcript: a fragment compatible with several must yield a
+    /// pair on each.
     fn multiple_tids_each_pair() {
         let left = vec![cand(0, true, 100, 50), cand(1, true, 200, 50)];
         let right = vec![cand(0, false, 300, 50), cand(1, false, 400, 50)];

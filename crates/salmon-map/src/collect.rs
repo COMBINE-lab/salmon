@@ -1,5 +1,16 @@
 //! MEM collection over piscem k-mer hits.
 //!
+//! # Where mapping starts
+//!
+//! This is the first stage: turn "these k-mers of the read were found in the
+//! index" into "these are the candidate placements worth considering". The index
+//! answers per k-mer, and answers in terms of the de Bruijn graph's unitigs, so
+//! the work here is to translate unitig hits into concrete reference positions,
+//! group them per transcript, and hand each group to the chainer.
+//!
+//! The payoff is that most of the transcriptome disappears immediately: a
+//! transcript sharing no k-mer with the read is never considered again.
+//!
 //! This turns piscem's raw k-mer hits into the [`Mem`] anchors that the
 //! [chaining](crate::chain) DP consumes, then chains them per reference and
 //! orientation to produce mapping candidates. It corresponds to the front half
@@ -262,6 +273,8 @@ mod tests {
     }
 
     #[test]
+    /// The basic path: k-mer hits become anchors at the right reference positions
+    /// and chain into one candidate.
     fn forward_kmers_project_and_chain() {
         let table = fw_table();
         let enc = table.encoding();
@@ -298,6 +311,8 @@ mod tests {
     }
 
     #[test]
+    /// Reverse-strand hits must have their read coordinates reflected, or the
+    /// anchors would not be colinear and would never chain.
     fn rc_kmers_use_reflected_read_coordinate() {
         let table = rc_table();
         let enc = table.encoding();
@@ -337,6 +352,8 @@ mod tests {
     }
 
     #[test]
+    /// A k-mer occurring in a great many places says almost nothing and would cost
+    /// a candidate per occurrence, so it must be skipped.
     fn repetitive_hits_are_skipped() {
         // A contig occurring in 3 references; with max_hit_occ=2 it is skipped.
         let mut b = ContigTableBuilder::new(1, 10_000, 3);
