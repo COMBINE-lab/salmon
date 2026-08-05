@@ -1241,25 +1241,69 @@ fn open_reader(path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
     }
 }
 
+/// Open a read file through piscem-rs's decoder selection.
+///
+/// `plan` decides whether this file gets the parallel gzip decoder or the
+/// serial one; `open_input` applies that and hands back the decoder control
+/// handle when the parallel path is taken, so the caller can supervise the
+/// worker budget across every file in the run.
+///
+/// Falls back to [`open_reader`] when the parallel decoder is not compiled in,
+/// so the plain path is unchanged.
+fn open_reader_planned(
+    path: &Path,
+    plan: &piscem_rs::io::fastx::ThreadBudget,
+    handles: &mut Vec<rapidgzip_core::DecoderHandle>,
+) -> Result<Box<dyn std::io::Read + Send>> {
+    let opened = piscem_rs::io::fastx::open_input(path, plan.per_file_ceiling, plan.initial_per_file)
+        .with_context(|| format!("opening {}", path.display()))?;
+    if let Some(h) = opened.handle {
+        handles.push(h);
+    }
+    Ok(opened.reader)
+}
+
 /// Drive the mapping pass over single-end input.
 ///
 /// paraseq owns the reading and the threading: it is handed every input file and
 /// the processor, and it calls back into [`processor`] with batches of records on
 /// each worker thread.
 fn run_single(paths: &[PathBuf], proc: &mut QuantProcessor, nthreads: usize) -> Result<()> {
+    let plan = piscem_rs::io::fastx::plan_thread_budget(nthreads, paths.len());
+    let mut handles = Vec::new();
     let mut readers = Vec::with_capacity(paths.len());
     for p in paths {
         readers.push(
-            reader_with_batch_size(open_reader(p)?)
+            reader_with_batch_size(open_reader_planned(p, &plan, &mut handles)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", p.display()))?,
         );
     }
+    let budget = piscem_rs::io::decode_budget::DecodeBudget::spawn(handles, plan.decode_budget);
     let collection = Collection::new(readers, CollectionType::Single)
         .map_err(|e| anyhow::anyhow!("building read collection: {e}"))?;
     collection
         .process_parallel(proc, nthreads, None)
         .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
+    report_decode_budget(budget, plan.decode_budget);
     Ok(())
+}
+
+/// Log what the decoder supervisor actually spent, so a run that chose the
+/// parallel path can be told apart from one that did not.
+fn report_decode_budget(
+    budget: Option<piscem_rs::io::decode_budget::DecodeBudget>,
+    configured: usize,
+) {
+    if let Some(b) = budget {
+        let r = b.finish();
+        tracing::info!(
+            "decoder threads: peak {} worker + {} auxiliary (budget {}); peak busy {}",
+            r.peak_worker_threads,
+            r.peak_auxiliary_threads,
+            configured,
+            r.peak_busy_workers,
+        );
+    }
 }
 
 /// Drive the mapping pass over paired-end input.
@@ -1277,21 +1321,25 @@ fn run_paired(
         mates1.len() == mates2.len(),
         "mates1 and mates2 must have the same number of files"
     );
+    let plan = piscem_rs::io::fastx::plan_thread_budget(nthreads, mates1.len() * 2);
+    let mut handles = Vec::new();
     let mut readers = Vec::with_capacity(mates1.len() * 2);
     for (a, b) in mates1.iter().zip(mates2.iter()) {
         readers.push(
-            reader_with_batch_size(open_reader(a)?)
+            reader_with_batch_size(open_reader_planned(a, &plan, &mut handles)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", a.display()))?,
         );
         readers.push(
-            reader_with_batch_size(open_reader(b)?)
+            reader_with_batch_size(open_reader_planned(b, &plan, &mut handles)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", b.display()))?,
         );
     }
+    let budget = piscem_rs::io::decode_budget::DecodeBudget::spawn(handles, plan.decode_budget);
     let collection = Collection::new(readers, CollectionType::Paired)
         .map_err(|e| anyhow::anyhow!("building paired read collection: {e}"))?;
     collection
         .process_parallel_paired(proc, nthreads, None)
         .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
+    report_decode_budget(budget, plan.decode_budget);
     Ok(())
 }
