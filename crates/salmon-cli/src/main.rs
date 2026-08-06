@@ -862,8 +862,9 @@ fn write_gene_level(
     tpm: &[f64],
     counts: &[f64],
 ) -> Result<()> {
-    let map = salmon_core::genemap::read_transcript_gene_map(gene_map)
-        .with_context(|| format!("reading gene map {}", gene_map.display()))?;
+    // `read_transcript_gene_map` names the file in every error it returns, so
+    // wrapping it here would print the path twice.
+    let map = salmon_core::genemap::read_transcript_gene_map(gene_map)?;
     let unmapped = salmon_core::genemap::write_gene_quant(
         &out_dir.join("quant.genes.sf"),
         names,

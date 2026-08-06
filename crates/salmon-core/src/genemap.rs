@@ -24,7 +24,7 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
     let mut map = HashMap::new();
 
     for line in reader.lines() {
-        let line = line?;
+        let line = line.map_err(|e| annotate_read_error(path, e))?;
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
@@ -60,6 +60,24 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
     Ok(map)
 }
 
+/// Name the file in a read failure, and add a hint when the bytes are not
+/// readable as text. `BufRead::lines()` reports only "stream did not contain
+/// valid UTF-8", which says neither which file nor what to do about it; past
+/// the gzip sniff, that error means the input is neither text nor gzip. The
+/// original message is kept so a corrupt-gzip failure still reads as one.
+fn annotate_read_error(path: &Path, err: io::Error) -> io::Error {
+    let hint = if err.kind() == io::ErrorKind::InvalidData {
+        " (expected plain text or gzip; annotations compressed with anything else, \
+         such as bzip2 or zstd, must be decompressed first)"
+    } else {
+        ""
+    };
+    io::Error::new(
+        err.kind(),
+        format!("reading gene map {}: {err}{hint}", path.display()),
+    )
+}
+
 /// Whether the path names a GTF/GFF, ignoring a trailing compression suffix:
 /// the last extension of `annotation.gtf.gz` is `gz`, but the content is GTF.
 /// Getting this wrong is not a cosmetic error — a GTF handed to the TSV branch
@@ -87,10 +105,14 @@ fn has_gtf_extension(path: &Path) -> bool {
 /// legal and some published annotations are built that way; a single-member
 /// decoder would silently stop at the first member's end.
 fn open_maybe_gzip(path: &Path) -> io::Result<Box<dyn BufRead>> {
-    let mut reader = io::BufReader::new(std::fs::File::open(path)?);
+    let file = std::fs::File::open(path).map_err(|e| annotate_read_error(path, e))?;
+    let mut reader = io::BufReader::new(file);
     // `fill_buf` peeks without consuming, so the magic bytes stay in the stream
     // for whichever reader we hand back.
-    let gzipped = matches!(reader.fill_buf()?, [0x1f, 0x8b, ..]);
+    let head = reader
+        .fill_buf()
+        .map_err(|e| annotate_read_error(path, e))?;
+    let gzipped = matches!(head, [0x1f, 0x8b, ..]);
     if gzipped {
         Ok(Box::new(io::BufReader::new(MultiGzDecoder::new(reader))))
     } else {
@@ -281,6 +303,44 @@ ENST00000450305\tENSG00000223972
         }
         f.flush().unwrap();
         assert_expected_map(&read_transcript_gene_map(&path).unwrap());
+    }
+
+    /// A bzip2 annotation is the realistic non-gzip binary: it survives the gzip
+    /// sniff and then fails on UTF-8. The error has to name the file and say
+    /// what would have been accepted.
+    #[test]
+    fn binary_input_names_the_file_and_hints_at_the_cause() {
+        let path = scratch("binary").join("annotation.gtf.bz2");
+        std::fs::write(&path, [0x42, 0x5a, 0x68, 0x39, 0xff, 0xfe, 0x00, 0x01]).unwrap();
+        let err = read_transcript_gene_map(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let msg = err.to_string();
+        assert!(msg.contains("annotation.gtf.bz2"), "{msg}");
+        assert!(msg.contains("valid UTF-8"), "{msg}");
+        assert!(msg.contains("gzip"), "{msg}");
+    }
+
+    /// A truncated gzip must still report the file, and must not be mistaken for
+    /// the not-text case — the decoder's own message is preserved.
+    #[test]
+    fn truncated_gzip_names_the_file() {
+        use flate2::{write::GzEncoder, Compression};
+        let mut enc = GzEncoder::new(Vec::new(), Compression::new(6));
+        enc.write_all(GTF.as_bytes()).unwrap();
+        let full = enc.finish().unwrap();
+        let path = scratch("truncated").join("annotation.gtf.gz");
+        std::fs::write(&path, &full[..full.len() / 2]).unwrap();
+        let err = read_transcript_gene_map(&path).unwrap_err();
+        assert!(err.to_string().contains("annotation.gtf.gz"), "{err}");
+    }
+
+    /// The CLI no longer prefixes the path, so a missing file has to name itself.
+    #[test]
+    fn missing_file_names_the_path() {
+        let path = scratch("missing").join("nope.gtf");
+        let err = read_transcript_gene_map(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("nope.gtf"), "{err}");
     }
 
     #[test]
