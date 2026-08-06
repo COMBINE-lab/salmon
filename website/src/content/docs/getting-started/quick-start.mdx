@@ -63,7 +63,7 @@ transcriptome, then quantify a paired-end sample.
 - **Posterior uncertainty:** `--numBootstraps 100` or `--numGibbsSamples 100`.
   See [inferential replicates](../../guides/inferential-replicates/).
 - **Gene-level output:** `-g txp2gene.gtf` also writes `quant.genes.sf`. The
-  annotation may be gzipped, so an Ensembl or GENCODE download works as-is:
-  `-g Homo_sapiens.GRCh38.115.gtf.gz`.
+  annotation may be compressed (gzip, BGZF, bzip2, xz or zstd), so an Ensembl or
+  GENCODE download works as-is: `-g Homo_sapiens.GRCh38.115.gtf.gz`.
 
 See the [CLI reference](../../reference/cli/) for the full option list.

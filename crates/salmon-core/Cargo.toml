@@ -12,8 +12,8 @@ description = "Shared core types for the Rust port of salmon (transcripts, libra
 thiserror = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
-# transparent gzip decompression for gzipped --geneMap annotations
-flate2 = { workspace = true }
+# transparent decompression of compressed --geneMap annotations
+niffler = { workspace = true }
 
 [lints]
 workspace = true

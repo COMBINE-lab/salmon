@@ -401,7 +401,8 @@ struct QuantArgs {
     #[arg(short = 'o', long = "output", required = true)]
     output: PathBuf,
     /// Transcript-to-gene map (GTF/GFF, or a 2-column TSV), optionally
-    /// gzip-compressed; also writes gene-level estimates to `quant.genes.sf`.
+    /// compressed (gzip, BGZF, bzip2, xz, zstd); also writes gene-level
+    /// estimates to `quant.genes.sf`.
     #[arg(short = 'g', long = "geneMap", value_name = "FILE")]
     gene_map: Option<PathBuf>,
     /// Worker threads (0 = all cores). salmon also runs one auxiliary thread for

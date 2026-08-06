@@ -5,7 +5,6 @@
 //! and EffectiveLength are the TPM-weighted means of the transcript (effective)
 //! lengths, falling back to the unweighted mean when the gene's total TPM is 0.
 
-use flate2::read::MultiGzDecoder;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
@@ -15,12 +14,13 @@ use std::path::Path;
 /// `key=value` syntaxes); anything else is read as a TSV whose first two
 /// whitespace-separated columns are `transcript` and `gene`.
 ///
-/// The file may be gzip-compressed — as Ensembl and GENCODE ship it. Compression
-/// is detected from the content, not the name, so a compressed file that kept a
-/// bare `.gtf` name is read correctly too.
+/// The file may be compressed — gzip is how Ensembl and GENCODE ship it, and
+/// `niffler` also covers BGZF, bzip2, xz and zstd. Compression is detected from
+/// the content, not the name, so a compressed file that kept a bare `.gtf` name
+/// is read correctly too.
 pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, String>> {
     let is_gtf = has_gtf_extension(path);
-    let reader = open_maybe_gzip(path)?;
+    let reader = open_maybe_compressed(path)?;
     let mut map = HashMap::new();
 
     for line in reader.lines() {
@@ -63,12 +63,13 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
 /// Name the file in a read failure, and add a hint when the bytes are not
 /// readable as text. `BufRead::lines()` reports only "stream did not contain
 /// valid UTF-8", which says neither which file nor what to do about it; past
-/// the gzip sniff, that error means the input is neither text nor gzip. The
-/// original message is kept so a corrupt-gzip failure still reads as one.
+/// the format sniff, that error means the input is neither text nor any
+/// compression format we recognise. The original message is kept so a
+/// corrupt-gzip failure still reads as one.
 fn annotate_read_error(path: &Path, err: io::Error) -> io::Error {
     let hint = if err.kind() == io::ErrorKind::InvalidData {
-        " (expected plain text or gzip; annotations compressed with anything else, \
-         such as bzip2 or zstd, must be decompressed first)"
+        " (expected plain text, or an annotation compressed with gzip, BGZF, \
+         bzip2, xz or zstd)"
     } else {
         ""
     };
@@ -78,11 +79,17 @@ fn annotate_read_error(path: &Path, err: io::Error) -> io::Error {
     )
 }
 
+/// Compression suffixes stripped before deciding GTF-vs-TSV, one per format
+/// `niffler` decodes. Content detection is the reader's job; this is only about
+/// the *name*, and a name that ends in a codec suffix says nothing about the
+/// format underneath it.
+const COMPRESSION_SUFFIXES: [&str; 6] = ["gz", "bgz", "bgzf", "bz2", "xz", "zst"];
+
 /// Whether the path names a GTF/GFF, ignoring a trailing compression suffix:
 /// the last extension of `annotation.gtf.gz` is `gz`, but the content is GTF.
 /// Getting this wrong is not a cosmetic error — a GTF handed to the TSV branch
 /// parses into `{sequence name: source}` pairs, which is a non-empty map that
-/// matches no transcript.
+/// matches no transcript, so it fails silently rather than loudly.
 fn has_gtf_extension(path: &Path) -> bool {
     let ext = |p: &Path| {
         p.extension()
@@ -91,32 +98,35 @@ fn has_gtf_extension(path: &Path) -> bool {
     };
     let outer = ext(path);
     let effective = match outer.as_deref() {
-        Some("gz") => ext(Path::new(path.file_stem().unwrap_or_default())),
+        Some(e) if COMPRESSION_SUFFIXES.contains(&e) => {
+            ext(Path::new(path.file_stem().unwrap_or_default()))
+        }
         _ => outer,
     };
     matches!(effective.as_deref(), Some("gtf" | "gff" | "gff3"))
 }
 
-/// Open `path`, transparently decompressing it when it is gzipped.
+/// Open `path`, transparently decompressing it when it is compressed.
 ///
-/// Detection is by the `1f 8b` magic bytes rather than the file name, so a
-/// compressed annotation that was renamed without a `.gz` suffix still works.
-/// `MultiGzDecoder` handles multi-member files — concatenating gzip members is
-/// legal and some published annotations are built that way; a single-member
-/// decoder would silently stop at the first member's end.
-fn open_maybe_gzip(path: &Path) -> io::Result<Box<dyn BufRead>> {
-    let file = std::fs::File::open(path).map_err(|e| annotate_read_error(path, e))?;
-    let mut reader = io::BufReader::new(file);
-    // `fill_buf` peeks without consuming, so the magic bytes stay in the stream
-    // for whichever reader we hand back.
-    let head = reader
-        .fill_buf()
-        .map_err(|e| annotate_read_error(path, e))?;
-    let gzipped = matches!(head, [0x1f, 0x8b, ..]);
-    if gzipped {
-        Ok(Box::new(io::BufReader::new(MultiGzDecoder::new(reader))))
-    } else {
-        Ok(Box::new(reader))
+/// [`niffler::get_reader`] sniffs the leading magic bytes and returns the
+/// matching decoder — gzip (via `MultiGzDecoder`, so concatenated members and
+/// BGZF are read in full rather than truncated at the first member), bzip2, xz
+/// and zstd — or the stream unchanged when it is plain text. Detection is by
+/// content, so a compressed annotation that kept a bare `.gtf` name still works.
+fn open_maybe_compressed(path: &Path) -> io::Result<Box<dyn BufRead>> {
+    let open = || std::fs::File::open(path).map_err(|e| annotate_read_error(path, e));
+    match niffler::get_reader(Box::new(io::BufReader::new(open()?))) {
+        Ok((reader, _format)) => Ok(Box::new(io::BufReader::new(reader))),
+        // niffler reads five bytes to sniff and rejects anything shorter. No
+        // compressed file is that small, so a stub gene map is plain text by
+        // construction; re-open it and let the line loop handle it (an empty or
+        // header-only file still trips the `map.is_empty()` guard below).
+        Err(niffler::Error::FileTooShort) => Ok(Box::new(io::BufReader::new(open()?))),
+        Err(niffler::Error::IOError(e)) => Err(annotate_read_error(path, e)),
+        Err(e) => Err(annotate_read_error(
+            path,
+            io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
+        )),
     }
 }
 
@@ -225,16 +235,25 @@ ENST00000450305\tENSG00000223972
         dir
     }
 
-    fn write_fixture(case: &str, name: &str, body: &str, gzip: bool) -> std::path::PathBuf {
+    use niffler::compression::Format;
+
+    /// Compress `body` into a single member of `format`. Every niffler encoder
+    /// finishes its stream on drop, so the returned bytes are complete.
+    fn compress(body: &str, format: Format) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut w =
+                niffler::get_writer(Box::new(&mut buf), format, niffler::Level::Six).unwrap();
+            w.write_all(body.as_bytes()).unwrap();
+        }
+        buf
+    }
+
+    fn write_fixture(case: &str, name: &str, body: &str, format: Format) -> std::path::PathBuf {
         let path = scratch(case).join(name);
-        if gzip {
-            use flate2::{write::GzEncoder, Compression};
-            let mut enc =
-                GzEncoder::new(std::fs::File::create(&path).unwrap(), Compression::new(6));
-            enc.write_all(body.as_bytes()).unwrap();
-            enc.finish().unwrap();
-        } else {
-            std::fs::write(&path, body).unwrap();
+        match format {
+            Format::No => std::fs::write(&path, body).unwrap(),
+            _ => std::fs::write(&path, compress(body, format)).unwrap(),
         }
         path
     }
@@ -254,13 +273,13 @@ ENST00000450305\tENSG00000223972
 
     #[test]
     fn reads_plain_gtf() {
-        let p = write_fixture("plain", "annotation.gtf", GTF, false);
+        let p = write_fixture("plain", "annotation.gtf", GTF, Format::No);
         assert_expected_map(&read_transcript_gene_map(&p).unwrap());
     }
 
     #[test]
     fn reads_two_column_tsv() {
-        let p = write_fixture("tsv", "t2g.tsv", TSV, false);
+        let p = write_fixture("tsv", "t2g.tsv", TSV, Format::No);
         assert_expected_map(&read_transcript_gene_map(&p).unwrap());
     }
 
@@ -269,53 +288,66 @@ ENST00000450305\tENSG00000223972
     /// decompressed GTF to the TSV branch would yield `{"1": "havana"}` instead.
     #[test]
     fn reads_gzipped_gtf() {
-        let p = write_fixture("gzip", "annotation.gtf.gz", GTF, true);
+        let p = write_fixture("gzip", "annotation.gtf.gz", GTF, Format::Gzip);
         assert_expected_map(&read_transcript_gene_map(&p).unwrap());
     }
 
     #[test]
     fn reads_gzipped_tsv() {
-        let p = write_fixture("gziptsv", "t2g.tsv.gz", TSV, true);
+        let p = write_fixture("gziptsv", "t2g.tsv.gz", TSV, Format::Gzip);
         assert_expected_map(&read_transcript_gene_map(&p).unwrap());
+    }
+
+    /// Every codec niffler decodes, under the suffix people actually use — and
+    /// each of these names ends in something other than `gtf`, so this pins the
+    /// suffix stripping in `has_gtf_extension` for all of them at once.
+    #[test]
+    fn reads_every_supported_codec() {
+        for (name, format) in [
+            ("annotation.gtf.gz", Format::Gzip),
+            ("annotation.gtf.bz2", Format::Bzip),
+            ("annotation.gtf.xz", Format::Lzma),
+            ("annotation.gtf.zst", Format::Zstd),
+        ] {
+            let p = write_fixture("codecs", name, GTF, format);
+            let map =
+                read_transcript_gene_map(&p).unwrap_or_else(|e| panic!("{name} ({format:?}): {e}"));
+            assert_expected_map(&map);
+        }
     }
 
     /// Compression is sniffed from the magic bytes, so a gzipped file that kept
     /// a bare `.gtf` name is still read as a compressed GTF.
     #[test]
     fn reads_gzip_content_under_a_plain_name() {
-        let p = write_fixture("misnamed", "annotation.gtf", GTF, true);
+        let p = write_fixture("misnamed", "annotation.gtf", GTF, Format::Gzip);
         assert_expected_map(&read_transcript_gene_map(&p).unwrap());
     }
 
     /// A multi-member gzip stream (concatenated members) must be read in full,
-    /// not truncated at the first member's end.
+    /// not truncated at the first member's end. This is also what makes a BGZF
+    /// annotation work, since BGZF is a multi-member gzip.
     #[test]
     fn reads_multi_member_gzip() {
-        use flate2::{write::GzEncoder, Compression};
         let path = scratch("multimember").join("annotation.gtf.gz");
-        let mut f = std::fs::File::create(&path).unwrap();
         // split the fixture so each half becomes its own gzip member
         let (head, tail) = GTF.split_at(GTF.find("1\thavana\ttranscript\t12010").unwrap());
-        for part in [head, tail] {
-            let mut enc = GzEncoder::new(Vec::new(), Compression::new(6));
-            enc.write_all(part.as_bytes()).unwrap();
-            f.write_all(&enc.finish().unwrap()).unwrap();
-        }
-        f.flush().unwrap();
+        let mut bytes = compress(head, Format::Gzip);
+        bytes.extend_from_slice(&compress(tail, Format::Gzip));
+        std::fs::write(&path, &bytes).unwrap();
         assert_expected_map(&read_transcript_gene_map(&path).unwrap());
     }
 
-    /// A bzip2 annotation is the realistic non-gzip binary: it survives the gzip
-    /// sniff and then fails on UTF-8. The error has to name the file and say
-    /// what would have been accepted.
+    /// Binary that matches no codec's magic bytes is passed through as text and
+    /// fails on UTF-8. The error has to name the file and say what was expected.
     #[test]
     fn binary_input_names_the_file_and_hints_at_the_cause() {
-        let path = scratch("binary").join("annotation.gtf.bz2");
-        std::fs::write(&path, [0x42, 0x5a, 0x68, 0x39, 0xff, 0xfe, 0x00, 0x01]).unwrap();
+        let path = scratch("binary").join("annotation.gtf");
+        std::fs::write(&path, [0x00, 0xff, 0xfe, 0x01, 0x80, 0x81, 0x82, 0x83]).unwrap();
         let err = read_transcript_gene_map(&path).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         let msg = err.to_string();
-        assert!(msg.contains("annotation.gtf.bz2"), "{msg}");
+        assert!(msg.contains("annotation.gtf"), "{msg}");
         assert!(msg.contains("valid UTF-8"), "{msg}");
         assert!(msg.contains("gzip"), "{msg}");
     }
@@ -324,14 +356,22 @@ ENST00000450305\tENSG00000223972
     /// the not-text case — the decoder's own message is preserved.
     #[test]
     fn truncated_gzip_names_the_file() {
-        use flate2::{write::GzEncoder, Compression};
-        let mut enc = GzEncoder::new(Vec::new(), Compression::new(6));
-        enc.write_all(GTF.as_bytes()).unwrap();
-        let full = enc.finish().unwrap();
+        let full = compress(GTF, Format::Gzip);
         let path = scratch("truncated").join("annotation.gtf.gz");
         std::fs::write(&path, &full[..full.len() / 2]).unwrap();
         let err = read_transcript_gene_map(&path).unwrap_err();
         assert!(err.to_string().contains("annotation.gtf.gz"), "{err}");
+    }
+
+    /// niffler needs five bytes to sniff a format and errors on anything
+    /// shorter. A gene map that small is plain text by construction, so it must
+    /// still parse rather than fail as an unreadable file.
+    #[test]
+    fn reads_a_file_shorter_than_the_sniff_window() {
+        let path = scratch("tiny").join("t2g.tsv");
+        std::fs::write(&path, "t\tg\n").unwrap(); // four bytes
+        let map = read_transcript_gene_map(&path).unwrap();
+        assert_eq!(map.get("t").map(String::as_str), Some("g"));
     }
 
     /// The CLI no longer prefixes the path, so a missing file has to name itself.
@@ -345,10 +385,22 @@ ENST00000450305\tENSG00000223972
 
     #[test]
     fn gtf_extension_detection_ignores_compression_suffix() {
-        for name in ["a.gtf", "a.gtf.gz", "a.GTF.GZ", "a.gff3", "a.gff.gz"] {
+        // one entry per suffix in COMPRESSION_SUFFIXES, plus the bare forms
+        for name in [
+            "a.gtf",
+            "a.gff3",
+            "a.gtf.gz",
+            "a.GTF.GZ",
+            "a.gff.gz",
+            "a.gtf.bgz",
+            "a.gtf.bgzf",
+            "a.gtf.bz2",
+            "a.gtf.xz",
+            "a.gtf.zst",
+        ] {
             assert!(has_gtf_extension(Path::new(name)), "{name}");
         }
-        for name in ["t2g.tsv", "t2g.tsv.gz", "t2g", "t2g.txt.gz"] {
+        for name in ["t2g.tsv", "t2g.tsv.gz", "t2g", "t2g.txt.gz", "t2g.tsv.zst"] {
             assert!(!has_gtf_extension(Path::new(name)), "{name}");
         }
     }
