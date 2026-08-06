@@ -62,6 +62,9 @@ transcriptome, then quantify a paired-end sample.
 - **Bias correction:** `--seqBias`, `--gcBias`, `--posBias`.
 - **Posterior uncertainty:** `--numBootstraps 100` or `--numGibbsSamples 100`.
   See [inferential replicates](../../guides/inferential-replicates/).
-- **Gene-level output:** `-g txp2gene.gtf` also writes `quant.genes.sf`.
+- **Gene-level output:** `-g txp2gene.gtf` also writes `quant.genes.sf`. With an
+  Ensembl cDNA index and an Ensembl GTF, add `--ignoreTxVersion` — the FASTA
+  carries transcript versions in the identifier and the GTF does not, so nothing
+  joins without it. See [Ensembl cDNA + GTF](../../reference/cli/#ensembl-cdna--gtf).
 
 See the [CLI reference](../../reference/cli/) for the full option list.

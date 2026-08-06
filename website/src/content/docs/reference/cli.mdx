@@ -70,6 +70,7 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | `-o, --output <DIR>` | Output directory. **Required.** |
 | `-p, --threads <N>` | Worker threads (`0` = all cores). |
 | `-g, --geneMap <FILE>` | Transcript-to-gene map (GTF/GFF or 2-column TSV); also writes `quant.genes.sf`. |
+| `--ignoreTxVersion` | Compare transcript identifiers without their trailing `.N` version suffix when joining `--geneMap` to quantified transcripts. Off by default. See [Ensembl cDNA + GTF](#ensembl-cdna--gtf). |
 
 ### Mapping
 
@@ -131,6 +132,34 @@ See the [RAD I/O & deterministic quantification](../../guides/rad-and-determinis
 ```sh
 salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 16 -o out
 ```
+
+### Ensembl cDNA + GTF
+
+Gene-level aggregation joins `--geneMap` entries to quantified transcripts by
+exact identifier. Ensembl spells the transcript version differently in its two
+files, so the reference human RNA-seq combination does not join as-is:
+
+| Source | Identifier |
+| --- | --- |
+| `quant.sf`, from an index built on the Ensembl cDNA FASTA | `ENST00000622028.1` |
+| Ensembl GTF | `transcript_id "ENST00000622028"` + `transcript_version "1"` |
+
+Nothing matches, so `quant.genes.sf` comes out with only its header. salmon
+warns when the match rate is at or below 50%, reports how many transcripts
+*would* have matched, and names the flag below.
+
+Either pass `--ignoreTxVersion`, which compares identifiers without the trailing
+`.N` on both sides — the same semantics as tximport's option of the same name —
+or use an annotation whose identifiers already carry versions (GENCODE's FASTA
+and GTF agree, so it needs no flag):
+
+```sh
+salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -o out \
+  -g Homo_sapiens.GRCh38.115.gtf --ignoreTxVersion
+```
+
+It is off by default on purpose: rewriting identifiers implicitly would hide the
+next mismatch as effectively as this one was hidden.
 
 ## `salmon quantmerge`
 

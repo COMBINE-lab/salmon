@@ -62,7 +62,7 @@ misbehaves.
 | `--dumpEq`, `--dumpEqWeights`, `--writeUnmappedNames` | ✅ | |
 | `--initUniform` | ✅ | |
 | `--skipQuant` | ✅ | Skips EM + Gibbs/bootstrap + quant.sf; still emits eq-classes/metadata. |
-| `-g/--geneMap`, `--genes` | ✅ | Gene-level aggregation. |
+| `-g/--geneMap`, `--genes` | ✅ | Gene-level aggregation. Rust also adds `--ignoreTxVersion` (no C++ equivalent) for Ensembl cDNA + GTF identifier mismatches. |
 | `-q/--quiet` | ✅ | |
 | `--noLengthCorrection` | ✅ | (`--noEffectiveLengthCorrection`). |
 | `--minAssignedFrags` | ⛔ | |
