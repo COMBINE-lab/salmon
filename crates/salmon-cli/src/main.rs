@@ -404,6 +404,14 @@ struct QuantArgs {
     /// gene-level estimates to `quant.genes.sf`.
     #[arg(short = 'g', long = "geneMap", value_name = "FILE")]
     gene_map: Option<PathBuf>,
+    /// Ignore trailing transcript-version suffixes when joining `--geneMap`
+    /// entries to quantified transcripts, so `ENST00000456328.2` matches
+    /// `ENST00000456328`. Matches tximport's option of the same name. Needed
+    /// when the index was built from an Ensembl cDNA FASTA, which carries the
+    /// version in the identifier, and the annotation is an Ensembl GTF, which
+    /// puts it in a separate `transcript_version` attribute.
+    #[arg(long = "ignoreTxVersion")]
+    ignore_tx_version: bool,
     /// Worker threads (0 = all cores). salmon also runs one auxiliary thread for
     /// FASTQ parsing/decompression, so total CPU use can slightly exceed this
     /// value; on schedulers that enforce the limit, request one extra core.
@@ -852,18 +860,28 @@ fn long_read_redirect() -> ! {
     std::process::exit(2);
 }
 
+/// Where the `--geneMap` annotation is and how to join it to quantified
+/// transcripts. Carried together so the option travels with the path through
+/// every quantification path.
+#[derive(Clone, Debug)]
+struct GeneMapOpts {
+    path: PathBuf,
+    /// `--ignoreTxVersion`
+    ignore_tx_version: bool,
+}
+
 /// Aggregate transcript estimates to gene level and write `quant.genes.sf`.
 fn write_gene_level(
     out_dir: &std::path::Path,
-    gene_map: &std::path::Path,
+    gene_map: &GeneMapOpts,
     names: &[String],
     lengths: &[u32],
     eff_lengths: &[f64],
     tpm: &[f64],
     counts: &[f64],
 ) -> Result<()> {
-    let map = salmon_core::genemap::read_transcript_gene_map(gene_map)
-        .with_context(|| format!("reading gene map {}", gene_map.display()))?;
+    let map = salmon_core::genemap::read_transcript_gene_map(&gene_map.path)
+        .with_context(|| format!("reading gene map {}", gene_map.path.display()))?;
     let summary = salmon_core::genemap::write_gene_quant(
         &out_dir.join("quant.genes.sf"),
         names,
@@ -872,6 +890,7 @@ fn write_gene_level(
         tpm,
         counts,
         &map,
+        gene_map.ignore_tx_version,
     )
     .context("writing quant.genes.sf")?;
 
@@ -896,12 +915,13 @@ fn write_gene_level(
             summary.genes_written
         );
         let would_match = salmon_core::genemap::matches_ignoring_tx_version(names, &map);
-        if would_match > summary.matched {
+        if !gene_map.ignore_tx_version && would_match > summary.matched {
             eprintln!(
-                "warning: {would_match} would match if the trailing version suffix were ignored \
-                 (e.g. {} vs {}). The Ensembl cDNA FASTA carries transcript versions in the \
-                 identifier while the GTF puts them in a separate transcript_version attribute, \
-                 so an index built from the FASTA does not join to the GTF as-is.",
+                "warning: {would_match} would match with --ignoreTxVersion, which compares \
+                 identifiers without their trailing version suffix (e.g. {} vs {}). The Ensembl \
+                 cDNA FASTA carries transcript versions in the identifier while the GTF puts \
+                 them in a separate transcript_version attribute, so an index built from the \
+                 FASTA does not join to the GTF as-is.",
                 names
                     .iter()
                     .find(|n| !map.contains_key(*n))
@@ -935,7 +955,7 @@ fn run_deterministic(
     rad_out: Option<PathBuf>,
     keep_rad: bool,
     bias_targets: Option<PathBuf>,
-    gene_map: Option<&std::path::Path>,
+    gene_map: Option<&GeneMapOpts>,
     out_dir: &std::path::Path,
 ) -> Result<()> {
     let bias_on = map_opts.seq_bias || map_opts.gc_bias || map_opts.pos_bias;
@@ -1048,7 +1068,7 @@ fn run_deterministic_align(
     opts: AlignQuantOptions,
     rad_out: Option<PathBuf>,
     keep_rad: bool,
-    gene_map: Option<&std::path::Path>,
+    gene_map: Option<&GeneMapOpts>,
     codec: ChunkCodec,
 ) -> Result<()> {
     let out_dir = opts.output_dir.clone();
@@ -1134,7 +1154,7 @@ fn run_genome_project(
     q: AlignQuantOptions,
     rad_out: Option<PathBuf>,
     keep_rad: bool,
-    gene_map: Option<&std::path::Path>,
+    gene_map: Option<&GeneMapOpts>,
 ) -> Result<()> {
     let out_dir = q.output_dir.clone();
     let explicit = rad_out.is_some();
@@ -1247,7 +1267,10 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         .num_threads(nthreads)
         .build_global();
     let out_dir = args.output.clone();
-    let gene_map = args.gene_map.clone();
+    let gene_map = args.gene_map.clone().map(|path| GeneMapOpts {
+        path,
+        ignore_tx_version: args.ignore_tx_version,
+    });
     // `--meta` (metagenomic preset) forces plain EM (no VBEM) and disables rich /
     // range-factorized equivalence classes, matching salmon's --meta. salmon's
     // preset also sets initUniform; the Rust offline EM already initializes
@@ -1347,7 +1370,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 opts,
                 args.write_rad.clone(),
                 args.keep_rad,
-                gene_map.as_deref(),
+                gene_map.as_ref(),
             );
         }
 
@@ -1361,7 +1384,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 opts,
                 args.write_rad.clone(),
                 args.keep_rad,
-                gene_map.as_deref(),
+                gene_map.as_ref(),
                 codec,
             );
         }
@@ -1610,7 +1633,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             rad_out,
             args.keep_rad,
             args.targets.clone(),
-            gene_map.as_deref(),
+            gene_map.as_ref(),
             &out_dir,
         );
     }

@@ -165,6 +165,10 @@ pub fn matches_ignoring_tx_version(names: &[String], gene_map: &HashMap<String, 
 /// The returned [`GeneQuantSummary`] is what the caller should report — in
 /// particular `genes_written`, which is the number of rows in the file and not
 /// the number of genes in the gene map.
+///
+/// With `ignore_tx_version`, identifiers are compared with a trailing `.<digits>`
+/// suffix removed on both sides (`--ignoreTxVersion`). Off by default: silently
+/// normalising identifiers is how a wrong join goes unnoticed in the first place.
 #[allow(clippy::too_many_arguments)]
 pub fn write_gene_quant(
     out_path: &Path,
@@ -174,14 +178,27 @@ pub fn write_gene_quant(
     tpm: &[f64],
     counts: &[f64],
     gene_map: &HashMap<String, String>,
+    ignore_tx_version: bool,
 ) -> io::Result<GeneQuantSummary> {
+    // Re-key the map once when versions are ignored, rather than per lookup.
+    let stripped: Option<HashMap<&str, &str>> = ignore_tx_version.then(|| {
+        gene_map
+            .iter()
+            .map(|(t, g)| (strip_tx_version(t), g.as_str()))
+            .collect()
+    });
+
     // Group transcript indices by gene (gene name order is sorted for determinism).
     let mut genes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     let mut summary = GeneQuantSummary::default();
     for (i, name) in names.iter().enumerate() {
-        match gene_map.get(name) {
+        let gene = match &stripped {
+            Some(m) => m.get(strip_tx_version(name)).copied(),
+            None => gene_map.get(name).map(String::as_str),
+        };
+        match gene {
             Some(g) => {
-                genes.entry(g.as_str()).or_default().push(i);
+                genes.entry(g).or_default().push(i);
                 summary.matched += 1;
             }
             None => summary.unmapped += 1,
@@ -260,6 +277,7 @@ mod tests {
             &[10.0, 20.0],
             &[100.0, 200.0],
             &map,
+            false,
         )
         .unwrap();
 
@@ -280,6 +298,72 @@ mod tests {
         assert_eq!(matches_ignoring_tx_version(&names, &map), 2);
     }
 
+    /// The same input as the mismatch case, with `--ignoreTxVersion` on: the
+    /// join succeeds and the gene rows appear.
+    #[test]
+    fn ignore_tx_version_matches_versioned_names_to_an_unversioned_map() {
+        let mut gm = HashMap::new();
+        gm.insert("ENST00000456328".to_string(), "ENSG00000290825".to_string());
+        gm.insert("ENST00000450305".to_string(), "ENSG00000223972".to_string());
+        let names = vec![
+            "ENST00000456328.2".to_string(),
+            "ENST00000450305.3".to_string(),
+        ];
+        let out = scratch("ignorever").join("quant.genes.sf");
+
+        let off = write_gene_quant(
+            &out,
+            &names,
+            &[1000, 2000],
+            &[800.0, 1800.0],
+            &[10.0, 20.0],
+            &[100.0, 200.0],
+            &gm,
+            false,
+        )
+        .unwrap();
+        assert_eq!(off.matched, 0, "default must not strip versions");
+        assert_eq!(off.genes_written, 0);
+
+        let on = write_gene_quant(
+            &out,
+            &names,
+            &[1000, 2000],
+            &[800.0, 1800.0],
+            &[10.0, 20.0],
+            &[100.0, 200.0],
+            &gm,
+            true,
+        )
+        .unwrap();
+        assert_eq!(on.matched, 2);
+        assert_eq!(on.unmapped, 0);
+        assert_eq!(on.genes_written, 2);
+        assert!(!on.match_rate_is_low());
+
+        let body = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(body.lines().count(), 3, "header + 2 genes: {body:?}");
+        // Counts must survive the join unchanged.
+        let row = body
+            .lines()
+            .find(|l| l.starts_with("ENSG00000290825\t"))
+            .unwrap();
+        assert_eq!(row.split('\t').nth(4), Some("100.000"));
+    }
+
+    /// Stripping applies to both sides, so a versioned gene map joins to
+    /// unversioned quant names too.
+    #[test]
+    fn ignore_tx_version_strips_the_gene_map_side_as_well() {
+        let mut gm = HashMap::new();
+        gm.insert("ENST00000456328.2".to_string(), "ENSG1".to_string());
+        let names = vec!["ENST00000456328".to_string()];
+        let out = scratch("ignorever2").join("quant.genes.sf");
+        let s = write_gene_quant(&out, &names, &[10], &[8.0], &[1.0], &[3.0], &gm, true).unwrap();
+        assert_eq!(s.matched, 1);
+        assert_eq!(s.genes_written, 1);
+    }
+
     #[test]
     fn summary_counts_genes_written_not_gene_map_size() {
         // The gene map knows three genes; only one of them is quantified.
@@ -297,6 +381,7 @@ mod tests {
             &[1.0, 2.0],
             &[3.0, 4.0],
             &gm,
+            false,
         )
         .unwrap();
         assert_eq!(summary.matched, 1);
@@ -322,6 +407,7 @@ mod tests {
             &[1.0, 2.0],
             &[3.0, 4.0],
             &gm,
+            false,
         )
         .unwrap();
         assert_eq!(summary.match_rate(), 1.0);
@@ -380,7 +466,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gq_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("quant.genes.sf");
-        let summary = write_gene_quant(&p, &names, &lengths, &eff, &tpm, &counts, &gm).unwrap();
+        let summary =
+            write_gene_quant(&p, &names, &lengths, &eff, &tpm, &counts, &gm, false).unwrap();
         assert_eq!(summary.unmapped, 0);
         assert_eq!(summary.matched, 3);
         assert_eq!(summary.genes_written, 2);
