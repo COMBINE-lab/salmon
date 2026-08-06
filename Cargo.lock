@@ -2683,6 +2683,7 @@ dependencies = [
 name = "salmon-core"
 version = "2.4.1"
 dependencies = [
+ "flate2",
  "serde",
  "thiserror 2.0.19",
  "tracing",

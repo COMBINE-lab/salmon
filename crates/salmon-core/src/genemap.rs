@@ -143,6 +143,79 @@ pub fn write_gene_quant(
 mod tests {
     use super::*;
 
+    /// An Ensembl-shaped GTF: a header comment, a `gene` feature carrying no
+    /// `transcript_id` (which must be skipped), and two transcripts.
+    const GTF: &str = "\
+#!genome-build GRCh38.p14
+1\thavana\tgene\t11869\t14409\t.\t+\t.\tgene_id \"ENSG00000290825\"; gene_name \"DDX11L16\";
+1\thavana\ttranscript\t11869\t14409\t.\t+\t.\tgene_id \"ENSG00000290825\"; transcript_id \"ENST00000456328\";
+1\thavana\ttranscript\t12010\t13670\t.\t+\t.\tgene_id \"ENSG00000223972\"; transcript_id \"ENST00000450305\";
+";
+
+    const TSV: &str = "\
+ENST00000456328\tENSG00000290825
+ENST00000450305\tENSG00000223972
+";
+
+    /// Per-test scratch directory, so cases can run concurrently.
+    fn scratch(case: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("salmon_genemap_{}_{case}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_fixture(case: &str, name: &str, body: &str, gzip: bool) -> std::path::PathBuf {
+        let path = scratch(case).join(name);
+        if gzip {
+            use flate2::{write::GzEncoder, Compression};
+            let mut enc =
+                GzEncoder::new(std::fs::File::create(&path).unwrap(), Compression::new(6));
+            enc.write_all(body.as_bytes()).unwrap();
+            enc.finish().unwrap();
+        } else {
+            std::fs::write(&path, body).unwrap();
+        }
+        path
+    }
+
+    /// Every accepted spelling of a gene map must yield the same two pairs.
+    fn assert_expected_map(map: &HashMap<String, String>) {
+        assert_eq!(map.len(), 2, "unexpected entries: {map:?}");
+        assert_eq!(
+            map.get("ENST00000456328").map(String::as_str),
+            Some("ENSG00000290825")
+        );
+        assert_eq!(
+            map.get("ENST00000450305").map(String::as_str),
+            Some("ENSG00000223972")
+        );
+    }
+
+    #[test]
+    fn reads_plain_gtf() {
+        let p = write_fixture("plain", "annotation.gtf", GTF, false);
+        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
+    }
+
+    #[test]
+    fn reads_two_column_tsv() {
+        let p = write_fixture("tsv", "t2g.tsv", TSV, false);
+        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
+    }
+
+    // Gzip is how Ensembl and GENCODE ship annotations, but the reader opens the
+    // path as plain text, so `BufRead::lines()` rejects the magic bytes with
+    // "stream did not contain valid UTF-8". Ignored so this commit stays green
+    // and bisectable; un-ignored by the commit that adds decompression.
+    // See https://github.com/COMBINE-lab/salmon/issues/1074.
+    #[test]
+    #[ignore = "gzip gene maps are not supported yet — see issue #1074"]
+    fn reads_gzipped_gtf() {
+        let p = write_fixture("gzip", "annotation.gtf.gz", GTF, true);
+        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
+    }
+
     #[test]
     fn gtf_and_gff_attr_extraction() {
         let gtf = r#"gene_id "ENSG1"; transcript_id "ENST1"; gene_name "A";"#;

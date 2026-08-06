@@ -13,5 +13,9 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+# builds the gzipped gene-map fixture in the genemap tests
+flate2 = { workspace = true }
+
 [lints]
 workspace = true
