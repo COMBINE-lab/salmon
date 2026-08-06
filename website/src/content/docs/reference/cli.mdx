@@ -144,9 +144,14 @@ files, so the reference human RNA-seq combination does not join as-is:
 | `quant.sf`, from an index built on the Ensembl cDNA FASTA | `ENST00000622028.1` |
 | Ensembl GTF | `transcript_id "ENST00000622028"` + `transcript_version "1"` |
 
-Nothing matches, so `quant.genes.sf` comes out with only its header. salmon
-warns when the match rate is at or below 50%, reports how many transcripts
-*would* have matched, and names the flag below.
+Nothing matches. Each transcript then stands in as its own single-transcript
+gene, so `quant.genes.sf` is full-length but keyed by transcript: it is
+transcript-level output under a gene-level name, and no abundance is lost.
+salmon warns when the match rate is at or below 50%, says how many rows are
+stand-ins, reports how many transcripts *would* have matched, names the flag
+below, and lists every unmatched identifier in
+`aux_info/genemap_unmatched_txps.txt` (one per line, removed when there are
+none).
 
 Either pass `--ignoreTxVersion`, which compares identifiers without the trailing
 `.N` on both sides — the same semantics as tximport's option of the same name —

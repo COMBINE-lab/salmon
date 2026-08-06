@@ -74,15 +74,20 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
 ## Behavior differences to be aware of
 
 - **Sketch orphan rule** defaults to the relaxed policy (see `--sketchStrictOrphans`).
-- **`-g/--geneMap`: unmatched transcripts are dropped, not emitted.** C++
-  salmon's `aggregateEstimatesToGeneLevel` gave a transcript with no gene-map
-  entry a gene of its own (named after the transcript) and warned once per
-  transcript. 2.x omits it from `quant.genes.sf` instead, and reports the total
-  once. If every identifier fails to match — the usual cause is the Ensembl
-  cDNA + GTF version mismatch above — C++ wrote one row per transcript where 2.x
-  writes a header and no rows. salmon now warns when the match rate is at or
-  below 50%, says how many transcripts would match without the version suffix,
-  and names `--ignoreTxVersion`.
+- **`-g/--geneMap`: unmatched transcripts are reported differently, not
+  aggregated differently.** As in C++ salmon's `aggregateEstimatesToGeneLevel`, a
+  transcript with no gene-map entry is emitted as its own single-transcript gene,
+  named after the transcript, so nothing quantified is dropped on the way to gene
+  level and `tximport` can apply its own transcript-to-gene policy to the whole
+  file. What changed is the reporting: C++ warned once *per unmatched transcript*
+  (half a million lines on a failed join), while 2.x warns once with the count
+  and writes the names to `aux_info/genemap_unmatched_txps.txt`, one per line.
+  That file is removed when nothing is unmatched, so its presence always refers
+  to the current run. 2.x additionally warns when the match rate is at or below
+  50%, says how many transcripts would match without the version suffix, and
+  names `--ignoreTxVersion`. Note that a `quant.genes.sf` whose rows are mostly
+  stand-ins is transcript-level output under a gene-level file name — the run's
+  closing line says so explicitly when any row is a stand-in.
 - **Selective-alignment chain pruning:** 2.0 currently defaults
   `--orphanChainSubThresh` and `--postMergeChainSubThresh` to `0.0` (off) — it
   aligns every candidate, which is marginally more sensitive than C++ (which uses
