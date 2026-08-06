@@ -5,6 +5,7 @@
 //! and EffectiveLength are the TPM-weighted means of the transcript (effective)
 //! lengths, falling back to the unweighted mean when the gene's total TPM is 0.
 
+use flate2::read::MultiGzDecoder;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
@@ -13,14 +14,13 @@ use std::path::Path;
 /// `transcript_id` and `gene_id` attributes (GTF `key "value"` and GFF3
 /// `key=value` syntaxes); anything else is read as a TSV whose first two
 /// whitespace-separated columns are `transcript` and `gene`.
+///
+/// The file may be gzip-compressed — as Ensembl and GENCODE ship it. Compression
+/// is detected from the content, not the name, so a compressed file that kept a
+/// bare `.gtf` name is read correctly too.
 pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, String>> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let is_gtf = matches!(ext.as_str(), "gtf" | "gff" | "gff3");
-    let reader = io::BufReader::new(std::fs::File::open(path)?);
+    let is_gtf = has_gtf_extension(path);
+    let reader = open_maybe_gzip(path)?;
     let mut map = HashMap::new();
 
     for line in reader.lines() {
@@ -58,6 +58,44 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
         ));
     }
     Ok(map)
+}
+
+/// Whether the path names a GTF/GFF, ignoring a trailing compression suffix:
+/// the last extension of `annotation.gtf.gz` is `gz`, but the content is GTF.
+/// Getting this wrong is not a cosmetic error — a GTF handed to the TSV branch
+/// parses into `{sequence name: source}` pairs, which is a non-empty map that
+/// matches no transcript.
+fn has_gtf_extension(path: &Path) -> bool {
+    let ext = |p: &Path| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+    };
+    let outer = ext(path);
+    let effective = match outer.as_deref() {
+        Some("gz") => ext(Path::new(path.file_stem().unwrap_or_default())),
+        _ => outer,
+    };
+    matches!(effective.as_deref(), Some("gtf" | "gff" | "gff3"))
+}
+
+/// Open `path`, transparently decompressing it when it is gzipped.
+///
+/// Detection is by the `1f 8b` magic bytes rather than the file name, so a
+/// compressed annotation that was renamed without a `.gz` suffix still works.
+/// `MultiGzDecoder` handles multi-member files — concatenating gzip members is
+/// legal and some published annotations are built that way; a single-member
+/// decoder would silently stop at the first member's end.
+fn open_maybe_gzip(path: &Path) -> io::Result<Box<dyn BufRead>> {
+    let mut reader = io::BufReader::new(std::fs::File::open(path)?);
+    // `fill_buf` peeks without consuming, so the magic bytes stay in the stream
+    // for whichever reader we hand back.
+    let gzipped = matches!(reader.fill_buf()?, [0x1f, 0x8b, ..]);
+    if gzipped {
+        Ok(Box::new(io::BufReader::new(MultiGzDecoder::new(reader))))
+    } else {
+        Ok(Box::new(reader))
+    }
 }
 
 /// Extract attribute `key` from a GTF/GFF column-9 string. Each `;`-separated
@@ -204,16 +242,55 @@ ENST00000450305\tENSG00000223972
         assert_expected_map(&read_transcript_gene_map(&p).unwrap());
     }
 
-    // Gzip is how Ensembl and GENCODE ship annotations, but the reader opens the
-    // path as plain text, so `BufRead::lines()` rejects the magic bytes with
-    // "stream did not contain valid UTF-8". Ignored so this commit stays green
-    // and bisectable; un-ignored by the commit that adds decompression.
-    // See https://github.com/COMBINE-lab/salmon/issues/1074.
+    /// Gzip is how Ensembl and GENCODE ship annotations. This also pins the
+    /// GTF-vs-TSV decision: the last extension here is `gz`, and routing the
+    /// decompressed GTF to the TSV branch would yield `{"1": "havana"}` instead.
     #[test]
-    #[ignore = "gzip gene maps are not supported yet — see issue #1074"]
     fn reads_gzipped_gtf() {
         let p = write_fixture("gzip", "annotation.gtf.gz", GTF, true);
         assert_expected_map(&read_transcript_gene_map(&p).unwrap());
+    }
+
+    #[test]
+    fn reads_gzipped_tsv() {
+        let p = write_fixture("gziptsv", "t2g.tsv.gz", TSV, true);
+        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
+    }
+
+    /// Compression is sniffed from the magic bytes, so a gzipped file that kept
+    /// a bare `.gtf` name is still read as a compressed GTF.
+    #[test]
+    fn reads_gzip_content_under_a_plain_name() {
+        let p = write_fixture("misnamed", "annotation.gtf", GTF, true);
+        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
+    }
+
+    /// A multi-member gzip stream (concatenated members) must be read in full,
+    /// not truncated at the first member's end.
+    #[test]
+    fn reads_multi_member_gzip() {
+        use flate2::{write::GzEncoder, Compression};
+        let path = scratch("multimember").join("annotation.gtf.gz");
+        let mut f = std::fs::File::create(&path).unwrap();
+        // split the fixture so each half becomes its own gzip member
+        let (head, tail) = GTF.split_at(GTF.find("1\thavana\ttranscript\t12010").unwrap());
+        for part in [head, tail] {
+            let mut enc = GzEncoder::new(Vec::new(), Compression::new(6));
+            enc.write_all(part.as_bytes()).unwrap();
+            f.write_all(&enc.finish().unwrap()).unwrap();
+        }
+        f.flush().unwrap();
+        assert_expected_map(&read_transcript_gene_map(&path).unwrap());
+    }
+
+    #[test]
+    fn gtf_extension_detection_ignores_compression_suffix() {
+        for name in ["a.gtf", "a.gtf.gz", "a.GTF.GZ", "a.gff3", "a.gff.gz"] {
+            assert!(has_gtf_extension(Path::new(name)), "{name}");
+        }
+        for name in ["t2g.tsv", "t2g.tsv.gz", "t2g", "t2g.txt.gz"] {
+            assert!(!has_gtf_extension(Path::new(name)), "{name}");
+        }
     }
 
     #[test]

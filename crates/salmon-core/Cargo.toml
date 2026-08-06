@@ -12,9 +12,7 @@ description = "Shared core types for the Rust port of salmon (transcripts, libra
 thiserror = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
-
-[dev-dependencies]
-# builds the gzipped gene-map fixture in the genemap tests
+# transparent gzip decompression for gzipped --geneMap annotations
 flate2 = { workspace = true }
 
 [lints]
