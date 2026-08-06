@@ -864,7 +864,7 @@ fn write_gene_level(
 ) -> Result<()> {
     let map = salmon_core::genemap::read_transcript_gene_map(gene_map)
         .with_context(|| format!("reading gene map {}", gene_map.display()))?;
-    let unmapped = salmon_core::genemap::write_gene_quant(
+    let summary = salmon_core::genemap::write_gene_quant(
         &out_dir.join("quant.genes.sf"),
         names,
         lengths,
@@ -874,13 +874,50 @@ fn write_gene_level(
         &map,
     )
     .context("writing quant.genes.sf")?;
-    let n_genes = map.values().collect::<std::collections::HashSet<_>>().len();
-    if unmapped > 0 {
+
+    if summary.unmapped > 0 {
         eprintln!(
-            "warning: {unmapped} transcript(s) had no entry in the gene map and were omitted from quant.genes.sf"
+            "warning: {} of {} transcript(s) had no entry in the gene map and were omitted \
+             from quant.genes.sf",
+            summary.unmapped,
+            summary.total()
         );
     }
-    println!("wrote gene-level estimates for {n_genes} genes to quant.genes.sf");
+    // A near-total mismatch means the identifiers do not line up, not that the
+    // annotation is merely incomplete — say so, rather than leaving the user to
+    // infer it from an empty file.
+    if summary.match_rate_is_low() {
+        eprintln!(
+            "warning: the gene map matched only {} of {} quantified transcripts ({:.1}%); \
+             quant.genes.sf has {} gene row(s)",
+            summary.matched,
+            summary.total(),
+            summary.match_rate() * 100.0,
+            summary.genes_written
+        );
+        let would_match = salmon_core::genemap::matches_ignoring_tx_version(names, &map);
+        if would_match > summary.matched {
+            eprintln!(
+                "warning: {would_match} would match if the trailing version suffix were ignored \
+                 (e.g. {} vs {}). The Ensembl cDNA FASTA carries transcript versions in the \
+                 identifier while the GTF puts them in a separate transcript_version attribute, \
+                 so an index built from the FASTA does not join to the GTF as-is.",
+                names
+                    .iter()
+                    .find(|n| !map.contains_key(*n))
+                    .map(String::as_str)
+                    .unwrap_or("ENST00000456328.2"),
+                map.keys()
+                    .next()
+                    .map(String::as_str)
+                    .unwrap_or("ENST00000456328"),
+            );
+        }
+    }
+    println!(
+        "wrote gene-level estimates for {} genes to quant.genes.sf",
+        summary.genes_written
+    );
     Ok(())
 }
 

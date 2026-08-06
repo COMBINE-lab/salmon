@@ -86,9 +86,85 @@ fn extract_attr(attrs: &str, key: &str) -> Option<String> {
     None
 }
 
+/// A match rate at or below this is reported as a problem rather than a note.
+///
+/// The failure this guards against is total: a versioned/unversioned identifier
+/// mismatch matches *nothing*, and pairing an annotation with the FASTA it was
+/// built from matches essentially everything, so the two regimes are far apart
+/// and the exact cut is not delicate. Half is chosen because below it the
+/// majority of what was quantified is missing from `quant.genes.sf`, which is
+/// worth a look in any workflow, while deliberately partial annotations — a
+/// single-chromosome GTF, a spike-in-only map — stay well clear of being
+/// mistaken for correct. It gates a warning only; nothing fails.
+pub const LOW_MATCH_RATE: f64 = 0.5;
+
+/// What gene-level aggregation actually did, for the caller to report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GeneQuantSummary {
+    /// Quantified transcripts that found an entry in the gene map.
+    pub matched: usize,
+    /// Quantified transcripts with no entry; omitted from `quant.genes.sf`.
+    pub unmapped: usize,
+    /// Gene rows actually written — not the number of genes in the gene map.
+    pub genes_written: usize,
+}
+
+impl GeneQuantSummary {
+    /// Quantified transcripts considered.
+    pub fn total(&self) -> usize {
+        self.matched + self.unmapped
+    }
+
+    /// Fraction of quantified transcripts that found a gene. An empty transcript
+    /// set is vacuously fully matched, so it does not trip the low-rate warning.
+    pub fn match_rate(&self) -> f64 {
+        if self.total() == 0 {
+            1.0
+        } else {
+            self.matched as f64 / self.total() as f64
+        }
+    }
+
+    /// Whether the caller should warn about how little the gene map matched.
+    pub fn match_rate_is_low(&self) -> bool {
+        self.match_rate() <= LOW_MATCH_RATE
+    }
+}
+
+/// Strip a trailing `.<digits>` version suffix, as tximport's `ignoreTxVersion`
+/// does. Identifiers whose last dot-separated part is not purely numeric are
+/// returned unchanged, which leaves GENCODE's `…_PAR_Y` suffixes alone.
+pub fn strip_tx_version(id: &str) -> &str {
+    match id.rsplit_once('.') {
+        Some((base, ver)) if !ver.is_empty() && ver.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => id,
+    }
+}
+
+/// How many of `names` would match if a version suffix were ignored on both
+/// sides. Purely diagnostic: it explains a poor match rate and never changes
+/// what is written.
+pub fn matches_ignoring_tx_version(names: &[String], gene_map: &HashMap<String, String>) -> usize {
+    let stripped: HashMap<&str, &str> = gene_map
+        .iter()
+        .map(|(t, g)| (strip_tx_version(t), g.as_str()))
+        .collect();
+    names
+        .iter()
+        .filter(|n| stripped.contains_key(strip_tx_version(n)))
+        .count()
+}
+
 /// Aggregate transcript-level estimates to gene level and write `quant.genes.sf`.
-/// Transcripts absent from `gene_map` are skipped (salmon's behavior); the count
-/// of skipped transcripts is returned for the caller to report.
+///
+/// Transcripts absent from `gene_map` are omitted from the output. Note this
+/// differs from C++ salmon, whose `aggregateEstimatesToGeneLevel` emitted an
+/// unmatched transcript as its own single-transcript gene and warned once per
+/// transcript; see #1075 for the discussion of which behaviour to keep.
+///
+/// The returned [`GeneQuantSummary`] is what the caller should report — in
+/// particular `genes_written`, which is the number of rows in the file and not
+/// the number of genes in the gene map.
 #[allow(clippy::too_many_arguments)]
 pub fn write_gene_quant(
     out_path: &Path,
@@ -98,14 +174,17 @@ pub fn write_gene_quant(
     tpm: &[f64],
     counts: &[f64],
     gene_map: &HashMap<String, String>,
-) -> io::Result<usize> {
+) -> io::Result<GeneQuantSummary> {
     // Group transcript indices by gene (gene name order is sorted for determinism).
     let mut genes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    let mut unmapped = 0usize;
+    let mut summary = GeneQuantSummary::default();
     for (i, name) in names.iter().enumerate() {
         match gene_map.get(name) {
-            Some(g) => genes.entry(g.as_str()).or_default().push(i),
-            None => unmapped += 1,
+            Some(g) => {
+                genes.entry(g.as_str()).or_default().push(i);
+                summary.matched += 1;
+            }
+            None => summary.unmapped += 1,
         }
     }
 
@@ -136,7 +215,8 @@ pub fn write_gene_quant(
         )?;
     }
     w.flush()?;
-    Ok(unmapped)
+    summary.genes_written = genes.len();
+    Ok(summary)
 }
 
 #[cfg(test)]
@@ -172,7 +252,7 @@ mod tests {
         // ...but quant.sf names them as the cDNA FASTA does.
         let names: Vec<String> = vec!["ENST00000456328.2".into(), "ENST00000450305.3".into()];
         let out = scratch("nomatch").join("quant.genes.sf");
-        let unmapped = write_gene_quant(
+        let summary = write_gene_quant(
             &out,
             &names,
             &[1000, 2000],
@@ -183,13 +263,95 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(unmapped, 2, "every transcript should fail to match");
+        assert_eq!(summary.unmapped, 2, "every transcript should fail to match");
+        assert_eq!(summary.matched, 0);
+        assert_eq!(summary.genes_written, 0);
+        assert_eq!(summary.match_rate(), 0.0);
+        assert!(summary.match_rate_is_low());
         let body = std::fs::read_to_string(&out).unwrap();
         assert_eq!(
             body.lines().count(),
             1,
             "quant.genes.sf should be header-only: {body:?}"
         );
+
+        // The diagnosis the warning is built on: the identifiers differ only by
+        // the version suffix, so ignoring it would match everything.
+        assert_eq!(matches_ignoring_tx_version(&names, &map), 2);
+    }
+
+    #[test]
+    fn summary_counts_genes_written_not_gene_map_size() {
+        // The gene map knows three genes; only one of them is quantified.
+        let mut gm = HashMap::new();
+        gm.insert("t1".to_string(), "G".to_string());
+        gm.insert("t2".to_string(), "H".to_string());
+        gm.insert("t3".to_string(), "I".to_string());
+        let names = vec!["t1".to_string(), "zzz".to_string()];
+        let out = scratch("written").join("quant.genes.sf");
+        let summary = write_gene_quant(
+            &out,
+            &names,
+            &[10, 20],
+            &[8.0, 18.0],
+            &[1.0, 2.0],
+            &[3.0, 4.0],
+            &gm,
+        )
+        .unwrap();
+        assert_eq!(summary.matched, 1);
+        assert_eq!(summary.unmapped, 1);
+        assert_eq!(summary.genes_written, 1, "one row written, not 3 map genes");
+        assert_eq!(summary.total(), 2);
+        assert_eq!(summary.match_rate(), 0.5);
+        assert!(summary.match_rate_is_low(), "50% is at the threshold");
+    }
+
+    #[test]
+    fn full_match_does_not_trip_the_low_rate_warning() {
+        let mut gm = HashMap::new();
+        gm.insert("t1".to_string(), "G".to_string());
+        gm.insert("t2".to_string(), "G".to_string());
+        let names = vec!["t1".to_string(), "t2".to_string()];
+        let out = scratch("full").join("quant.genes.sf");
+        let summary = write_gene_quant(
+            &out,
+            &names,
+            &[10, 20],
+            &[8.0, 18.0],
+            &[1.0, 2.0],
+            &[3.0, 4.0],
+            &gm,
+        )
+        .unwrap();
+        assert_eq!(summary.match_rate(), 1.0);
+        assert!(!summary.match_rate_is_low());
+        assert_eq!(summary.genes_written, 1);
+        // Nothing to suggest when everything already matches.
+        assert_eq!(matches_ignoring_tx_version(&names, &gm), 2);
+    }
+
+    #[test]
+    fn version_stripping_leaves_non_numeric_suffixes_alone() {
+        assert_eq!(strip_tx_version("ENST00000456328.2"), "ENST00000456328");
+        assert_eq!(strip_tx_version("ENST00000456328.12"), "ENST00000456328");
+        assert_eq!(strip_tx_version("ENST00000456328"), "ENST00000456328");
+        // GENCODE PAR_Y entries must survive intact.
+        assert_eq!(
+            strip_tx_version("ENST00000456328.2_PAR_Y"),
+            "ENST00000456328.2_PAR_Y"
+        );
+        // a name that is dotted but not versioned
+        assert_eq!(strip_tx_version("gene.symbol"), "gene.symbol");
+        assert_eq!(strip_tx_version("t."), "t.");
+    }
+
+    /// An empty transcript set must not be reported as a mismatch.
+    #[test]
+    fn empty_transcript_set_is_not_low() {
+        let s = GeneQuantSummary::default();
+        assert_eq!(s.match_rate(), 1.0);
+        assert!(!s.match_rate_is_low());
     }
 
     #[test]
@@ -218,8 +380,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gq_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("quant.genes.sf");
-        let unmapped = write_gene_quant(&p, &names, &lengths, &eff, &tpm, &counts, &gm).unwrap();
-        assert_eq!(unmapped, 0);
+        let summary = write_gene_quant(&p, &names, &lengths, &eff, &tpm, &counts, &gm).unwrap();
+        assert_eq!(summary.unmapped, 0);
+        assert_eq!(summary.matched, 3);
+        assert_eq!(summary.genes_written, 2);
         let body = std::fs::read_to_string(&p).unwrap();
         let g_line = body.lines().find(|l| l.starts_with("G\t")).unwrap();
         let f: Vec<&str> = g_line.split('\t').collect();
