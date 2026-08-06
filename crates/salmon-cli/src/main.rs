@@ -870,6 +870,11 @@ struct GeneMapOpts {
     ignore_tx_version: bool,
 }
 
+/// Name of the file under `aux_info/` listing transcripts the gene map did not
+/// cover, one per line. It sits beside `unmapped_names.txt` — which is about
+/// *fragments* that did not map — so the name says transcripts explicitly.
+const UNMATCHED_TXP_FILE: &str = "genemap_unmatched_txps.txt";
+
 /// Aggregate transcript estimates to gene level and write `quant.genes.sf`.
 fn write_gene_level(
     out_dir: &std::path::Path,
@@ -882,6 +887,9 @@ fn write_gene_level(
 ) -> Result<()> {
     let map = salmon_core::genemap::read_transcript_gene_map(&gene_map.path)
         .with_context(|| format!("reading gene map {}", gene_map.path.display()))?;
+    // Listed by name rather than only counted, so the failure survives a lost
+    // terminal and can be fed straight back into whatever built the annotation.
+    let unmatched_list = out_dir.join("aux_info").join(UNMATCHED_TXP_FILE);
     let summary = salmon_core::genemap::write_gene_quant(
         &out_dir.join("quant.genes.sf"),
         names,
@@ -891,28 +899,35 @@ fn write_gene_level(
         counts,
         &map,
         gene_map.ignore_tx_version,
+        Some(&unmatched_list),
     )
     .context("writing quant.genes.sf")?;
 
-    if summary.unmapped > 0 {
+    if summary.unmatched > 0 {
         eprintln!(
-            "warning: {} of {} transcript(s) had no entry in the gene map and were omitted \
-             from quant.genes.sf",
-            summary.unmapped,
-            summary.total()
+            "warning: {} of {} transcript(s) had no entry in the gene map. Each was written to \
+             quant.genes.sf as its own single-transcript gene, so those rows are named by \
+             transcript, not by gene. Their names are listed in {}",
+            summary.unmatched,
+            summary.total(),
+            unmatched_list.display()
         );
     }
     // A near-total mismatch means the identifiers do not line up, not that the
-    // annotation is merely incomplete — say so, rather than leaving the user to
-    // infer it from an empty file.
+    // annotation is merely incomplete. With the fallback in place the file is
+    // full-looking either way, so the row breakdown is the only thing that
+    // distinguishes a real gene-level result from a transcript list wearing its
+    // name — state it rather than leave it to be inferred.
     if summary.match_rate_is_low() {
         eprintln!(
-            "warning: the gene map matched only {} of {} quantified transcripts ({:.1}%); \
-             quant.genes.sf has {} gene row(s)",
+            "warning: the gene map matched only {} of {} quantified transcripts ({:.1}%), so of \
+             the {} rows in quant.genes.sf, {} are unmatched transcripts standing in as their \
+             own gene. Treat this output as transcript-level until the join is fixed.",
             summary.matched,
             summary.total(),
             summary.match_rate() * 100.0,
-            summary.genes_written
+            summary.genes_written,
+            summary.unmatched
         );
         let would_match = salmon_core::genemap::matches_ignoring_tx_version(names, &map);
         if !gene_map.ignore_tx_version && would_match > summary.matched {
@@ -934,10 +949,31 @@ fn write_gene_level(
             );
         }
     }
-    println!(
-        "wrote gene-level estimates for {} genes to quant.genes.sf",
-        summary.genes_written
-    );
+    // Count the rows written, not the genes in the gene map: the two differ
+    // whenever the join is imperfect, and reporting the latter is what let a
+    // header-only quant.genes.sf be announced as a success (#1075).
+    //
+    // With the fallback in place the same trap reappears one step along, since
+    // a stand-in row is a transcript wearing a gene's place in the file. So the
+    // count is only called "genes" when every row is one; otherwise the split is
+    // spelled out, and the last line of the run agrees with the warnings above
+    // it rather than contradicting them.
+    if summary.unmatched == 0 {
+        println!(
+            "wrote gene-level estimates for {} genes to quant.genes.sf",
+            summary.genes_written
+        );
+    } else {
+        println!(
+            "wrote {} rows to quant.genes.sf: {} gene(s), plus {} unmatched transcript(s) as \
+             their own gene",
+            summary.genes_written,
+            // saturating: a stand-in row whose name collides with a real gene
+            // merges into it, so the two counts can overlap by one per collision.
+            summary.genes_written.saturating_sub(summary.unmatched),
+            summary.unmatched
+        );
+    }
     Ok(())
 }
 

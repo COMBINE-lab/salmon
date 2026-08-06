@@ -103,16 +103,19 @@ pub const LOW_MATCH_RATE: f64 = 0.5;
 pub struct GeneQuantSummary {
     /// Quantified transcripts that found an entry in the gene map.
     pub matched: usize,
-    /// Quantified transcripts with no entry; omitted from `quant.genes.sf`.
-    pub unmapped: usize,
+    /// Quantified transcripts with no entry. They are still written, each as its
+    /// own single-transcript gene, so they contribute rows to `quant.genes.sf`
+    /// and are listed by name in the unmatched-transcript file.
+    pub unmatched: usize,
     /// Gene rows actually written — not the number of genes in the gene map.
+    /// Counts the `unmatched` fallback rows as well as the joined genes.
     pub genes_written: usize,
 }
 
 impl GeneQuantSummary {
     /// Quantified transcripts considered.
     pub fn total(&self) -> usize {
-        self.matched + self.unmapped
+        self.matched + self.unmatched
     }
 
     /// Fraction of quantified transcripts that found a gene. An empty transcript
@@ -157,16 +160,30 @@ pub fn matches_ignoring_tx_version(names: &[String], gene_map: &HashMap<String, 
 
 /// Aggregate transcript-level estimates to gene level and write `quant.genes.sf`.
 ///
-/// Transcripts absent from `gene_map` are omitted from the output. This is a
-/// deliberate divergence from C++ salmon, whose `aggregateEstimatesToGeneLevel`
-/// emitted an unmatched transcript as its own single-transcript gene: that turns
-/// a failed join into a `quant.genes.sf` full of transcript IDs posing as genes,
-/// which is harder to notice than an empty one. The caller is expected to report
-/// the summary below instead. Documented in MIGRATION.md.
+/// A transcript with no entry in `gene_map` is emitted as its own
+/// single-transcript gene, keyed by the transcript's own name — C++ salmon's
+/// `aggregateEstimatesToGeneLevel` behaviour. No abundance is dropped on the way
+/// to gene level, so downstream tools (`tximport` in particular, which has its
+/// own transcript-to-gene policy) see everything that was quantified and decide
+/// for themselves what to do with the leftovers.
 ///
-/// The returned [`GeneQuantSummary`] is what the caller should report — in
-/// particular `genes_written`, which is the number of rows in the file and not
-/// the number of genes in the gene map.
+/// What C++ got wrong was the reporting, not the aggregation: it warned once per
+/// unmatched transcript, so a failed join buried the signal under half a million
+/// lines. Here the names go to `unmatched_out` instead, and the caller reports
+/// the counts in [`GeneQuantSummary`] once.
+///
+/// Note that the fallback keys on the transcript name, so an unmatched
+/// transcript whose name collides with a real gene name in the map merges into
+/// that gene's row. C++ had the same property; it needs a gene named exactly
+/// like an unmapped transcript, which does not occur in practice for the
+/// Ensembl/GENCODE/RefSeq identifier schemes.
+///
+/// `unmatched_out`, when given, receives one unmatched transcript name per line
+/// in `names` order, and is removed when nothing is unmatched so a stale list
+/// from an earlier run cannot be mistaken for a current one. The returned
+/// [`GeneQuantSummary`] is what the caller should report — in particular
+/// `genes_written`, which is the number of rows in the file and not the number
+/// of genes in the gene map.
 ///
 /// With `ignore_tx_version`, identifiers are compared with a trailing `.<digits>`
 /// suffix removed on both sides (`--ignoreTxVersion`). Off by default: silently
@@ -181,6 +198,7 @@ pub fn write_gene_quant(
     counts: &[f64],
     gene_map: &HashMap<String, String>,
     ignore_tx_version: bool,
+    unmatched_out: Option<&Path>,
 ) -> io::Result<GeneQuantSummary> {
     // Re-key the map once when versions are ignored, rather than per lookup.
     let stripped: Option<HashMap<&str, &str>> = ignore_tx_version.then(|| {
@@ -193,6 +211,7 @@ pub fn write_gene_quant(
     // Group transcript indices by gene (gene name order is sorted for determinism).
     let mut genes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     let mut summary = GeneQuantSummary::default();
+    let mut unmatched: Vec<&str> = Vec::new();
     for (i, name) in names.iter().enumerate() {
         let gene = match &stripped {
             Some(m) => m.get(strip_tx_version(name)).copied(),
@@ -203,8 +222,18 @@ pub fn write_gene_quant(
                 genes.entry(g).or_default().push(i);
                 summary.matched += 1;
             }
-            None => summary.unmapped += 1,
+            // No entry: the transcript becomes its own gene, so its abundance
+            // still reaches the output. Recorded by name for the caller's list.
+            None => {
+                genes.entry(name.as_str()).or_default().push(i);
+                summary.unmatched += 1;
+                unmatched.push(name.as_str());
+            }
         }
+    }
+
+    if let Some(list_path) = unmatched_out {
+        write_unmatched_list(list_path, &unmatched)?;
     }
 
     // smallest positive double, matching salmon's `minTPM = denorm_min`.
@@ -236,6 +265,31 @@ pub fn write_gene_quant(
     w.flush()?;
     summary.genes_written = genes.len();
     Ok(summary)
+}
+
+/// Write the names of transcripts the gene map did not cover, one per line, in
+/// `quant.sf` order. No header and no second column, so the file is directly
+/// usable as `grep -f` input or a one-column read in R/pandas.
+///
+/// An empty list removes the file rather than writing an empty one: the run that
+/// produced it is the only thing that can be said to be current, and a stale
+/// list left over from a previous run in the same output directory would claim
+/// failures this run did not have.
+fn write_unmatched_list(path: &Path, unmatched: &[&str]) -> io::Result<()> {
+    if unmatched.is_empty() {
+        return match std::fs::remove_file(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        };
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut w = io::BufWriter::new(std::fs::File::create(path)?);
+    for name in unmatched {
+        writeln!(w, "{name}")?;
+    }
+    w.flush()
 }
 
 #[cfg(test)]
@@ -271,6 +325,7 @@ mod tests {
         // ...but quant.sf names them as the cDNA FASTA does.
         let names: Vec<String> = vec!["ENST00000456328.2".into(), "ENST00000450305.3".into()];
         let out = scratch("nomatch").join("quant.genes.sf");
+        let list = scratch("nomatch").join("genemap_unmatched_txps.txt");
         let summary = write_gene_quant(
             &out,
             &names,
@@ -280,24 +335,103 @@ mod tests {
             &[100.0, 200.0],
             &map,
             false,
+            Some(&list),
         )
         .unwrap();
 
-        assert_eq!(summary.unmapped, 2, "every transcript should fail to match");
+        assert_eq!(
+            summary.unmatched, 2,
+            "every transcript should fail to match"
+        );
         assert_eq!(summary.matched, 0);
-        assert_eq!(summary.genes_written, 0);
         assert_eq!(summary.match_rate(), 0.0);
         assert!(summary.match_rate_is_low());
+
+        // Nothing is dropped: each unmatched transcript stands in as its own
+        // gene, so the abundance still reaches gene level for tximport to
+        // re-aggregate under its own policy.
+        assert_eq!(summary.genes_written, 2);
         let body = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(body.lines().count(), 3, "header + 2 rows: {body:?}");
+        let row = body
+            .lines()
+            .find(|l| l.starts_with("ENST00000456328.2\t"))
+            .unwrap_or_else(|| panic!("rows are keyed by transcript name: {body:?}"));
+        assert_eq!(row.split('\t').nth(4), Some("100.000"), "reads preserved");
+        // Mass is conserved through the join even when nothing joins.
+        let reads: f64 = body
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').nth(4).unwrap().parse::<f64>().unwrap())
+            .sum();
+        assert_eq!(reads, 300.0);
+
+        // And the failure is recorded where it outlives the terminal.
+        let listed = std::fs::read_to_string(&list).unwrap();
         assert_eq!(
-            body.lines().count(),
-            1,
-            "quant.genes.sf should be header-only: {body:?}"
+            listed.lines().collect::<Vec<_>>(),
+            ["ENST00000456328.2", "ENST00000450305.3"],
+            "listed in quant.sf order, one per line, no header"
         );
 
         // The diagnosis the warning is built on: the identifiers differ only by
         // the version suffix, so ignoring it would match everything.
         assert_eq!(matches_ignoring_tx_version(&names, &map), 2);
+    }
+
+    /// An unmatched transcript named exactly like a gene in the map merges into
+    /// that gene's row rather than adding one. C++ behaved the same way; this
+    /// pins it so the collision is a known property and not a surprise.
+    #[test]
+    fn a_fallback_row_colliding_with_a_real_gene_name_merges_into_it() {
+        let mut gm = HashMap::new();
+        gm.insert("t1".to_string(), "G".to_string());
+        let names = vec!["t1".to_string(), "G".to_string()];
+        let out = scratch("collide").join("quant.genes.sf");
+        let s = write_gene_quant(
+            &out,
+            &names,
+            &[10, 20],
+            &[8.0, 18.0],
+            &[1.0, 2.0],
+            &[3.0, 4.0],
+            &gm,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.matched, 1);
+        assert_eq!(s.unmatched, 1);
+        assert_eq!(s.genes_written, 1, "both land on the row named G");
+        let body = std::fs::read_to_string(&out).unwrap();
+        let row = body.lines().find(|l| l.starts_with("G\t")).unwrap();
+        assert_eq!(row.split('\t').nth(4), Some("7.000"), "3 + 4 reads");
+    }
+
+    /// A clean run must not leave the previous run's failure list behind: an
+    /// empty list is the absence of the file, not an empty file.
+    #[test]
+    fn a_stale_unmatched_list_is_removed_when_everything_matches() {
+        let mut gm = HashMap::new();
+        gm.insert("t1".to_string(), "G".to_string());
+        let out = scratch("stale").join("quant.genes.sf");
+        let list = scratch("stale").join("genemap_unmatched_txps.txt");
+        std::fs::write(&list, "leftover_from_a_previous_run\n").unwrap();
+
+        let s = write_gene_quant(
+            &out,
+            &["t1".to_string()],
+            &[10],
+            &[8.0],
+            &[1.0],
+            &[3.0],
+            &gm,
+            false,
+            Some(&list),
+        )
+        .unwrap();
+        assert_eq!(s.unmatched, 0);
+        assert!(!list.exists(), "stale list must not survive a clean run");
     }
 
     /// The same input as the mismatch case, with `--ignoreTxVersion` on: the
@@ -322,10 +456,19 @@ mod tests {
             &[100.0, 200.0],
             &gm,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(off.matched, 0, "default must not strip versions");
-        assert_eq!(off.genes_written, 0);
+        // Two rows either way; the flag changes what they are named after, and
+        // that is the whole difference the warnings have to convey.
+        assert_eq!(off.unmatched, 2);
+        assert_eq!(off.genes_written, 2);
+        let off_body = std::fs::read_to_string(&out).unwrap();
+        assert!(
+            off_body.contains("ENST00000456328.2\t"),
+            "rows keyed by transcript when the join fails: {off_body:?}"
+        );
 
         let on = write_gene_quant(
             &out,
@@ -336,10 +479,11 @@ mod tests {
             &[100.0, 200.0],
             &gm,
             true,
+            None,
         )
         .unwrap();
         assert_eq!(on.matched, 2);
-        assert_eq!(on.unmapped, 0);
+        assert_eq!(on.unmatched, 0);
         assert_eq!(on.genes_written, 2);
         assert!(!on.match_rate_is_low());
 
@@ -361,7 +505,8 @@ mod tests {
         gm.insert("ENST00000456328.2".to_string(), "ENSG1".to_string());
         let names = vec!["ENST00000456328".to_string()];
         let out = scratch("ignorever2").join("quant.genes.sf");
-        let s = write_gene_quant(&out, &names, &[10], &[8.0], &[1.0], &[3.0], &gm, true).unwrap();
+        let s =
+            write_gene_quant(&out, &names, &[10], &[8.0], &[1.0], &[3.0], &gm, true, None).unwrap();
         assert_eq!(s.matched, 1);
         assert_eq!(s.genes_written, 1);
     }
@@ -384,11 +529,15 @@ mod tests {
             &[3.0, 4.0],
             &gm,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(summary.matched, 1);
-        assert_eq!(summary.unmapped, 1);
-        assert_eq!(summary.genes_written, 1, "one row written, not 3 map genes");
+        assert_eq!(summary.unmatched, 1);
+        // Two rows (gene G, plus `zzz` standing in for itself) — not the 3 genes
+        // the map knows about. Reporting the map's size is what let a
+        // header-only file be announced as a success in #1075.
+        assert_eq!(summary.genes_written, 2, "rows written, not 3 map genes");
         assert_eq!(summary.total(), 2);
         assert_eq!(summary.match_rate(), 0.5);
         assert!(summary.match_rate_is_low(), "50% is at the threshold");
@@ -410,6 +559,7 @@ mod tests {
             &[3.0, 4.0],
             &gm,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(summary.match_rate(), 1.0);
@@ -469,8 +619,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("quant.genes.sf");
         let summary =
-            write_gene_quant(&p, &names, &lengths, &eff, &tpm, &counts, &gm, false).unwrap();
-        assert_eq!(summary.unmapped, 0);
+            write_gene_quant(&p, &names, &lengths, &eff, &tpm, &counts, &gm, false, None).unwrap();
+        assert_eq!(summary.unmatched, 0);
         assert_eq!(summary.matched, 3);
         assert_eq!(summary.genes_written, 2);
         let body = std::fs::read_to_string(&p).unwrap();
