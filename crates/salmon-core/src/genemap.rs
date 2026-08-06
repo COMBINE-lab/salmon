@@ -143,6 +143,55 @@ pub fn write_gene_quant(
 mod tests {
     use super::*;
 
+    fn scratch(case: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("salmon_genemap_{}_{case}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The reference human bulk RNA-seq setup: an index built from the Ensembl
+    /// cDNA FASTA, whose headers carry the version inline, against an Ensembl
+    /// GTF, which splits it into a separate `transcript_version` attribute.
+    /// The join is a literal string compare, so nothing matches at all.
+    #[test]
+    fn versioned_quant_names_match_no_unversioned_gene_map_entry() {
+        let gtf = "\
+1\thavana\ttranscript\t11869\t14409\t.\t+\t.\tgene_id \"ENSG00000290825\"; gene_version \"2\"; transcript_id \"ENST00000456328\"; transcript_version \"2\";
+1\thavana\ttranscript\t12010\t13670\t.\t+\t.\tgene_id \"ENSG00000223972\"; gene_version \"6\"; transcript_id \"ENST00000450305\"; transcript_version \"3\";
+";
+        let gtf_path = scratch("nomatch").join("annotation.gtf");
+        std::fs::write(&gtf_path, gtf).unwrap();
+        let map = read_transcript_gene_map(&gtf_path).unwrap();
+        assert_eq!(map.len(), 2);
+        assert!(
+            map.contains_key("ENST00000456328"),
+            "GTF keys are unversioned"
+        );
+
+        // ...but quant.sf names them as the cDNA FASTA does.
+        let names: Vec<String> = vec!["ENST00000456328.2".into(), "ENST00000450305.3".into()];
+        let out = scratch("nomatch").join("quant.genes.sf");
+        let unmapped = write_gene_quant(
+            &out,
+            &names,
+            &[1000, 2000],
+            &[800.0, 1800.0],
+            &[10.0, 20.0],
+            &[100.0, 200.0],
+            &map,
+        )
+        .unwrap();
+
+        assert_eq!(unmapped, 2, "every transcript should fail to match");
+        let body = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(
+            body.lines().count(),
+            1,
+            "quant.genes.sf should be header-only: {body:?}"
+        );
+    }
+
     #[test]
     fn gtf_and_gff_attr_extraction() {
         let gtf = r#"gene_id "ENSG1"; transcript_id "ENST1"; gene_name "A";"#;
