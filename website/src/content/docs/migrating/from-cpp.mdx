@@ -63,11 +63,22 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
   mate had no matching k-mers at all (the conservative rule). The default is the
   relaxed rule, which tracks selective alignment more closely.
 - **`--allowDovetail`** — now honored in `--sketch` as well.
+- **`--ignoreTxVersion`** — compare `-g/--geneMap` identifiers without their
+  trailing `.N` version suffix, as tximport's option of the same name does. Off
+  by default. See [Ensembl cDNA + GTF](../../reference/cli/#ensembl-cdna--gtf).
 
 ## Behavior differences to be aware of
 
 - **Sketch orphan rule** defaults to the relaxed policy (see
   `--sketchStrictOrphans`).
+- **`-g/--geneMap`: unmatched transcripts are dropped, not emitted.** C++
+  salmon's `aggregateEstimatesToGeneLevel` gave a transcript with no gene-map
+  entry a gene of its own, named after the transcript, and warned once per
+  transcript. 2.x omits it from `quant.genes.sf` and reports the total once. When
+  *no* identifier matches — usually the Ensembl cDNA + GTF version mismatch — C++
+  wrote one row per transcript where 2.x writes a header and no rows. salmon now
+  warns when the match rate is at or below 50%, says how many transcripts would
+  match without the version suffix, and names `--ignoreTxVersion`.
 - **Selective-alignment chain pruning:** 2.0 defaults `--orphanChainSubThresh`
   and `--postMergeChainSubThresh` to `0.0` (off) — it aligns every candidate,
   marginally more sensitive than C++ (`0.95` / `0.9`). Quantification is
@@ -80,4 +91,4 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
 Index/quant basics, `quant.sf`, `cmd_info.json`, `lib_format_counts.json`,
 `aux_info/meta_info.json`, `--libType/-l`, `--threads/-p`, `--seqBias`,
 `--gcBias`, `--posBias`, `--numBootstraps`, `--numGibbsSamples`, `--useEM`,
-`--dumpEq`, `-g/--geneMap`, decoys, and `salmon quantmerge`.
+`--dumpEq`, decoys, and `salmon quantmerge`.

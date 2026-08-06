@@ -157,10 +157,12 @@ pub fn matches_ignoring_tx_version(names: &[String], gene_map: &HashMap<String, 
 
 /// Aggregate transcript-level estimates to gene level and write `quant.genes.sf`.
 ///
-/// Transcripts absent from `gene_map` are omitted from the output. Note this
-/// differs from C++ salmon, whose `aggregateEstimatesToGeneLevel` emitted an
-/// unmatched transcript as its own single-transcript gene and warned once per
-/// transcript; see #1075 for the discussion of which behaviour to keep.
+/// Transcripts absent from `gene_map` are omitted from the output. This is a
+/// deliberate divergence from C++ salmon, whose `aggregateEstimatesToGeneLevel`
+/// emitted an unmatched transcript as its own single-transcript gene: that turns
+/// a failed join into a `quant.genes.sf` full of transcript IDs posing as genes,
+/// which is harder to notice than an empty one. The caller is expected to report
+/// the summary below instead. Documented in MIGRATION.md.
 ///
 /// The returned [`GeneQuantSummary`] is what the caller should report — in
 /// particular `genes_written`, which is the number of rows in the file and not

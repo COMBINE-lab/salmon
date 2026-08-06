@@ -65,10 +65,24 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
   alignment more closely.
 - `--allowDovetail` — now honored in `--sketch` as well (admits dovetailed
   short-insert fragments).
+- `--ignoreTxVersion` — compare `-g/--geneMap` identifiers without their trailing
+  `.N` version suffix, as tximport's option of the same name does. Off by
+  default. Needed for an Ensembl cDNA index against an Ensembl GTF, where the
+  FASTA carries the version in the identifier and the GTF puts it in a separate
+  `transcript_version` attribute.
 
 ## Behavior differences to be aware of
 
 - **Sketch orphan rule** defaults to the relaxed policy (see `--sketchStrictOrphans`).
+- **`-g/--geneMap`: unmatched transcripts are dropped, not emitted.** C++
+  salmon's `aggregateEstimatesToGeneLevel` gave a transcript with no gene-map
+  entry a gene of its own (named after the transcript) and warned once per
+  transcript. 2.x omits it from `quant.genes.sf` instead, and reports the total
+  once. If every identifier fails to match — the usual cause is the Ensembl
+  cDNA + GTF version mismatch above — C++ wrote one row per transcript where 2.x
+  writes a header and no rows. salmon now warns when the match rate is at or
+  below 50%, says how many transcripts would match without the version suffix,
+  and names `--ignoreTxVersion`.
 - **Selective-alignment chain pruning:** 2.0 currently defaults
   `--orphanChainSubThresh` and `--postMergeChainSubThresh` to `0.0` (off) — it
   aligns every candidate, which is marginally more sensitive than C++ (which uses
@@ -82,5 +96,5 @@ Index/quant basics, `quant.sf`, `cmd_info.json`, `lib_format_counts.json`,
 `aux_info/meta_info.json`, `--libType/-l`, `--threads/-p`, `-k/--kmerLen`,
 `-m/--minimizerLen`, `-n/--no-clip` (poly-A clipping, on by default),
 `--seqBias`, `--gcBias`, `--posBias`, `--numBootstraps`, `--numGibbsSamples`,
-`--useEM`, `--meta` (metagenomic preset), `--dumpEq`, `-g/--geneMap`, decoys, and
+`--useEM`, `--meta` (metagenomic preset), `--dumpEq`, decoys, and
 `salmon quantmerge`.
