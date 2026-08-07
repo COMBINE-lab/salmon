@@ -1255,8 +1255,9 @@ fn open_reader_planned(
     plan: &piscem_rs::io::fastx::ThreadBudget,
     handles: &mut Vec<rapidgzip_core::DecoderHandle>,
 ) -> Result<Box<dyn std::io::Read + Send>> {
-    let opened = piscem_rs::io::fastx::open_input(path, plan.per_file_ceiling, plan.initial_per_file)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let opened =
+        piscem_rs::io::fastx::open_input(path, plan.per_file_ceiling, plan.initial_per_file)
+            .with_context(|| format!("opening {}", path.display()))?;
     if let Some(h) = opened.handle {
         handles.push(h);
     }
