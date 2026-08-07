@@ -432,9 +432,20 @@ impl EquivalenceClassBuilder {
         // Move the entries out of the concurrent map rather than cloning them.
         // `self` is owned here, so the map is dropped either way; cloning would
         // deep-copy every `txps`/`bins`/`acc` vector and hold two full copies of
-        // the largest structure in the run at once. Iteration order of a hash map
-        // is arbitrary, hence the sort on the next line.
-        let mut classes: Vec<(TranscriptGroup, TGValue)> = self.map.into_iter().collect();
+        // the largest structure in the run at once.
+        //
+        // Reserve first: `dashmap`'s owning iterator implements neither
+        // `size_hint` nor `ExactSizeIterator`, so `collect` would report `(0,
+        // None)` and grow this vector from empty by doubling — a realloc and a
+        // memcpy of every element at each step, plus a transient ~1.5x peak at
+        // the last one. At 144 bytes per entry that is the same cost this change
+        // removes from `PackedEqClasses::from_collapsed`. `len` has to be read
+        // before `into_iter` consumes the map.
+        //
+        // Iteration order of a hash map is arbitrary, hence the sort below.
+        let num_classes = self.map.len();
+        let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::with_capacity(num_classes);
+        classes.extend(self.map);
         classes.sort_by(|a, b| a.0.txps.cmp(&b.0.txps));
         // Materialize f64 weights from each class's order-independent fixed-point
         // accumulator (the sort above already makes the class *order* stable).
