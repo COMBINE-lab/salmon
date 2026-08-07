@@ -60,6 +60,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 # compression
 flate2 = "1"
 zstd = "0.13"
+# format-sniffing decompression (gzip/BGZF, bzip2, xz, zstd) for user-supplied
+# annotation files; already in the tree via paraseq and piscem-rs.
+niffler = "3"
 # logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
