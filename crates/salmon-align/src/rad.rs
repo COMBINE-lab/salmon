@@ -722,7 +722,7 @@ struct BiasCfg<'a> {
     paired_lib: bool,
     /// fixed per-reference abundances (baked or first-EM) for the posterior.
     abundances: &'a [f64],
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     gc_store: &'a GcStore<'a>,
     length_class: Option<&'a [usize]>,
 }
@@ -848,11 +848,7 @@ fn collect_bias_fragment(placements: &[RadPlacement], cfg: &BiasCfg, local: &mut
         }
         // Sequence/GC need the reference bytes; positional bias needs only the
         // transcript length, so it works even without `-t` (empty `ref_bytes`).
-        let refseq = cfg
-            .ref_bytes
-            .get(*tid as usize)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let refseq = cfg.ref_bytes.get(*tid as usize).unwrap_or(&[]);
         let rl = if refseq.is_empty() {
             cfg.lengths.get(*tid as usize).copied().unwrap_or(0) as usize
         } else {
@@ -1225,8 +1221,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // is requested; mirrors alignment mode). Seq/GC need the transcript bytes; the
     // GC store is a rank bitvector over the concatenated references; positional
     // bias needs only the per-transcript length classes.
-    let ref_bytes: Vec<Vec<u8>> = if !bias_on {
-        Vec::new()
+    let ref_bytes: salmon_core::RefSeqs = if !bias_on {
+        salmon_core::RefSeqs::default()
     } else if let Some(rs) = &opts.ref_seqs {
         // Sequences supplied directly (e.g. by `--deterministic`, from the index).
         // They are in transcript-id order, which is the RAD ref-name order.
@@ -1238,17 +1234,19 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         );
         rs.clone()
     } else {
-        crate::load_ref_bytes(opts.transcripts.as_ref().unwrap(), &names)?
+        salmon_core::RefSeqs::from_sequences(crate::load_ref_bytes(
+            opts.transcripts.as_ref().unwrap(),
+            &names,
+        )?)
     };
     let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if opts.gc_bias {
-        let mut concat: Vec<u8> = Vec::new();
-        let mut offs: Vec<u64> = Vec::with_capacity(ref_bytes.len() + 1);
-        offs.push(0);
-        for s in &ref_bytes {
-            concat.extend_from_slice(s);
-            offs.push(concat.len() as u64);
-        }
-        (Some(salmon_model::GcRank::new(&concat)), offs)
+        // `RefSeqs` already holds exactly what the rank bitvector wants: the
+        // references concatenated, plus their endpoints. Previously this rebuilt
+        // both from a `Vec<Vec<u8>>`, copying every base a second time.
+        (
+            Some(salmon_model::GcRank::new(ref_bytes.concatenated())),
+            ref_bytes.offsets().to_vec(),
+        )
     } else {
         (None, Vec::new())
     };

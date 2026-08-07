@@ -89,7 +89,7 @@ pub struct GenomeProjectOptions {
 pub struct ProjectionArtifacts {
     pub names: Vec<String>,
     pub lengths: Vec<u32>,
-    pub ref_seqs: Option<Vec<Vec<u8>>>,
+    pub ref_seqs: Option<salmon_core::RefSeqs>,
     pub num_processed: u64,
     pub num_mapped: u64,
 }
@@ -225,8 +225,9 @@ pub fn project_genome_bam_to_rad(
 /// Reconstruct each transcript's 5'→3' sequence (tid order = `txs` slice order,
 /// which is how `build_g2t` assigns ids) by concatenating its exon slices in
 /// ascending genomic order and reverse-complementing `-`-strand transcripts.
-fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> Vec<Vec<u8>> {
-    txs.iter()
+fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> salmon_core::RefSeqs {
+    let seqs = txs
+        .iter()
         .map(|tx| {
             let mut exons = tx.exons.clone();
             exons.sort_by_key(|e| e.start);
@@ -241,7 +242,8 @@ fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> Vec<Vec<u8>> {
             }
             seq
         })
-        .collect()
+        .collect::<Vec<_>>();
+    salmon_core::RefSeqs::from_sequences(seqs)
 }
 
 /// In-place reverse complement (ACGT; other bases → `N`).

@@ -148,7 +148,7 @@ pub struct AlignQuantOptions {
     /// which already has the index and can hand its sequences to the requant
     /// pass so bias correction needs no separate `-t`. Takes precedence over
     /// [`Self::transcripts`] when set.
-    pub ref_seqs: Option<Vec<Vec<u8>>>,
+    pub ref_seqs: Option<salmon_core::RefSeqs>,
     /// disable the alignment error model (salmon's `--noErrorModel`)
     pub no_error_model: bool,
     /// opt in to the order-independent error model in `--deterministic` alignment
@@ -768,7 +768,7 @@ struct PassCfg<'a> {
     online: Option<&'a salmon_infer::OnlineInference>,
     fld: &'a FragmentLengthDistribution,
     eq_builder: &'a EquivalenceClassBuilder,
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     lengths: &'a [u32],
     gc_store: salmon_model::GcStore<'a>,
     length_class: Option<&'a [usize]>,
@@ -1058,7 +1058,7 @@ struct FragCtx<'a> {
     online: Option<&'a salmon_infer::OnlineInference>,
     fld: &'a FragmentLengthDistribution,
     eq_builder: &'a EquivalenceClassBuilder,
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     lengths: &'a [u32],
     gc_store: salmon_model::GcStore<'a>,
     length_class: Option<&'a [usize]>,
@@ -1179,11 +1179,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
         if ctx.discard_orphans && ctx.paired_lib && idxs.len() < 2 {
             continue;
         }
-        let refseq = ctx
-            .ref_bytes
-            .get(tid as usize)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let refseq = ctx.ref_bytes.get(tid as usize).unwrap_or(&[]);
         // Conditional log-weight basis = salmon's `errLike` (Σ(fg−bg) over the
         // mate(s) under the error model; uniform 0.0 when it is disabled).
         let basis = if let Some(m) = ctx.model {
@@ -1291,11 +1287,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
                 continue;
             }
             let online_log_tid = online_log[ti];
-            let refseq = ctx
-                .ref_bytes
-                .get(*tid as usize)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
+            let refseq = ctx.ref_bytes.get(*tid as usize).unwrap_or(&[]);
             for &k in ks {
                 let p = p_tid * (sp_online[k] - online_log_tid).exp();
                 if p <= 0.0 {
@@ -1427,7 +1419,7 @@ fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn apply_bias_correction(
     num_refs: usize,
-    ref_bytes: &[Vec<u8>],
+    ref_bytes: &salmon_core::RefSeqs,
     gc_store: &salmon_model::GcStore<'_>,
     lengths: &[u32],
     length_class: Option<&[usize]>,
@@ -1453,7 +1445,7 @@ fn apply_bias_correction(
     let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
     let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
     let k = if seq_bias { CONTEXT_LENGTH } else { 1 };
-    let refseq_of = |t: usize| ref_bytes[t].as_slice();
+    let refseq_of = |t: usize| &ref_bytes[t];
 
     let seq = seq_obs.map(|(mut of, mut or)| {
         of.normalize();
@@ -1540,7 +1532,7 @@ fn apply_bias_correction(
             if alphas[tid] < 1e-8 {
                 return;
             }
-            let s = ref_bytes[tid].as_slice();
+            let s = &ref_bytes[tid];
             let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
                 pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
                     let lc = length_class.expect("positional bias requires length classes")[tid];
@@ -1620,10 +1612,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         !bias_on || opts.transcripts.is_some(),
         "--seqBias/--gcBias/--posBias in alignment mode require -t/--targets (the transcriptome FASTA)"
     );
-    let ref_bytes: Vec<Vec<u8>> = if use_error_model || bias_on {
-        load_ref_bytes(opts.transcripts.as_ref().unwrap(), &names)?
+    let ref_bytes: salmon_core::RefSeqs = if use_error_model || bias_on {
+        salmon_core::RefSeqs::from_sequences(load_ref_bytes(
+            opts.transcripts.as_ref().unwrap(),
+            &names,
+        )?)
     } else {
-        Vec::new()
+        salmon_core::RefSeqs::default()
     };
 
     // Online (dual-phase) abundances: develop running estimates so the error
@@ -1646,14 +1641,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // leaner than dense per-transcript prefixes, identical results). `gc_store`
     // presents per-transcript `GcView`s.
     let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if opts.gc_bias {
-        let mut concat: Vec<u8> = Vec::new();
-        let mut offs: Vec<u64> = Vec::with_capacity(ref_bytes.len() + 1);
-        offs.push(0);
-        for s in &ref_bytes {
-            concat.extend_from_slice(s);
-            offs.push(concat.len() as u64);
-        }
-        (Some(salmon_model::GcRank::new(&concat)), offs)
+        // `RefSeqs` already stores the references concatenated with their
+        // endpoints, which is what the rank bitvector needs; rebuilding both here
+        // copied every base a second time.
+        (
+            Some(salmon_model::GcRank::new(ref_bytes.concatenated())),
+            ref_bytes.offsets().to_vec(),
+        )
     } else {
         (None, Vec::new())
     };

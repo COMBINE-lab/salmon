@@ -848,7 +848,7 @@ fn gc_bias_rad_uses_ref_seqs_without_transcripts() {
 
     let mut o = opts_for(&tmp.path().join("quant"));
     o.gc_bias = true;
-    o.ref_seqs = Some(ref_seqs);
+    o.ref_seqs = Some(salmon_core::RefSeqs::from_sequences(ref_seqs));
     assert!(o.transcripts.is_none(), "this path must not need -t");
     std::fs::create_dir_all(&o.output_dir).unwrap();
     let res = quantify_rad(&o, &rad).expect("quantify_rad --gcBias via ref_seqs");
@@ -876,7 +876,7 @@ fn all_bias_rad_is_thread_invariant() {
         o.seq_bias = true;
         o.gc_bias = true;
         o.pos_bias = true;
-        o.ref_seqs = Some(ref_seqs.clone());
+        o.ref_seqs = Some(salmon_core::RefSeqs::from_sequences(ref_seqs.clone()));
         assert!(o.transcripts.is_none(), "this path must not need -t");
         std::fs::create_dir_all(&o.output_dir).unwrap();
         rayon::ThreadPoolBuilder::new()

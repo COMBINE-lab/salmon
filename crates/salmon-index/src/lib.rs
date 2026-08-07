@@ -51,6 +51,7 @@ use anyhow::{Context, Result};
 use cf1_rs::{cf_build, CfInput};
 use piscem_rs::index::build::{build_index, BuildConfig};
 use piscem_rs::index::reference_index::ReferenceIndex;
+use salmon_core::RefSeqs;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -1090,7 +1091,7 @@ pub struct SalmonIndex {
 /// dictionary. Reads only `refseq.bin` + `refseq_offsets.json`. Used to feed
 /// bias models a requant pass (e.g. `--deterministic`) the reference sequences
 /// the index already stores, so the user need not re-supply a transcript FASTA.
-pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<Vec<Vec<u8>>> {
+pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<RefSeqs> {
     let dir = dir.as_ref();
     let refseq =
         std::fs::read(dir.join(REFSEQ_FILE)).with_context(|| format!("reading {REFSEQ_FILE}"))?;
@@ -1098,12 +1099,13 @@ pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<Vec<Vec<u8>>> {
         &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
             .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
     )?;
-    // `windows(2)` walks consecutive offset pairs, each of which delimits one
-    // transcript inside the concatenated blob.
-    Ok(offsets
-        .windows(2)
-        .map(|w| refseq[w[0] as usize..w[1] as usize].to_vec())
-        .collect())
+    // The on-disk layout is already one concatenated blob plus an offset table,
+    // which is exactly what `RefSeqs` holds, so both parts move in as they are:
+    // no copy of the bases, and no per-transcript allocation. `from_concatenated`
+    // validates the table against the blob, turning a corrupt index into an error
+    // here rather than a panicking slice at the first bias lookup.
+    RefSeqs::from_concatenated(refseq, offsets)
+        .with_context(|| format!("reference sequences in {}", dir.display()))
 }
 
 impl SalmonIndex {

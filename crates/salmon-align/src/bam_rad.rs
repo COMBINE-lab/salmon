@@ -115,10 +115,12 @@ pub fn write_alignment_rad(
     // Reference sequences for the error model: supplied index sequences take
     // precedence, else load the `-t` FASTA (mirrors `quantify_rad`). Absent ⇒ no
     // error model (the MVP AS-score path).
-    let ref_bytes: Option<Vec<Vec<u8>>> = if let Some(rs) = &opts.ref_seqs {
+    let ref_bytes: Option<salmon_core::RefSeqs> = if let Some(rs) = &opts.ref_seqs {
         Some(rs.clone())
     } else if let Some(t) = &opts.transcripts {
-        Some(load_ref_bytes(t, &names)?)
+        Some(salmon_core::RefSeqs::from_sequences(load_ref_bytes(
+            t, &names,
+        )?))
     } else {
         None
     };
@@ -448,7 +450,7 @@ struct TrainWorker<'a> {
     model: CountingAlignmentModel,
     fld: &'a DiscreteFld,
     naive: Option<&'a NaiveEqBuilder>,
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     scratch: Vec<FragRecord>,
 }
 
@@ -457,7 +459,7 @@ impl<'a> TrainWorker<'a> {
         error_bins: usize,
         fld: &'a DiscreteFld,
         naive: Option<&'a NaiveEqBuilder>,
-        ref_bytes: &'a [Vec<u8>],
+        ref_bytes: &'a salmon_core::RefSeqs,
     ) -> Self {
         Self {
             model: CountingAlignmentModel::new(error_bins),
@@ -478,7 +480,7 @@ impl GroupWorker for TrainWorker<'_> {
         // Uniform per-placement training: one count per placement-mate. Integer
         // increments make the merged model independent of thread partitioning.
         for info in &data.infos {
-            let refseq = self.ref_bytes.get(info.tid as usize).map(Vec::as_slice);
+            let refseq = self.ref_bytes.get(info.tid as usize);
             let Some(refseq) = refseq.filter(|s| !s.is_empty()) else {
                 continue;
             };
@@ -501,7 +503,7 @@ impl GroupWorker for TrainWorker<'_> {
 struct ScoreWriteWorker<'a> {
     buf: FragmentChunkBuf,
     writer: &'a RadOutputWriter,
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     model: &'a AlignmentModel,
     scratch: Vec<FragRecord>,
     processed: u64,
@@ -511,7 +513,7 @@ struct ScoreWriteWorker<'a> {
 impl<'a> ScoreWriteWorker<'a> {
     fn new(
         writer: &'a RadOutputWriter,
-        ref_bytes: &'a [Vec<u8>],
+        ref_bytes: &'a salmon_core::RefSeqs,
         model: &'a AlignmentModel,
     ) -> Self {
         Self {
@@ -542,7 +544,6 @@ impl GroupWorker for ScoreWriteWorker<'_> {
                 let refseq = self
                     .ref_bytes
                     .get(info.tid as usize)
-                    .map(Vec::as_slice)
                     .filter(|s| !s.is_empty());
                 let ll = match refseq {
                     None => 0.0,
