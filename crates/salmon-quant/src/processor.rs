@@ -468,14 +468,14 @@ fn collect_context(
 /// per-alignment `observedGCMass.inc(gcDesc(start, stop), logProb)`.
 fn collect_gc(
     sh: &Shared,
-    maps: &[ScoredMapping],
+    placements: &[ScoredMapping],
     compat: &[(usize, f64)],
     bias_w: &[f64],
     gc: &mut GcFragModel,
 ) {
     let Some(store) = sh.gc_store else { return };
     for (k, &(i, _)) in compat.iter().enumerate() {
-        let m = &maps[i];
+        let m = &placements[i];
         if m.status != MateStatus::PairedEndPaired || m.fragment_len <= 0 {
             continue;
         }
@@ -499,7 +499,7 @@ fn collect_gc(
 /// `observedPosBias{Fwd,RC}[lengthClass].addMass(pos, refLen, logProb)`.
 fn collect_pos(
     sh: &Shared,
-    maps: &[ScoredMapping],
+    placements: &[ScoredMapping],
     compat: &[(usize, f64)],
     bias_w: &[f64],
     pos: &mut (Vec<SimplePosBias>, Vec<SimplePosBias>),
@@ -508,7 +508,7 @@ fn collect_pos(
         return;
     };
     for (k, &(i, _)) in compat.iter().enumerate() {
-        let m = &maps[i];
+        let m = &placements[i];
         // `bias_w` is aligned to `compat`, indexed by `k`, not by `i`.
         if bias_w[k] <= 0.0 {
             continue;
@@ -535,12 +535,12 @@ fn collect_pos(
 /// accumulator at end of pass and baked into the RAD.
 fn record_discrete(
     sh: &Shared,
-    maps: &[ScoredMapping],
+    placements: &[ScoredMapping],
     acc: &salmon_model::DiscreteFld,
     counters: &mut Counters,
 ) {
     sh.num_processed.fetch_add(1, Ordering::Relaxed);
-    if maps.is_empty() {
+    if placements.is_empty() {
         return;
     }
     counters.mapped += 1;
@@ -548,8 +548,8 @@ fn record_discrete(
     // orientation; its observed format also feeds order-independent `-l A`
     // detection. Uses the raw mapping (like the RAD records written this pass, and
     // like the reader's `derive_fld`), so a baked FLD matches a re-derived one.
-    if maps.len() == 1 {
-        let m = &maps[0];
+    if placements.len() == 1 {
+        let m = &placements[0];
         if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
             // Orientation from the mate strands (sketch mode leaves `m.format`
             // `None`), exactly as `build_rad_record` derives the RAD hit.
@@ -563,7 +563,7 @@ fn record_discrete(
     // leaves `m.format` `None`, so derive the observed paired format from the mate
     // strands (as `build_rad_record` / `DiscreteFld` do).
     if let Some(nb) = sh.naive_eq {
-        let sig: Vec<NaivePlacement> = maps
+        let sig: Vec<NaivePlacement> = placements
             .iter()
             .map(|m| {
                 let fmt_id = if m.status == MateStatus::PairedEndPaired {
@@ -611,7 +611,7 @@ fn record_discrete(
 #[allow(clippy::too_many_arguments)]
 fn record(
     sh: &Shared,
-    maps: &[ScoredMapping],
+    placements: &[ScoredMapping],
     log_fm: f64,
     fld_pmf: &[f64],
     fld_cmf: &[f64],
@@ -624,7 +624,7 @@ fn record(
     // Still a shared atomic: unlike the other counters this one is *read* below,
     // to gate `use_aux`. See `Counters`.
     sh.num_processed.fetch_add(1, Ordering::Relaxed);
-    if maps.is_empty() {
+    if placements.is_empty() {
         return;
     }
     // Independent `&mut` borrows of the reusable buffers.
@@ -641,7 +641,7 @@ fn record(
     // below, so detection sees the true observed orientation/strand.
     if let Some(det) = sh.detector {
         if det.is_active() {
-            if let Some(m) = maps
+            if let Some(m) = placements
                 .iter()
                 .filter(|m| m.format.is_some())
                 .max_by(|a, b| a.weight.total_cmp(&b.weight))
@@ -659,21 +659,26 @@ fn record(
     let expected = sh
         .expected_format
         .or_else(|| sh.detector.and_then(|d| d.resolved_format()));
-    // Indices into `maps` rather than references, so the buffer can outlive the
+    // Indices into `placements` rather than references, so the buffer can outlive the
     // call and be reused by the next fragment.
     compat.clear();
-    compat.extend(maps.iter().enumerate().filter_map(|(i, m)| match expected {
-        Some(exp) => {
-            if is_compatible(exp, m.format, m.is_fw, m.status) {
-                Some((i, m.weight))
-            } else if sh.ignore_incompat {
-                None
-            } else {
-                Some((i, m.weight * sh.incompat_prior))
-            }
-        }
-        None => Some((i, m.weight)),
-    }));
+    compat.extend(
+        placements
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| match expected {
+                Some(exp) => {
+                    if is_compatible(exp, m.format, m.is_fw, m.status) {
+                        Some((i, m.weight))
+                    } else if sh.ignore_incompat {
+                        None
+                    } else {
+                        Some((i, m.weight * sh.incompat_prior))
+                    }
+                }
+                None => Some((i, m.weight)),
+            }),
+    );
     if compat.is_empty() {
         return; // no compatible mapping -> fragment is unassigned (not mapped)
     }
@@ -705,11 +710,11 @@ fn record(
     debug_assert!(
         compat
             .iter()
-            .all(|&(i, _)| maps[i].status == maps[compat[0].0].status),
+            .all(|&(i, _)| placements[i].status == placements[compat[0].0].status),
         "a fragment's surviving mappings must share one status"
     );
     if matches!(
-        maps[compat[0].0].status,
+        placements[compat[0].0].status,
         MateStatus::PairedEndLeft | MateStatus::PairedEndRight
     ) {
         counters.orphan += 1;
@@ -750,7 +755,7 @@ fn record(
                 let use_aux = online.num_assigned() >= sh.pre_burnin;
                 online_in.clear();
                 online_in.extend(compat.iter().map(|&(i, w)| {
-                    let m = &maps[i];
+                    let m = &placements[i];
                     {
                         let ref_len = sh.salmon.ref_len(m.tid as usize);
                         let rl = ref_len.max(1) as f64;
@@ -800,14 +805,14 @@ fn record(
     if collect_now {
         if let Some(obs) = seqbias {
             for (k, &(i, _)) in compat.iter().enumerate() {
-                collect_context(sh.salmon, &maps[i], bias_w[k], obs);
+                collect_context(sh.salmon, &placements[i], bias_w[k], obs);
             }
         }
         if let Some(gc) = gcbias {
-            collect_gc(sh, maps, compat, bias_w, gc);
+            collect_gc(sh, placements, compat, bias_w, gc);
         }
         if let Some(pos) = posbias {
-            collect_pos(sh, maps, compat, bias_w, pos);
+            collect_pos(sh, placements, compat, bias_w, pos);
         }
     }
 
@@ -825,7 +830,7 @@ fn record(
         // best pair at full weight, which overdisperses it). Frozen after the
         // training window (`online_post` is `None`).
         for (k, &(i, _)) in compat.iter().enumerate() {
-            let m = &maps[i];
+            let m = &placements[i];
             let conc = m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
                 && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
@@ -841,7 +846,7 @@ fn record(
         // is true but `online_post` is `None`, the training window has closed and
         // the FLD is intentionally frozen — so this branch is skipped.)
         if compat.len() == 1 {
-            let m = &maps[compat[0].0];
+            let m = &placements[compat[0].0];
             if m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
                 && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
@@ -880,7 +885,7 @@ fn record(
     // mini-batch boundary, so it is never empty here.
     log_fps.clear();
     log_fps.extend(compat.iter().map(|&(i, _)| {
-        let m = &maps[i];
+        let m = &placements[i];
         let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
         frag_log_prob(
             m,
@@ -914,7 +919,7 @@ fn record(
         compat
             .iter()
             .zip(log_fps.iter())
-            .map(|(&(i, w), &lfp)| (maps[i].tid, (w.ln() + lfp - log_denom).exp())),
+            .map(|(&(i, w), &lfp)| (placements[i].tid, (w.ln() + lfp - log_denom).exp())),
     );
 
     // Build the equivalence class: sorted transcript ids + weights, combining
@@ -1076,13 +1081,13 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it), so the
         // per-fragment result Vec isn't reallocated per read.
-        let mut maps: Vec<ScoredMapping> = Vec::new();
+        let mut placements: Vec<ScoredMapping> = Vec::new();
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();
             if sh.sketch {
                 map_read_pair_sketch_into(
-                    &mut maps,
+                    &mut placements,
                     idx,
                     hs,
                     sketch_scratch.as_mut().unwrap(),
@@ -1098,7 +1103,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 );
             } else {
                 map_read_pair_into(
-                    &mut maps,
+                    &mut placements,
                     idx,
                     hs,
                     sh.salmon,
@@ -1114,55 +1119,55 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             // fragments. SA mode already handled decoys inside finalize.
             if sh.sketch && sh.salmon.info().num_decoys > 0 {
                 let decoy_dominated =
-                    salmon_map::filter_sketch_decoys(&mut maps, sh.salmon, &sh.map_cfg.score);
+                    salmon_map::filter_sketch_decoys(&mut placements, sh.salmon, &sh.map_cfg.score);
                 if decoy_dominated {
                     counters.decoy += 1;
                 }
             }
             // A fragment mapping to too many places is discarded (salmon's
             // tooManyHits / maxReadOccs): treat as unmapped everywhere below.
-            if maps.len() > sh.max_read_occ {
-                maps.clear();
+            if placements.len() > sh.max_read_occ {
+                placements.clear();
             }
-            if maps.is_empty() && sh.unmapped_names.is_some() {
+            if placements.is_empty() && sh.unmapped_names.is_some() {
                 unmapped.push(format!("{} u", read_name(r1.id())));
             }
             if !sh.sketch {
-                accumulate_vm_stats(maps.is_empty(), counters);
+                accumulate_vm_stats(placements.is_empty(), counters);
             }
-            if sh.sam.is_some() && !maps.is_empty() {
+            if sh.sam.is_some() && !placements.is_empty() {
                 crate::sam::write_fragment(
                     sam_buf,
                     sh.salmon,
                     r1.id(),
                     s1.as_ref(),
                     Some((r2.id(), s2.as_ref())),
-                    &maps,
+                    &placements,
                 );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
-                if !maps.is_empty() {
+                if !placements.is_empty() {
                     scratch.write_fragment(
                         sh.salmon,
                         r1.id(),
                         s1.as_ref(),
                         Some((r2.id(), s2.as_ref())),
-                        &maps,
+                        &placements,
                     )?;
                 }
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
-                if !maps.is_empty() {
-                    let rec = build_rad_record(&maps);
+                if !placements.is_empty() {
+                    let rec = build_rad_record(&placements);
                     let _ = buf.write(&rec, rad.context());
                 }
             }
             if let Some(acc) = sh.discrete_fld {
-                record_discrete(&sh, &maps, acc, counters);
+                record_discrete(&sh, &placements, acc, counters);
             } else {
                 record(
                     &sh,
-                    &maps,
+                    &placements,
                     log_fm,
                     &fld_pmf,
                     &fld_cmf,
@@ -1239,12 +1244,12 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         let fld_pmf = sh.fld.online_snapshot();
         let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it).
-        let mut maps: Vec<ScoredMapping> = Vec::new();
+        let mut placements: Vec<ScoredMapping> = Vec::new();
         for rec in records {
             let s = rec.seq();
             if sh.sketch {
                 map_single_read_sketch_into(
-                    &mut maps,
+                    &mut placements,
                     idx,
                     hs,
                     sketch_scratch.as_mut().unwrap(),
@@ -1254,46 +1259,53 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.max_read_occ,
                 );
             } else {
-                map_single_read_into(&mut maps, idx, hs, sh.salmon, s.as_ref(), sh.map_cfg);
+                map_single_read_into(&mut placements, idx, hs, sh.salmon, s.as_ref(), sh.map_cfg);
             }
             // Sketch decoy policy (see the paired-end branch): drop decoy tids /
             // decoy-dominated fragments that SA mode handles inside finalize.
             if sh.sketch && sh.salmon.info().num_decoys > 0 {
                 let decoy_dominated =
-                    salmon_map::filter_sketch_decoys(&mut maps, sh.salmon, &sh.map_cfg.score);
+                    salmon_map::filter_sketch_decoys(&mut placements, sh.salmon, &sh.map_cfg.score);
                 if decoy_dominated {
                     counters.decoy += 1;
                 }
             }
-            if maps.len() > sh.max_read_occ {
-                maps.clear();
+            if placements.len() > sh.max_read_occ {
+                placements.clear();
             }
-            if maps.is_empty() && sh.unmapped_names.is_some() {
+            if placements.is_empty() && sh.unmapped_names.is_some() {
                 unmapped.push(format!("{} u", read_name(rec.id())));
             }
             if !sh.sketch {
-                accumulate_vm_stats(maps.is_empty(), counters);
+                accumulate_vm_stats(placements.is_empty(), counters);
             }
-            if sh.sam.is_some() && !maps.is_empty() {
-                crate::sam::write_fragment(sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps);
+            if sh.sam.is_some() && !placements.is_empty() {
+                crate::sam::write_fragment(
+                    sam_buf,
+                    sh.salmon,
+                    rec.id(),
+                    s.as_ref(),
+                    None,
+                    &placements,
+                );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
-                if !maps.is_empty() {
-                    scratch.write_fragment(sh.salmon, rec.id(), s.as_ref(), None, &maps)?;
+                if !placements.is_empty() {
+                    scratch.write_fragment(sh.salmon, rec.id(), s.as_ref(), None, &placements)?;
                 }
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
-                if !maps.is_empty() {
-                    let radrec = build_rad_record(&maps);
+                if !placements.is_empty() {
+                    let radrec = build_rad_record(&placements);
                     let _ = buf.write(&radrec, rad.context());
                 }
             }
             if let Some(acc) = sh.discrete_fld {
-                record_discrete(&sh, &maps, acc, counters);
+                record_discrete(&sh, &placements, acc, counters);
             } else {
                 record(
                     &sh,
-                    &maps,
+                    &placements,
                     log_fm,
                     &fld_pmf,
                     &fld_cmf,
@@ -1360,9 +1372,9 @@ fn flush_bam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
 /// fragment length and the mate strand for proper pairs, the unpaired sentinel
 /// otherwise. `score` is recorded for the selective-alignment profile and
 /// ignored when writing the sketch profile.
-fn build_rad_record(maps: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecord {
-    let frag_type = salmon_rad::frag_map_type::fragment_level(maps.iter().map(|m| m.status));
-    let hits = maps
+fn build_rad_record(placements: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecord {
+    let frag_type = salmon_rad::frag_map_type::fragment_level(placements.iter().map(|m| m.status));
+    let hits = placements
         .iter()
         .map(|m| {
             let paired = m.status == MateStatus::PairedEndPaired;
