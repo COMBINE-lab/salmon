@@ -203,34 +203,21 @@ impl BamOutput {
             bgzf_workers = compression_workers.get(),
             "BAM output pipeline"
         );
-        // noodles 0.48 deprecated `with_worker_count` and made it a no-op: the
-        // multithreaded writer now dispatches every block through `rayon::spawn`,
-        // which resolves to `Registry::current()`. Left alone, BGZF compression
-        // would silently land on salmon's *global* rayon pool, sized to `-p` and
-        // already busy mapping reads — and the worker count derived above (and
-        // `--bamCompressThreads`) would control nothing at all.
+        // noodles-bgzf 0.50 gave `MultithreadedWriter` its own exclusive thread
+        // pool again and un-deprecated `with_worker_count`, so the worker count
+        // derived above (and `--bamCompressThreads`) is honoured directly and
+        // compression stays off salmon's global pool without our help.
         //
-        // Building a dedicated pool and running the writer thread inside
-        // `install` makes that pool "current" for the spawns noodles issues, so
-        // the sizing model keeps its meaning and compression stays off the
-        // mapping threads.
-        // `+ 1`: `install` runs the writer loop *on* a pool worker, while noodles
-        // spawns each block's compression into that same pool and its ordering
-        // thread blocks awaiting the result. A pool sized exactly to the worker
-        // count leaves no thread to compress on and deadlocks outright at
-        // `--bamCompressThreads 1` (observed: 26 min wall, 3 s CPU). Reserving a
-        // slot for the driver leaves exactly `compression_workers` compressing.
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(compression_workers.get() + 1)
-            .thread_name(|i| format!("salmon-bgzf-{i}"))
-            .build()
-            .context("building the BGZF compression thread pool")?;
+        // Passing the count is not optional: `MultithreadedWriter::new` is
+        // defined as `with_worker_count(NonZero::MIN, ..)`, i.e. a single
+        // compression thread, so calling it would silently serialise BGZF output.
         let handle = std::thread::Builder::new()
             .name("salmon-bam-writer".into())
             .spawn(move || {
-                let result = pool.install(|| {
+                let result = (|| {
                     let file = std::io::BufWriter::with_capacity(1 << 20, file);
-                    let mut writer = bgzf::io::MultithreadedWriter::new(file);
+                    let mut writer =
+                        bgzf::io::MultithreadedWriter::with_worker_count(compression_workers, file);
                     writer.write_all(&header)?;
                     while let Ok(mut chunk) = receiver.recv() {
                         writer.write_all(&chunk)?;
@@ -248,7 +235,7 @@ impl BamOutput {
                     let mut file = writer.finish()?;
                     file.flush()?;
                     Ok(())
-                });
+                })();
                 if let Err(error) = &result {
                     writer_failure.record(error);
                 }
