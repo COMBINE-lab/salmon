@@ -1,4 +1,9 @@
 //! `--writeMappings` SAM output.
+//!
+//! SAM is the plain-text alignment format: one tab-separated line per placed
+//! read, after a header describing the references. Every field here is derived by
+//! [`crate::mapping_record`], which BAM output shares, so this file is purely the
+//! text encoding.
 
 use std::fmt::Write as _;
 use std::io::Write;
@@ -9,6 +14,9 @@ use salmon_map::ScoredMapping;
 
 use crate::mapping_record::{self, AlignmentRecord, CigarKind};
 
+/// Shared SAM sink. Worker threads format whole blocks of records into their own
+/// string buffers and hand them over; the mutex is taken once per block rather
+/// than once per record, so it is never contended in practice.
 pub struct SamWriter {
     inner: Mutex<Box<dyn Write + Send>>,
 }
@@ -33,6 +41,11 @@ impl SamWriter {
         })
     }
 
+    /// Append one worker's accumulated block of records.
+    ///
+    /// Blocks land in whatever order threads finish, so records for one fragment
+    /// are contiguous but no order is imposed across fragments — as documented
+    /// for `--writeMappings`.
     pub fn write_block(&self, block: &str) -> std::io::Result<()> {
         if block.is_empty() {
             return Ok(());
@@ -45,6 +58,9 @@ impl SamWriter {
     }
 }
 
+/// Write the read's bases, reverse-complementing them when the alignment is on
+/// the reverse strand — SAM always stores the sequence as it appears on the
+/// reference's forward strand.
 fn write_sequence(buf: &mut String, record: &AlignmentRecord<'_>) {
     if record.reverse_complement {
         for &base in record.sequence.iter().rev() {
@@ -57,9 +73,12 @@ fn write_sequence(buf: &mut String, record: &AlignmentRecord<'_>) {
     }
 }
 
+/// Serialize one record as a SAM line: the eleven mandatory tab-separated fields
+/// followed by salmon's optional tags.
 fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord<'_>) {
     let name = String::from_utf8_lossy(record.name);
     let reference = salmon.ref_name(record.reference_id);
+    // QNAME, FLAG, RNAME, POS, MAPQ. SAM positions are 1-based, ours are 0-based.
     let _ = write!(
         buf,
         "{name}\t{}\t{reference}\t{}\t{}",
@@ -75,6 +94,8 @@ fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord
         };
         let _ = write!(buf, "{}{kind}", op.len);
     }
+    // RNEXT, PNEXT, TLEN. `=` is SAM's shorthand for "same reference as this
+    // record", which is always the case for a proper pair here.
     if let (Some(mate_id), Some(mate_position)) = (record.mate_reference_id, record.mate_position) {
         let mate_reference = if mate_id == record.reference_id {
             "="
@@ -92,6 +113,8 @@ fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord
     }
     buf.push('\t');
     write_sequence(buf, record);
+    // QUAL is `*` (not retained), then the tags: NH = number of placements for
+    // this fragment, HI = which one this is, XT = transcript/decoy, AS = score.
     let _ = writeln!(
         buf,
         "\t*\tNH:i:{}\tHI:i:{}\tXT:A:{}\tAS:i:{}",
@@ -99,6 +122,7 @@ fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord
     );
 }
 
+/// Append every SAM record implied by one fragment's placements.
 pub fn write_fragment(
     buf: &mut String,
     salmon: &SalmonIndex,

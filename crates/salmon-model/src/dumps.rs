@@ -1,5 +1,9 @@
 //! Aux-output dump helpers shared by reads-mode and alignment-mode quant.
 //!
+//! These files are diagnostics: they let a user (or a parity test against C++
+//! salmon) inspect what the bias models actually learned from a run, rather than
+//! only seeing the corrected abundances that came out the far end.
+//!
 //! salmon writes several `aux_info` files in raw little-endian binary, gzipped:
 //! `fld.gz` (fragment-length sample histogram), the legacy simple-count seq-bias
 //! model (`observed_bias`/`observed_bias_3p`/`expected_bias`), and — under bias
@@ -8,6 +12,9 @@
 //! gzip of raw LE arrays; positional files carry a small header) but not salmon's
 //! legacy simple-count model, which is written as a documented stub for
 //! file-presence parity. `libParams/flenDist.txt` is the text PMF.
+//!
+//! The stubs exist because downstream tooling checks for these filenames; an
+//! absent file is an error to handle, a present placeholder is not.
 
 use std::io::Write;
 use std::path::Path;
@@ -16,6 +23,9 @@ use std::path::Path;
 /// Each group is empty when its correction was not enabled. Seq tables are the
 /// [`SBModel`](crate::seqbias::SBModel) transition tables; GC the `cond×gc`
 /// matrices; pos the per-length-class bin masses.
+///
+/// Everything is pre-flattened into plain `Vec<f64>` so this struct can be
+/// carried across the codebase without dragging the model types along with it.
 #[derive(Debug, Clone, Default)]
 pub struct BiasDump {
     pub obs5_seq: Vec<f64>,
@@ -24,6 +34,7 @@ pub struct BiasDump {
     pub exp3_seq: Vec<f64>,
     pub obs_gc: Vec<f64>,
     pub exp_gc: Vec<f64>,
+    /// Positional models are per length class, hence the extra nesting.
     pub obs5_pos: Vec<Vec<f64>>,
     pub obs3_pos: Vec<Vec<f64>>,
     pub exp5_pos: Vec<Vec<f64>>,
@@ -36,6 +47,8 @@ pub struct BiasDump {
 /// C++↔Rust parity comparison, not as a stable machine format.
 pub fn dump_bias_models_to_file(path: &Path, d: &BiasDump) -> std::io::Result<()> {
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    // Two small local writers, one per table shape, so the twelve call sites
+    // below stay one line each.
     let flat = |f: &mut std::io::BufWriter<std::fs::File>, name: &str, v: &[f64]| {
         if v.is_empty() {
             return Ok(());
@@ -47,6 +60,8 @@ pub fn dump_bias_models_to_file(path: &Path, d: &BiasDump) -> std::io::Result<()
         writeln!(f)
     };
     let per_lc = |f: &mut std::io::BufWriter<std::fs::File>, name: &str, v: &[Vec<f64>]| {
+        // The length-class index is written as a second field so rows stay
+        // identifiable when the file is grepped.
         for (lc, row) in v.iter().enumerate() {
             write!(f, "{name} {lc}")?;
             for x in row {
@@ -54,6 +69,7 @@ pub fn dump_bias_models_to_file(path: &Path, d: &BiasDump) -> std::io::Result<()
             }
             writeln!(f)?;
         }
+        // The closure's error type is otherwise ambiguous to the compiler.
         Ok::<(), std::io::Error>(())
     };
     flat(&mut f, "obs5_seq", &d.obs5_seq)?;
@@ -74,11 +90,16 @@ pub fn gz_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let f = std::fs::File::create(path)?;
     let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::new(6));
     enc.write_all(bytes)?;
+    // `finish` writes the gzip trailer; dropping the encoder without it would
+    // leave a truncated file.
     enc.finish()?;
     Ok(())
 }
 
 /// gzip of a raw little-endian `f64` array.
+///
+/// "Little-endian" is stated explicitly rather than using the host's byte order,
+/// so a dump written on one machine reads correctly on another.
 pub fn write_f64_gz(path: &Path, vals: &[f64]) -> std::io::Result<()> {
     let mut b = Vec::with_capacity(vals.len() * 8);
     for v in vals {
@@ -98,7 +119,11 @@ pub fn write_i32_gz(path: &Path, vals: &[i32]) -> std::io::Result<()> {
 
 /// gzip of a per-length-class positional model: header `[u32 num_models][u32
 /// bins_per_model]` then the models' bin masses as `f64` LE, row-major.
+///
+/// The header is needed because, unlike the flat dumps, this file holds a matrix
+/// whose shape a reader cannot infer from the byte count alone.
 pub fn write_pos_gz(path: &Path, models: &[Vec<f64>]) -> std::io::Result<()> {
+    // Every model has the same bin count; take it from the first (0 if empty).
     let bins = models.first().map(|m| m.len()).unwrap_or(0) as u32;
     let mut b = Vec::new();
     b.extend_from_slice(&(models.len() as u32).to_le_bytes());
@@ -114,6 +139,10 @@ pub fn write_pos_gz(path: &Path, models: &[Vec<f64>]) -> std::io::Result<()> {
 /// `aux_info/fld.gz`: per-length sample histogram. salmon draws 10,000 samples
 /// from the log-PMF and writes the per-length `i32` counts; we write the
 /// deterministic expected histogram `round(10000 * pmf[len])` (same type/layout).
+///
+/// Writing the *expectation* rather than an actual random draw gives a file with
+/// the same meaning and layout but no run-to-run variation — sampling here would
+/// add nondeterminism to a purely diagnostic output.
 pub fn write_fld_dump(path: &Path, pmf: &[f64]) -> std::io::Result<()> {
     const N_SAMPLES: f64 = 10000.0;
     let hist: Vec<i32> = pmf
@@ -131,9 +160,13 @@ pub fn write_flen_dist(path: &Path, pmf: &[f64]) -> std::io::Result<()> {
     }
     let mut s = String::with_capacity(pmf.len() * 14);
     for (i, p) in pmf.iter().enumerate() {
+        // Separator before every value except the first, so the line has no
+        // trailing tab.
         if i > 0 {
             s.push('\t');
         }
+        // `{:e}` is scientific notation, which keeps precision for the very small
+        // probabilities in the tails.
         s.push_str(&format!("{p:e}"));
     }
     s.push('\n');
@@ -143,12 +176,19 @@ pub fn write_flen_dist(path: &Path, pmf: &[f64]) -> std::io::Result<()> {
 /// Write the `aux_info` bias dumps into `aux_dir`: documented stubs for salmon's
 /// legacy simple-count model (not implemented in the port), plus the computed
 /// seq/GC/pos observed+expected tables present in `dump`.
+///
+/// Each group is written only when it was populated, so the presence of a file
+/// tells you the corresponding correction was enabled.
 pub fn write_aux_bias_dumps(aux_dir: &Path, dump: &BiasDump) -> std::io::Result<()> {
     // Legacy simple-count seq-bias model (the port uses SBModel instead): stubs.
+    // Single-element arrays with neutral values (0 observed, 1.0 expected), so a
+    // reader that computes obs/exp gets a no-op correction rather than garbage.
     write_i32_gz(&aux_dir.join("observed_bias.gz"), &[0])?;
     write_i32_gz(&aux_dir.join("observed_bias_3p.gz"), &[0])?;
     write_f64_gz(&aux_dir.join("expected_bias.gz"), &[1.0])?;
 
+    // The 5'/3' and observed/expected members of a group are always populated
+    // together, so one emptiness check gates all four files.
     if !dump.obs5_seq.is_empty() {
         write_f64_gz(&aux_dir.join("obs5_seq.gz"), &dump.obs5_seq)?;
         write_f64_gz(&aux_dir.join("obs3_seq.gz"), &dump.obs3_seq)?;

@@ -28,6 +28,9 @@ fn main() {
     for (ord, rec) in v.as_object().unwrap() {
         let r1 = rec["r1"].as_str().unwrap().as_bytes();
         let r2 = rec["r2"].as_str().unwrap().as_bytes();
+        // The index's k-mer length is only known at run time, but the mapping
+        // engine is generic over it for speed. `dispatch_on_k!` expands to a match
+        // that picks the right monomorphized instantiation, binding it as `K`.
         dispatch_on_k!(k, K => {
             let mut left = MappingCache::<SketchHitInfoSimple>::new(k);
             let mut right = MappingCache::<SketchHitInfoSimple>::new(k);
@@ -41,6 +44,9 @@ fn main() {
                 let mut q = PiscemStreamingQuery::<K>::new(ridx.dict());
                 map_read::<K, SketchHitInfoSimple, _, _>(r2, &mut right, &mut hs, &mut q, ridx, &mut pois, SkippingStrategy::Permissive);
             }
+            // The transcripts each mate accepted. A pair can only be concordant on
+            // a transcript both mates hit, so the intersection is the candidate set
+            // and an empty one already explains the failure.
             let lt: BTreeSet<u32> = left.accepted_hits.iter().map(|h| h.tid).collect();
             let rt: BTreeSet<u32> = right.accepted_hits.iter().map(|h| h.tid).collect();
             let shared: Vec<u32> = lt.intersection(&rt).copied().collect();

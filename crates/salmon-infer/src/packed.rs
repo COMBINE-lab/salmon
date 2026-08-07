@@ -1,22 +1,43 @@
 //! Packed, parallel-friendly equivalence-class representation for inference.
 //!
-//! Mirrors the flat CSR layout used by `piscem-infer` (`PackedEqMap`): instead
-//! of a `Vec<(TranscriptGroup, TGValue)>` of small per-class allocations, all
-//! class labels and weights are concatenated into flat arrays indexed by a CSR
-//! `starts` offset vector. This is cache-friendly and trivially parallelizable
-//! (a class is just a pair of slices), which matters for the main EM and even
-//! more for bootstrap/Gibbs, which run the optimizer many times.
+//! # What "packed" means and why it matters
+//!
+//! The builder in `salmon-eqclass` produces a `Vec<(TranscriptGroup, TGValue)>`:
+//! a vector of structs, each owning its own little vectors of transcript ids and
+//! weights. That shape is convenient to build concurrently, but it is the wrong
+//! shape to iterate a thousand times: each class costs several pointer hops, the
+//! data is scattered across the heap, and the CPU's cache prefetcher cannot
+//! help.
+//!
+//! This module flattens it into the classic **CSR** ("compressed sparse row")
+//! layout: one long array of transcript ids, one long array of weights, and an
+//! offsets array saying where each class begins. Everything a class needs is then
+//! contiguous, iterating classes walks memory in a straight line, and splitting
+//! the work across threads is just splitting a range of indices.
+//!
+//! Mirrors the flat CSR layout used by `piscem-infer` (`PackedEqMap`). This is
+//! cache-friendly and trivially parallelizable (a class is just a pair of
+//! slices), which matters for the main EM and even more for bootstrap/Gibbs,
+//! which run the optimizer many times.
 //!
 //! For class `i` the targets are `labels[starts[i]..starts[i+1]]`, with aligned
 //! `combined` (= `weight / effLen`, what EM multiplies by `alpha`) and raw
 //! `weights` (what Gibbs multiplies by the sampled fraction `mu`). `counts[i]`
 //! is the class's fragment count (overridable per run so bootstrap can resample).
+//!
+//! # The M-step, in one sentence
+//!
+//! Every routine below is a variation on the same operation: for each class,
+//! split its fragment count across its member transcripts in proportion to
+//! `abundance × weight`, and accumulate the result. That is the "M-step" of EM.
 
 use rayon::prelude::*;
 use salmon_eqclass::CollapsedEqClasses;
 use statrs::function::gamma::digamma;
 
 /// Minimum `alpha + prior` for which VBEM evaluates `digamma`.
+/// Below this the function heads to negative infinity and the result is
+/// indistinguishable from zero anyway, so it is short-circuited.
 const DIGAMMA_MIN: f64 = 1e-10;
 
 /// Flat CSR equivalence classes (only `valid` groups are retained).
@@ -25,6 +46,9 @@ pub struct PackedEqClasses {
     /// flat transcript ids; class `i` spans `labels[starts[i]..starts[i+1]]`
     pub labels: Vec<u32>,
     /// CSR offsets into `labels`/`combined`/`weights`; length `num_classes + 1`
+    ///
+    /// The extra trailing entry is what lets class `i`'s span be written without
+    /// a special case for the last class.
     pub starts: Vec<u32>,
     /// flat `combined_weights` (`weight/effLen`), aligned to `labels`; used by EM
     pub combined: Vec<f64>,
@@ -49,9 +73,12 @@ impl PackedEqClasses {
         let mut combined = Vec::new();
         let mut weights = Vec::new();
         let mut counts = Vec::with_capacity(n);
+        // The first class starts at offset 0; every later entry is appended after
+        // that class's data has been copied in.
         starts.push(0u32);
         let mut total = 0u64;
         for (group, value) in &eq.classes {
+            // Classes the optimizer marked degenerate are simply not carried over.
             if !group.valid {
                 continue;
             }
@@ -80,6 +107,9 @@ impl PackedEqClasses {
     }
 
     /// Targets and combined-weights slices for class `i`.
+    ///
+    /// Returning borrowed slices means no allocation and no copying: this is
+    /// called once per class per iteration, millions of times per run.
     #[inline]
     pub fn class(&self, i: usize) -> (&[u32], &[f64]) {
         let s = self.starts[i] as usize;
@@ -89,6 +119,7 @@ impl PackedEqClasses {
 }
 
 /// Smallest denominator weight below which a class is treated as degenerate.
+/// Dividing by anything smaller would produce an infinity.
 const MIN_EQ_CLASS_WEIGHT: f64 = f64::MIN_POSITIVE;
 
 /// Final masked M-step that redistributes truncated mass instead of rescaling.
@@ -101,6 +132,10 @@ const MIN_EQ_CLASS_WEIGHT: f64 = f64::MIN_POSITIVE;
 /// among its remaining active members — so the truncated mass flows to genuine
 /// eq-class co-members and the total is preserved. Inactive transcripts are given
 /// zero weight (in VBEM this also keeps the Dirichlet prior from reviving them).
+///
+/// The distinction matters: rescaling would move a truncated transcript's mass to
+/// transcripts that share no evidence with it, whereas redistribution moves it
+/// only to transcripts the same fragments were also compatible with.
 ///
 /// A class whose every member is inactive has nowhere to put its count; that mass
 /// cannot be redistributed and is summed into the returned `dropped` value
@@ -137,11 +172,14 @@ pub(crate) fn redistribute_truncated(
     }
     let mut alpha_out = vec![0.0f64; n];
     let mut dropped = 0.0f64;
+    // Reused across classes so the loop allocates nothing; 64 comfortably covers
+    // a typical class size.
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
     for ci in 0..p.num_classes() {
         let count = counts[ci] as f64;
         let (tids, ws) = p.class(ci);
         if tids.len() > 1 {
+            // Ambiguous class: split the count in proportion to basis × weight.
             scratch.clear();
             let mut denom = 0.0;
             for (&tid, &w) in tids.iter().zip(ws) {
@@ -150,6 +188,7 @@ pub(crate) fn redistribute_truncated(
                 denom += v;
             }
             if denom > MIN_EQ_CLASS_WEIGHT {
+                // Multiply by the reciprocal once rather than dividing per member.
                 let inv = count / denom;
                 for (&tid, &v) in tids.iter().zip(scratch.iter()) {
                     if v > 0.0 {
@@ -162,6 +201,7 @@ pub(crate) fn redistribute_truncated(
         } else if inactive[tids[0] as usize] {
             dropped += count; // single-transcript class, its transcript truncated
         } else {
+            // Unambiguous class: its whole count belongs to that transcript.
             alpha_out[tids[0] as usize] += count;
         }
     }
@@ -171,6 +211,10 @@ pub(crate) fn redistribute_truncated(
 /// One sequential EM M-step: `alpha_out[t] += count·(alpha_in[t]·w_t)/Σ_j(alpha_in[j]·w_j)`,
 /// with single-transcript classes assigned their full count. `counts` overrides
 /// the per-class counts (so bootstrap can pass resampled counts).
+///
+/// Read the formula as: a fragment that could have come from several transcripts
+/// is split between them in proportion to how likely each is — which depends on
+/// the current abundance estimate, which is why this has to be iterated.
 pub(crate) fn em_step_seq(
     p: &PackedEqClasses,
     counts: &[u64],
@@ -178,6 +222,7 @@ pub(crate) fn em_step_seq(
     alpha_out: &mut [f64],
     scratch: &mut Vec<f64>,
 ) {
+    // The output accumulates from zero every step; it is not an update in place.
     alpha_out.iter_mut().for_each(|a| *a = 0.0);
     for ci in 0..p.num_classes() {
         let count = counts[ci] as f64;
@@ -193,6 +238,8 @@ pub(crate) fn em_step_seq(
             if denom > MIN_EQ_CLASS_WEIGHT {
                 let inv = count / denom;
                 for (&tid, &v) in tids.iter().zip(scratch.iter()) {
+                    // NaN would silently poison the transcript's total for the
+                    // rest of the run; skip rather than propagate.
                     if !v.is_nan() {
                         alpha_out[tid as usize] += v * inv;
                     }
@@ -206,6 +253,10 @@ pub(crate) fn em_step_seq(
 
 /// Reduce per-shard dense accumulators into `alpha_out` (one writer per `tid`,
 /// no contention). Parallelized over transcripts.
+///
+/// Parallelizing over *transcripts* rather than shards is what removes the
+/// contention: each output slot is written by exactly one task, which reads that
+/// slot from every shard.
 fn reduce_shards(shards: &[Vec<f64>], alpha_out: &mut [f64]) {
     alpha_out.par_iter_mut().enumerate().for_each(|(tid, out)| {
         let mut s = 0.0;
@@ -222,6 +273,11 @@ fn reduce_shards(shards: &[Vec<f64>], alpha_out: &mut [f64]) {
 /// allocation of a naive fold/reduce and the cross-thread CAS contention of a
 /// single shared `AtomicF64` array (which, on hot transcripts, dominated the
 /// M-step). The buffers are allocated once in [`run_em_counts`] and reused.
+///
+/// The trade is memory for speed: one dense `num_txps` buffer per shard, in
+/// exchange for every add being an ordinary non-atomic one. A fixed shard count
+/// and a fixed class partition also keep the summation order stable, so the
+/// parallel result reproduces run to run.
 pub(crate) fn em_step_par(
     p: &PackedEqClasses,
     counts: &[u64],
@@ -230,8 +286,10 @@ pub(crate) fn em_step_par(
     shards: &mut [Vec<f64>],
 ) {
     let nclasses = p.num_classes();
+    // Contiguous slices: `div_ceil` makes the last shard the short one.
     let chunk = nclasses.div_ceil(shards.len().max(1));
     shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
+        // Buffers are reused across iterations, so clear before accumulating.
         buf.iter_mut().for_each(|x| *x = 0.0);
         let start = s * chunk;
         let end = ((s + 1) * chunk).min(nclasses);
@@ -245,6 +303,9 @@ pub(crate) fn em_step_par(
                 }
                 if denom > MIN_EQ_CLASS_WEIGHT {
                     let inv = count / denom;
+                    // Recomputes `alpha_in[tid] * w` rather than keeping a scratch
+                    // vector: the multiply is cheaper than the extra memory
+                    // traffic inside a parallel closure.
                     for (&tid, &w) in tids.iter().zip(ws) {
                         let v = alpha_in[tid as usize] * w;
                         if !v.is_nan() {
@@ -262,6 +323,14 @@ pub(crate) fn em_step_par(
 
 /// `exp_theta[i] = exp(digamma(alpha_in[i]+prior_i) - digamma(Σ_j alpha_in[j]+prior_j))`,
 /// the VBEM mean-field expectation substituted for `alpha` in the M-step.
+///
+/// **What VBEM changes.** Plain EM asks "what single abundance vector best
+/// explains the data?". Variational Bayes instead keeps a distribution over
+/// abundance vectors (a Dirichlet) and works with the expectation of its log.
+/// That expectation is a difference of `digamma` functions, and `exp_theta` is
+/// simply its exponential — so every M-step below is the EM one with `alpha`
+/// replaced by `exp_theta`. In practice VBEM shrinks weakly-supported
+/// transcripts toward zero rather than letting them float on noise.
 fn fill_exp_theta(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f64]) {
     let alpha_sum: f64 = alpha_in.iter().zip(prior_alphas).map(|(a, p)| a + p).sum();
     let log_norm = digamma(alpha_sum);
@@ -295,6 +364,8 @@ pub(crate) fn vbem_step_seq(
             let mut denom = 0.0;
             for (&tid, &w) in tids.iter().zip(ws) {
                 let et = exp_theta[tid as usize];
+                // A zeroed expectation contributes nothing; guarding here keeps
+                // `0 * w` out of the sum entirely.
                 let v = if et > 0.0 { et * w } else { 0.0 };
                 scratch.push(v);
                 denom += v;
@@ -323,9 +394,12 @@ pub(crate) fn vbem_step_par(
     exp_theta: &mut [f64],
     shards: &mut [Vec<f64>],
 ) {
+    // Computed once, before the parallel region: it depends on a global sum over
+    // all transcripts, so it cannot be sharded.
     fill_exp_theta(alpha_in, prior_alphas, exp_theta);
     let nclasses = p.num_classes();
     let chunk = nclasses.div_ceil(shards.len().max(1));
+    // Reborrow as immutable so the closure below can share it across threads.
     let exp_theta: &[f64] = exp_theta;
     shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
         buf.iter_mut().for_each(|x| *x = 0.0);
@@ -364,6 +438,9 @@ mod tests {
     use super::*;
     use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
 
+    /// Build a packed set from `(transcript ids, count)` pairs with uniform
+    /// weights and unit effective lengths, so the tests exercise the
+    /// redistribution logic and nothing else.
     fn packed(classes: &[(Vec<u32>, u64)], num_txps: usize) -> PackedEqClasses {
         let b = EquivalenceClassBuilder::new();
         for (txps, count) in classes {
@@ -378,6 +455,8 @@ mod tests {
         PackedEqClasses::from_collapsed(&eq, num_txps)
     }
 
+    /// The core claim of `redistribute_truncated`: truncated mass goes to
+    /// transcripts that shared evidence with it, and the total is unchanged.
     #[test]
     fn redistribute_moves_truncated_mass_to_comembers_no_rescale() {
         // Shared class {0,1} with count 100; transcript 1 is truncated. Its share
@@ -398,6 +477,8 @@ mod tests {
         );
     }
 
+    /// Mass with nowhere to go must be reported, not silently absorbed — that is
+    /// what makes the `inference_truncated_mass` metric trustworthy.
     #[test]
     fn redistribute_reports_fully_truncated_class_mass() {
         // Class {0} count 5 (active) + class {1} count 3 whose only transcript is
@@ -411,6 +492,9 @@ mod tests {
         assert_eq!(dropped, 3.0, "fully-truncated class mass must be reported");
     }
 
+    /// The subtle VBEM interaction: because the Dirichlet prior keeps `expTheta`
+    /// positive even at zero abundance, the explicit inactive mask is what stops a
+    /// truncated transcript from coming back to life in the final step.
     #[test]
     fn redistribute_vbem_prior_does_not_revive_truncated() {
         // Under VBEM the Dirichlet prior makes expTheta nonzero even at alpha=0;

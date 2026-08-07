@@ -1,5 +1,14 @@
 //! Parallel RAD-format input quantification (`salmon quant --rad`).
 //!
+//! # Why quantify from a RAD file
+//!
+//! Mapping is the expensive half of a salmon run; the statistics are cheap. A RAD
+//! file stores the mapping result compactly, so it can be re-quantified many
+//! times — with different bias settings, priors or bootstrap counts — without
+//! touching the reads again. It is also how `--deterministic` gets its guarantee:
+//! map once, bake the learned models into the header, and every later requant
+//! reproduces the same numbers exactly.
+//!
 //! Quantifies from a RAD file of mappings instead of FASTQ/BAM, taking a path
 //! analogous to alignment mode: each fragment's placements are turned into a
 //! weighted equivalence class, then the shared inference (EM/VBEM + bootstrap/
@@ -526,37 +535,20 @@ where
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
-    let queue = prr.get_queue();
-    let done = prr.is_done();
 
     std::thread::scope(|s| -> Result<()> {
         for _ in 0..nthreads.max(1) {
-            let queue = queue.clone();
-            let done = done.clone();
+            let chunks = prr.chunk_iter();
             s.spawn(move || {
-                // Set once `done` is observed; see the drain comment below.
-                let mut draining = false;
-                loop {
-                    if let Some(mc) = queue.pop() {
-                        for chunk in mc.iter() {
-                            for rec in &chunk.reads {
-                                let assigned = process_rad_fragment(&rec.placements(), cfg);
-                                num_processed.fetch_add(1, Ordering::Relaxed);
-                                if assigned {
-                                    num_mapped.fetch_add(1, Ordering::Relaxed);
-                                }
+                for mc in chunks {
+                    for chunk in mc.iter() {
+                        for rec in &chunk.reads {
+                            let assigned = process_rad_fragment(&rec.placements(), cfg);
+                            num_processed.fetch_add(1, Ordering::Relaxed);
+                            if assigned {
+                                num_mapped.fetch_add(1, Ordering::Relaxed);
                             }
                         }
-                    } else if draining {
-                        break;
-                    } else if done.load(Ordering::Acquire) {
-                        // `done` observed after an empty pop. The producer pushes
-                        // every meta-chunk before storing the flag, so anything it
-                        // enqueued between our failed pop and that store is still
-                        // waiting. Sweep once more before exiting.
-                        draining = true;
-                    } else {
-                        std::hint::spin_loop();
                     }
                 }
             });
@@ -602,68 +594,51 @@ where
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
-    let queue = prr.get_queue();
-    let done = prr.is_done();
     std::thread::scope(|s| -> Result<()> {
         for _ in 0..nthreads.max(1) {
-            let queue = queue.clone();
-            let done = done.clone();
+            let chunks = prr.chunk_iter();
             let acc = &acc;
             s.spawn(move || {
-                // Set once `done` is observed; see the drain comment below.
-                let mut draining = false;
-                loop {
-                    if let Some(mc) = queue.pop() {
-                        for chunk in mc.iter() {
-                            for rec in &chunk.reads {
-                                let pls = rec.placements();
-                                // Naive (kallisto-style) eq for the rough seed EM: the
-                                // compatible transcripts, orientation-tagged (so library-
-                                // incompatible placements can be dropped once the lib
-                                // type is known), no FLD/score weighting. Built in the
-                                // same read as the FLD counts; order-independent.
-                                if let Some(nb) = naive_eq {
-                                    let sig: Vec<NaivePlacement> = pls
-                                        .iter()
-                                        .map(|p| {
-                                            let (obs, is_fw, status) = rad_frag_format(p);
-                                            NaivePlacement {
-                                                tid: p.tid,
-                                                fmt_id: obs
-                                                    .map(|f| f.format_id())
-                                                    .unwrap_or(NAIVE_NO_FMT),
-                                                is_fw,
-                                                status,
-                                            }
-                                        })
-                                        .collect();
-                                    nb.add(sig);
-                                }
-                                // "unique" = exactly one placement; only proper pairs
-                                // carry a meaningful fragment length.
-                                if pls.len() != 1 {
-                                    continue;
-                                }
-                                let p = &pls[0];
-                                if p.status != MateStatus::PairedEndPaired
-                                    || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
-                                    || p.frag_len == 0
-                                {
-                                    continue;
-                                }
-                                acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
+                for mc in chunks {
+                    for chunk in mc.iter() {
+                        for rec in &chunk.reads {
+                            let pls = rec.placements();
+                            // Naive (kallisto-style) eq for the rough seed EM: the
+                            // compatible transcripts, orientation-tagged (so library-
+                            // incompatible placements can be dropped once the lib
+                            // type is known), no FLD/score weighting. Built in the
+                            // same read as the FLD counts; order-independent.
+                            if let Some(nb) = naive_eq {
+                                let sig: Vec<NaivePlacement> = pls
+                                    .iter()
+                                    .map(|p| {
+                                        let (obs, is_fw, status) = rad_frag_format(p);
+                                        NaivePlacement {
+                                            tid: p.tid,
+                                            fmt_id: obs
+                                                .map(|f| f.format_id())
+                                                .unwrap_or(NAIVE_NO_FMT),
+                                            is_fw,
+                                            status,
+                                        }
+                                    })
+                                    .collect();
+                                nb.add(sig);
                             }
+                            // "unique" = exactly one placement; only proper pairs
+                            // carry a meaningful fragment length.
+                            if pls.len() != 1 {
+                                continue;
+                            }
+                            let p = &pls[0];
+                            if p.status != MateStatus::PairedEndPaired
+                                || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
+                                || p.frag_len == 0
+                            {
+                                continue;
+                            }
+                            acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
                         }
-                    } else if draining {
-                        break;
-                    } else if done.load(Ordering::Acquire) {
-                        // `done` observed after an empty pop. The producer pushes
-                        // every meta-chunk before storing the flag, so anything it
-                        // enqueued between our failed pop and that store is still
-                        // waiting. Sweep once more before exiting.
-                        draining = true;
-                    } else {
-                        std::hint::spin_loop();
                     }
                 }
             });
@@ -747,7 +722,7 @@ struct BiasCfg<'a> {
     paired_lib: bool,
     /// fixed per-reference abundances (baked or first-EM) for the posterior.
     abundances: &'a [f64],
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     gc_store: &'a GcStore<'a>,
     length_class: Option<&'a [usize]>,
 }
@@ -873,11 +848,7 @@ fn collect_bias_fragment(placements: &[RadPlacement], cfg: &BiasCfg, local: &mut
         }
         // Sequence/GC need the reference bytes; positional bias needs only the
         // transcript length, so it works even without `-t` (empty `ref_bytes`).
-        let refseq = cfg
-            .ref_bytes
-            .get(*tid as usize)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let refseq = cfg.ref_bytes.get(*tid as usize).unwrap_or(&[]);
         let rl = if refseq.is_empty() {
             cfg.lengths.get(*tid as usize).copied().unwrap_or(0) as usize
         } else {
@@ -961,37 +932,19 @@ where
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
-    let queue = prr.get_queue();
-    let done = prr.is_done();
     let merged = std::sync::Mutex::new(BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins));
 
     std::thread::scope(|s| -> Result<()> {
         for _ in 0..nthreads.max(1) {
-            let queue = queue.clone();
-            let done = done.clone();
+            let chunks = prr.chunk_iter();
             let merged = &merged;
             s.spawn(move || {
                 let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
-                // Set once `done` is observed; see the drain comment below.
-                let mut draining = false;
-                loop {
-                    if let Some(mc) = queue.pop() {
-                        for chunk in mc.iter() {
-                            for rec in &chunk.reads {
-                                collect_bias_fragment(&rec.placements(), cfg, &mut local);
-                            }
+                for mc in chunks {
+                    for chunk in mc.iter() {
+                        for rec in &chunk.reads {
+                            collect_bias_fragment(&rec.placements(), cfg, &mut local);
                         }
-                    } else if draining {
-                        break;
-                    } else if done.load(Ordering::Acquire) {
-                        // `done` observed after an empty pop. The producer
-                        // pushes every meta-chunk before storing the flag, so
-                        // anything enqueued between our failed pop and that
-                        // store is still waiting. Sweep once more before
-                        // exiting.
-                        draining = true;
-                    } else {
-                        std::hint::spin_loop();
                     }
                 }
                 merged.lock().unwrap().merge(&local);
@@ -1038,43 +991,25 @@ where
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
-    let queue = prr.get_queue();
-    let done = prr.is_done();
     let merged = std::sync::Mutex::new(BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins));
 
     std::thread::scope(|s| -> Result<()> {
         for _ in 0..nthreads.max(1) {
-            let queue = queue.clone();
-            let done = done.clone();
+            let chunks = prr.chunk_iter();
             let merged = &merged;
             s.spawn(move || {
                 let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
-                // Set once `done` is observed; see the drain comment below.
-                let mut draining = false;
-                loop {
-                    if let Some(mc) = queue.pop() {
-                        for chunk in mc.iter() {
-                            for rec in &chunk.reads {
-                                let pls = rec.placements();
-                                let assigned = process_rad_fragment(&pls, cfg);
-                                num_processed.fetch_add(1, Ordering::Relaxed);
-                                if assigned {
-                                    num_mapped.fetch_add(1, Ordering::Relaxed);
-                                }
-                                collect_bias_fragment(&pls, bias_cfg, &mut local);
+                for mc in chunks {
+                    for chunk in mc.iter() {
+                        for rec in &chunk.reads {
+                            let pls = rec.placements();
+                            let assigned = process_rad_fragment(&pls, cfg);
+                            num_processed.fetch_add(1, Ordering::Relaxed);
+                            if assigned {
+                                num_mapped.fetch_add(1, Ordering::Relaxed);
                             }
+                            collect_bias_fragment(&pls, bias_cfg, &mut local);
                         }
-                    } else if draining {
-                        break;
-                    } else if done.load(Ordering::Acquire) {
-                        // `done` observed after an empty pop. The producer
-                        // pushes every meta-chunk before storing the flag, so
-                        // anything enqueued between our failed pop and that
-                        // store is still waiting. Sweep once more before
-                        // exiting.
-                        draining = true;
-                    } else {
-                        std::hint::spin_loop();
                     }
                 }
                 merged.lock().unwrap().merge(&local);
@@ -1286,8 +1221,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // is requested; mirrors alignment mode). Seq/GC need the transcript bytes; the
     // GC store is a rank bitvector over the concatenated references; positional
     // bias needs only the per-transcript length classes.
-    let ref_bytes: Vec<Vec<u8>> = if !bias_on {
-        Vec::new()
+    let ref_bytes: salmon_core::RefSeqs = if !bias_on {
+        salmon_core::RefSeqs::default()
     } else if let Some(rs) = &opts.ref_seqs {
         // Sequences supplied directly (e.g. by `--deterministic`, from the index).
         // They are in transcript-id order, which is the RAD ref-name order.
@@ -1299,17 +1234,19 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         );
         rs.clone()
     } else {
-        crate::load_ref_bytes(opts.transcripts.as_ref().unwrap(), &names)?
+        salmon_core::RefSeqs::from_sequences(crate::load_ref_bytes(
+            opts.transcripts.as_ref().unwrap(),
+            &names,
+        )?)
     };
     let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if opts.gc_bias {
-        let mut concat: Vec<u8> = Vec::new();
-        let mut offs: Vec<u64> = Vec::with_capacity(ref_bytes.len() + 1);
-        offs.push(0);
-        for s in &ref_bytes {
-            concat.extend_from_slice(s);
-            offs.push(concat.len() as u64);
-        }
-        (Some(salmon_model::GcRank::new(&concat)), offs)
+        // `RefSeqs` already holds exactly what the rank bitvector wants: the
+        // references concatenated, plus their endpoints. Previously this rebuilt
+        // both from a `Vec<Vec<u8>>`, copying every base a second time.
+        (
+            Some(salmon_model::GcRank::new(ref_bytes.concatenated())),
+            ref_bytes.offsets().to_vec(),
+        )
     } else {
         (None, Vec::new())
     };

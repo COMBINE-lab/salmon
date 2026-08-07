@@ -1,5 +1,22 @@
 //! Colinear MEM chaining.
 //!
+//! # The problem
+//!
+//! A read's k-mers hit a transcript in several places. Some of those hits belong
+//! to one true alignment; others are coincidence — a repeat elsewhere in the
+//! transcript, a shared domain, a low-complexity stretch. Chaining separates the
+//! two by looking for anchors that are *colinear*: ordered the same way on the
+//! read and on the reference, with gaps between them that a real fragment could
+//! plausibly have.
+//!
+//! "Colinear" is the key idea. If a read genuinely aligns here, then anchor A
+//! coming before anchor B on the read means A also comes before B on the
+//! reference, and the distance between them is similar in both. Anchors that
+//! violate that cannot be part of the same alignment.
+//!
+//! The output is a handful of candidate chains per transcript, scored so the
+//! caller can align only the promising ones.
+//!
 //! Given a set of [`Mem`] anchors that all lie on one reference in one
 //! orientation, find high-scoring colinear chains. This is the
 //! minimap2-style dynamic program that pufferfish/salmon use to assemble
@@ -40,6 +57,9 @@ pub struct ChainConfig {
     pub chain_subopt_thresh: f32,
     /// Maximum number of predecessors to examine per anchor (lookback bound).
     /// `0` means examine all earlier anchors.
+    ///
+    /// Bounds the DP at O(n · lookback) rather than O(n²); an anchor far back in
+    /// the sort order is essentially never the right predecessor.
     pub max_lookback: usize,
 }
 
@@ -62,6 +82,9 @@ pub struct MemChain {
     /// DP score of the chain
     pub score: f32,
     /// orientation of the underlying mapping (stamped by the caller)
+    ///
+    /// Whether the read matched the reference's forward strand or its reverse
+    /// complement; both are tried, since a fragment can come from either.
     pub is_fw: bool,
     /// merged read-base coverage, computed once at construction. The consensus
     /// filter and `best_per_target` sort on this; computing it lazily (with a
@@ -114,6 +137,8 @@ impl MemChain {
 /// Merged read-base coverage of read-start-ordered anchors, without allocating
 /// (overlaps counted once). Assumes `mems` is sorted by `read_start`.
 #[inline]
+/// Read bases covered by the chain, counting overlaps once — the chain's main
+/// quality signal (see [`crate::mem`]).
 fn merged_read_coverage(mems: &[Mem]) -> i32 {
     if mems.is_empty() {
         return 0;
@@ -148,6 +173,16 @@ static LOG2_LUT: std::sync::LazyLock<Box<[f32]>> =
 /// minimap2-style gap cost: 0 when the read and reference gaps match, otherwise
 /// an affine term proportional to the gap plus a logarithmic term.
 #[inline]
+/// minimap2's gap penalty: a linear term plus a logarithmic one.
+///
+/// The shape matters. A linear-only penalty would make one long indel cost the
+/// same as many short ones, and real indels are far more often short. Adding a
+/// log term makes the first few bases of a gap expensive and each further base
+/// progressively cheaper, so the chainer prefers one 30-base indel over ten
+/// 3-base ones — which matches how insertions and deletions actually arise.
+///
+/// `log2_lut` is a precomputed table: the logarithm is evaluated in the innermost
+/// loop of the DP, where a table lookup is far cheaper than computing it.
 fn gap_cost(gap: i32, seed_len: i32, log2_lut: &[f32]) -> f32 {
     if gap == 0 {
         0.0
@@ -164,6 +199,11 @@ fn gap_cost(gap: i32, seed_len: i32, log2_lut: &[f32]) -> f32 {
 /// Exact `chain_mems` fast path for the common two-anchor case. Returns `None`
 /// for tie cases where matching `sort_unstable_by`'s arbitrary equal-key/order
 /// behavior would be brittle; the caller then uses the general implementation.
+/// Fast path for exactly two anchors, the overwhelmingly common case.
+///
+/// With two anchors there is only one question — do they chain or not — so the
+/// full DP, its sort and its allocations can all be skipped. Returns `None` when
+/// the input is not two anchors, leaving the caller to run the general algorithm.
 fn chain_two_mems(m0: Mem, m1: Mem, is_fw: bool, cfg: &ChainConfig) -> Option<Vec<MemChain>> {
     let k0 = (m0.ref_start, m0.read_start);
     let k1 = (m1.ref_start, m1.read_start);
@@ -281,8 +321,7 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
         // read_start, i.e. duplicate anchors) only affect colinear tie-breaks.
         sorted.clear();
         sorted.extend_from_slice(mems);
-        sorted
-            .sort_unstable_by(|a, b| (a.ref_start, a.read_start).cmp(&(b.ref_start, b.read_start)));
+        sorted.sort_unstable_by_key(|m| (m.ref_start, m.read_start));
 
         f.clear();
         f.resize(n, 0.0); // best score ending at i
@@ -394,11 +433,13 @@ mod tests {
     }
 
     #[test]
+    /// No anchors, no chains — and no panic on the empty case.
     fn empty_input() {
         assert!(chain_mems(&[], true, &cfg()).is_empty());
     }
 
     #[test]
+    /// A lone anchor is a valid (if weak) candidate in its own right.
     fn single_mem_one_chain() {
         let mems = [Mem::new(0, 100, 20)];
         let chains = chain_mems(&mems, true, &cfg());
@@ -409,6 +450,8 @@ mod tests {
     }
 
     #[test]
+    /// The core behaviour: consistent anchors must join into one candidate rather
+    /// than being reported as two competing placements.
     fn colinear_mems_merge_into_one_chain() {
         // Two gap-free anchors on the same diagonal -> single chain.
         let mems = [Mem::new(0, 100, 15), Mem::new(20, 120, 15)];
@@ -425,6 +468,8 @@ mod tests {
     }
 
     #[test]
+    /// An anchor wholly inside another adds no new matched bases, so chaining
+    /// them would inflate the score without adding evidence.
     fn contained_anchor_not_chained_with_container() {
         // The second anchor starts after the first on both axes (so dr,dq > 0) but
         // is fully *contained* in the first's span (a repeat-copy / sub-anchor on a
@@ -446,6 +491,8 @@ mod tests {
     }
 
     #[test]
+    /// Anchors ordered one way on the read and the other way on the reference
+    /// cannot belong to one alignment, and must not be chained.
     fn anti_colinear_mems_split() {
         // Second anchor is earlier on the read but later on the ref -> not
         // colinear, so two separate single-anchor chains.
@@ -456,6 +503,8 @@ mod tests {
     }
 
     #[test]
+    /// A gap between anchors must cost something, or a chain stitched across an
+    /// implausible distance would outscore a compact one.
     fn gap_penalty_reduces_score() {
         // Same anchors, but a large indel between them (read gap != ref gap).
         let mems = [Mem::new(0, 100, 15), Mem::new(20, 220, 15)];
@@ -470,6 +519,8 @@ mod tests {
     }
 
     #[test]
+    /// Past `max_gap` the anchors are unrelated, not one alignment with a very
+    /// large indel.
     fn gap_beyond_bandwidth_does_not_chain() {
         let mut c = cfg();
         c.max_gap = 50;
@@ -480,6 +531,8 @@ mod tests {
     }
 
     #[test]
+    /// Only chains competitive with the best survive; the rest are noise that
+    /// would cost an alignment each to rule out.
     fn subopt_threshold_filters_weak_chains() {
         // One strong colinear pair plus one isolated short anchor far away.
         let mems = [
@@ -496,6 +549,7 @@ mod tests {
     }
 
     #[test]
+    /// Callers take the best chains first, so the order is part of the contract.
     fn chains_sorted_by_descending_score() {
         let mems = [
             Mem::new(0, 100, 30),

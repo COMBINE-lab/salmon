@@ -1,5 +1,17 @@
 //! MEM extraction: extend k-mer anchors into longer exact matches.
 //!
+//! # Why extend at all
+//!
+//! A k-mer hit says 31 bases matched. But a read that genuinely came from this
+//! transcript usually matches far more than 31 bases in a row — the hit is just
+//! the part the index happened to be queried at. Extending each hit outward until
+//! it stops matching replaces a scatter of short, fixed-length anchors with a few
+//! long ones that describe the same agreement.
+//!
+//! That helps twice: the chainer sees fewer, more informative anchors, and a long
+//! exact match is much stronger evidence than several short ones that could each
+//! be coincidence.
+//!
 //! The bare [`collect`](crate::collect) path chains the *sparse, fixed-length*
 //! k-mer anchors that piscem's skipping streaming query emits — one length-`k`
 //! anchor per unitig transition (`--sparseSeeds`). This module offers two
@@ -412,6 +424,8 @@ mod tests {
     use piscem_rs::mapping::projected_hits::ProjectedHits;
 
     #[test]
+    /// Anchors must end up grouped by (transcript, orientation): the chainer is run
+    /// per group, so a mis-sort would mix unrelated anchors into one candidate.
     fn radix_sort_tidfw_groups_by_key() {
         // Regression: the ping-pong scratch fill must be a valid `Mem` (len > 0).
         // A zero-length placeholder tripped `Mem::new`'s `debug_assert!(len > 0)`
@@ -436,6 +450,8 @@ mod tests {
     }
 
     #[test]
+    /// Overlapping anchors on one diagonal describe the same match and must merge
+    /// into a single anchor.
     fn merge_collapses_same_diagonal_overlaps() {
         // The read-100000/ENST00000518938.1 geometry: three overlapping uni-MEMs
         // on diagonal 76 (one per surviving seed). They must collapse to a single
@@ -456,6 +472,8 @@ mod tests {
     }
 
     #[test]
+    /// But anchors on different diagonals, or with a genuine gap between them, must
+    /// stay separate for the chainer to reason about.
     fn merge_keeps_distinct_diagonals_and_real_gaps() {
         // Same diagonal but a real read gap (a SNP run) stays distinct; a
         // different diagonal stays distinct — only overlapping/touching runs merge.
@@ -498,6 +516,8 @@ mod tests {
     }
 
     #[test]
+    /// Extension must reach the full extent of the exact match, which is the whole
+    /// reason for extending.
     fn extend_grows_seed_to_full_exact_match() {
         // read == ref[50..130]; a length-31 seed at read 0 / ref 50 should grow
         // to cover the whole 80 bp exact match.
@@ -511,6 +531,8 @@ mod tests {
     }
 
     #[test]
+    /// The uni-MEM variant must stop at the unitig edge, matching pufferfish, so
+    /// one anchor per unitig is produced and the chainer stitches them.
     fn uni_mem_extension_stops_at_unitig_boundary() {
         // read == ref[50..130] (80 bp exact). A seed at read 0 / ref 50:
         // - reference MEM extends to the full 80 bp.
@@ -528,6 +550,8 @@ mod tests {
     }
 
     #[test]
+    /// Extension must stop at the first mismatch — an anchor is by definition an
+    /// exact match.
     fn extend_stops_at_mismatch() {
         let mut reference = gen_seq(300, 9);
         let read = reference[50..130].to_vec();
@@ -552,6 +576,8 @@ mod tests {
     }
 
     #[test]
+    /// Several seeds within one exact match must collapse to one anchor rather than
+    /// being counted repeatedly as evidence.
     fn unimems_collapse_colinear_seeds_into_one_anchor() {
         // Reference where read (= ref[50..130]) matches exactly. Two forward
         // seeds at read offsets 0 and 10 both lie on the same diagonal and must

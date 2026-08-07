@@ -2,6 +2,17 @@
 //! aggregates (never per-fragment), surfaced to the log and to
 //! `meta_info.json`'s `diagnostics` array by both the reads and alignment
 //! quantification paths.
+//!
+//! # Why this exists
+//!
+//! salmon will happily produce a numerically valid `quant.sf` from reads that
+//! have nothing to do with the reference: the numbers are just meaningless. The
+//! commonest real-world failures are quiet ones — wrong organism, wrong
+//! strandedness flag, untrimmed adapters — so the run ends by checking a few
+//! end-of-run aggregates and saying plainly when the result looks untrustworthy.
+//!
+//! The checks deliberately use only totals, never per-fragment state, so they
+//! cost nothing and cannot affect results.
 
 use serde::Serialize;
 
@@ -9,6 +20,9 @@ use serde::Serialize;
 /// (snake_case) so downstream tools can key on it (e.g. `low_mapping_rate`,
 /// `no_fragments_mapped`, `library_type_mismatch`). `severity` is one of
 /// `"warning"` | `"error"` | `"info"`.
+///
+/// The code is what pipelines should match on; the `message` is prose and may be
+/// reworded between releases.
 #[derive(Debug, Clone, Serialize)]
 pub struct Diagnostic {
     pub code: String,
@@ -17,6 +31,8 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    /// Private constructor; the codes and severities are all chosen inside this
+    /// module so they stay consistent.
     fn new(code: &str, severity: &str, message: String) -> Self {
         Self {
             code: code.to_string(),
@@ -42,6 +58,9 @@ pub fn input_diagnostics(
     detected_lib_type: Option<&str>,
 ) -> Vec<Diagnostic> {
     let mut d = Vec::new();
+    // Ordered from most to least fundamental: no input at all, then input but no
+    // mapping, then mapping but suspiciously little. Only one of the three can
+    // apply, hence the if/else-if chain.
     if num_processed == 0 {
         d.push(Diagnostic::new(
             "no_input_fragments",
@@ -58,6 +77,10 @@ pub fn input_diagnostics(
         ));
     } else {
         let pct = 100.0 * num_mapped as f64 / num_processed as f64;
+        // The thresholds are judgement calls, not statistics: a healthy bulk
+        // RNA-seq run against a matching transcriptome typically maps 70-90%.
+        // Below 30% something is usually wrong; below 10% it is almost certainly
+        // the wrong reference.
         if pct < 10.0 {
             d.push(Diagnostic::new(
                 "very_low_mapping_rate",
@@ -73,6 +96,9 @@ pub fn input_diagnostics(
         }
     }
     // Strandedness sanity: an explicit `-l` disagreeing with the observed format.
+    //
+    // Under `-l A` there is nothing to disagree with — the detector's answer *is*
+    // the setting — so the check is skipped, otherwise it would fire on itself.
     if !auto_detect {
         if let Some(det) = detected_lib_type {
             if det != requested_lib_type {
@@ -89,11 +115,21 @@ pub fn input_diagnostics(
 
 /// Peak resident set size in KiB from `/proc/self/status` (`VmHWM`); 0 if
 /// unavailable (non-Linux or parse failure). Read once at end of run.
+///
+/// "Peak RSS" is the high-water mark of physical memory the process ever held —
+/// more useful than current usage for reporting, since the peak is what decides
+/// whether a run fits on a given machine. Linux exposes it as the `VmHWM` line;
+/// on other platforms the file simply does not exist and this returns 0.
 pub fn peak_rss_kb() -> u64 {
+    // Every step is fallible and every failure means the same thing ("no number
+    // available"), so the chain uses `.ok()`/`and_then` to collapse them all
+    // into a single `Option` and ends with a 0 default.
     std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|s| {
             s.lines().find_map(|l| {
+                // Line looks like `VmHWM:\t  123456 kB`; take the first
+                // whitespace-separated token after the prefix.
                 l.strip_prefix("VmHWM:")
                     .and_then(|v| v.split_whitespace().next())
                     .and_then(|n| n.parse::<u64>().ok())

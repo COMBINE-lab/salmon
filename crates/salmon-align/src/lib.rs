@@ -1,5 +1,27 @@
 //! `salmon-align`: alignment-based (BAM) quantification.
 //!
+//! # When you would use this
+//!
+//! salmon's usual input is raw reads, which it maps itself. But sometimes the
+//! alignments already exist: another tool produced them, a pipeline requires a
+//! specific aligner, or the reads were aligned to the genome and projected. In
+//! those cases the expensive half of the work is already done, and salmon only
+//! needs to do the statistics.
+//!
+//! So this crate is the mapping stage replaced by a reader. Everything after it —
+//! equivalence classes, the fragment-length distribution, bias models, the EM,
+//! the output files — is the same code the reads path uses. The three entry
+//! points differ only in where the placements come from:
+//!
+//! * a transcriptome BAM (this module),
+//! * a genome BAM plus an annotation, projected into transcript coordinates
+//!   (the `genome_project` module),
+//! * a RAD file of mappings (the `rad` module).
+//!
+//! The BAM must be *name-grouped*: all records for one read adjacent, so a
+//! fragment's placements can be gathered in one pass without holding the whole
+//! file in memory.
+//!
 //! The alternative to mapping FASTQ reads: take a BAM of reads already aligned
 //! to the *transcriptome* (each `@SQ` is a transcript) and quantify directly
 //! from those alignments. References and their lengths come from the BAM
@@ -126,7 +148,7 @@ pub struct AlignQuantOptions {
     /// which already has the index and can hand its sequences to the requant
     /// pass so bias correction needs no separate `-t`. Takes precedence over
     /// [`Self::transcripts`] when set.
-    pub ref_seqs: Option<Vec<Vec<u8>>>,
+    pub ref_seqs: Option<salmon_core::RefSeqs>,
     /// disable the alignment error model (salmon's `--noErrorModel`)
     pub no_error_model: bool,
     /// opt in to the order-independent error model in `--deterministic` alignment
@@ -746,7 +768,7 @@ struct PassCfg<'a> {
     online: Option<&'a salmon_infer::OnlineInference>,
     fld: &'a FragmentLengthDistribution,
     eq_builder: &'a EquivalenceClassBuilder,
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     lengths: &'a [u32],
     gc_store: salmon_model::GcStore<'a>,
     length_class: Option<&'a [usize]>,
@@ -1017,12 +1039,12 @@ fn stream_online_pass(bam_path: &Path, cfg: &PassCfg, acc: &mut PassAccum) -> Re
             .unwrap_or(4)
             .clamp(1, 4);
         let workers = std::num::NonZeroUsize::new(workers).unwrap();
-        with_bgzf_pool(workers, || {
-            let decoder = noodles_bgzf::io::MultithreadedReader::new(file);
+        {
+            let decoder = noodles_bgzf::io::MultithreadedReader::with_worker_count(workers, file);
             let mut reader = bam::io::Reader::from(decoder);
             let header = reader.read_header().context("reading BAM header")?;
             run_online_pass(reader.records(), &header, cfg, acc)
-        })?
+        }
     }
 }
 
@@ -1036,7 +1058,7 @@ struct FragCtx<'a> {
     online: Option<&'a salmon_infer::OnlineInference>,
     fld: &'a FragmentLengthDistribution,
     eq_builder: &'a EquivalenceClassBuilder,
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     lengths: &'a [u32],
     gc_store: salmon_model::GcStore<'a>,
     length_class: Option<&'a [usize]>,
@@ -1157,11 +1179,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
         if ctx.discard_orphans && ctx.paired_lib && idxs.len() < 2 {
             continue;
         }
-        let refseq = ctx
-            .ref_bytes
-            .get(tid as usize)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let refseq = ctx.ref_bytes.get(tid as usize).unwrap_or(&[]);
         // Conditional log-weight basis = salmon's `errLike` (Σ(fg−bg) over the
         // mate(s) under the error model; uniform 0.0 when it is disabled).
         let basis = if let Some(m) = ctx.model {
@@ -1269,11 +1287,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
                 continue;
             }
             let online_log_tid = online_log[ti];
-            let refseq = ctx
-                .ref_bytes
-                .get(*tid as usize)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
+            let refseq = ctx.ref_bytes.get(*tid as usize).unwrap_or(&[]);
             for &k in ks {
                 let p = p_tid * (sp_online[k] - online_log_tid).exp();
                 if p <= 0.0 {
@@ -1405,7 +1419,7 @@ fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn apply_bias_correction(
     num_refs: usize,
-    ref_bytes: &[Vec<u8>],
+    ref_bytes: &salmon_core::RefSeqs,
     gc_store: &salmon_model::GcStore<'_>,
     lengths: &[u32],
     length_class: Option<&[usize]>,
@@ -1431,7 +1445,7 @@ fn apply_bias_correction(
     let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
     let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
     let k = if seq_bias { CONTEXT_LENGTH } else { 1 };
-    let refseq_of = |t: usize| ref_bytes[t].as_slice();
+    let refseq_of = |t: usize| &ref_bytes[t];
 
     let seq = seq_obs.map(|(mut of, mut or)| {
         of.normalize();
@@ -1518,7 +1532,7 @@ fn apply_bias_correction(
             if alphas[tid] < 1e-8 {
                 return;
             }
-            let s = ref_bytes[tid].as_slice();
+            let s = &ref_bytes[tid];
             let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
                 pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
                     let lc = length_class.expect("positional bias requires length classes")[tid];
@@ -1553,35 +1567,6 @@ fn apply_bias_correction(
             );
         });
     bias_dump
-}
-
-/// Run `f` with a dedicated rayon pool of `workers` threads installed as the
-/// current pool.
-///
-/// noodles 0.48 deprecated `MultithreadedReader/Writer::with_worker_count` and
-/// made it a no-op: BGZF block work is now dispatched via `rayon::spawn`, which
-/// resolves to `Registry::current()`. Without an installed pool that is
-/// salmon's *global* rayon pool — sized to `-p` and already busy — so the
-/// requested worker count would silently control nothing. Installing a pool
-/// around the read/write keeps the count meaningful and keeps BGZF work off the
-/// mapping threads.
-pub(crate) fn with_bgzf_pool<T>(
-    workers: std::num::NonZeroUsize,
-    f: impl FnOnce() -> T + Send,
-) -> anyhow::Result<T>
-where
-    T: Send,
-{
-    // `+ 1`: `install` occupies one pool thread with `f` itself, while noodles
-    // spawns block work into the same pool and blocks awaiting it. Sizing the
-    // pool exactly to `workers` leaves nothing to run that work on and deadlocks
-    // at a worker count of 1.
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers.get() + 1)
-        .thread_name(|i| format!("salmon-bgzf-{i}"))
-        .build()
-        .context("building the BGZF thread pool")?;
-    Ok(pool.install(f))
 }
 
 /// Run alignment-based quantification end-to-end.
@@ -1627,10 +1612,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         !bias_on || opts.transcripts.is_some(),
         "--seqBias/--gcBias/--posBias in alignment mode require -t/--targets (the transcriptome FASTA)"
     );
-    let ref_bytes: Vec<Vec<u8>> = if use_error_model || bias_on {
-        load_ref_bytes(opts.transcripts.as_ref().unwrap(), &names)?
+    let ref_bytes: salmon_core::RefSeqs = if use_error_model || bias_on {
+        salmon_core::RefSeqs::from_sequences(load_ref_bytes(
+            opts.transcripts.as_ref().unwrap(),
+            &names,
+        )?)
     } else {
-        Vec::new()
+        salmon_core::RefSeqs::default()
     };
 
     // Online (dual-phase) abundances: develop running estimates so the error
@@ -1653,14 +1641,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // leaner than dense per-transcript prefixes, identical results). `gc_store`
     // presents per-transcript `GcView`s.
     let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if opts.gc_bias {
-        let mut concat: Vec<u8> = Vec::new();
-        let mut offs: Vec<u64> = Vec::with_capacity(ref_bytes.len() + 1);
-        offs.push(0);
-        for s in &ref_bytes {
-            concat.extend_from_slice(s);
-            offs.push(concat.len() as u64);
-        }
-        (Some(salmon_model::GcRank::new(&concat)), offs)
+        // `RefSeqs` already stores the references concatenated with their
+        // endpoints, which is what the rank bitvector needs; rebuilding both here
+        // copied every base a second time.
+        (
+            Some(salmon_model::GcRank::new(ref_bytes.concatenated())),
+            ref_bytes.offsets().to_vec(),
+        )
     } else {
         (None, Vec::new())
     };
@@ -2200,6 +2187,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// The `AS` tag can be stored in any of BAM's integer widths, so all of them
+    /// must decode; a missed case would silently score placements as zero.
     fn alignment_score_value_decoding() {
         assert_eq!(value_as_i32(&Value::Int32(-12)), Some(-12));
         assert_eq!(value_as_i32(&Value::Int8(0)), Some(0));
@@ -2232,6 +2221,8 @@ mod tests {
     /// the strand filters accept it per its own orientation — regression for
     /// issue #1057 (single-end BAM dropped under `SF`/`SR`).
     #[test]
+    /// A single-end record must be classified as such and still be subject to the
+    /// library-type strand filter.
     fn single_end_record_is_single_end_and_strand_filters_apply() {
         use salmon_core::LibraryFormat;
         let sf = LibraryFormat::parse("SF").unwrap();
@@ -2261,6 +2252,8 @@ mod tests {
     /// A paired-end read reported alone (BAM `0x1` set) remains an orphan,
     /// classified left/right by the first-segment (`0x40`) flag — unchanged.
     #[test]
+    /// An orphan must record *which* mate placed: read 1 and read 2 have mirrored
+    /// strand expectations, so losing that would misapply the filter.
     fn paired_orphan_keeps_left_right_status() {
         let read1 = vec![frag(false, true, true)];
         let (_, _, status) = frag_format(&read1, &[0]);
@@ -2274,6 +2267,8 @@ mod tests {
     /// The warning in #1062 must name exactly the flags the user typed, so it
     /// never claims a value was ignored that the user never supplied.
     #[test]
+    /// The warning about ignored fragment-length arguments must name only the flags
+    /// the user actually passed.
     fn explicit_fld_args_report_only_supplied_flags() {
         assert!(!ExplicitFldArgs::default().any());
         assert_eq!(ExplicitFldArgs::default().names(), "");
@@ -2303,6 +2298,8 @@ mod tests {
     /// Baked is the default, so an ordinary requant keeps reproducing the run
     /// that wrote the RAD unless the user opts out.
     #[test]
+    /// The default must reproduce the run that wrote the RAD, rather than
+    /// re-deriving a distribution and quietly changing the answer.
     fn fld_policy_defaults_to_baked() {
         assert_eq!(FldPolicy::default(), FldPolicy::Baked);
         let opts = AlignQuantOptions::new("x.rad".into(), "out".into());

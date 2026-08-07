@@ -1,12 +1,35 @@
 //! Posterior uncertainty: multinomial **bootstrap** (`CollapsedEMOptimizer::gatherBootstraps`)
 //! and the non-collapsed **Gibbs sampler** (`CollapsedGibbsSampler`).
 //!
+//! # Why uncertainty at all
+//!
+//! The EM returns a single number per transcript, but that number is not equally
+//! trustworthy for every transcript. A transcript with plenty of unique evidence
+//! is pinned down precisely; one that shares all its sequence with a paralogue is
+//! barely constrained, and its estimate could shift a long way given slightly
+//! different reads. Downstream differential-expression tools need to know which
+//! is which, so salmon can produce a *distribution* of plausible estimates
+//! instead of only the point estimate.
+//!
+//! Two methods are offered, answering slightly different questions:
+//!
+//! * **Bootstrap** — "if I had sequenced this sample again, how much would the
+//!   answer move?". Resample the observed fragment counts with replacement and
+//!   re-run the EM. Spread across replicates estimates sampling variability.
+//! * **Gibbs sampling** — "given this data, what is the posterior distribution of
+//!   abundances?". Repeatedly reassign each ambiguous fragment at random in
+//!   proportion to current abundances, and redraw abundances from the resulting
+//!   counts. After enough rounds the chain wanders the posterior, and snapshots
+//!   of it are posterior samples.
+//!
 //! Both operate on the flat [`PackedEqClasses`] layout and produce one abundance
 //! vector per replicate/sample. Bootstrap parallelizes across replicates (each
 //! runs a sequential EM on resampled class counts); Gibbs parallelizes across
-//! independent chains (each runs sequential thinned rounds). RNG is PCG
-//! (`rand_pcg`), seeded per replicate/chain for reproducibility — results are
-//! statistically equivalent to salmon's but not bit-identical (different RNG).
+//! independent chains (each runs sequential thinned rounds) — in both cases the
+//! unit of parallelism is an entirely independent computation, which is the
+//! cleanest kind. RNG is PCG (`rand_pcg`), seeded per replicate/chain for
+//! reproducibility — results are statistically equivalent to salmon's but not
+//! bit-identical (different RNG).
 
 use rand::{Rng, SeedableRng};
 use rand_distr::{Binomial, Distribution, Gamma};
@@ -22,6 +45,13 @@ const MIN_EQ_CLASS_WEIGHT: f64 = f64::MIN_POSITIVE;
 /// Draw a multinomial count vector: `total` draws over categories with the given
 /// (non-normalized) `weights`, via the conditional-binomial method — `O(k)` in
 /// the number of categories rather than `O(total)` individual draws.
+///
+/// **The conditional-binomial trick.** Throwing `total` balls into `k` buckets
+/// one at a time would cost `O(total)`, and `total` is the fragment count —
+/// hundreds of millions. Instead, ask "how many of the remaining balls land in
+/// bucket 0?", which is a single binomial draw, then recurse on the rest with
+/// bucket 0 removed and the probabilities renormalized. That is `k` draws total,
+/// and the result has exactly the right joint distribution.
 fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
     let n = weights.len();
     let mut out = vec![0u64; n];
@@ -31,13 +61,19 @@ fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
     let mut remaining = total;
     let mut remaining_w: f64 = weights.iter().sum();
     for i in 0..n {
+        // All balls placed; the rest of the buckets stay empty.
         if remaining == 0 {
             break;
         }
+        // Last bucket (or no weight left anywhere): it takes the remainder by
+        // construction, which also guarantees the counts sum to `total` exactly.
         if i == n - 1 || remaining_w <= 0.0 {
             out[i] = remaining;
             break;
         }
+        // Probability this bucket takes a ball, among those not yet allocated.
+        // Clamped because the running subtraction of `remaining_w` accumulates
+        // rounding error.
         let p = (weights[i] / remaining_w).clamp(0.0, 1.0);
         let k = if p >= 1.0 {
             remaining
@@ -65,6 +101,10 @@ fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
 /// `num_mapped` is computed elsewhere. (This is also unconditional, unlike C++'s
 /// mode-gated `useScaledCounts`, which corrects prior-inflated VBEM alphas we do
 /// not have.) Returns one abundance vector per replicate.
+///
+/// Resampling *classes* rather than individual fragments is what makes this
+/// affordable: a class is a group of identical fragments, so one multinomial draw
+/// over classes is statistically the same as drawing every fragment.
 pub fn bootstrap(
     p: &PackedEqClasses,
     opts: &EmOptions,
@@ -76,6 +116,9 @@ pub fn bootstrap(
     (0..num_bootstraps)
         .into_par_iter()
         .map(|bs| {
+            // Seed derived from (run seed, replicate index) so results reproduce
+            // exactly and do not depend on which thread ran which replicate. The
+            // odd multiplier scatters adjacent indices to distant seeds.
             let mut rng =
                 Pcg64Mcg::seed_from_u64(seed ^ (bs as u64).wrapping_mul(0x9E3779B97F4A7C15));
             let resampled = multinomial(total, &sample_weights, &mut rng);
@@ -85,6 +128,10 @@ pub fn bootstrap(
             // masked final M-step over the *resampled* counts (no rescale-up). The
             // replicate's `dropped` mass is negligible and not reported (only the
             // point estimate surfaces `inference_truncated_mass`).
+            //
+            // Finalizing identically to the point estimate is what makes the
+            // spread interpretable: any systematic difference in post-processing
+            // would show up as bias, not variance.
             let (alphas, _dropped) =
                 crate::finalize_truncate_redistribute(p, &resampled, alphas, opts, None);
             alphas
@@ -98,6 +145,10 @@ pub struct GibbsOptions {
     /// number of posterior samples to draw
     pub num_samples: u32,
     /// internal thinning rounds between recorded samples (salmon default 16)
+    ///
+    /// Consecutive states of a Markov chain are highly correlated, so recording
+    /// every one would give many samples carrying little independent information.
+    /// Keeping only every 16th decorrelates them.
     pub thinning: u32,
     /// base prior value (per-transcript, or per-nucleotide when `!per_transcript_prior`)
     pub prior: f64,
@@ -117,11 +168,21 @@ impl Default for GibbsOptions {
 }
 
 /// salmon's Gibbs rate parameter `beta`.
+/// The rate of the Gamma prior on each transcript's expression rate.
 const GIBBS_BETA: f64 = 0.1;
 
 /// One Gibbs round (salmon's `sampleRoundNonCollapsedMultithreaded_`): draw the
 /// transcript fractions `mu` from their Gamma posterior, then resample each
 /// equivalence class's count multinomially across its transcripts.
+///
+/// These are the two conditional distributions the sampler alternates between:
+/// abundances given a fragment assignment, and a fragment assignment given
+/// abundances. Alternating between the full conditionals of a model is exactly
+/// what makes this a Gibbs sampler.
+///
+/// The Gamma appears because it is the conjugate prior for a Poisson count: with
+/// a Gamma prior and Poisson-distributed observed counts, the posterior is again
+/// a Gamma, with the observed count folded into its shape parameter.
 #[allow(clippy::too_many_arguments)]
 fn gibbs_round(
     p: &PackedEqClasses,
@@ -133,6 +194,11 @@ fn gibbs_round(
     rng: &mut impl Rng,
 ) {
     // Sample mu[i] ~ Gamma(txpCount[i] + prior[i], 1/(beta + effLen[i])); reset count.
+    //
+    // Shape = observed count + prior (more reads ⇒ tighter, higher draw); scale
+    // shrinks with effective length, converting counts back to a rate per
+    // available position. The counts are zeroed as we go because the second half
+    // of the round refills them from scratch.
     for &i in active {
         let i = i as usize;
         let ci = txp_count[i] + prior_alphas[i];
@@ -151,17 +217,24 @@ fn gibbs_round(
         let s = p.starts[ci] as usize;
         let e = p.starts[ci + 1] as usize;
         let tids = &p.labels[s..e];
+        // Note: the *raw* weights here, not the effective-length-divided
+        // `combined` ones — the length correction already lives in `mu`'s scale.
         let weights = &p.weights[s..e];
         if tids.len() > 1 {
             probs.clear();
             let mut denom = 0.0;
             for (&tid, &w) in tids.iter().zip(weights) {
+                // The 1000× factor only keeps the products away from denormal
+                // territory; the multinomial normalizes them anyway.
                 let v = 1000.0 * mu[tid as usize] * w;
                 probs.push(v);
                 denom += v;
             }
             if denom <= MIN_EQ_CLASS_WEIGHT {
                 // fall back to uniform over the class
+                //
+                // Every member drew a vanishing rate; assigning uniformly keeps
+                // the chain moving instead of stalling on a zero denominator.
                 for v in probs.iter_mut() {
                     *v = 1.0;
                 }
@@ -171,6 +244,7 @@ fn gibbs_round(
                 txp_count[tid as usize] += k as f64;
             }
         } else {
+            // Unambiguous class: nothing random about where its reads go.
             txp_count[tids[0] as usize] += class_count as f64;
         }
     }
@@ -182,6 +256,10 @@ fn gibbs_round(
 /// Returns one abundance vector per sample (scaled to the input total
 /// `p.total_count`, matching the point estimate — not an external mapped-fragment
 /// counter).
+///
+/// Starting every chain from the converged EM estimate is what allows the burn-in
+/// to be skipped: the chain begins in a high-probability region rather than
+/// having to walk there.
 pub fn gibbs_sample(
     p: &PackedEqClasses,
     eff_lens: &[f64],
@@ -196,6 +274,10 @@ pub fn gibbs_sample(
     }
 
     // Active transcripts = those appearing in some class.
+    //
+    // A transcript no fragment is compatible with has no posterior to sample;
+    // restricting the per-round loop to active ones skips them entirely, which
+    // matters because most of a transcriptome is typically unexpressed.
     let mut active_flag = vec![false; num_txps];
     for &t in &p.labels {
         active_flag[t as usize] = true;
@@ -205,6 +287,9 @@ pub fn gibbs_sample(
         .collect();
 
     // Per-transcript prior (per-txp = constant; per-nucleotide = prior·max(1,effLen)).
+    //
+    // The per-nucleotide form makes the prior's strength proportional to how much
+    // sequence a transcript offers, so it does not dominate short transcripts.
     let prior_alphas: Vec<f64> = (0..num_txps)
         .map(|i| {
             if opts.per_transcript_prior {
@@ -224,6 +309,10 @@ pub fn gibbs_sample(
     }
 
     // Chain layout: salmon uses 1/2/4/8 chains by sample count.
+    //
+    // More chains means more parallelism, but each still pays its own thinning
+    // cost per sample, so splitting a small request across many chains would be
+    // pure overhead.
     let nchains: usize = if num_samples >= 200 {
         8
     } else if num_samples >= 100 {
@@ -235,6 +324,7 @@ pub fn gibbs_sample(
     };
     let step = num_samples / nchains;
     // chain c produces samples [c*step .. c*step+len_c)
+    // The last chain absorbs the remainder of an uneven division.
     let bounds: Vec<(usize, usize)> = (0..nchains)
         .map(|c| {
             let start = c * step;
@@ -249,6 +339,9 @@ pub fn gibbs_sample(
 
     let mut all: Vec<Vec<f64>> = vec![Vec::new(); num_samples];
     // Run chains in parallel; each writes its contiguous block.
+    //
+    // Each chain returns its block plus the offset to place it at, so the final
+    // ordering is by sample index and not by which chain finished first.
     let blocks: Vec<(usize, Vec<Vec<f64>>)> = bounds
         .par_iter()
         .enumerate()
@@ -259,6 +352,7 @@ pub fn gibbs_sample(
             let mut mu = vec![0.0f64; num_txps];
             let mut out: Vec<Vec<f64>> = Vec::with_capacity(end - start);
             for _ in start..end {
+                // Advance the chain `thinning` steps, then record one state.
                 for _ in 0..opts.thinning {
                     gibbs_round(
                         p,
@@ -280,6 +374,7 @@ pub fn gibbs_sample(
                 let mut sample = vec![0.0f64; num_txps];
                 let mut denom = 0.0;
                 for t in 0..num_txps {
+                    // rate × available positions = expected fragment count.
                     let ext = mu[t] * eff_lens[t];
                     if ext > 1e-8 {
                         sample[t] = ext;
@@ -308,6 +403,12 @@ pub fn gibbs_sample(
 /// Per-transcript unique / ambiguous fragment counts (salmon's `ambig_info.tsv`):
 /// `unique[t]` sums counts of single-transcript classes for `t`; `ambig[t]` sums
 /// counts of every multi-transcript class containing `t`.
+///
+/// A cheap, deterministic proxy for confidence: a transcript whose evidence is
+/// mostly unique is well-determined, one whose evidence is mostly ambiguous is
+/// not. Note `ambig` deliberately double-counts across transcripts — each member
+/// of a shared class is credited the whole class count, because the question
+/// being answered is per transcript.
 pub fn ambiguity_counts(p: &PackedEqClasses) -> (Vec<u32>, Vec<u32>) {
     let mut unique = vec![0u32; p.num_txps];
     let mut ambig = vec![0u32; p.num_txps];
@@ -332,6 +433,8 @@ mod tests {
     use super::*;
     use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
 
+    /// Uniform weights and unit effective lengths, so the tests measure the
+    /// resampling behaviour and nothing else.
     fn packed(classes: &[(Vec<u32>, u64)], num_txps: usize) -> PackedEqClasses {
         let b = EquivalenceClassBuilder::new();
         for (txps, count) in classes {
@@ -346,6 +449,8 @@ mod tests {
         PackedEqClasses::from_collapsed(&eq, num_txps)
     }
 
+    /// With only unique evidence the bootstrap must be centred on the point
+    /// estimate and must conserve the total in every replicate.
     #[test]
     fn bootstrap_mean_near_point_estimate() {
         // unique evidence -> every bootstrap recovers ~the same counts
@@ -362,6 +467,7 @@ mod tests {
         }
     }
 
+    /// The whole point of the bootstrap: ambiguity must show up as spread.
     #[test]
     fn bootstrap_variance_grows_with_ambiguity() {
         // a fully shared class has higher per-transcript bootstrap variance
@@ -375,6 +481,8 @@ mod tests {
         );
     }
 
+    /// Gibbs samples are stochastic, so this checks the invariant that must hold
+    /// for every sample — the scale — rather than the values themselves.
     #[test]
     fn gibbs_runs_and_conserves_scale() {
         let p = packed(&[(vec![0], 300), (vec![1], 700)], 2);
@@ -394,6 +502,8 @@ mod tests {
         }
     }
 
+    /// Unique counts are per transcript; ambiguous counts credit the full class
+    /// count to every member, hence 100 twice rather than 50 each.
     #[test]
     fn ambiguity_counts_split() {
         let p = packed(&[(vec![0], 30), (vec![1], 70), (vec![0, 1], 100)], 2);

@@ -13,6 +13,8 @@ fn main() -> anyhow::Result<()> {
     let output = args.next().expect("out.bam");
     let n: usize = args.next().expect("n").parse()?;
 
+    // Read the whole input into memory: this is a benchmarking aid run on small
+    // BAMs, so simplicity beats streaming.
     let mut reader = bam::io::Reader::new(std::fs::File::open(&input)?);
     let header = reader.read_header()?;
     let recs: Vec<_> = reader
@@ -22,6 +24,9 @@ fn main() -> anyhow::Result<()> {
 
     let mut writer = bam::io::Writer::new(std::io::BufWriter::new(std::fs::File::create(&output)?));
     writer.write_header(&header)?;
+    // Emit the records N times *in blocks*, not interleaved. Alignment mode
+    // groups a fragment's records by adjacency, so each block's copies read as
+    // additional fragments rather than corrupting the grouping.
     for _ in 0..n {
         for r in &recs {
             writer.write_alignment_record(&header, r)?;

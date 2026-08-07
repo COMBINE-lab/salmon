@@ -109,6 +109,8 @@ fn check(out: &Path, requested: usize) {
 }
 
 #[test]
+/// Bootstrap output must line up with `quant.sf` positionally *and* by name —
+/// tximport reads the two together — and every replicate must conserve mass.
 fn align_bootstrap_output_aligns_with_quant_and_conserves_mass() {
     let tmp = tempfile::tempdir().unwrap();
     let sam = write_sam(tmp.path());
@@ -118,6 +120,8 @@ fn align_bootstrap_output_aligns_with_quant_and_conserves_mass() {
 }
 
 #[test]
+/// The same obligations for Gibbs samples, which take a different code path to
+/// the same file layout.
 fn align_gibbs_output_aligns_with_quant_and_conserves_mass() {
     let tmp = tempfile::tempdir().unwrap();
     let sam = write_sam(tmp.path());

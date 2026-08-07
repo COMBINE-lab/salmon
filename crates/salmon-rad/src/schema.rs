@@ -1,5 +1,21 @@
 //! Building the [`RadPrelude`] (header + tag sections) and matching file-tag
 //! [`TagMap`] for a salmon RAD file.
+//!
+//! # What a "prelude" is
+//!
+//! Every RAD file starts with a self-describing header: how many references
+//! there are and what they are called, plus three *tag sections* that declare
+//! the fields each later record will contain, in order. A reader parses the tag
+//! sections first and then knows exactly how to decode the binary payload; there
+//! is no per-record field naming, which is what keeps the format compact.
+//!
+//! The three sections are:
+//!   * **file tags** — one value per file (written once, right after the header);
+//!   * **read tags** — one value per fragment;
+//!   * **alignment tags** — one value per placement of a fragment.
+//!
+//! This module only *declares* the read/alignment tags; the values are written
+//! per record by [`crate::record`].
 
 use libradicl::header::{RadHeader, RadPrelude};
 use libradicl::rad_types::{
@@ -9,6 +25,9 @@ use libradicl::{ChunkCodec, CHUNK_CODEC_TAG};
 
 use crate::RadProfile;
 
+/// Shorthand for declaring an integer-typed tag: a name plus a width
+/// (`RadIntId::U32` and friends). Used purely to keep the declarations below
+/// readable.
 fn int_desc(name: &str, id: RadIntId) -> TagDesc {
     TagDesc {
         name: name.to_string(),
@@ -29,6 +48,12 @@ fn int_desc(name: &str, id: RadIntId) -> TagDesc {
 /// (see [`crate::RadOutputWriter`]); a `baked_flags` byte records which were
 /// actually filled, so a reader can do a single-pass quant when the FLD (and,
 /// for bias, abundances) are present and fall back to deriving them otherwise.
+///
+/// **Why placeholders + backpatching.** The fragment-length distribution and the
+/// abundance estimates are only known once the whole run has finished, but the
+/// header must be written before any records. So the slots are reserved at the
+/// correct size up front and overwritten in place at the end — which only works
+/// because their size does not depend on the data.
 pub fn build_prelude(
     profile: RadProfile,
     is_paired: bool,
@@ -42,11 +67,13 @@ pub fn build_prelude(
     // reserved placeholders are backpatched once the FLD / abundances /
     // library format are known at the end of the pass.
     let mut file_tag_values: Vec<(&str, TagValue)> = vec![
+        // Identifies the file as salmon's and says which profile it is.
         (
             "rad_type",
             TagValue::String(profile.rad_type_str().to_string()),
         ),
         ("ref_lengths", TagValue::ArrayU32(ref_lengths.to_vec())),
+        // Zeroed bitfield: "nothing baked yet".
         (crate::BAKED_FLAGS_TAG, TagValue::U8(0)),
         (
             crate::FRAG_LENGTH_DIST_TAG,
@@ -70,6 +97,8 @@ pub fn build_prelude(
     if codec != ChunkCodec::None {
         file_tag_values.push((CHUNK_CODEC_TAG, TagValue::U8(codec.as_u8())));
     }
+    // Returns both the serializable section and a name-keyed map, so the writer
+    // can later look a tag up by name in order to backpatch it.
     let (file_tags, file_tag_map) =
         TagSection::from_tag_values(TagSectionLabel::FileTags, &file_tag_values);
 
@@ -78,7 +107,8 @@ pub fn build_prelude(
     read_tags.add_tag_desc(int_desc("frag_map_type", RadIntId::U8));
 
     // Alignment-level tags. The first three are byte-identical to piscem
-    // `bulk_with_pos`; SA adds a per-hit score.
+    // `bulk_with_pos`; SA adds a per-hit score. Declaration order *is* the
+    // on-disk field order, so these lines must match the record writer exactly.
     let mut aln_tags = TagSection::new_with_label(TagSectionLabel::AlignmentTags);
     aln_tags.add_tag_desc(int_desc("compressed_ori_ref", RadIntId::U32));
     aln_tags.add_tag_desc(int_desc("pos", RadIntId::U32));

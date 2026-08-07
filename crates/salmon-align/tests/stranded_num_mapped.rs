@@ -78,6 +78,9 @@ fn run(sam: &Path, out: &Path, lib_type: &str) -> salmon_align::AlignQuantResult
 }
 
 #[test]
+/// The regression itself: `num_mapped` must count fragments that survived the
+/// strand filter, not every fragment that aligned, or the reported mapping rate
+/// is inflated and mass conservation breaks.
 fn stranded_align_num_mapped_matches_quantified_mass() {
     let tmp = tempfile::tempdir().unwrap();
     let (n_fwd, n_rev) = (5usize, 3usize);
@@ -125,6 +128,8 @@ fn stranded_align_num_mapped_matches_quantified_mass() {
 /// paired-end right orphans and dropped under `SF`/`SR` (0 fragments mapped),
 /// leaving `U` as the only library type that worked.
 #[test]
+/// Single-end records must be filtered on their own orientation, which is the
+/// only strand information they carry.
 fn single_end_strand_filters_respect_alignment_orientation() {
     let tmp = tempfile::tempdir().unwrap();
     let (n_fwd, n_rev) = (12usize, 48usize); // flag-16-heavy, as reported

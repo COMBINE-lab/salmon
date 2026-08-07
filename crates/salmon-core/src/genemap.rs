@@ -1,9 +1,21 @@
 //! Transcript→gene mapping and gene-level aggregation (`-g/--geneMap` →
 //! `quant.genes.sf`), matching salmon's `aggregateEstimatesToGeneLevel`.
 //!
-//! Gene NumReads and TPM are the sums over the gene's transcripts; gene Length
-//! and EffectiveLength are the TPM-weighted means of the transcript (effective)
-//! lengths, falling back to the unweighted mean when the gene's total TPM is 0.
+//! # Why aggregate at all
+//!
+//! salmon quantifies *transcripts* (isoforms), but many analyses want one number
+//! per *gene*. A gene typically has several isoforms, so gene-level output is a
+//! roll-up of its transcripts.
+//!
+//! Counts and TPM are additive, so they simply sum. Lengths are not: a gene has
+//! no single length, and averaging its isoforms equally would be wrong when one
+//! isoform dominates expression. So gene Length and EffectiveLength are the
+//! TPM-weighted means of the transcript (effective) lengths — the length of the
+//! "average molecule actually present" — falling back to the unweighted mean when
+//! the gene's total TPM is 0 and there is nothing to weight by.
+//!
+//! ("TPM" is transcripts per million: a within-sample relative abundance that
+//! already accounts for length, so all TPMs in a sample sum to one million.)
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, Write};
@@ -13,24 +25,27 @@ use std::path::Path;
 /// `transcript_id` and `gene_id` attributes (GTF `key "value"` and GFF3
 /// `key=value` syntaxes); anything else is read as a TSV whose first two
 /// whitespace-separated columns are `transcript` and `gene`.
+///
+/// The file may be compressed — gzip is how Ensembl and GENCODE ship it, and
+/// `niffler` also covers BGZF, bzip2, xz and zstd. Compression is detected from
+/// the content, not the name, so a compressed file that kept a bare `.gtf` name
+/// is read correctly too.
 pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, String>> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let is_gtf = matches!(ext.as_str(), "gtf" | "gff" | "gff3");
-    let reader = io::BufReader::new(std::fs::File::open(path)?);
+    let is_gtf = has_gtf_extension(path);
+    let reader = open_maybe_compressed(path)?;
     let mut map = HashMap::new();
 
     for line in reader.lines() {
-        let line = line?;
+        let line = line.map_err(|e| annotate_read_error(path, e))?;
         let trimmed = line.trim();
+        // Blank lines and `#` comment/pragma lines appear in real annotations.
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
         if is_gtf {
             let cols: Vec<&str> = line.split('\t').collect();
+            // A well-formed feature line has 9 columns; skip anything shorter
+            // rather than failing the whole file.
             if cols.len() < 9 {
                 continue;
             }
@@ -38,6 +53,9 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
                 extract_attr(cols[8], "transcript_id"),
                 extract_attr(cols[8], "gene_id"),
             ) {
+                // `or_insert` keeps the first mapping seen: an annotation
+                // repeats a transcript on every one of its exon lines, and they
+                // all name the same gene.
                 map.entry(t).or_insert(g);
             }
         } else {
@@ -48,6 +66,8 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
         }
     }
 
+    // An empty map almost always means the wrong file or the wrong format was
+    // passed, and would otherwise surface much later as an empty gene table.
     if map.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -60,15 +80,90 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
     Ok(map)
 }
 
+/// Name the file in a read failure, and add a hint when the bytes are not
+/// readable as text. `BufRead::lines()` reports only "stream did not contain
+/// valid UTF-8", which says neither which file nor what to do about it; past
+/// the format sniff, that error means the input is neither text nor any
+/// compression format we recognise. The original message is kept so a
+/// corrupt-gzip failure still reads as one.
+fn annotate_read_error(path: &Path, err: io::Error) -> io::Error {
+    let hint = if err.kind() == io::ErrorKind::InvalidData {
+        " (expected plain text, or an annotation compressed with gzip, BGZF, \
+         bzip2, xz or zstd)"
+    } else {
+        ""
+    };
+    io::Error::new(
+        err.kind(),
+        format!("reading gene map {}: {err}{hint}", path.display()),
+    )
+}
+
+/// Compression suffixes stripped before deciding GTF-vs-TSV, one per format
+/// `niffler` decodes. Content detection is the reader's job; this is only about
+/// the *name*, and a name that ends in a codec suffix says nothing about the
+/// format underneath it.
+const COMPRESSION_SUFFIXES: [&str; 6] = ["gz", "bgz", "bgzf", "bz2", "xz", "zst"];
+
+/// Whether the path names a GTF/GFF, ignoring a trailing compression suffix:
+/// the last extension of `annotation.gtf.gz` is `gz`, but the content is GTF.
+/// Getting this wrong is not a cosmetic error — a GTF handed to the TSV branch
+/// parses into `{sequence name: source}` pairs, which is a non-empty map that
+/// matches no transcript, so it fails silently rather than loudly.
+fn has_gtf_extension(path: &Path) -> bool {
+    let ext = |p: &Path| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+    };
+    let outer = ext(path);
+    let effective = match outer.as_deref() {
+        Some(e) if COMPRESSION_SUFFIXES.contains(&e) => {
+            ext(Path::new(path.file_stem().unwrap_or_default()))
+        }
+        _ => outer,
+    };
+    matches!(effective.as_deref(), Some("gtf" | "gff" | "gff3"))
+}
+
+/// Open `path`, transparently decompressing it when it is compressed.
+///
+/// [`niffler::get_reader`] sniffs the leading magic bytes and returns the
+/// matching decoder — gzip (via `MultiGzDecoder`, so concatenated members and
+/// BGZF are read in full rather than truncated at the first member), bzip2, xz
+/// and zstd — or the stream unchanged when it is plain text. Detection is by
+/// content, so a compressed annotation that kept a bare `.gtf` name still works.
+fn open_maybe_compressed(path: &Path) -> io::Result<Box<dyn BufRead>> {
+    let open = || std::fs::File::open(path).map_err(|e| annotate_read_error(path, e));
+    match niffler::get_reader(Box::new(io::BufReader::new(open()?))) {
+        Ok((reader, _format)) => Ok(Box::new(io::BufReader::new(reader))),
+        // niffler reads five bytes to sniff and rejects anything shorter. No
+        // compressed file is that small, so a stub gene map is plain text by
+        // construction; re-open it and let the line loop handle it (an empty or
+        // header-only file still trips the `map.is_empty()` guard below).
+        Err(niffler::Error::FileTooShort) => Ok(Box::new(io::BufReader::new(open()?))),
+        Err(niffler::Error::IOError(e)) => Err(annotate_read_error(path, e)),
+        Err(e) => Err(annotate_read_error(
+            path,
+            io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
+        )),
+    }
+}
+
 /// Extract attribute `key` from a GTF/GFF column-9 string. Each `;`-separated
 /// entry is `key "value"` (GTF) or `key=value` (GFF3); the value's surrounding
 /// quotes are stripped.
+///
+/// Both syntaxes are handled by one parser because real files mix conventions,
+/// and because the caller only knows the file's extension, not its dialect.
 fn extract_attr(attrs: &str, key: &str) -> Option<String> {
     for entry in attrs.split(';') {
         let entry = entry.trim();
         if entry.is_empty() {
             continue;
         }
+        // Split into key and value at the first `=` (GFF3) or the first space
+        // (GTF). Anything with neither separator is not an attribute.
         let (k, v) = if let Some(eq) = entry.find('=') {
             (entry[..eq].trim(), entry[eq + 1..].trim())
         } else if let Some(sp) = entry.find(char::is_whitespace) {
@@ -76,6 +171,8 @@ fn extract_attr(attrs: &str, key: &str) -> Option<String> {
         } else {
             continue;
         };
+        // Exact key comparison, never a substring test: `havana_gene_id` must
+        // not satisfy a request for `gene_id` (see the test below).
         if k == key {
             let v = v.trim_matches('"');
             if !v.is_empty() {
@@ -210,6 +307,10 @@ pub fn write_gene_quant(
     });
 
     // Group transcript indices by gene (gene name order is sorted for determinism).
+    //
+    // A `BTreeMap` iterates in sorted key order, unlike a `HashMap`; that is the
+    // whole reason it is used here, so the output file is byte-identical between
+    // runs.
     let mut genes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     let mut summary = GeneQuantSummary::default();
     let mut unmatched: Vec<&str> = Vec::new();
@@ -238,26 +339,33 @@ pub fn write_gene_quant(
     }
 
     // smallest positive double, matching salmon's `minTPM = denorm_min`.
+    // Used as the "is the total effectively zero" threshold below.
     let min_tpm = f64::from_bits(1);
     let mut w = io::BufWriter::new(std::fs::File::create(out_path)?);
     writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
     for (gene, idxs) in &genes {
+        // Additive quantities: straight sums over the gene's transcripts.
         let total_tpm: f64 = idxs.iter().map(|&i| tpm[i]).sum();
         let total_reads: f64 = idxs.iter().map(|&i| counts[i]).sum();
         let (mut g_len, mut g_eff) = (0.0f64, 0.0f64);
         if total_tpm > min_tpm {
+            // Weight each isoform's length by its share of the gene's expression.
             for &i in idxs {
                 let frac = tpm[i] / total_tpm;
                 g_len += lengths[i] as f64 * frac;
                 g_eff += eff_lengths[i] * frac;
             }
         } else {
+            // Nothing expressed: weighting by zero would give 0/0, so fall back
+            // to a plain average over the isoforms.
             let frac = 1.0 / idxs.len() as f64;
             for &i in idxs {
                 g_len += lengths[i] as f64 * frac;
                 g_eff += eff_lengths[i] * frac;
             }
         }
+        // Fixed decimal places matching salmon's output precision exactly, so
+        // downstream tools that diff the two see no difference.
         writeln!(
             w,
             "{gene}\t{g_len:.3}\t{g_eff:.3}\t{total_tpm:.6}\t{total_reads:.3}"
@@ -632,6 +740,9 @@ mod tests {
         assert_eq!(extract_attr("havana_gene_id \"X\";", "gene_id"), None);
     }
 
+    /// Counts and TPM sum; length is TPM-weighted, not a plain average. The
+    /// numbers are chosen so the weighted answer (125) differs clearly from the
+    /// unweighted one (150).
     #[test]
     fn aggregation_sums_and_weights() {
         // two transcripts of gene G (lengths 100/200, TPM 30/10), one of gene H.

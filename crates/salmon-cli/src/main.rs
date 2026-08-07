@@ -1,5 +1,22 @@
 //! `salmon` command-line interface (Rust port).
 //!
+//! # What this layer does
+//!
+//! Almost nothing, deliberately. Its job is to turn a command line into one of
+//! the option structs the library crates take (`IndexBuildOptions`,
+//! `QuantOptions`, `AlignQuantOptions`, …), call the corresponding entry point,
+//! and report the result. All the science lives in those crates, which is why
+//! they can be used as libraries and tested without a command line.
+//!
+//! What does live here is everything that only matters to a person at a
+//! terminal: argument validation and conflict detection, the progress bar,
+//! logging setup, and choosing which mode a given combination of flags means.
+//!
+//! **A note on doc comments below.** The `///` comments on the argument structs
+//! are not just documentation — `clap` turns them verbatim into the `--help`
+//! text a user sees. So they are written for users, and anything addressed to a
+//! reader of the source is a plain `//` comment instead.
+//!
 //! Provides the two most-used subcommands so far: `index` (build a salmon
 //! index over a transcriptome) and `quant` (quantify from FASTQ reads, via
 //! selective alignment or the pseudoalignment-only `--sketch` path). Flag
@@ -28,6 +45,15 @@ use salmon_quant::{quantify, ChunkCodec, EmAccel, ProgressCounters, QuantOptions
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+// ---------------------------------------------------------------------------
+// Progress display
+//
+// A long run needs to show that it is making progress, but log lines and a live
+// spinner both write to the terminal and will garble each other. The two types
+// below solve that by routing every log write through the progress bar, which
+// knows how to clear and redraw itself around foreign output.
+// ---------------------------------------------------------------------------
 
 /// The active mapping progress bar, if one is being shown. Tracing log writes
 /// route through its `suspend` so status lines print cleanly above the live
@@ -400,8 +426,9 @@ struct QuantArgs {
     /// Output directory.
     #[arg(short = 'o', long = "output", required = true)]
     output: PathBuf,
-    /// Transcript-to-gene map (GTF/GFF, or a 2-column TSV); also writes
-    /// gene-level estimates to `quant.genes.sf`.
+    /// Transcript-to-gene map (GTF/GFF, or a 2-column TSV), optionally
+    /// compressed (gzip, BGZF, bzip2, xz, zstd); also writes gene-level
+    /// estimates to `quant.genes.sf`.
     #[arg(short = 'g', long = "geneMap", value_name = "FILE")]
     gene_map: Option<PathBuf>,
     /// Ignore trailing transcript-version suffixes when joining `--geneMap`
@@ -809,6 +836,8 @@ struct QuantArgs {
 /// seeding (`--uniMEMs`): it is faster than sparse k-mer seeding and at least as
 /// accurate, and faithfully reproduces pufferfish's seeding. `--sparseSeeds`
 /// selects the older sparse fixed-k anchors.
+// Resolve the three mutually-exclusive seeding flags into one mode. Kept as a
+// function so the precedence between them is stated once rather than inline.
 fn seed_mode(unimems: bool, refmems: bool, sparse_seeds: bool) -> salmon_map::SeedMode {
     if sparse_seeds {
         salmon_map::SeedMode::Sparse
@@ -821,6 +850,7 @@ fn seed_mode(unimems: bool, refmems: bool, sparse_seeds: bool) -> salmon_map::Se
     }
 }
 
+// `salmon index`: translate the arguments into `IndexBuildOptions` and build.
 fn run_index(args: IndexArgs) -> Result<()> {
     if args.filter_size.is_some() {
         tracing::warn!("--filterSize is accepted for salmon compatibility but has no effect: the Rust index builder (cf1-rs) does not expose the cDBG bloom-filter size.");
@@ -849,6 +879,9 @@ fn run_index(args: IndexArgs) -> Result<()> {
 /// Long-read (`--ont`) quantification is intentionally not supported: for long
 /// reads, oarfish is the recommended tool. Print a pointer and exit rather than
 /// silently producing estimates that are inappropriate for long reads.
+// Long-read quantification is out of scope, as it is upstream. Rather than
+// failing obscurely on data salmon cannot model, point the user at the right
+// tool. `-> !` means this never returns: it exits the process.
 fn long_read_redirect() -> ! {
     eprintln!(
         "salmon (Rust): long-read quantification (--ont) is not supported.\n\
@@ -986,6 +1019,10 @@ fn write_gene_level(
 /// Bias correction needs the reference sequence, but since we control both passes
 /// and phase 1 loads the index, we hand the index's sequences to phase 2 — so
 /// `--deterministic --seqBias/--gcBias/--posBias` needs no separate `-t`.
+// `--deterministic` (reads mode): a two-pass run. The first pass maps to a RAD
+// with order-independent models baked into the header; the second quantifies
+// from it. Splitting the run this way is what makes the result independent of
+// the thread count.
 fn run_deterministic(
     mut map_opts: QuantOptions,
     rad_out: Option<PathBuf>,
@@ -1100,6 +1137,7 @@ fn run_deterministic(
 /// from it via the same deterministic [`quantify_rad`] the reads path uses, so
 /// the result is byte-identical across thread counts. Score-based (carries the
 /// BAM `AS` tag); the online alignment error model is not used in this mode.
+// The same two-pass split for alignment input: BAM to RAD, then quantify.
 fn run_deterministic_align(
     opts: AlignQuantOptions,
     rad_out: Option<PathBuf>,
@@ -1185,6 +1223,8 @@ fn rad_codec_from_args(no_compress_rad: bool, rad_compress: &str) -> Result<Chun
 /// spliced genome alignments into transcriptome coordinates with bramble, write
 /// a salmon RAD, then quantify from it with the deterministic `quantify_rad`.
 /// `q` supplies the EM / bias / output / bootstrap knobs for that requant.
+// `--annotation`: project a genome BAM into transcript coordinates, then
+// quantify the resulting RAD through the ordinary path.
 fn run_genome_project(
     gp: GenomeProjectOptions,
     q: AlignQuantOptions,
@@ -1245,6 +1285,11 @@ fn run_genome_project(
     Ok(())
 }
 
+// `salmon quant`: the main entry point. Most of its length is deciding which of
+// the several input modes the flags describe (reads, BAM, genome BAM, RAD; plain
+// or deterministic), validating that the combination makes sense, and reporting
+// clearly when it does not — a wrong mode chosen silently would be far worse
+// than an error.
 fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.ont {
         long_read_redirect();
@@ -1788,6 +1833,7 @@ fn main() -> Result<()> {
 
 /// `salmon swim` — the super-secret operation. (An easter egg carried over from
 /// C++ salmon: it prints the ASCII banner and swims away.)
+// An easter egg, and a deliberate one: salmon has always had it.
 fn run_swim() {
     print!(
         r#"
@@ -1908,6 +1954,9 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
 /// `--fldPolicy` selects between a RAD's baked fragment-length distribution and
 /// recomputing one, so it means nothing where there is no RAD header to read.
 /// Say so rather than accepting it silently.
+// Warn rather than ignore. A flag that has no effect in the chosen mode is a
+// misunderstanding on the user's part, and silently discarding it would leave
+// them believing they had configured something they had not.
 fn warn_unsupported_fld_policy(policy: FldPolicyArg, mode: &str) {
     if policy == FldPolicyArg::default() {
         return;
@@ -1945,11 +1994,14 @@ mod tests {
 
     /// Parse a minimal `salmon quant` invocation plus `extra`, returning the
     /// mapping-output flags only (`QuantArgs` itself is not `Debug`).
+    /// Parse a `quant` command line and return just the two mapping-output paths.
     fn write_flags(extra: &[&str]) -> Result<(Option<PathBuf>, Option<PathBuf>), clap::Error> {
         quant_args(extra).map(|args| (args.write_mappings, args.write_bam))
     }
 
     /// Parse a minimal `salmon quant` invocation plus `extra`.
+    /// Parse a `quant` command line with the mandatory arguments filled in, so
+    /// each test only states the flags it is actually about.
     fn quant_args(extra: &[&str]) -> Result<QuantArgs, clap::Error> {
         let mut argv = vec![
             "salmon", "quant", "-i", "idx", "-l", "A", "-r", "r.fq", "-o", "out",
@@ -1964,6 +2016,8 @@ mod tests {
     /// `--writeSam` is a spelling of `--writeMappings`, giving SAM output a
     /// format-named flag to match `--writeBam`.
     #[test]
+    /// `--writeSam` is kept as a visible alias for compatibility, so it must land
+    /// in the same field rather than being a second, separate option.
     fn write_sam_is_an_alias_for_write_mappings() {
         let expected = Some(PathBuf::from("m.sam"));
         for sam_flag in ["--writeMappings", "--writeSam", "-z"] {
@@ -1976,6 +2030,8 @@ mod tests {
     /// The alias shares `write_mappings`' arg id, so it inherits the
     /// `--writeBam` conflict rather than silently allowing both formats.
     #[test]
+    /// Asking for both mapping-output formats at once is a usage error, and must
+    /// be reported as one instead of silently honouring whichever came last.
     fn write_sam_conflicts_with_write_bam() {
         for sam_flag in ["--writeMappings", "--writeSam", "-z"] {
             let err = write_flags(&[sam_flag, "m.sam", "--writeBam", "m.bam"])
@@ -2038,6 +2094,9 @@ mod tests {
     /// supplied value from an inherited default, which is why these are `Option`
     /// rather than `default_value_t`.
     #[test]
+    /// The warning about ignored fragment-length arguments must fire only for
+    /// values the user actually typed — warning about a default the user never
+    /// set would be noise.
     fn fld_prior_args_distinguish_supplied_from_default() {
         let bare = quant_args(&[]).unwrap();
         assert_eq!(bare.fld_mean, None);

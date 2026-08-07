@@ -48,6 +48,9 @@ fn write_fixture(dir: &Path) -> (PathBuf, PathBuf) {
 }
 
 #[test]
+/// All three bias corrections at once through the alignment entry point: the
+/// corrections are shared with the reads path, so this only has to prove they are
+/// still wired up and produce a sane result, not re-verify the models.
 fn all_bias_alignment_mode_smoke() {
     let tmp = tempfile::tempdir().unwrap();
     let (sam, fasta) = write_fixture(tmp.path());

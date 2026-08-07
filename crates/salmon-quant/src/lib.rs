@@ -5,10 +5,32 @@
 //! equivalence classes ([`salmon_eqclass`]) and fragment lengths
 //! ([`salmon_model`]) → compute effective lengths → estimate abundances by EM
 //! ([`salmon_infer`]) → write `quant.sf` and the JSON metadata
-//! ([`output`]).
+//! (the `output` module).
 //!
 //! Selective alignment is the default; set [`QuantOptions::sketch`] for the
 //! alignment-free pseudoalignment path.
+//!
+//! # The shape of a run
+//!
+//! [`quantify`] is one long function because a quant run *is* one long sequence
+//! of phases, each depending on the last:
+//!
+//! 1. **Load the index** (optionally without the reference sequence, which is
+//!    only needed for alignment and sequence-dependent bias).
+//! 2. **Map**, in parallel over the input reads. This is the expensive phase and
+//!    the one that populates everything else: equivalence classes, the
+//!    fragment-length distribution, the library-type tally, the observed bias
+//!    models, and any SAM/BAM/RAD output.
+//! 3. **Finalize the models** learned during mapping, and from them compute each
+//!    transcript's effective length.
+//! 4. **Infer** abundances by EM/VBEM over the equivalence classes, optionally
+//!    with a bias-correction round and posterior sampling.
+//! 5. **Write** `quant.sf` and the metadata.
+//!
+//! Bias correction adds a wrinkle to step 4: the bias models must be weighted by
+//! abundance, but abundance is what we are estimating. salmon resolves this by
+//! running a rough EM first, using its output to weight the bias models,
+//! recomputing effective lengths, and then running the real EM.
 
 mod bam;
 mod mapping_record;
@@ -42,6 +64,10 @@ pub use output::write_outputs;
 pub use salmon_core::ProgressCounters;
 
 /// Options for a reads-mode quantification run.
+///
+/// The library-level equivalent of salmon's command line: every field here
+/// corresponds to a flag, and `salmon-cli` does little more than parse arguments
+/// into this struct. Defaults come from [`QuantOptions::new`] and match salmon's.
 #[derive(Debug, Clone)]
 pub struct QuantOptions {
     /// directory of a salmon index (produced by `salmon-index`)
@@ -238,6 +264,11 @@ impl QuantOptions {
 pub use salmon_core::Diagnostic;
 
 /// Quantification results (also written to disk by [`write_outputs`]).
+///
+/// The abundance vectors are indexed by reference id and cover *all* references
+/// including decoys; the output writer selects the rows that belong in
+/// `quant.sf`. The remaining fields are the counters and provenance that end up
+/// in `meta_info.json`.
 #[derive(Debug, Clone)]
 pub struct QuantResult {
     pub names: Vec<String>,
@@ -276,7 +307,7 @@ pub struct QuantResult {
     pub num_alignments_below_threshold_for_mapped_fragments_vm: u64,
     /// where the fragment-length distribution came from; reported as
     /// `frag_length_source` in `meta_info.json`. Always
-    /// [`FragLengthSource::Reads`] here — reads mode trains the FLD during the
+    /// `FragLengthSource::Reads` here — reads mode trains the FLD during the
     /// mapping pass — but carried so every mode reports the field.
     pub frag_len_source: salmon_model::FragLengthSource,
     pub frag_len_mean: f64,
@@ -324,6 +355,9 @@ pub struct QuantResult {
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
+///
+/// See the module documentation for the phases; the `PhaseTimer` marks below
+/// delimit them in the log.
 pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     anyhow::ensure!(
         opts.write_mappings.is_none() || opts.write_bam.is_none(),
@@ -664,6 +698,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     };
 
     // ---- effective lengths from the (now frozen) FLD ------------------------
+    //
+    // Effective length is the divisor that turns fragment counts into
+    // abundances: how many positions a fragment could have started at, given how
+    // long fragments actually are. It can only be computed now, because the
+    // fragment-length distribution was being learned throughout the mapping pass.
+    // `cache()` freezes it, after which every lookup is an array read.
     // salmon's base effective length is `refLen − E[L | L ≤ refLen]`
     // (`computeSmoothedEffectiveLengths` via `correctionFactorsFromMass`), NOT the
     // truncated-PMF `Σ pmf(l)·(refLen−l+1)` estimate, which falls back to the raw
@@ -681,6 +721,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     }
 
     // ---- inference ----------------------------------------------------------
+    //
+    // `finish` drains the concurrent builder into a flat, sorted vector, which is
+    // what makes the class ordering (and hence the EM) reproducible.
     let mut collapsed = eq_builder.finish();
     collapsed.update_eff_lengths(&eff_lengths);
     let num_eq_classes = collapsed.len();
@@ -1111,6 +1154,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
 /// Current local time as an asctime-style string (`Wed Jun 10 20:34:58 2026`),
 /// matching salmon's `start_time`/`end_time` format.
+///
+/// Matched exactly because downstream tools parse these fields.
 pub(crate) fn asctime_now() -> String {
     jiff::Zoned::now()
         .strftime("%a %b %e %H:%M:%S %Y")
@@ -1125,6 +1170,11 @@ pub(crate) fn asctime_now() -> String {
 /// classes are collapsed by transcript set (`groupSize`, tids…, summed count),
 /// matching salmon's `--dumpEq`; with `with_weights` each class is emitted as-is
 /// with its per-transcript combined weights before the count (`--dumpEqWeights`).
+/// Serialize the equivalence classes for inspection or for a downstream tool.
+///
+/// This is the intermediate the EM actually consumes, so dumping it is the way to
+/// see what salmon inferred *before* the statistics: which transcript sets the
+/// reads were compatible with, and how many reads fell into each.
 fn dump_eq_classes(
     dir: &Path,
     salmon: &SalmonIndex,
@@ -1178,6 +1228,10 @@ fn dump_eq_classes(
 }
 
 /// Open a (optionally gzipped) read file as a boxed reader.
+///
+/// Boxed as `dyn Read` so the plain and gzipped cases have one type and the
+/// parser below does not need to be generic over them; `Send` because paraseq
+/// moves the reader onto worker threads.
 fn open_reader(path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
     let f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     if path.extension().and_then(|e| e.to_str()) == Some("gz") {
@@ -1187,6 +1241,11 @@ fn open_reader(path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
     }
 }
 
+/// Drive the mapping pass over single-end input.
+///
+/// paraseq owns the reading and the threading: it is handed every input file and
+/// the processor, and it calls back into [`processor`] with batches of records on
+/// each worker thread.
 fn run_single(paths: &[PathBuf], proc: &mut QuantProcessor, nthreads: usize) -> Result<()> {
     let mut readers = Vec::with_capacity(paths.len());
     for p in paths {
@@ -1203,6 +1262,11 @@ fn run_single(paths: &[PathBuf], proc: &mut QuantProcessor, nthreads: usize) -> 
     Ok(())
 }
 
+/// Drive the mapping pass over paired-end input.
+///
+/// The two mate files are interleaved into the collection in pairs, so paraseq
+/// hands the processor matching records together — the mates of one fragment are
+/// always processed by the same worker at the same time.
 fn run_paired(
     mates1: &[PathBuf],
     mates2: &[PathBuf],
