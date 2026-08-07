@@ -68,10 +68,30 @@ impl PackedEqClasses {
     /// ([`update_eff_lengths`](salmon_eqclass::CollapsedEqClasses::update_eff_lengths)).
     pub fn from_collapsed(eq: &CollapsedEqClasses, num_txps: usize) -> Self {
         let n = eq.classes.len();
-        let mut labels = Vec::new();
+        // Size the flat arrays up front. Growing them from empty costs a
+        // reallocation plus a full copy at every doubling, and leaves a transient
+        // peak of ~1.5x the final size while both buffers are live. The exact
+        // total is one cheap pass over the class list (it only reads `Vec::len`).
+        let total_labels: usize = eq
+            .classes
+            .iter()
+            .filter(|(g, _)| g.valid)
+            .map(|(g, _)| g.txps.len())
+            .sum();
+        // The CSR offsets below are `u32`. Past `u32::MAX` incidences the `as u32`
+        // cast would wrap silently and `class()` would hand the optimizer slices
+        // belonging to other classes — wrong abundances with no diagnostic. Fail
+        // loudly instead.
+        assert!(
+            total_labels <= u32::MAX as usize,
+            "equivalence-class CSR needs {total_labels} incidences, which exceeds \
+             the u32 offset limit ({}); please report this input",
+            u32::MAX
+        );
+        let mut labels = Vec::with_capacity(total_labels);
         let mut starts = Vec::with_capacity(n + 1);
-        let mut combined = Vec::new();
-        let mut weights = Vec::new();
+        let mut combined = Vec::with_capacity(total_labels);
+        let mut weights = Vec::with_capacity(total_labels);
         let mut counts = Vec::with_capacity(n);
         // The first class starts at offset 0; every later entry is appended after
         // that class's data has been copied in.
