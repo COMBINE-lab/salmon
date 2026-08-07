@@ -1,5 +1,20 @@
 //! Pseudoalignment-only mapping (the optional, alignment-free path).
 //!
+//! # The trade being made
+//!
+//! Pseudoalignment asks only "which transcripts share enough k-mers with this
+//! read?" and never checks how well the bases actually line up. That is
+//! dramatically faster — no chaining, no alignment — and for clean data against a
+//! well-matched reference it usually gives very similar abundances.
+//!
+//! What it gives up is the ability to reject a read that shares k-mers with a
+//! transcript by coincidence, which is exactly what selective alignment exists to
+//! do. So this is the right mode when speed matters more than resolving hard
+//! cases, and the default is selective alignment.
+//!
+//! Because there is no alignment score, every surviving mapping is weighted
+//! equally.
+//!
 //! This is the new capability the port adds on top of salmon: quantify directly
 //! from piscem's pseudoalignment, skipping MEM chaining and alignment
 //! validation entirely. It calls piscem's [`map_read`] engine to collect

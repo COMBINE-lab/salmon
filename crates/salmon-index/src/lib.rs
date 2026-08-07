@@ -1,9 +1,30 @@
 //! Salmon index construction and loading.
 //!
+//! # What an index is, and why one is needed
+//!
+//! Finding where a 100-base read comes from by comparing it against every
+//! transcript would take forever. Instead salmon builds a *search structure* once
+//! per transcriptome — the index — and then answers each read's query against it
+//! in roughly constant time. Building takes minutes; the payoff is that mapping
+//! hundreds of millions of reads becomes feasible.
+//!
 //! Salmon's index is a piscem (SSHash + contig table) index built over the
-//! compacted de Bruijn graph / reference tiling of the transcriptome. This
-//! crate orchestrates the two-stage build that salmon's C++ `BuildSalmonIndex`
-//! performs, but using the Rust components:
+//! compacted de Bruijn graph / reference tiling of the transcriptome. In plain
+//! terms:
+//!
+//! * a **k-mer** is a substring of fixed length `k` (31 by default). Every
+//!   sequence is a series of overlapping k-mers.
+//! * a **de Bruijn graph** links k-mers that overlap by `k-1` bases. Sequence
+//!   shared between transcripts becomes *one* path in the graph rather than being
+//!   stored repeatedly, which is what makes the structure compact. "Compacted"
+//!   means unbranching runs are collapsed into single nodes called *unitigs*.
+//! * **SSHash** is a dictionary that answers "which unitig contains this k-mer,
+//!   and where?" very fast and in little memory.
+//! * the **contig table** maps a unitig back to every transcript/position it came
+//!   from, which is how a k-mer hit becomes a list of candidate transcripts.
+//!
+//! This crate orchestrates the two-stage build that salmon's C++
+//! `BuildSalmonIndex` performs, but using the Rust components:
 //!
 //! 1. [`cf1_rs::cf_build`] constructs the cDBG and writes the
 //!    `.cf_seg` / `.cf_seq` / `.json` tiling.
@@ -13,6 +34,16 @@
 //! A small `info.json` records the build parameters. [`SalmonIndex`] wraps the
 //! loaded [`piscem_rs`] [`ReferenceIndex`] and exposes the accessors the
 //! mapper and quantifier need.
+//!
+//! # Decoys, in one paragraph
+//!
+//! A decoy is extra sequence (usually the whole genome) indexed alongside the
+//! transcripts purely as a sink. Reads from introns, unannotated genes or
+//! genomic DNA contamination would otherwise be forced onto whichever transcript
+//! they resemble most; with decoys present they align better to the decoy and are
+//! discarded. Much of the machinery below exists to guarantee that decoys occupy
+//! one *contiguous* block of reference ids, because that turns the
+//! per-fragment "is this a decoy?" test into a single range comparison.
 
 use std::path::{Path, PathBuf};
 
@@ -20,6 +51,7 @@ use anyhow::{Context, Result};
 use cf1_rs::{cf_build, CfInput};
 use piscem_rs::index::build::{build_index, BuildConfig};
 use piscem_rs::index::reference_index::ReferenceIndex;
+use salmon_core::RefSeqs;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -31,7 +63,7 @@ const INDEX_PREFIX: &str = "index";
 const INFO_FILE: &str = "info.json";
 /// Concatenated reference sequences (forward strand), in transcript-id order.
 const REFSEQ_FILE: &str = "refseq.bin";
-/// Per-reference offsets into [`REFSEQ_FILE`] (`num_refs + 1` entries).
+/// Per-reference offsets into `REFSEQ_FILE` (`num_refs + 1` entries).
 const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 
 /// On-disk salmon index *format* version written into `info.json` by this build.
@@ -54,9 +86,16 @@ pub const INDEX_FORMAT_VERSION: u32 = 1;
 /// Minimum index format version this build can load. Indices below this are
 /// rejected with an actionable rebuild message (their decoy / short-transcript
 /// layout predates the contiguity guarantee and cannot be loaded safely).
+///
+/// Refusing to load is deliberate: silently producing subtly wrong abundances is
+/// far worse than telling the user to spend ten minutes rebuilding.
 pub const MIN_READABLE_INDEX_VERSION: u32 = 1;
 
 /// Default minimizer length for a given k (used when `m == 0`).
+///
+/// A *minimizer* is the smallest k-mer-like substring within a window, used as a
+/// bucket key so that neighbouring positions share a bucket. Longer minimizers
+/// mean fewer, more specific buckets; they must be shorter than `k`.
 ///
 /// Matches piscem's default minimizer length of 19 for the standard k = 31.
 /// Falls back to `k/2 + 1` for small k, where 19 would be invalid (m must be < k).
@@ -87,12 +126,18 @@ pub struct IndexBuildOptions {
     /// output index directory (created if absent)
     pub output_dir: PathBuf,
     /// k-mer length (must be odd, ≤ 63); salmon's default is 31
+    ///
+    /// Odd is required so a k-mer can never equal its own reverse complement,
+    /// which would make the canonical form ambiguous.
     pub k: usize,
-    /// minimizer length; `0` selects [`default_minimizer_len`]
+    /// minimizer length; `0` selects a default derived from `k`
     pub m: usize,
     /// worker threads; `0` means all available cores
     pub threads: usize,
     /// build canonical-k-mer index (the salmon/pufferfish convention)
+    ///
+    /// "Canonical" means a k-mer and its reverse complement are stored under one
+    /// key, since DNA is double-stranded and a read may come from either strand.
     pub canonical: bool,
     /// build the equivalence-class table (needed for pseudoalignment-only mode)
     pub build_ec_table: bool,
@@ -108,6 +153,10 @@ pub struct IndexBuildOptions {
     pub tmpdir: Option<PathBuf>,
     /// retain exact-duplicate transcript sequences instead of collapsing them
     /// (salmon's `--keepDuplicates`; default `false` = remove duplicates).
+    ///
+    /// Identical sequences are statistically indistinguishable, so the EM cannot
+    /// apportion reads between them; collapsing avoids reporting an arbitrary
+    /// split of the same evidence.
     pub keep_duplicates: bool,
     /// optional file of decoy sequence names (one per line; salmon's `--decoys`).
     /// Records whose name is in this set are indexed but flagged as decoys; they
@@ -122,6 +171,10 @@ pub struct IndexBuildOptions {
     /// A reference whose (cleaned) sequence ends in a run of >= 10 `A`s has all
     /// its trailing `A`s trimmed; an all-`A` reference is dropped from the index.
     /// Reference hashes are computed pre-clip, so this does not change provenance.
+    ///
+    /// Poly-A tails are added post-transcriptionally and are near-identical
+    /// across all transcripts, so indexing them creates a large block of shared,
+    /// uninformative sequence.
     pub clip_polya: bool,
     /// Directory for sshash's external minimizer-sort scratch. `None` defaults to
     /// a `sshash_tmp` subdirectory of the build-intermediate dir (i.e. `--tmpdir`
@@ -139,7 +192,7 @@ pub struct IndexBuildOptions {
 
 impl IndexBuildOptions {
     /// Construct options with salmon's defaults for the given transcripts and
-    /// output directory.
+    /// output directory. Callers then override individual fields.
     pub fn new(transcripts: Vec<PathBuf>, output_dir: PathBuf) -> Self {
         Self {
             transcripts,
@@ -163,6 +216,10 @@ impl IndexBuildOptions {
 }
 
 /// Metadata written to `info.json` alongside the piscem index.
+///
+/// This is what makes an index self-describing: a later quant run reads it to
+/// learn the k-mer size, the decoy layout, and which reference FASTA the index
+/// was built from (via the hashes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexInfo {
     pub k: usize,
@@ -174,6 +231,10 @@ pub struct IndexInfo {
     /// are decoys (genome/contamination sequences indexed for selective-alignment
     /// but never quantified). `None` (or absent) means no decoys. salmon requires
     /// all decoy records to appear contiguously at the end of the FASTA.
+    ///
+    /// `#[serde(default)]` means the field may be missing from an older
+    /// `info.json` and will then take its type's default rather than failing to
+    /// parse — that is how new fields are added without invalidating old files.
     #[serde(default)]
     pub first_decoy_index: Option<usize>,
     /// Number of decoy references (the contiguous block beginning at
@@ -198,6 +259,9 @@ pub struct IndexInfo {
     /// salmon's pufferfish `FixFasta` hashes (so downstream provenance tools
     /// recognize a Rust-built index as equivalent for the same FASTA). Empty for
     /// indexes built before these were recorded (`#[serde(default)]`).
+    ///
+    /// The point is reproducibility: two indexes with the same hashes were built
+    /// from the same reference, so results from them are comparable.
     #[serde(default)]
     pub seq_hash: String,
     #[serde(default)]
@@ -222,12 +286,18 @@ pub struct IndexInfo {
 ///   hashed for every record whose (printable) sequence is non-empty;
 /// - decoy hashers receive nothing here (decoys are not yet supported), so the
 ///   decoy digests are the SHA of the empty string, matching salmon's no-decoy case.
+///
+/// Every one of those "before"s matters: hashing the *input* rather than the
+/// processed sequence is what lets the digest identify the FASTA the user
+/// supplied, independently of how salmon later transforms it.
 fn compute_ref_hashes(
     transcripts: &[PathBuf],
     decoy_names: &ahash::AHashSet<Vec<u8>>,
     gencode: bool,
 ) -> Result<RefHashes> {
     use sha2::{Digest, Sha256, Sha512};
+    // A hasher is fed incrementally and finalized once, so the whole
+    // transcriptome never needs to be in memory at once.
     let mut seq256 = Sha256::new();
     let mut name256 = Sha256::new();
     let mut seq512 = Sha512::new();
@@ -245,6 +315,8 @@ fn compute_ref_hashes(
         while let Some(rec) = reader.next() {
             let rec = rec.context("reading FASTA record for hashing")?;
             // Keep only C-`isprint` bytes (0x20..=0x7e); preserve original case.
+            // This drops line endings and stray control bytes so the digest does
+            // not depend on how the FASTA was wrapped.
             let seq: Vec<u8> = rec
                 .seq()
                 .iter()
@@ -261,6 +333,7 @@ fn compute_ref_hashes(
                 seq256.update(&seq);
                 seq512.update(&seq);
             }
+            // Empty-sequence records contribute no name, matching salmon.
             if !seq.is_empty() {
                 if is_decoy {
                     decoy_name256.update(name);
@@ -271,6 +344,7 @@ fn compute_ref_hashes(
             }
         }
     }
+    // Render a digest as lowercase hex, the conventional textual form.
     let hex = |bytes: &[u8]| -> String {
         let mut s = String::with_capacity(bytes.len() * 2);
         for b in bytes {
@@ -288,6 +362,8 @@ fn compute_ref_hashes(
     })
 }
 
+/// The six digests [`compute_ref_hashes`] produces, grouped so the function can
+/// return them all without a six-element tuple.
 struct RefHashes {
     seq_hash: String,
     name_hash: String,
@@ -329,12 +405,18 @@ struct PreprocessResult {
 /// salmon/pufferfish `FixFasta` clips a reference iff its (cleaned) sequence ends
 /// in a run of at least this many `A`s; the entire trailing `A` run is then
 /// removed (an all-`A` reference is dropped).
+///
+/// The threshold avoids clipping a transcript that merely happens to end in one
+/// or two genuine `A`s.
 const POLYA_CLIP_LEN: usize = 10;
 
 /// Length of the longest run of consecutive ACGT (case-insensitive) bases — the
 /// longest stretch Cuttlefish can extract k-mers from (it splits the de Bruijn
 /// graph on any other base, e.g. `N`). A run of length `L` carries `L - k + 1`
 /// k-mers, so a reference is tileable iff its longest ACGT run is `>= k`.
+///
+/// So a 50 kb genome fragment made of 20-base islands separated by `N` runs is,
+/// for indexing purposes, no more useful than a 20-base sequence.
 fn longest_acgt_run(seq: &[u8]) -> usize {
     let mut best = 0usize;
     let mut cur = 0usize;
@@ -343,12 +425,20 @@ fn longest_acgt_run(seq: &[u8]) -> usize {
             cur += 1;
             best = best.max(cur);
         } else {
+            // Any other byte breaks the run.
             cur = 0;
         }
     }
     best
 }
 
+/// Read every input FASTA, apply salmon's reference cleaning rules, and write one
+/// combined cleaned FASTA for the index build. See [`PreprocessResult`] for what
+/// it reports back.
+///
+/// The rules, applied per record in this order: reject a transcript that follows
+/// a decoy, drop exact duplicates, randomize non-ACGT bases (transcripts only),
+/// clip poly-A tails, drop untileable decoys.
 fn preprocess_fasta(
     inputs: &[PathBuf],
     out_path: &Path,
@@ -360,6 +450,9 @@ fn preprocess_fasta(
 ) -> Result<PreprocessResult> {
     use std::io::Write as _;
     const B: [u8; 4] = *b"ACGT";
+    // Seed of a small deterministic generator (below) used for base replacement.
+    // Deterministic on purpose: the same FASTA must always produce the same
+    // index, so a real random source would be wrong here.
     let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut out = std::io::BufWriter::new(
         std::fs::File::create(out_path)
@@ -370,6 +463,7 @@ fn preprocess_fasta(
     let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
     let mut short_decoys_dropped: Vec<Vec<u8>> = Vec::new();
     let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    // Tracks whether a decoy has been seen, to enforce the "decoys last" rule.
     let mut saw_decoy = false;
     // Exact original (pure-ACGT) sequence -> name of the first transcript that
     // carried it. salmon collapses transcripts whose *processed* sequences match;
@@ -393,6 +487,10 @@ fn preprocess_fasta(
             let is_decoy = decoy_names.contains(name);
             // salmon requires every decoy record to appear, contiguously, at the
             // end of the input — reject a real transcript after any decoy.
+            //
+            // This is what ultimately guarantees the contiguous decoy id block;
+            // failing here is far better than discovering the violation later,
+            // when the only symptom is wrong abundances.
             if is_decoy {
                 saw_decoy = true;
             } else if saw_decoy {
@@ -417,6 +515,8 @@ fn preprocess_fasta(
                 if let Some(retained_name) = seen.get(orig.as_ref()) {
                     duplicate_clusters.push((retained_name.clone(), name.to_vec()));
                     if !keep_duplicates {
+                        // `continue` skips the write below, so the duplicate never
+                        // reaches the index.
                         continue;
                     }
                 } else {
@@ -437,6 +537,9 @@ fn preprocess_fasta(
             if !is_decoy {
                 for b in seq.iter_mut() {
                     if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+                        // A linear congruential generator: multiply, add, and take
+                        // high bits. `wrapping_*` means overflow wraps around
+                        // rather than panicking, which is the intended arithmetic.
                         x = x
                             .wrapping_mul(6364136223846793005)
                             .wrapping_add(1442695040888963407);
@@ -456,6 +559,7 @@ fn preprocess_fasta(
                     .iter()
                     .all(|&b| matches!(b, b'A' | b'a'))
             {
+                // `rposition` finds the last non-`A`, i.e. where the tail begins.
                 match seq.iter().rposition(|&b| !matches!(b, b'A' | b'a')) {
                     Some(last) => {
                         seq.truncate(last + 1);
@@ -485,6 +589,8 @@ fn preprocess_fasta(
                 continue;
             }
 
+            // Write the record in canonical two-line form (header, then the whole
+            // sequence unwrapped), which is what the downstream builder expects.
             out.write_all(b">")?;
             out.write_all(name)?;
             out.write_all(b"\n")?;
@@ -504,12 +610,20 @@ fn preprocess_fasta(
 
 /// Read a decoy-names file (one name per line; blank lines ignored) into a set,
 /// matching how `name` is extracted in [`preprocess_fasta`] (no `>` prefix).
+///
+/// A set (rather than a list) because membership is tested once per FASTA record
+/// and the decoy list can hold thousands of contig names.
 fn read_decoy_names(path: &Path) -> Result<ahash::AHashSet<Vec<u8>>> {
     let bytes =
         std::fs::read(path).with_context(|| format!("reading decoys file {}", path.display()))?;
     let mut set = ahash::AHashSet::new();
     for line in bytes.split(|&b| b == b'\n') {
         // trim trailing CR and surrounding whitespace
+        //
+        // Done by hand on raw bytes (rather than with a string method) because
+        // reference names are not guaranteed to be valid UTF-8. The `[rest @ ..,
+        // last]` syntax is slice pattern matching: it binds the last element and
+        // everything before it.
         let line: &[u8] = {
             let mut s = line;
             while let [rest @ .., last] = s {
@@ -538,6 +652,9 @@ fn read_decoy_names(path: &Path) -> Result<ahash::AHashSet<Vec<u8>>> {
 /// Write salmon's `duplicate_clusters.tsv` (`RetainedRef<TAB>DuplicateRef`, one
 /// line per collapsed duplicate). Always written (salmon emits it even with a
 /// header and no rows) so downstream tools find the expected file.
+///
+/// Unconditional output matters for pipelines: a missing file is an error to
+/// handle, an empty one is not.
 fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
     use std::io::Write as _;
     let path = dir.join("duplicate_clusters.tsv");
@@ -546,6 +663,8 @@ fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Resu
     );
     f.write_all(b"RetainedRef\tDuplicateRef\n")?;
     for (retained, dup) in clusters {
+        // Written as raw bytes rather than formatted text, since names need not
+        // be valid UTF-8.
         f.write_all(retained)?;
         f.write_all(b"\t")?;
         f.write_all(dup)?;
@@ -556,8 +675,15 @@ fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Resu
 }
 
 /// Build a salmon index from a transcriptome FASTA into `opts.output_dir`.
+///
+/// The whole build in order: validate options, read the decoy list, preprocess
+/// the FASTA, build the cDBG (stage 1), build the SSHash index (stage 2), locate
+/// and verify the decoy block, write `info.json` and the reference-sequence
+/// store, and clean up intermediates.
 pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     anyhow::ensure!(!opts.transcripts.is_empty(), "no transcript files provided");
+    // 63 is the largest k that fits in a 2-bit-per-base 128-bit word; odd is
+    // required so no k-mer equals its own reverse complement.
     anyhow::ensure!(
         opts.k >= 1 && opts.k <= 63 && opts.k % 2 == 1,
         "k must be odd in [1, 63]"
@@ -607,6 +733,9 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         opts.k,
     )
     .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
+    // Everything below reports what the preprocessing did. Silent transformation
+    // of a user's reference would be indefensible, so each rule that fired is
+    // logged, with the destructive ones (dropped references) as warnings.
     if pre.replaced > 0 {
         info!(
             "replaced {} non-ACGT base(s) with random bases",
@@ -721,6 +850,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         build_ec_table: opts.build_ec_table,
         num_threads: opts.threads,
         canonical: opts.canonical,
+        // Fixed seed: the hash function must be reproducible, or two builds of
+        // the same reference would differ.
         seed: 1,
         single_mphf: false,
         emit_tiny: None,
@@ -730,6 +861,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     build_index(&config).context("piscem index construction failed")?;
 
     // Load once to capture reference count and confirm the index is usable.
+    // Better to fail here, during the build, than at the start of a quant run.
     let idx = ReferenceIndex::load(&index_prefix, opts.build_ec_table, false)
         .context("loading freshly built index")?;
     // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
@@ -758,10 +890,12 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         (None, 0usize)
     } else {
         let n = idx.num_refs();
+        // Which reference ids ended up being decoys, in index order.
         let decoy_tids: Vec<usize> = (0..n)
             .filter(|&t| decoy_names.contains(idx.ref_name(t).as_bytes()))
             .collect();
         match decoy_tids.first().copied() {
+            // Named decoys existed but none survived preprocessing.
             None => (None, 0usize),
             Some(first) => {
                 let count = decoy_tids.len();
@@ -782,6 +916,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         }
     };
     if let Some(fdi) = first_decoy_index {
+        // Everything after the decoy block is a short (sub-k) transcript.
         let n_short = idx.num_refs() - (fdi + num_decoys);
         info!(
             "{num_decoys} decoy reference(s) (first decoy index {fdi}); \
@@ -797,6 +932,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         first_decoy_index,
         num_decoys,
         index_version: INDEX_FORMAT_VERSION,
+        // `env!` reads an environment variable at compile time; Cargo sets this
+        // one from Cargo.toml, so the recorded version is always this build's.
         salmon_version: env!("CARGO_PKG_VERSION").to_string(),
         seq_hash: h.seq_hash,
         name_hash: h.name_hash,
@@ -815,6 +952,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     if !opts.keep_intermediate {
         remove_cdbg_intermediates(&cdbg_prefix);
         if !opts.keep_fixed_fasta {
+            // `let _ =` deliberately ignores the result: failing to delete a
+            // temporary file must not fail an otherwise successful build.
             let _ = std::fs::remove_file(&cleaned);
         }
         // sshash removes its own scratch files but leaves the directory. Prune
@@ -827,6 +966,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     Ok(info)
 }
 
+/// Serialize [`IndexInfo`] to `info.json` (pretty-printed, since users read it).
 fn write_info(dir: &Path, info: &IndexInfo) -> Result<()> {
     let path = dir.join(INFO_FILE);
     let json = serde_json::to_string_pretty(info)?;
@@ -849,6 +989,9 @@ fn header_name(id: &[u8]) -> &[u8] {
 /// `|` (so GENCODE `ENST...|ENSG...|...` headers reduce to `ENST...`). Used for
 /// the cleaned-FASTA headers (→ index names), decoy matching, and the name hash,
 /// so all three stay consistent.
+///
+/// That consistency is the point: if decoy matching used a different name rule
+/// than the index, a decoy would silently fail to be recognized.
 fn processed_name(id: &[u8], gencode: bool) -> &[u8] {
     let end = id
         .iter()
@@ -865,10 +1008,23 @@ fn processed_name(id: &[u8], gencode: bool) -> &[u8] {
 
 /// Read all transcript FASTA(s) and write the reference sequences concatenated
 /// in the index's transcript-id order, plus the offset table.
+///
+/// **Why store the sequences at all.** piscem's index holds k-mers, not
+/// sequence, but selective alignment has to compare a read against the actual
+/// reference bases, and the bias models need the local sequence context. Storing
+/// one concatenated blob plus an offset table is the cheapest structure that
+/// gives O(1) access to any transcript: `refseq[offsets[tid]..offsets[tid+1]]`.
+///
+/// Order matters: the sequences are written in the *index's* id order, not the
+/// FASTA's, because that is how every later lookup indexes them.
 fn write_refseq_store(dir: &Path, transcripts: &[PathBuf], idx: &ReferenceIndex) -> Result<()> {
     use std::collections::HashMap;
 
     // name -> uppercased sequence bytes
+    //
+    // Uppercased because FASTA files use lower case for soft-masked (repetitive)
+    // regions, which is irrelevant to alignment and would otherwise have to be
+    // handled at every comparison.
     let mut by_name: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     for fasta in transcripts {
         let mut reader = needletail::parse_fastx_file(fasta)
@@ -883,6 +1039,9 @@ fn write_refseq_store(dir: &Path, transcripts: &[PathBuf], idx: &ReferenceIndex)
 
     let num_refs = idx.num_refs();
     let mut concat: Vec<u8> = Vec::new();
+    // `num_refs + 1` entries: the extra final offset is the end of the last
+    // sequence, so every transcript's span is `offsets[tid]..offsets[tid+1]`
+    // with no special case for the last one.
     let mut offsets: Vec<u64> = Vec::with_capacity(num_refs + 1);
     offsets.push(0);
     for tid in 0..num_refs {
@@ -901,6 +1060,8 @@ fn write_refseq_store(dir: &Path, transcripts: &[PathBuf], idx: &ReferenceIndex)
     Ok(())
 }
 
+/// Delete the cDBG tiling files, which are only needed as input to stage 2.
+/// Failures are ignored: leftover temporaries are untidy, not incorrect.
 fn remove_cdbg_intermediates(cdbg_prefix: &Path) {
     for ext in ["cf_seg", "cf_seq", "json"] {
         let p = cdbg_prefix.with_extension(ext);
@@ -927,10 +1088,10 @@ pub struct SalmonIndex {
 
 /// Load just the per-reference forward sequences from an index directory, in
 /// transcript-id order (decoys included), without loading the (multi-GB) SSHash
-/// dictionary. Reads only [`REFSEQ_FILE`] + [`REFSEQ_OFFSETS_FILE`]. Used to feed
+/// dictionary. Reads only `refseq.bin` + `refseq_offsets.json`. Used to feed
 /// bias models a requant pass (e.g. `--deterministic`) the reference sequences
 /// the index already stores, so the user need not re-supply a transcript FASTA.
-pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<Vec<Vec<u8>>> {
+pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<RefSeqs> {
     let dir = dir.as_ref();
     let refseq =
         std::fs::read(dir.join(REFSEQ_FILE)).with_context(|| format!("reading {REFSEQ_FILE}"))?;
@@ -938,10 +1099,13 @@ pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<Vec<Vec<u8>>> {
         &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
             .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
     )?;
-    Ok(offsets
-        .windows(2)
-        .map(|w| refseq[w[0] as usize..w[1] as usize].to_vec())
-        .collect())
+    // The on-disk layout is already one concatenated blob plus an offset table,
+    // which is exactly what `RefSeqs` holds, so both parts move in as they are:
+    // no copy of the bases, and no per-transcript allocation. `from_concatenated`
+    // validates the table against the blob, turning a corrupt index into an error
+    // here rather than a panicking slice at the first bias lookup.
+    RefSeqs::from_concatenated(refseq, offsets)
+        .with_context(|| format!("reference sequences in {}", dir.display()))
 }
 
 impl SalmonIndex {
@@ -979,6 +1143,8 @@ impl SalmonIndex {
         // and so deserializes to 0). Such an index can mis-classify decoys and
         // silently drop transcripts, so force a rebuild rather than load it.
         if info.index_version < MIN_READABLE_INDEX_VERSION {
+            // Old indices may not record a version string either; say something
+            // useful in both cases.
             let built_by = if info.salmon_version.is_empty() {
                 "salmon <= 2.0.1".to_string()
             } else {
@@ -1036,6 +1202,7 @@ impl SalmonIndex {
             self.refseq_loaded,
             "ref_seq called on an index loaded without reference sequence"
         );
+        // Slice the concatenated blob using the offset table.
         let s = self.ref_offsets[tid as usize] as usize;
         let e = self.ref_offsets[tid as usize + 1] as usize;
         &self.refseq[s..e]
@@ -1096,6 +1263,8 @@ impl SalmonIndex {
     }
 }
 
+// Implementing the shared trait is what lets `salmon-map` align against this
+// index without depending on this crate.
 impl salmon_core::RefProvider for SalmonIndex {
     fn num_refs(&self) -> usize {
         self.num_refs()
@@ -1111,6 +1280,9 @@ impl salmon_core::RefProvider for SalmonIndex {
         // "short" transcripts after the block are NOT decoys (they are 0-count
         // transcripts reported in quant.sf); they carry no k-mers, so `is_decoy` is
         // never consulted for them during mapping regardless.
+        //
+        // This function runs once per candidate placement — billions of times in a
+        // large run — which is why the whole contiguity apparatus above exists.
         let t = tid as usize;
         match self.info.first_decoy_index {
             // Legacy index that recorded `first_decoy_index` but not `num_decoys`
@@ -1123,6 +1295,7 @@ impl salmon_core::RefProvider for SalmonIndex {
     }
 }
 
+/// Read and parse `info.json` from an index directory.
 fn read_info(dir: &Path) -> Result<IndexInfo> {
     let path = dir.join(INFO_FILE);
     let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
@@ -1157,6 +1330,9 @@ mod tests {
         path
     }
 
+    /// The end-to-end contract: a build produces a loadable index whose names,
+    /// lengths and stored sequences all agree, and which leaves no intermediates
+    /// behind.
     #[test]
     fn build_and_load_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1187,6 +1363,7 @@ mod tests {
         assert!(idx.ref_len(0) > 31);
 
         // The reference sequence store round-trips and matches the index lengths.
+        // A mismatch here would mean every alignment reads the wrong bases.
         for tid in 0..idx.num_refs() as u32 {
             let seq = idx.ref_seq(tid);
             assert_eq!(
@@ -1244,6 +1421,10 @@ mod tests {
     ///
     /// Then asserts the surviving decoy is one contiguous block so `is_decoy`
     /// stays an O(1) range test.
+    ///
+    /// One index rather than four, because the interaction is the risk: each rule
+    /// is easy in isolation and the failure mode was them shifting each other's
+    /// reference ids.
     #[test]
     fn build_composes_short_transcript_short_and_n_decoys() {
         use salmon_core::RefProvider; // brings `is_decoy` into scope
@@ -1345,6 +1526,8 @@ mod tests {
         );
     }
 
+    /// An index too old to trust must be refused with a message that says what to
+    /// do, rather than loaded and quietly mis-quantified.
     #[test]
     fn rejects_pre_2_1_index() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1372,6 +1555,8 @@ mod tests {
             Ok(_) => panic!("pre-2.1 index must be rejected"),
             Err(e) => e,
         };
+        // Assert on the *content* of the message: an error the user cannot act on
+        // is barely better than a wrong answer.
         let msg = format!("{err:#}");
         assert!(msg.contains("salmon 2.0.1"), "message was: {msg}");
         assert!(msg.contains("rebuild"), "message was: {msg}");

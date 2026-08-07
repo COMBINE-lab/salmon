@@ -1,5 +1,20 @@
 //! The assembled selective-alignment mapper.
 //!
+//! # The per-fragment pipeline
+//!
+//! This is the entry point [`salmon_quant`](../salmon_quant/index.html) calls
+//! once per fragment, and it runs the whole staged process end to end:
+//!
+//! ```text
+//!   read(s) ─► seed + anchor ─► chain ─► pair ─► align ─► score/filter ─► mappings
+//! ```
+//!
+//! Each stage narrows the candidate set, so the expensive stages only ever see
+//! what the cheap ones could not rule out. Orphan recovery is the one step that
+//! goes the other way: when only one mate placed, the mapper searches directly
+//! for the other nearby, since a genuine pair whose second mate happened to be
+//! seed-poor is worth rescuing.
+//!
 //! Ties the pieces together for a read or read pair: collect MEM chains
 //! ([`collect`](crate::collect)), pair them ([`pair`](crate::pair)), validate by
 //! alignment ([`align`](crate::align)), optionally recover orphan mates, then

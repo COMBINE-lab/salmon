@@ -1,5 +1,17 @@
 //! Maximal exact match (MEM) anchors.
 //!
+//! # What an anchor is for
+//!
+//! A read that genuinely came from a transcript will match it exactly over long
+//! stretches, broken only by sequencing errors and genetic variants. Those
+//! stretches are the anchors, and they are the evidence chaining reasons about:
+//! rather than considering every possible alignment, the mapper only considers
+//! placements that a set of consistent anchors already supports.
+//!
+//! "Maximal" means the match cannot be extended in either direction — one base
+//! further and it would stop matching — so anchors are the longest available
+//! summary of the agreement between read and reference.
+//!
 //! A [`Mem`] is an exact match between a stretch of the read and a stretch of a
 //! reference, in a single orientation. In salmon/pufferfish these "uni-MEMs"
 //! are produced by extending shared k-mers along a unitig and then projecting
@@ -49,6 +61,12 @@ impl Mem {
 
     /// The diagonal `ref_start - read_start`. Anchors on the same diagonal are
     /// gap-free continuations of one another.
+    ///
+    /// Picture the read along one axis and the reference along the other: an
+    /// alignment traces a path, and a gap-free stretch is a straight diagonal
+    /// line. Two anchors with equal diagonals lie on the same line, so the
+    /// sequence between them matched too (it was just interrupted by, say, a
+    /// single mismatch). A change of diagonal means an insertion or deletion.
     #[inline]
     pub fn diagonal(&self) -> i32 {
         self.ref_start - self.read_start
@@ -59,6 +77,10 @@ impl Mem {
 /// `mems`). Overlapping anchors are counted once. (Chains now cache their own
 /// coverage at construction via [`crate::chain::MemChain::new`]; this generic
 /// index-addressed form is retained for tests.)
+///
+/// Coverage is the main quality signal for a candidate: how much of the read is
+/// actually accounted for by exact matches. Overlaps must be counted once, or a
+/// pile of anchors over the same few bases would look like strong evidence.
 #[cfg(test)]
 pub(crate) fn covered_read_bases(mems: &[Mem], indices: &[usize]) -> i32 {
     if indices.is_empty() {
@@ -89,6 +111,7 @@ pub(crate) fn covered_read_bases(mems: &[Mem], indices: &[usize]) -> i32 {
 mod tests {
     use super::*;
 
+    /// The three derived coordinates on a simple anchor, including the diagonal.
     #[test]
     fn mem_geometry() {
         let m = Mem::new(5, 100, 20);
@@ -97,12 +120,15 @@ mod tests {
         assert_eq!(m.diagonal(), 95);
     }
 
+    /// Separate anchors add up.
     #[test]
     fn coverage_disjoint() {
         let mems = [Mem::new(0, 0, 10), Mem::new(20, 20, 10)];
         assert_eq!(covered_read_bases(&mems, &[0, 1]), 20);
     }
 
+    /// Overlapping anchors must not be double-counted, or coverage could exceed
+    /// the read length and make a poor candidate look perfect.
     #[test]
     fn coverage_overlapping_counts_once() {
         // [0,15) and [10,25) -> union [0,25) = 25

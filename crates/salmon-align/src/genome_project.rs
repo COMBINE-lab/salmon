@@ -1,5 +1,21 @@
 //! Genome-alignment quantification via bramble projection.
 //!
+//! # The problem this solves
+//!
+//! salmon quantifies transcripts, so it needs to know where a read sits *within a
+//! transcript*. A genome aligner instead reports where the read sits on a
+//! chromosome, often spanning an intron. Those are different coordinate systems,
+//! and the genome one does not by itself say which transcript a read supports.
+//!
+//! *Projection* converts between them: given an annotation describing each
+//! transcript's exons, a genomic alignment is translated into the transcript
+//! coordinates of every transcript whose exon structure it is consistent with.
+//! A read spanning an exon junction is strong evidence, because only transcripts
+//! containing that junction can explain it.
+//!
+//! This lets an existing genome BAM — the common output of a standard pipeline —
+//! be quantified without re-aligning anything.
+//!
 //! `salmon quant -a <genome.bam> --annotation <gtf|gff>` reads a name-collated
 //! genome BAM, projects each read group into transcriptome coordinates with
 //! `bramble-rs`, and writes a salmon RAD (selective-alignment profile) that the
@@ -73,7 +89,7 @@ pub struct GenomeProjectOptions {
 pub struct ProjectionArtifacts {
     pub names: Vec<String>,
     pub lengths: Vec<u32>,
-    pub ref_seqs: Option<Vec<Vec<u8>>>,
+    pub ref_seqs: Option<salmon_core::RefSeqs>,
     pub num_processed: u64,
     pub num_mapped: u64,
 }
@@ -209,8 +225,9 @@ pub fn project_genome_bam_to_rad(
 /// Reconstruct each transcript's 5'→3' sequence (tid order = `txs` slice order,
 /// which is how `build_g2t` assigns ids) by concatenating its exon slices in
 /// ascending genomic order and reverse-complementing `-`-strand transcripts.
-fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> Vec<Vec<u8>> {
-    txs.iter()
+fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> salmon_core::RefSeqs {
+    let seqs = txs
+        .iter()
         .map(|tx| {
             let mut exons = tx.exons.clone();
             exons.sort_by_key(|e| e.start);
@@ -225,7 +242,8 @@ fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> Vec<Vec<u8>> {
             }
             seq
         })
-        .collect()
+        .collect::<Vec<_>>();
+    salmon_core::RefSeqs::from_sequences(seqs)
 }
 
 /// In-place reverse complement (ACGT; other bases → `N`).
@@ -346,8 +364,8 @@ fn record_to_genomic_alignment<R: sam::alignment::Record>(
         sequence: None, // soft-clip rescue (use_fasta) is off in this MVP
         is_paired: flags.is_segmented(),
         is_first_in_pair: flags.is_first_segment(),
-        xs_strand: strand_tag(rec, [b'X', b'S']),
-        ts_strand: strand_tag(rec, [b't', b's']),
+        xs_strand: strand_tag(rec, *b"XS"),
+        ts_strand: strand_tag(rec, *b"ts"),
         hit_index,
         mate_ref_id,
         mate_ref_start,
@@ -536,8 +554,9 @@ fn stream_project_pass(
             .unwrap_or(4)
             .clamp(1, 4);
         let bgzf_workers = std::num::NonZeroUsize::new(bgzf_workers).unwrap();
-        crate::with_bgzf_pool(bgzf_workers, || {
-            let decoder = noodles_bgzf::io::MultithreadedReader::new(file);
+        {
+            let decoder =
+                noodles_bgzf::io::MultithreadedReader::with_worker_count(bgzf_workers, file);
             let mut reader = bam::io::Reader::from(decoder);
             let header = reader.read_header().context("reading BAM header")?;
             run_project_pass(
@@ -552,7 +571,7 @@ fn stream_project_pass(
                 tx_is_minus,
                 is_short,
             )
-        })?
+        }
     }
 }
 

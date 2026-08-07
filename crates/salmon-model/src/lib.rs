@@ -1,8 +1,26 @@
 //! `salmon-model`: statistical models used during quantification.
 //!
-//! Currently provides the fragment-length distribution ([`fld`]) and automatic
-//! library-type detection ([`libdetect`]). Bias models (sequence-specific, GC,
-//! positional) and the alignment error model are added in later phases.
+//! # What these models are for
+//!
+//! Sequencing is not a uniform sampler. A fragment's chance of being observed
+//! depends on how long it is, what sequence sits at its ends, how GC-rich it is,
+//! and where in the transcript it starts. Left uncorrected, those effects are
+//! read as differences in *abundance*, which they are not. Each model here
+//! measures one such effect from the data itself and hands the quantifier a
+//! correction factor:
+//!
+//! * [`fld`] — the fragment-length distribution, and automatic library-type
+//!   detection ([`libdetect`]);
+//! * [`seqbias`] — sequence-specific bias, from primer/ligation preferences at
+//!   fragment ends;
+//! * [`gcbias`] — fragment GC bias, largely from PCR amplification efficiency;
+//! * [`posbias`] — positional bias along the transcript body, e.g. 3' pileup from
+//!   degraded RNA;
+//! * [`bias`] — combines them into a corrected effective length per transcript.
+//!
+//! Every model is *observed vs expected*: count what was actually seen, count
+//! what would have been seen under no bias, and take the ratio. That framing is
+//! why the dump files in [`dumps`] always come in `obs`/`exp` pairs.
 
 /// Fixed-point scale for deterministic bias-model mass accumulation. Bias
 /// observed models sum per-fragment posterior masses (each in `[0,1]`) into
@@ -12,12 +30,19 @@
 /// the sum associative (order/thread-count independent). `2^20` keeps the
 /// per-contribution resolution at ~1e-6 (ample for these coarse models) while a
 /// bin total (~num_fragments × 2^20) stays far below `u64::MAX`.
+///
+/// Same reasoning as the equivalence-class weight accumulator: integer addition
+/// commutes, floating-point addition does not, so identical input must give
+/// identical output regardless of how the work was split.
 pub const BIAS_WEIGHT_SCALE: f64 = (1u64 << 20) as f64;
 
 /// Quantize a bias mass (`[0,∞)`, typically a `[0,1]` posterior) to the
 /// fixed-point integer accumulator. Truncates (rounds toward zero) — cheaper
 /// than `round()` and the ≤1-ULP downward bias is negligible and cancels under
 /// the model's normalization.
+///
+/// ("ULP" is a unit in the last place: the smallest difference representable at
+/// that magnitude.)
 #[inline]
 pub fn bias_mass_to_fp(mass: f64) -> u64 {
     (mass * BIAS_WEIGHT_SCALE) as u64
@@ -32,6 +57,8 @@ pub mod posbias;
 pub mod seqbias;
 pub mod spline;
 
+// Re-exports so callers can write `salmon_model::SBModel` rather than naming the
+// submodule; the modules above remain the real homes.
 pub use bias::{
     build_expected_pos, corrected_effective_length_full, positional_factor, BiasInputs,
 };

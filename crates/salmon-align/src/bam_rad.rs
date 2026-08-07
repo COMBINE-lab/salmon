@@ -1,5 +1,15 @@
 //! Deterministic alignment-mode RAD producer.
 //!
+//! # What "deterministic" means here
+//!
+//! An ordinary run learns its models *while* mapping, from whichever fragments
+//! each thread happened to see first, so tiny differences accumulate and the
+//! output depends on the thread count. `--deterministic` splits the run in two:
+//! a first pass that only reads alignments and accumulates order-independent
+//! integer tallies, and a second that quantifies from those fixed models. This
+//! module is the first pass — it converts a BAM into a RAD with everything the
+//! second pass needs already baked into the header.
+//!
 //! `salmon quant -a <bam> --deterministic` runs over a name-grouped
 //! transcriptome BAM, pairs each fragment's records (reusing the alignment-mode
 //! [`crate::pair_records`] / [`crate::frag_format`]), writes the placements as a
@@ -105,10 +115,12 @@ pub fn write_alignment_rad(
     // Reference sequences for the error model: supplied index sequences take
     // precedence, else load the `-t` FASTA (mirrors `quantify_rad`). Absent ⇒ no
     // error model (the MVP AS-score path).
-    let ref_bytes: Option<Vec<Vec<u8>>> = if let Some(rs) = &opts.ref_seqs {
+    let ref_bytes: Option<salmon_core::RefSeqs> = if let Some(rs) = &opts.ref_seqs {
         Some(rs.clone())
     } else if let Some(t) = &opts.transcripts {
-        Some(load_ref_bytes(t, &names)?)
+        Some(salmon_core::RefSeqs::from_sequences(load_ref_bytes(
+            t, &names,
+        )?))
     } else {
         None
     };
@@ -438,7 +450,7 @@ struct TrainWorker<'a> {
     model: CountingAlignmentModel,
     fld: &'a DiscreteFld,
     naive: Option<&'a NaiveEqBuilder>,
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     scratch: Vec<FragRecord>,
 }
 
@@ -447,7 +459,7 @@ impl<'a> TrainWorker<'a> {
         error_bins: usize,
         fld: &'a DiscreteFld,
         naive: Option<&'a NaiveEqBuilder>,
-        ref_bytes: &'a [Vec<u8>],
+        ref_bytes: &'a salmon_core::RefSeqs,
     ) -> Self {
         Self {
             model: CountingAlignmentModel::new(error_bins),
@@ -468,7 +480,7 @@ impl GroupWorker for TrainWorker<'_> {
         // Uniform per-placement training: one count per placement-mate. Integer
         // increments make the merged model independent of thread partitioning.
         for info in &data.infos {
-            let refseq = self.ref_bytes.get(info.tid as usize).map(Vec::as_slice);
+            let refseq = self.ref_bytes.get(info.tid as usize);
             let Some(refseq) = refseq.filter(|s| !s.is_empty()) else {
                 continue;
             };
@@ -491,7 +503,7 @@ impl GroupWorker for TrainWorker<'_> {
 struct ScoreWriteWorker<'a> {
     buf: FragmentChunkBuf,
     writer: &'a RadOutputWriter,
-    ref_bytes: &'a [Vec<u8>],
+    ref_bytes: &'a salmon_core::RefSeqs,
     model: &'a AlignmentModel,
     scratch: Vec<FragRecord>,
     processed: u64,
@@ -501,7 +513,7 @@ struct ScoreWriteWorker<'a> {
 impl<'a> ScoreWriteWorker<'a> {
     fn new(
         writer: &'a RadOutputWriter,
-        ref_bytes: &'a [Vec<u8>],
+        ref_bytes: &'a salmon_core::RefSeqs,
         model: &'a AlignmentModel,
     ) -> Self {
         Self {
@@ -532,7 +544,6 @@ impl GroupWorker for ScoreWriteWorker<'_> {
                 let refseq = self
                     .ref_bytes
                     .get(info.tid as usize)
-                    .map(Vec::as_slice)
                     .filter(|s| !s.is_empty());
                 let ll = match refseq {
                     None => 0.0,
@@ -600,12 +611,13 @@ where
             .unwrap_or(4)
             .clamp(1, 4);
         let bgzf_workers = std::num::NonZeroUsize::new(bgzf_workers).unwrap();
-        crate::with_bgzf_pool(bgzf_workers, || {
-            let decoder = noodles_bgzf::io::MultithreadedReader::new(file);
+        {
+            let decoder =
+                noodles_bgzf::io::MultithreadedReader::with_worker_count(bgzf_workers, file);
             let mut reader = bam::io::Reader::from(decoder);
             let header = reader.read_header().context("reading BAM header")?;
             run_grouped(reader.records(), &header, nthreads, make_worker)
-        })?
+        }
     }
 }
 

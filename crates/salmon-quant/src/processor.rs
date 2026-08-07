@@ -2,10 +2,31 @@
 //! classes, fragment lengths, observed library formats, and (for `--seqBias`)
 //! observed sequence-bias contexts.
 //!
+//! # This is the hot loop
+//!
+//! Everything in this file runs once per sequenced fragment — hundreds of
+//! millions of times in a real run — so it is where the run's time goes and why
+//! several structures elsewhere in the codebase exist in the shape they do.
+//!
+//! For each fragment the work is: place the read(s) on the transcriptome, score
+//! and filter the placements, then fold the result into whatever the run needs —
+//! an equivalence class, the fragment-length distribution, the bias models, the
+//! library-type tally, and optionally a SAM/BAM/RAD record.
+//!
+//! # The sharing model
+//!
+//! `paraseq` (the FASTQ reader) drives this: it hands each worker thread batches
+//! of records and a *clone* of the processor. So the type is split in two.
+//!
 //! Shared `&'a` references hold the index and thread-safe accumulators; the
 //! per-thread scratch (a [`HitSearcher`] and, when bias-correcting, observed
 //! sequence-bias models) is rebuilt on `Clone` (paraseq clones the processor
 //! per worker) and merged into shared state in `on_thread_complete`.
+//!
+//! Accumulating into per-thread models and merging once at the end — rather than
+//! into a shared model per fragment — is what keeps the workers from contending,
+//! and (because the merges are integer sums) is also what makes the models
+//! independent of how the fragments happened to be split across threads.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -34,6 +55,14 @@ use salmon_model::{
 };
 
 /// Shared, thread-safe state (all `Copy` references).
+///
+/// Everything here is either read-only (the index, the configuration) or
+/// internally synchronized (atomics, mutexes, concurrent maps), so every worker
+/// can hold a copy. Being `Copy` means passing it around costs nothing.
+///
+/// Most of the fields are flags gating optional work. They are resolved once,
+/// before mapping starts, so the per-fragment path tests a boolean rather than
+/// re-deriving what this run needs.
 #[derive(Clone, Copy)]
 pub(crate) struct Shared<'a> {
     pub salmon: &'a SalmonIndex,
@@ -143,7 +172,13 @@ pub(crate) struct Shared<'a> {
     pub naive_eq: Option<&'a NaiveEqBuilder>,
 }
 
-/// Per-thread mapping processor.
+/// Per-thread mapping processor: the shared state plus this worker's private
+/// scratch.
+///
+/// Every `Option` field is `None` unless the corresponding feature is on, so a
+/// plain run allocates none of them. The private buffers exist so the hot path
+/// touches no shared memory at all; they are merged or flushed at batch and
+/// thread boundaries.
 pub(crate) struct QuantProcessor<'a> {
     pub shared: Shared<'a>,
     pub hs: Option<HitSearcher<'a>>,
@@ -203,6 +238,9 @@ impl<'a> QuantProcessor<'a> {
     }
 }
 
+// paraseq clones the processor once per worker thread. Cloning the *scratch*
+// would be wrong (two threads would share a buffer) and wasteful, so this
+// deliberately ignores it and builds fresh state from the shared references.
 impl Clone for QuantProcessor<'_> {
     fn clone(&self) -> Self {
         // Per-thread scratch is rebuilt fresh in each worker.
@@ -212,6 +250,10 @@ impl Clone for QuantProcessor<'_> {
 
 /// salmon's `LOG_EPSILON = log(0.375e-10)` — the small log-probability assigned
 /// to implausible placements (out-of-range fragment lengths, unexpected orphans).
+///
+/// Small but finite: a placement that looks impossible is heavily penalized
+/// rather than discarded outright, so a fragment whose every placement is
+/// implausible still contributes somewhere instead of vanishing.
 const LOG_EPSILON: f64 = -23.998_158_637_57; // (0.375e-10f64).ln()
 /// salmon's `numPreBurninFrags`: fold the fragment-length term into the online
 /// posterior only after this many fragments have been assigned.
@@ -287,6 +329,13 @@ thread_local! {
 }
 
 /// Draw a pseudo-random value in `[0, 1)` from the per-thread xorshift state.
+///
+/// Used only for acceptance sampling when training the fragment-length
+/// distribution online: rather than folding every fragment into the model (which
+/// would over-weight the early, poorly-mapped ones), a fragment is accepted with
+/// some probability. Per-thread state means no contention; the resulting
+/// thread-order dependence is exactly why `--deterministic` uses the integer
+/// histogram instead.
 fn fld_rng_u01() -> f64 {
     FLD_RNG.with(|s| {
         let mut x = s.get();
@@ -814,6 +863,11 @@ fn merge_unmapped(proc: &mut QuantProcessor) {
     }
 }
 
+/// Merge this worker's private bias models into the shared ones.
+///
+/// Called once per thread at the end of its work, not per fragment: the mutexes
+/// below would be ruinously contended otherwise. The merges are integer sums, so
+/// the result does not depend on the order threads finish in.
 fn merge_bias(proc: &QuantProcessor) {
     if let (Some(local), Some(shared_mtx)) = (proc.seqbias.as_ref(), proc.shared.seqbias_obs) {
         let mut g = shared_mtx.lock().unwrap();
@@ -835,11 +889,18 @@ fn merge_bias(proc: &QuantProcessor) {
     }
 }
 
+// The paired-end entry point. `PairedParallelProcessor` is paraseq's interface
+// for "given a batch of mate pairs, do something with them"; paraseq owns the
+// reading and the threading, this owns the per-fragment work.
 impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
+    /// Map and record one worker's batch of mate pairs.
     fn process_record_pair_batch(
         &mut self,
         pairs: impl Iterator<Item = (RefRecord<'r>, RefRecord<'r>)>,
     ) -> paraseq::Result<()> {
+        // Destructure `self` into its fields up front: the loop below needs
+        // several of them mutably at once, which the borrow checker only permits
+        // on distinct fields, not through repeated `self.` accesses.
         let QuantProcessor {
             shared,
             hs,
@@ -854,6 +915,9 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
+        // The seed searcher is created lazily on this worker's first batch, so
+        // its (substantial) state is never allocated for threads paraseq does not
+        // end up using.
         if hs.is_none() {
             *hs = Some(HitSearcher::new(idx));
         }
@@ -987,7 +1051,10 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 }
 
+// The single-end entry point: the same work with one read per fragment, so no
+// pairing, no fragment length, and every placement is `SingleEnd`.
 impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
+    /// Map and record one worker's batch of single-end reads.
     fn process_record_batch(
         &mut self,
         records: impl Iterator<Item = RefRecord<'r>>,
@@ -1106,6 +1173,9 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
 }
 
 /// Flush this thread's accumulated SAM buffer to the shared writer (under lock).
+/// Hand this worker's accumulated SAM text to the shared writer and clear the
+/// buffer. Called at batch boundaries, so the lock is taken once per batch
+/// rather than once per record.
 fn flush_sam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
     if let Some(sw) = proc.shared.sam {
         if !proc.sam_buf.is_empty() {
@@ -1118,6 +1188,7 @@ fn flush_sam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
 
 /// Hand this thread's accumulated BAM chunk to the writer thread. No-op unless
 /// `--writeBam` is set; the scratch carries its own writer borrow.
+/// Same for BAM: hand the encoded chunk to the writer thread's queue.
 fn flush_bam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
     if let Some(scratch) = proc.bam_scratch.as_mut() {
         scratch.flush()?;

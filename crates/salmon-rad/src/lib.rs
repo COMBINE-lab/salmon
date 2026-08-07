@@ -1,10 +1,29 @@
 //! RAD-format schema, record types, and writer for salmon (libradicl-backed).
 //!
-//! salmon can optionally emit its per-fragment mappings as a RAD file, in one of
-//! two profiles:
-//!   * [`RadProfile::Sketch`] — equivalent to piscem `map-bulk` (`bulk_with_pos`):
-//!     per-hit `(tid, orientation, pos, frag_len)`, no alignment scores, decoys
-//!     excluded.
+//! # What RAD is
+//!
+//! RAD ("Reduced Alignment Data") is a compact binary file format from the
+//! COMBINE-lab tool family. Instead of a full SAM/BAM alignment record per read
+//! — read name, sequence, qualities, CIGAR string, all of it — a RAD file stores
+//! only what a quantifier actually needs: for each fragment, the list of places
+//! it could have come from. That is roughly an order of magnitude smaller and
+//! much faster to re-read.
+//!
+//! # Why salmon writes one
+//!
+//! Mapping reads is the expensive half of a salmon run; the statistical half
+//! (EM) is comparatively cheap. Writing a RAD file lets you map once and then
+//! re-quantify many times (different bias settings, different priors) without
+//! touching the FASTQ again. It is also how `--deterministic` works: map to a
+//! RAD, then quantify from it with a fixed fragment-length distribution so the
+//! answer is byte-identical across runs and thread counts.
+//!
+//! # The two profiles
+//!
+//! salmon can emit its per-fragment mappings in one of two profiles:
+//!   * [`RadProfile::Sketch`] — equivalent to piscem `map-bulk`
+//!     (`bulk_with_pos`): per-hit `(tid, orientation, pos, frag_len)`, no
+//!     alignment scores, decoys excluded.
 //!   * [`RadProfile::SelectiveAlignment`] — the same, plus a per-hit alignment
 //!     score so the placements can be re-weighted on requant exactly like
 //!     internal selective alignments.
@@ -12,6 +31,8 @@
 //! Determinism is achieved structurally (a fixed FLD before order-independent
 //! equivalence-class assembly), so no per-read name hash is stored; a salmon RAD
 //! is identified instead by its `rad_type` file tag.
+//!
+//! # Binary-compatibility note
 //!
 //! The per-hit `(compressed_ori_ref, pos, frag_len)` triple is byte-identical to
 //! piscem's `bulk_with_pos` layout (`tid` in the low 30 bits, `is_fw` in bit 31,
@@ -33,6 +54,9 @@ pub use writer::{FragmentChunkBuf, RadOutputWriter};
 
 /// The profile of a RAD file presented for *input*, as detected from its
 /// prelude tag signature (see [`detect_input_profile`]).
+///
+/// salmon can quantify from RAD files it wrote itself *and* from files piscem
+/// wrote, so on the reading side it must first work out which it is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RadInputProfile {
     /// piscem `map-bulk` (`bulk_with_pos`): `frag_map_type` read tag + the
@@ -45,11 +69,13 @@ pub enum RadInputProfile {
 
 /// Detect the input profile of a RAD file from its prelude's tag signature.
 ///
-/// libradicl has no single "kind" field, so detection is by which tags are
-/// present: salmon RAD is identified by the `rad_type` file tag (and
-/// selective-alignment by the `alignment_score` aln tag); a piscem bulk file is
-/// identified by `frag_map_type` + the `compressed_ori_ref`/`pos`/`frag_len`
-/// alignment triple.
+/// **How a RAD file describes itself.** Its header ("prelude") carries three
+/// lists of named tags: file-level, per-read, and per-alignment. There is no
+/// single "kind" field, so detection is by *which tags are present*.
+///
+/// salmon RAD is identified by the `rad_type` file tag (and selective-alignment
+/// by the `alignment_score` aln tag); a piscem bulk file is identified by
+/// `frag_map_type` + the `compressed_ori_ref`/`pos`/`frag_len` alignment triple.
 pub fn detect_input_profile(
     prelude: &libradicl::header::RadPrelude,
 ) -> anyhow::Result<RadInputProfile> {
@@ -59,6 +85,8 @@ pub fn detect_input_profile(
     // salmon RAD is identified by its `rad_type` file tag; piscem uses a
     // differently-named `known_rad_type` tag, so this cleanly distinguishes them.
     if ft.has_tag("rad_type") {
+        // Within salmon's own files, the presence of per-hit scores is what
+        // separates the two profiles.
         let p = if at.has_tag("alignment_score") {
             RadProfile::SelectiveAlignment
         } else {
@@ -73,6 +101,8 @@ pub fn detect_input_profile(
     {
         return Ok(RadInputProfile::PiscemBulk);
     }
+    // Neither signature matched: fail loudly rather than guess, since guessing
+    // wrong would decode the binary payload with the wrong layout.
     anyhow::bail!(
         "unrecognized RAD profile: expected a salmon RAD (with a `rad_type` file tag) \
          or a piscem bulk RAD (with `frag_map_type` + `compressed_ori_ref`/`pos`/`frag_len`)"
@@ -89,7 +119,8 @@ pub enum RadProfile {
 }
 
 impl RadProfile {
-    /// The `rad_type` file-tag string salmon writes for this profile.
+    /// The `rad_type` file-tag string salmon writes for this profile. This
+    /// string is what [`detect_input_profile`] later reads back.
     pub fn rad_type_str(self) -> &'static str {
         match self {
             RadProfile::Sketch => "salmon_bulk_sketch",
@@ -99,9 +130,25 @@ impl RadProfile {
 
     /// True if records in this profile carry a per-hit `alignment_score` tag.
     pub fn has_scores(self) -> bool {
+        // `matches!` is a compact "does this value have this shape" test.
         matches!(self, RadProfile::SelectiveAlignment)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Bit layout of `compressed_ori_ref`
+//
+// Three pieces of information are packed into one 32-bit integer to keep the
+// per-hit record small (a big run writes billions of hits, so every byte
+// counts):
+//
+//   bit 31        : is_fw    — fragment/read-1 aligned to the forward strand
+//   bit 30        : mate_fw  — read-2 aligned to the forward strand
+//   bits 29..0    : tid      — transcript id, up to ~1.07 billion references
+//
+// A "mask" is a constant with 1-bits exactly where a field lives, so `v & MASK`
+// extracts the field and `v | BIT` sets a flag.
+// ---------------------------------------------------------------------------
 
 /// Orientation/reference bit layout of `compressed_ori_ref`, matching piscem
 /// (`piscem-rs::io::rad::write_bulk_record`) and libradicl's bulk *reader*.
@@ -112,11 +159,23 @@ pub const MATE_FW: u32 = 0x4000_0000;
 pub const TID_MASK: u32 = 0x3FFF_FFFF;
 
 /// Sentinel `frag_len` for non-proper-pair hits (orphan / single-end), matching
-/// piscem.
+/// piscem. A sentinel is an otherwise-impossible value used to mean "not
+/// applicable" without spending an extra field.
 pub const FRAG_LEN_UNPAIRED: u16 = u16::MAX;
+
+// ---------------------------------------------------------------------------
+// File tags salmon bakes into its own RAD files.
+//
+// "Baking" means storing a value the writing run already computed so a later
+// requant does not have to recompute (or worse, recompute differently). This is
+// what makes a RAD requant reproduce the original run exactly.
+// ---------------------------------------------------------------------------
 
 /// File-tag name: a `u8` bitfield recording which reserved values were actually
 /// baked at finalize ([`BAKED_FLD`] / [`BAKED_ABUND`]); `0` ⇒ none (placeholders).
+///
+/// The tag slots are written up front at a fixed size so they can be patched in
+/// place at the end of the run; this bitfield says which slots hold real data.
 pub const BAKED_FLAGS_TAG: &str = "baked_flags";
 /// File-tag name: the fragment-length distribution as a log-PMF over raw lengths
 /// `[0, fld_len)`, baked at write time so a reader can quantify in a single pass
@@ -156,12 +215,18 @@ pub const SCORE_KIND_LOGWEIGHT: u8 = 1;
 /// Fixed-point scale for a [`SCORE_KIND_LOGWEIGHT`] score: the per-hit log-LR is
 /// stored as `round(logLR · SCORE_LOG_SCALE)` and read back as `score / scale`.
 /// 1000 keeps ~3 decimal digits of the log-weight, well within an `i32`.
+///
+/// Storing a scaled integer rather than a float keeps the record fixed-width and
+/// makes the value bit-reproducible across platforms.
 pub const SCORE_LOG_SCALE: f64 = 1000.0;
 
 /// piscem `frag_map_type` (a.k.a. `MappingType`) code for an unmapped fragment.
 pub const FRAG_MAP_TYPE_UNMAPPED: u8 = 0;
 
 /// A single salmon mapping placement, in the form written to / read from RAD.
+///
+/// One fragment usually has several of these: "this fragment could have come
+/// from transcript 12 at position 340, or transcript 88 at position 12, or …".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RadHit {
     /// transcript id (must fit in 30 bits).
@@ -181,14 +246,19 @@ pub struct RadHit {
 impl RadHit {
     /// Pack `(tid, is_fw, mate_fw)` into the `compressed_ori_ref` u32, matching
     /// piscem's bulk layout and libradicl's bulk reader.
+    ///
+    /// `#[inline]` asks the compiler to paste the body into the caller: this is
+    /// called once per written hit, so even a function call would be visible.
     #[inline]
     pub fn compressed_ori_ref(&self) -> u32 {
+        // Mask the id down to 30 bits, then OR in each flag bit if set.
         (self.tid & TID_MASK)
             | if self.is_fw { ORI_FW } else { 0 }
             | if self.mate_fw { MATE_FW } else { 0 }
     }
 
-    /// Decode a `compressed_ori_ref` u32 into `(tid, is_fw, mate_fw)`.
+    /// Decode a `compressed_ori_ref` u32 into `(tid, is_fw, mate_fw)`, the exact
+    /// inverse of [`Self::compressed_ori_ref`].
     #[inline]
     pub fn decode_ori_ref(v: u32) -> (u32, bool, bool) {
         (v & TID_MASK, (v & ORI_FW) != 0, (v & MATE_FW) != 0)
@@ -196,12 +266,19 @@ impl RadHit {
 
     /// Build a hit for one placement following piscem's bulk `frag_len`
     /// convention, shared by every RAD producer (reads, alignment-BAM, genome
-    /// projection): a proper pair stores its real `fragment_len`; an orphan /
-    /// single-end stores the mapped mate's `read_len` in the slot (clamped below
-    /// [`FRAG_LEN_UNPAIRED`]) so the reader can recover the bounded-CMF orphan
-    /// fragment-length weight rather than a flat penalty. `pos` is clamped to
-    /// `>= 0`. `mate_fw` is meaningful only for proper pairs (callers pass
-    /// `false` otherwise).
+    /// projection).
+    ///
+    /// **The `frag_len` convention.** A proper pair stores its real
+    /// `fragment_len`. An orphan or single-end read has no fragment length —
+    /// only one end was observed — so the slot instead stores the mapped mate's
+    /// `read_len` (clamped below the [`FRAG_LEN_UNPAIRED`] sentinel). That lets
+    /// the reader recover the bounded-CMF orphan fragment-length weight, i.e.
+    /// "the true fragment was at least this long", rather than falling back to a
+    /// flat penalty.
+    ///
+    /// `pos` is clamped to `>= 0` (a soft-clipped alignment can compute a
+    /// negative start). `mate_fw` is meaningful only for proper pairs, and is
+    /// forced to `false` otherwise so the encoded bit is deterministic.
     pub fn for_placement(
         tid: u32,
         is_fw: bool,
@@ -218,8 +295,12 @@ impl RadHit {
             mate_fw: paired && mate_fw,
             pos: pos.max(0) as u32,
             frag_len: if paired {
+                // Saturate rather than wrap: an absurd fragment length must not
+                // silently become a small one.
                 fragment_len.clamp(0, u16::MAX as i32) as u16
             } else {
+                // MAX - 1 so a real read length can never be mistaken for the
+                // "unpaired" sentinel.
                 read_len.clamp(0, (u16::MAX - 1) as i32) as u16
             },
             score,
@@ -229,7 +310,8 @@ impl RadHit {
 
 /// piscem `MappingType` codes for the read-level `frag_map_type` tag.
 ///
-/// salmon's [`MateStatus`] maps onto the subset piscem uses for bulk data.
+/// salmon's [`MateStatus`] maps onto the subset piscem uses for bulk data. The
+/// numeric codes are fixed by the format, not chosen here.
 pub mod frag_map_type {
     use super::MateStatus;
 
@@ -258,6 +340,11 @@ pub mod frag_map_type {
     /// "Completeness" rank used to pick a single fragment-level `frag_map_type`
     /// when a fragment's placements disagree (a proper pair is more complete
     /// than an orphan, which is more complete than a single-end / unmapped).
+    ///
+    /// Note this is *not* the same ordering as the raw codes above, which is
+    /// exactly why the rank function exists: `MAPPED_PAIR` is 4 but
+    /// `RIGHT_ORPHAN` is 3, so comparing codes directly would work here by luck,
+    /// while `SINGLE` (1) vs `LEFT_ORPHAN` (2) would not generalize.
     #[inline]
     fn rank(code: u8) -> u8 {
         match code {
@@ -269,6 +356,10 @@ pub mod frag_map_type {
     }
 
     /// Fragment-level `frag_map_type` = the most complete status across hits.
+    ///
+    /// The tag is per read, but hits may disagree (the same fragment can be a
+    /// proper pair on one transcript and an orphan on another), so one summary
+    /// value has to be chosen. `unwrap_or(UNMAPPED)` covers the empty case.
     pub fn fragment_level(statuses: impl IntoIterator<Item = MateStatus>) -> u8 {
         statuses
             .into_iter()
@@ -282,6 +373,8 @@ pub mod frag_map_type {
 mod tests {
     use super::*;
 
+    /// The packing is a wire format shared with piscem, so encode/decode must be
+    /// an exact round trip, including at the extreme transcript id.
     #[test]
     fn ori_ref_roundtrip() {
         for &(tid, fw, mfw) in &[
@@ -302,6 +395,8 @@ mod tests {
         }
     }
 
+    /// When a fragment's hits disagree, the summary tag must report the most
+    /// complete mapping seen, not the first or the last.
     #[test]
     fn fragment_level_picks_most_complete() {
         use frag_map_type::*;
@@ -317,6 +412,8 @@ mod tests {
         assert_eq!(fragment_level([]), UNMAPPED);
     }
 
+    /// Pin the paired/orphan `frag_len` convention and both saturation limits,
+    /// since a reader decodes these bytes with no way to detect a wrong rule.
     #[test]
     fn for_placement_frag_len_convention() {
         // Proper pair: real fragment length, mate strand kept, pos clamped >= 0.

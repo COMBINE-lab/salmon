@@ -1,5 +1,17 @@
 //! Collapsed EM / VBEM abundance estimation over equivalence classes.
 //!
+//! # The estimation problem
+//!
+//! We know, for each group of identical-looking fragments (an *equivalence
+//! class*), how many fragments there were and which transcripts they were
+//! compatible with. We do not know which transcript each fragment actually came
+//! from. If we knew the abundances we could apportion the ambiguous fragments
+//! sensibly; if we knew the apportionment we could compute the abundances. That
+//! circularity is exactly what **EM** (expectation-maximization) resolves: guess
+//! the abundances, apportion accordingly (E-step), recompute the abundances from
+//! that apportionment (M-step), repeat. Each round provably improves the fit, and
+//! the sequence converges to a fixed point.
+//!
 //! Ports salmon's `CollapsedEMOptimizer` (`src/inference/CollapsedEMOptimizer.cpp`):
 //! given a finalized set of equivalence classes (each a transcript label, a
 //! count, and per-transcript `combined_weights`), iteratively estimate the
@@ -7,9 +19,12 @@
 //!
 //! The update rules match the C++ exactly:
 //! - **EM**: `alphaOut[t] += count * (alphaIn[t] * w_t) / sum_j(alphaIn[j] * w_j)`,
-//!   with single-transcript classes assigned their full count.
+//!   with single-transcript classes assigned their full count. Read it as:
+//!   split each class's count in proportion to `abundance × compatibility`.
 //! - **VBEM**: replaces `alphaIn[t]` with `expTheta[t] = exp(digamma(alphaIn[t] +
-//!   prior_t) - digamma(sum_j(alphaIn[j] + prior_j)))`.
+//!   prior_t) - digamma(sum_j(alphaIn[j] + prior_j)))` — the variational-Bayes
+//!   analogue, which adds a Dirichlet prior and pulls weakly-supported
+//!   transcripts toward zero instead of letting them float on noise.
 //!
 //! The M-steps run in parallel with rayon. Optional SQUAREM acceleration
 //! ([`EmAccel::Squarem`]) extrapolates over the plain iteration to reach the same
@@ -27,6 +42,11 @@ pub use packed::PackedEqClasses;
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
 
 /// EM/VBEM acceleration scheme applied on top of the fixed-point map.
+///
+/// All three reach the *same* answer; they differ only in how many M-steps it
+/// takes to get there, and (for the accelerated ones) in the exact sequence of
+/// intermediate iterates. That is why the default is the unaccelerated path:
+/// identical output to historical salmon, with acceleration strictly opt-in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EmAccel {
     /// Plain fixed-point iteration (one M-step per iteration). Default; the output
@@ -42,18 +62,25 @@ pub enum EmAccel {
     /// multi-secant quasi-Newton step) rather than just two. Converges faster than
     /// SQUAREM on high-dimensional, ill-conditioned problems. Same opt-in,
     /// same-fixpoint semantics as [`EmAccel::Squarem`]; not byte-identical to
-    /// `None`. See [`daarem`].
+    /// `None`. See the `daarem` module.
     Daarem,
 }
 
 /// Optimizer configuration. Defaults mirror salmon's command-line defaults.
 #[derive(Debug, Clone)]
 pub struct EmOptions {
+    /// hard stop, so a pathological input cannot loop forever
     pub max_iter: u32,
+    /// floor on iterations before the convergence check engages, so an early
+    /// accidental "nothing moved" cannot end the run prematurely
     pub min_iter: u32,
     /// relative-difference convergence tolerance
     pub rel_diff_tol: f64,
     /// only transcripts with `alpha` above this participate in the convergence check
+    ///
+    /// Without the cutoff, a transcript oscillating between 1e-30 and 2e-30 would
+    /// register a 100% relative change forever and block convergence, despite
+    /// being numerically irrelevant.
     pub alpha_check_cutoff: f64,
     /// abundances below this are truncated to zero on output
     pub min_alpha: f64,
@@ -89,6 +116,8 @@ impl Default for EmOptions {
 #[derive(Debug, Clone)]
 pub struct EmResult {
     /// estimated fragment counts per transcript (indexed by transcript id)
+    ///
+    /// Fractional, because ambiguous fragments are split between transcripts.
     pub alphas: Vec<f64>,
     /// iterations actually run
     pub iters: u32,
@@ -104,9 +133,15 @@ pub struct EmResult {
 /// Relative-difference convergence check, matching salmon: the max over
 /// transcripts (with `alpha_in` above the cutoff) of
 /// `|alpha_out - alpha_in| / alpha_out`.
+///
+/// The *maximum* rather than an average: convergence means every meaningful
+/// transcript has settled, and an average would let one large still-moving
+/// transcript hide behind thousands of settled ones.
 pub(crate) fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
     let mut max_d = f64::NEG_INFINITY;
     for i in 0..alpha_in.len() {
+        // Skip negligible transcripts (see `alpha_check_cutoff`) and guard the
+        // division against a zero denominator.
         if alpha_in[i] > cutoff && alpha_out[i] > 0.0 {
             let d = (alpha_out[i] - alpha_in[i]).abs() / alpha_out[i];
             if d > max_d {
@@ -114,6 +149,7 @@ pub(crate) fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> 
             }
         }
     }
+    // Stays -inf when no transcript qualified; callers test `is_finite()`.
     max_d
 }
 
@@ -138,6 +174,9 @@ pub fn optimize(
 /// transcript id) when its length matches `num_txps` — used to seed the EM with
 /// salmon's count-blended initialization (online estimates blended with uniform),
 /// which reduces the iteration count to convergence.
+///
+/// A warm start does not change where the EM lands, only how quickly it gets
+/// there: starting near the answer skips the iterations spent travelling.
 pub fn optimize_with_init(
     eq: &CollapsedEqClasses,
     num_txps: usize,
@@ -153,7 +192,10 @@ pub fn optimize_with_init(
 /// rayon M-step (for the single main run) vs. the sequential one (used by
 /// bootstrap, which parallelizes across replicates instead). The per-class
 /// `counts` are the packed structure's own (bootstrap passes resampled counts
-/// through [`run_em_counts`]).
+/// through the private `run_em_counts`).
+///
+/// Parallelizing at only one level is deliberate: nesting a parallel M-step
+/// inside parallel replicates would oversubscribe the machine and slow both down.
 pub fn optimize_packed(p: &PackedEqClasses, opts: &EmOptions, parallel: bool) -> EmResult {
     optimize_packed_with_init(p, opts, parallel, None, None)
 }
@@ -193,12 +235,17 @@ pub fn optimize_packed_with_init(
 
 /// VBEM Dirichlet prior per transcript: flat `vb_prior`, or `vb_prior·max(1,effLen)`
 /// under `--perNucleotidePrior`.
+///
+/// The per-nucleotide form scales the prior's strength with how much sequence a
+/// transcript offers, so a flat prior does not dominate short transcripts.
 pub(crate) fn prior_alphas_vec(
     opts: &EmOptions,
     eff_lens: Option<&[f64]>,
     num_txps: usize,
 ) -> Vec<f64> {
     match (opts.per_nucleotide_prior, eff_lens) {
+        // Only usable when effective lengths were supplied and line up; the
+        // catch-all arm below falls back to the flat prior otherwise.
         (true, Some(el)) if el.len() == num_txps => {
             el.iter().map(|&l| opts.vb_prior * l.max(1.0)).collect()
         }
@@ -240,6 +287,8 @@ pub(crate) fn run_em_counts(
 ) -> (Vec<f64>, u32, bool) {
     let num_txps = p.num_txps;
     let total: u64 = counts.iter().sum();
+    // Uniform start: spread all the observed mass evenly. Any strictly positive
+    // start converges to the same place; uniform is simply the least presumptuous.
     let init = if num_txps > 0 {
         total as f64 / num_txps as f64
     } else {
@@ -252,6 +301,7 @@ pub(crate) fn run_em_counts(
         Some(a) if a.len() == num_txps => a.to_vec(),
         _ => vec![init; num_txps],
     };
+    // Destination buffer for each M-step; the two are swapped rather than copied.
     let mut alphas_prime = vec![0.0f64; num_txps];
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
@@ -275,6 +325,10 @@ pub(crate) fn run_em_counts(
     // reusing the once-allocated shard/scratch/exp_theta buffers. Both the plain
     // and SQUAREM loops drive `F` through this closure, so the accelerated path
     // reuses the exact same (already tuned) kernels.
+    //
+    // Packaging the M-step as a closure is what lets the three acceleration
+    // strategies below be written once against an abstract `F`, with no knowledge
+    // of EM vs VBEM or of the threading model.
     let mut f = |src: &[f64], dst: &mut [f64]| match (opts.use_vbem, parallel) {
         (false, true) => packed::em_step_par(p, counts, src, dst, &mut shards),
         (false, false) => packed::em_step_seq(p, counts, src, dst, &mut scratch),
@@ -302,11 +356,14 @@ pub(crate) fn run_em_counts(
     let mut it = 0u32;
     match opts.accel {
         EmAccel::None => {
+            // The textbook loop: one M-step, check whether anything moved, repeat.
             while it < opts.max_iter {
                 f(&alphas, &mut alphas_prime);
                 it += 1;
                 if it >= min_iter {
                     let d = max_rel_diff(&alphas, &alphas_prime, opts.alpha_check_cutoff);
+                    // Swap rather than copy: the buffers just exchange roles, so
+                    // no data movement is needed.
                     std::mem::swap(&mut alphas, &mut alphas_prime);
                     if d.is_finite() && d < opts.rel_diff_tol {
                         converged = true;
@@ -337,6 +394,12 @@ pub(crate) fn run_em_counts(
 
 /// SQUAREM (SqS3) acceleration of the fixed-point iteration.
 ///
+/// **The intuition.** Near its fixed point, EM moves along a roughly straight
+/// line, each step a little shorter than the last — a geometric series. If you
+/// can see the first two steps you can estimate where the whole series is
+/// heading, and jump there directly. That is all SQUAREM does: two ordinary
+/// steps, one extrapolation, one safety step.
+///
 /// Each cycle takes two M-steps (`x1 = F(x0)`, `x2 = F(x1)`), forms `r = x1 - x0`
 /// and `v = (x2 - x1) - r`, and extrapolates
 /// `xp = x0 - 2·alpha·r + alpha²·v` with steplength `alpha = -‖r‖/‖v‖` clamped to
@@ -347,6 +410,10 @@ pub(crate) fn run_em_counts(
 /// valid EM iterate (non-negative, mass-conserving), and convergence is checked on
 /// the full cycle `x0 → x_next` with the same [`max_rel_diff`] criterion as the
 /// plain loop.
+///
+/// Here `r` is the first step and `v` how much the second step differed from it —
+/// the "acceleration" of the sequence. The clamp and the negativity fallback
+/// together guarantee SQUAREM is never *worse* than taking two plain steps.
 ///
 /// `x0` aliases the caller's `alphas` (updated in place to the final estimate) and
 /// `x_next` reuses the caller's `alphas_prime` scratch; the vector/norm math is
@@ -364,6 +431,7 @@ fn squarem_loop(
     it: &mut u32,
 ) -> bool {
     let n = num_txps;
+    // Allocated once outside the loop; these are reused every cycle.
     let mut x1 = vec![0.0f64; n];
     let mut x2 = vec![0.0f64; n];
     let mut r = vec![0.0f64; n];
@@ -371,6 +439,7 @@ fn squarem_loop(
     let mut xp = vec![0.0f64; n];
 
     while *it < opts.max_iter {
+        // Two ordinary EM steps, which is what the extrapolation is built from.
         f(x0, &mut x1);
         *it += 1;
         f(&x1, &mut x2);
@@ -397,12 +466,18 @@ fn squarem_loop(
         }
 
         // SqS3 steplength, clamped so |alpha| ≥ 1 (alpha = -1 ⇒ xp = x2).
+        // The ratio of step size to step-size *change* estimates how far the
+        // geometric series still has to run.
         let mut alpha = -(r_sq.sqrt() / v_sq.sqrt());
         if alpha > -1.0 {
             alpha = -1.0;
         }
 
         // Extrapolate, backing off toward the double-step if a component < 0.
+        //
+        // Abundances are counts and cannot be negative; an over-long jump can
+        // overshoot past zero, so the step is repeatedly halved back toward the
+        // plain double step until every component is valid.
         let mut tries = 0u32;
         loop {
             let a2 = alpha * alpha;
@@ -427,6 +502,11 @@ fn squarem_loop(
         }
 
         // Stabilizing M-step, then converge-check on the whole cycle.
+        //
+        // The extrapolated point is only a guess and need not be a legal EM
+        // iterate; running one real M-step from it re-imposes non-negativity and
+        // mass conservation, so the accelerated path can never drift off the
+        // manifold the plain path stays on.
         f(&xp, x_next);
         *it += 1;
         if *it >= min_iter {
@@ -448,6 +528,9 @@ mod tests {
     use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
 
     /// Build a collapsed eq-class set and set unit effective lengths.
+    ///
+    /// Unit lengths and unit weights mean the tests below isolate the EM's
+    /// apportionment logic from length correction and bias.
     fn build(classes: &[(Vec<u32>, u64)], num_txps: usize) -> CollapsedEqClasses {
         let b = EquivalenceClassBuilder::new();
         for (txps, count) in classes {
@@ -459,6 +542,8 @@ mod tests {
         eq
     }
 
+    /// With no ambiguity there is nothing to infer, so the EM must return the
+    /// observed counts unchanged.
     #[test]
     fn unique_classes_recover_exact_counts() {
         // Two transcripts, only unique evidence: EM must return those counts.
@@ -468,6 +553,8 @@ mod tests {
         assert!((res.alphas[1] - 70.0).abs() < 1e-6);
     }
 
+    /// The central behaviour: unique evidence decides how the ambiguous evidence
+    /// is split.
     #[test]
     fn shared_class_splits_by_unique_evidence() {
         // 10 unique to t0, 90 unique to t1, 100 shared between them.
@@ -482,6 +569,8 @@ mod tests {
         assert!((res.alphas[1] - 180.0).abs() < 1e-2, "a1={}", res.alphas[1]);
     }
 
+    /// The EM only ever redistributes evidence, so no fragment may be created or
+    /// destroyed however tangled the classes are.
     #[test]
     fn conserves_total_count() {
         let eq = build(&[(vec![0, 1, 2], 50), (vec![1, 2], 30), (vec![2], 20)], 3);
@@ -490,6 +579,8 @@ mod tests {
         assert!((total - 100.0).abs() < 1e-6, "total={total}");
     }
 
+    /// VBEM's prior perturbs the total slightly (by design); check it stays close
+    /// and preserves the ordering.
     #[test]
     fn vbem_runs_and_conserves_approximately() {
         let eq = build(&[(vec![0], 30), (vec![1], 70), (vec![0, 1], 100)], 2);
@@ -522,6 +613,8 @@ mod tests {
         )
     }
 
+    /// Acceleration must change the *speed*, never the *answer* — the single most
+    /// important property of an opt-in accelerator.
     #[test]
     fn squarem_matches_plain_em_fixpoint() {
         let eq = ambiguous();
@@ -556,6 +649,7 @@ mod tests {
         );
     }
 
+    /// The same guarantee under VBEM, whose map is a different function.
     #[test]
     fn squarem_matches_plain_vbem_fixpoint() {
         let eq = ambiguous();
@@ -584,6 +678,8 @@ mod tests {
         }
     }
 
+    /// Extrapolation could in principle break mass conservation; the stabilizing
+    /// M-step is what prevents it, and this pins that.
     #[test]
     fn squarem_conserves_total_count() {
         let eq = ambiguous();
@@ -601,6 +697,8 @@ mod tests {
         assert!((total - 1340.0).abs() < 1e-6, "total={total}");
     }
 
+    /// Same fixpoint is necessary but not sufficient — the accelerator also has to
+    /// actually accelerate, on a case constructed to be hard for plain EM.
     #[test]
     fn squarem_reduces_iters_on_large_ambiguous_case() {
         // Two nearly-indistinguishable transcripts sharing a huge class, with tiny
@@ -646,6 +744,8 @@ mod tests {
         );
     }
 
+    /// The DAAREM path carries the same four obligations as SQUAREM; this is the
+    /// first (same fixpoint under plain EM).
     #[test]
     fn daarem_matches_plain_em_fixpoint() {
         let eq = ambiguous();
@@ -679,6 +779,7 @@ mod tests {
         );
     }
 
+    /// Same fixpoint under VBEM.
     #[test]
     fn daarem_matches_plain_vbem_fixpoint() {
         let eq = ambiguous();
@@ -707,6 +808,7 @@ mod tests {
         }
     }
 
+    /// Mass conservation through the Anderson extrapolation.
     #[test]
     fn daarem_conserves_total_count() {
         let eq = ambiguous();
@@ -723,6 +825,7 @@ mod tests {
         assert!((total - 1340.0).abs() < 1e-6, "total={total}");
     }
 
+    /// And that DAAREM actually accelerates, on the same deliberately slow case.
     #[test]
     fn daarem_reduces_iters_on_slow_mixer() {
         // Same slow-mixing case as the SQUAREM test: two near-indistinguishable
@@ -761,6 +864,9 @@ mod tests {
         );
     }
 
+    /// Effective length enters through the class weights, so a longer transcript
+    /// needs *more* fragments to justify the same abundance and therefore receives
+    /// a smaller share of identical evidence.
     #[test]
     fn effective_length_shifts_allocation() {
         // One shared class, equal weights, but t0 is 3x longer -> more of the

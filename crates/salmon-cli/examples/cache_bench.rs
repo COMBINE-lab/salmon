@@ -19,12 +19,15 @@ fn main() {
     } else {
         "mimalloc"
     };
+    // Enough iterations that per-op timing is not dominated by clock resolution.
     let n: u64 = 30_000_000;
 
     // alloc + free, every iteration (what the current sketch path does per read)
     let t = Instant::now();
     for _ in 0..n {
         let c = MappingCache::<SketchHitInfoSimple>::new(31);
+        // `black_box` stops the optimizer deleting the allocation as dead code,
+        // which is the entire thing being measured.
         black_box(&c);
     }
     let new_ns = t.elapsed().as_nanos() as f64 / n as f64;

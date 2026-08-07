@@ -1,24 +1,42 @@
 //! Positional fragment bias (`SimplePosBias`) — a port of salmon's
 //! `src/model/SimplePosBias.cpp`.
 //!
-//! A 20-bin histogram of fragment start positions (binned uniformly along the
-//! transcript) accumulated in log space, one model per *length class* and per
-//! end (5'/3'). After [`finalize`](SimplePosBias::finalize) the (normalized)
-//! bin masses are fit with a cubic spline over the non-uniform Cufflinks
-//! position knots, and [`project_weights`](SimplePosBias::project_weights)
-//! evaluates that spline at each transcript position. The observed/expected
-//! per-position ratio gives the positional bias factor used in the
-//! effective-length convolution.
+//! # The effect being modelled
+//!
+//! Fragments are not drawn uniformly along a transcript. Degraded RNA is
+//! preferentially sequenced near its 3' end; some protocols pile up at the 5'
+//! end; random priming is uneven near both. Left alone, this makes a transcript
+//! look more or less abundant depending on where its fragments happened to land.
+//!
+//! The model is deliberately coarse: a 20-bin histogram of fragment start
+//! positions (binned uniformly along the transcript) accumulated in log space,
+//! one model per *length class* and per end (5'/3'). Length classes matter
+//! because positional bias is not the same shape on a 500-base transcript as on a
+//! 10,000-base one, and a single pooled model would average the two into
+//! something that fits neither.
+//!
+//! After [`finalize`](SimplePosBias::finalize) the (normalized) bin masses are
+//! fit with a cubic spline over the non-uniform Cufflinks position knots, and
+//! [`project_weights`](SimplePosBias::project_weights) evaluates that spline at
+//! each transcript position. The observed/expected per-position ratio gives the
+//! positional bias factor used in the effective-length convolution.
 
 use crate::spline::Spline;
 
 /// salmon's default number of position bins (`SimplePosBias` `numBins`).
+/// Coarse on purpose: the effect is smooth, and finer bins would mostly fit
+/// noise.
 pub const NUM_POS_BINS: usize = 20;
 /// salmon's number of transcript length classes (`numBiasBins`).
 pub const NUM_LENGTH_CLASSES: usize = 5;
 
 /// Cufflinks fractional position knots used as the spline x-coordinates
 /// (`SimplePosBias::positionBins_`).
+///
+/// Note they are *not* evenly spaced: dense near both ends (0.02, 0.04, …) and
+/// sparse through the middle (0.3, 0.4, 0.5). That is where the interesting
+/// structure lives — the body of a transcript is close to flat, the ends are
+/// not — so the resolution is spent where it buys something.
 const POSITION_BINS: [f64; NUM_POS_BINS] = [
     0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.92, 0.94,
     0.96, 0.98, 1.0,
@@ -37,6 +55,7 @@ pub struct SimplePosBias {
     /// `log(1)` pseudocount injected once) at [`finalize`]. Replaces the old
     /// non-associative log-space `log_add`. See [`crate::BIAS_WEIGHT_SCALE`].
     masses_fp: Vec<u64>,
+    /// Guards against adding mass after the spline has been fit.
     finalized: bool,
     spline: Option<Spline>,
 }
@@ -50,6 +69,10 @@ impl Default for SimplePosBias {
 impl SimplePosBias {
     /// A model with `num_bins` bins, masses initialized to `log(1) = 0` (salmon
     /// initializes to `LOG_1`, i.e. a pseudocount of 1 per bin).
+    ///
+    /// A *pseudocount* is a fictitious observation added to every bin so that an
+    /// unobserved bin has a small probability rather than exactly zero — which
+    /// would make its bias factor a division by zero.
     pub fn new(num_bins: usize) -> Self {
         Self {
             num_bins,
@@ -60,12 +83,15 @@ impl SimplePosBias {
         }
     }
 
-    /// A model with masses at `log(0) = -inf` — the true [`log_add`] identity, so
+    /// A model with masses at `log(0) = -inf` — the true log-add identity, so
     /// it carries *no* pseudocount. Used as the per-thread accumulator when
     /// building an expected model in parallel: partials accumulate pure observed
     /// log-mass and merge associatively via [`combine`](Self::combine); the single
     /// `log(1)` pseudocount is then injected once by combining into a [`new`](Self::new)
     /// (or [`default`](Self::default)) model.
+    ///
+    /// If each partial carried its own pseudocount, the merged total would hold
+    /// one per thread and the model would depend on the thread count.
     pub fn new_empty(num_bins: usize) -> Self {
         Self {
             num_bins,
@@ -86,11 +112,16 @@ impl SimplePosBias {
 
     /// Add `mass` (LINEAR) to the bin for `pos` on a transcript of `length`
     /// (`bin = floor(pos / (length / numBins))`, clamped to the last bin).
+    ///
+    /// Binning by *fraction* of the transcript, not by absolute offset, is what
+    /// lets transcripts of different lengths contribute to one model.
     #[inline]
     pub fn add_mass(&mut self, pos: i32, length: i32, mass: f64) {
         debug_assert!(!self.finalized);
         let step = length as f64 / self.num_bins as f64;
         let mut bin = (pos as f64 / step).floor() as i32;
+        // Clamp both ends: a soft-clipped alignment can report a slightly negative
+        // start, and `pos == length` would land one past the last bin.
         if bin < 0 {
             bin = 0;
         }
@@ -115,6 +146,7 @@ impl SimplePosBias {
     /// Convert log masses to linear, normalize, and fit the spline over the
     /// Cufflinks position knots (duplicating the endpoints as natural knots).
     pub fn finalize(&mut self) {
+        // Idempotent: several call sites may finalize the same model.
         if self.finalized {
             return;
         }
@@ -125,16 +157,24 @@ impl SimplePosBias {
         for (m, &fp) in self.masses.iter_mut().zip(&self.masses_fp) {
             *m = (1.0 + fp as f64 / crate::BIAS_WEIGHT_SCALE).ln();
         }
+        // Back to linear space, accumulating the normalizer as we go.
         let mut sum = 0.0;
         for m in &mut self.masses {
             *m = m.exp();
             sum += *m;
         }
         let n = self.masses.len();
+        // Duplicate the first and last bin values as extra knots at exactly 0.0
+        // and 1.0. Without them the spline would have to extrapolate over the
+        // transcript's very ends, where cubic overshoot is worst.
         let start_knot = self.masses[0] / sum;
         let stop_knot = self.masses[n - 1] / sum;
         let spline_sum = sum + start_knot + stop_knot;
 
+        // Spline values: the duplicated endpoints plus the normalized bins. Note
+        // the spline uses `spline_sum` (which includes the duplicates) while
+        // `self.masses` is normalized by `sum`, so the reported bin masses stay a
+        // proper distribution.
         let mut spline_mass = vec![0.0f64; n + 2];
         spline_mass[0] = start_knot;
         for i in 0..n {
@@ -143,6 +183,8 @@ impl SimplePosBias {
         }
         spline_mass[n + 1] = stop_knot;
 
+        // Spline x-coordinates: 0.0, the Cufflinks knots shifted back by 0.01 to
+        // sit at bin *centres* rather than upper edges, then 1.0.
         let mut spline_bins = vec![0.0f64; n + 2];
         spline_bins[0] = 0.0;
         for i in 0..n {
@@ -167,6 +209,9 @@ impl SimplePosBias {
     /// observed/expected ratio, amplifying tiny model differences. The ratio is
     /// instead additively smoothed toward 1 at the division site (see
     /// `bias::positional_factor`).
+    ///
+    /// A spline through non-negative points can still dip slightly below zero
+    /// between them, which is why the clamp is needed at all.
     pub fn project_weights(&self, out: &mut [f64]) {
         let spline = self
             .spline
@@ -174,6 +219,8 @@ impl SimplePosBias {
             .expect("project_weights requires finalize()");
         let len = out.len();
         for (p, o) in out.iter_mut().enumerate() {
+            // Positions map to the spline's fractional coordinate, so one model
+            // serves transcripts of any length.
             let frac_p = p as f64 / len as f64;
             *o = spline.eval(frac_p).max(0.0);
         }
@@ -183,6 +230,10 @@ impl SimplePosBias {
 /// Length-class quantile boundaries (salmon's `setTranscriptLengthClasses_`):
 /// with `n > nbins`, the lengths at sorted positions `step, 2·step, …` (clamped);
 /// otherwise the sorted lengths themselves.
+///
+/// Quantiles rather than fixed length thresholds, so the classes hold roughly
+/// equal numbers of transcripts whatever the organism's length distribution looks
+/// like.
 pub fn compute_length_quantiles(lengths: &[u32], nbins: usize) -> Vec<u32> {
     let n = lengths.len();
     let mut sorted: Vec<u32> = lengths.to_vec();
@@ -193,11 +244,13 @@ pub fn compute_length_quantiles(lengths: &[u32], nbins: usize) -> Vec<u32> {
         let mut q = Vec::with_capacity(nbins);
         for _ in 0..nbins {
             cum += step;
+            // Clamp: the final cumulative position can land one past the end.
             let ind = cum.min(n - 1);
             q.push(sorted[ind]);
         }
         q
     } else {
+        // Fewer transcripts than classes: every transcript is its own boundary.
         sorted
     }
 }
@@ -209,6 +262,7 @@ pub fn length_class_index(quantiles: &[u32], ref_len: u32) -> usize {
     let max_quant = quantiles.len() - 1;
     // upper_bound: first index whose quantile is > ref_len
     let ub = quantiles.partition_point(|&q| q <= ref_len);
+    // A transcript longer than every boundary belongs to the last class.
     ub.min(max_quant)
 }
 
@@ -216,6 +270,8 @@ pub fn length_class_index(quantiles: &[u32], ref_len: u32) -> usize {
 mod tests {
     use super::*;
 
+    /// No positional preference in, no positional correction out — the model must
+    /// not manufacture structure from uniform data.
     #[test]
     fn uniform_observations_project_near_flat() {
         // mass spread uniformly across positions -> projected weights ~ constant
@@ -237,6 +293,8 @@ mod tests {
         );
     }
 
+    /// And the converse: a real 5' pile-up must survive binning, normalization
+    /// and spline fitting as a higher early weight.
     #[test]
     fn enriched_5p_has_higher_early_weight() {
         let mut m = SimplePosBias::new(NUM_POS_BINS);
@@ -244,6 +302,8 @@ mod tests {
         for _ in 0..10000 {
             m.add_mass(5, 1000, 0.0);
         }
+        // plus a uniform background, so the model is a bump on a plateau rather
+        // than a single spike.
         for pos in 0..1000 {
             m.add_mass(pos, 1000, 0.0);
         }
@@ -259,6 +319,8 @@ mod tests {
         );
     }
 
+    /// Class boundaries must be ordered, and lookup must saturate at both ends
+    /// rather than index out of range.
     #[test]
     fn length_classes_partition() {
         let lengths: Vec<u32> = (1..=1000).collect();

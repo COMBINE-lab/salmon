@@ -2,6 +2,23 @@
 //! `aux_info/meta_info.json`, `libParams/flenDist.txt`, and `logs/salmon_quant.log`.
 //! Functional parity with salmon's column/field layout (the binary aux bias
 //! dumps and the index-hash meta fields are deferred to a later step).
+//!
+//! # What a salmon output directory contains
+//!
+//! * `quant.sf` — the result: one row per transcript with its length, effective
+//!   length, TPM and estimated fragment count. This is what downstream analysis
+//!   reads.
+//! * `cmd_info.json` — exactly how the run was invoked, so a result can be
+//!   reproduced.
+//! * `aux_info/meta_info.json` — how the run went: mapping rate, fragment-length
+//!   statistics, index hashes, timing, diagnostics. Tools like tximport and
+//!   MultiQC key off this.
+//! * `aux_info/bootstrap/` — posterior samples, when requested.
+//! * `libParams/`, `logs/`, and the binary bias dumps — diagnostics.
+//!
+//! The exact filenames, column order and JSON field names are part of salmon's
+//! contract with a large ecosystem of downstream tools, so they are matched
+//! deliberately rather than chosen.
 
 use std::io::Write;
 use std::path::Path;
@@ -11,6 +28,8 @@ use serde::Serialize;
 
 use crate::{QuantOptions, QuantResult};
 
+/// This build's version, read from Cargo.toml at compile time and recorded in
+/// every output file for provenance.
 pub(crate) const SALMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Write the standard salmon output set into `opts.output_dir`.
@@ -81,6 +100,9 @@ fn write_quant_log(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
 }
 
 /// `aux_info/ambig_info.tsv`: `UniqueCount\tAmbigCount` per transcript (id order).
+///
+/// A cheap confidence indicator: a transcript whose evidence is mostly unique is
+/// well determined, one whose evidence is mostly shared is not.
 fn write_ambig_info(path: &Path, res: &QuantResult) -> Result<()> {
     let (uniq, ambig) = &res.ambig;
     let mut w = std::io::BufWriter::new(
@@ -177,6 +199,12 @@ fn quant_row_indices(
 }
 
 /// `quant.sf`: `Name  Length  EffectiveLength  TPM  NumReads`.
+///
+/// The four numbers per transcript: its annotated length, the effective length
+/// used as the divisor, TPM (a within-sample relative abundance that already
+/// accounts for length, summing to one million), and the estimated fragment
+/// count — fractional, because ambiguous fragments are split between
+/// transcripts.
 fn write_quant_sf(path: &Path, res: &QuantResult, sig_digits: usize) -> Result<()> {
     let mut w = std::io::BufWriter::new(
         std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
@@ -207,6 +235,11 @@ fn write_quant_sf(path: &Path, res: &QuantResult, sig_digits: usize) -> Result<(
     Ok(())
 }
 
+/// `cmd_info.json`: the run's inputs and key settings.
+///
+/// `#[derive(Serialize)]` generates the JSON encoding from the struct, so the
+/// field names below *are* the JSON keys — which is why several carry an explicit
+/// `rename` to match salmon's camelCase spelling.
 #[derive(Serialize)]
 struct CmdInfo {
     salmon_version: String,
@@ -222,6 +255,8 @@ struct CmdInfo {
     sketch: bool,
 }
 
+/// Render paths for the JSON outputs (they are recorded as text, not as
+/// platform-specific path objects).
 fn paths_to_strings(paths: &[std::path::PathBuf]) -> Vec<String> {
     paths.iter().map(|p| p.display().to_string()).collect()
 }
@@ -241,6 +276,9 @@ fn write_cmd_info(path: &Path, opts: &QuantOptions) -> Result<()> {
     write_json(path, &info)
 }
 
+/// `lib_format_counts.json`: how many fragments were compatible with the
+/// declared library type, which is the first thing to check when a mapping rate
+/// looks wrong.
 #[derive(Serialize)]
 struct LibCounts {
     read_files: Vec<String>,
@@ -272,6 +310,8 @@ fn write_lib_counts(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resu
     write_json(path, &counts)
 }
 
+/// `aux_info/meta_info.json`: everything a downstream tool or a human needs to
+/// judge the run — provenance, settings, counters, timing and diagnostics.
 #[derive(Serialize)]
 struct MetaInfo {
     salmon_version: String,
@@ -420,6 +460,8 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
     write_json(path, &meta)
 }
 
+/// Write any serializable value as pretty-printed JSON. Pretty rather than
+/// compact because these files are read by people as often as by tools.
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(value)?;
     std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))?;
@@ -430,26 +472,35 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 mod tests {
     use super::{quant_row_indices, select_names_tsv, select_sample_bytes};
 
+    /// Collect the emitted row indices for a given reference layout.
     fn rows(total: usize, fdi: Option<usize>, nd: usize) -> Vec<usize> {
         quant_row_indices(total, fdi, nd).collect()
     }
 
+    /// The ordinary case: no decoys, so every reference is reported.
     #[test]
     fn no_decoys_emits_all() {
         assert_eq!(rows(5, None, 0), vec![0, 1, 2, 3, 4]);
     }
 
+    /// The case that motivates the whole function: the trailing short
+    /// transcripts sit *after* the decoy block, so a naive "drop everything from
+    /// the first decoy" rule would silently lose real transcripts.
     #[test]
     fn decoys_then_shorts_skips_decoys_keeps_shorts() {
         // [0,3) transcripts, [3,5) decoys, [5,7) short transcripts.
         assert_eq!(rows(7, Some(3), 2), vec![0, 1, 2, 5, 6]);
     }
 
+    /// With no short transcripts the decoy block really is the suffix, and both
+    /// interpretations agree.
     #[test]
     fn decoys_as_clean_suffix_no_shorts() {
         assert_eq!(rows(5, Some(3), 2), vec![0, 1, 2]);
     }
 
+    /// An index built before `num_decoys` was recorded must keep its original
+    /// interpretation rather than being reinterpreted and emitting decoy rows.
     #[test]
     fn legacy_index_without_num_decoys_drops_suffix() {
         // num_decoys unrecorded (0) but decoys present -> old behavior: drop
@@ -457,12 +508,16 @@ mod tests {
         assert_eq!(rows(7, Some(3), 0), vec![0, 1, 2]);
     }
 
+    /// A corrupt or inconsistent header must not panic or invent rows.
     #[test]
     fn clamps_out_of_range_decoy_block() {
         // num_decoys overshooting total must not panic or emit phantom rows.
         assert_eq!(rows(5, Some(3), 99), vec![0, 1, 2]);
     }
 
+    /// tximport reads `bootstraps.gz` positionally against the `quant.sf` rows,
+    /// so a misalignment here would silently attribute every posterior sample to
+    /// the wrong transcript.
     #[test]
     fn bootstrap_output_aligns_with_quant_rows() {
         // Reference layout: [t0 t1 t2][d0 d1][s0] — 3 transcripts, 2 decoys, 1
