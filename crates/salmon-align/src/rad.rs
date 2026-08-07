@@ -1391,6 +1391,12 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     //  * otherwise ⇒ first EM, then (if bias) a SECOND RAD read for bias
     //    collection (weighted by that EM or a baked / diagnostic prior) + re-EM.
     let mut bias_dump = salmon_model::dumps::BiasDump::default();
+    // Built once and reused by every EM below plus bootstrap / Gibbs; only
+    // `combined` changes after bias correction, and `refresh_combined` patches
+    // that in place. `weights` is Gibbs-only.
+    let want_gibbs = !opts.skip_quant && opts.num_bootstraps == 0 && opts.num_gibbs_samples > 0;
+    let mut packed =
+        salmon_infer::PackedEqClasses::from_collapsed_with(&collapsed, num_refs, want_gibbs);
     let em = if opts.skip_quant {
         salmon_infer::EmResult {
             alphas: vec![0.0; num_refs],
@@ -1422,9 +1428,16 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             opts.no_bias_length_threshold,
         );
         collapsed.update_eff_lengths(&eff_lengths);
-        salmon_infer::optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
+        packed.refresh_combined(&collapsed);
+        salmon_infer::optimize_packed_with_init(&packed, &opts.em, true, None, Some(&eff_lengths))
     } else {
-        let mut em = salmon_infer::optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+        let mut em = salmon_infer::optimize_packed_with_init(
+            &packed,
+            &opts.em,
+            true,
+            None,
+            Some(&eff_lengths),
+        );
         if bias_on {
             // Abundances weighting bias collection: baked prior if present, else
             // this run's (converged) first EM. (Reached only when no up-front
@@ -1490,7 +1503,14 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 opts.no_bias_length_threshold,
             );
             collapsed.update_eff_lengths(&eff_lengths);
-            em = salmon_infer::optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+            packed.refresh_combined(&collapsed);
+            em = salmon_infer::optimize_packed_with_init(
+                &packed,
+                &opts.em,
+                true,
+                None,
+                Some(&eff_lengths),
+            );
         }
         em
     };
@@ -1524,7 +1544,6 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let length_classes =
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES);
 
-    let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
     let ambig = salmon_infer::ambiguity_counts(&packed);
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()

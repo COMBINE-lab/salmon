@@ -51,7 +51,7 @@ use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::SalmonIndex;
 pub use salmon_infer::EmAccel;
-use salmon_infer::{optimize, optimize_with_init, EmOptions};
+use salmon_infer::{optimize_packed_with_init, EmOptions};
 use salmon_map::MapConfig;
 use salmon_model::dumps::{dump_bias_models_to_file, BiasDump};
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
@@ -748,6 +748,18 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             if opts.em.use_vbem { "VBEM" } else { "EM" }
         );
     }
+    // The packed CSR layout is built ONCE and reused by every consumer below: the
+    // burn-in EM, the warm-started EM after bias correction, and bootstrap /
+    // Gibbs. `optimize`/`optimize_with_init` each build their own internally, so
+    // going through them meant re-copying labels, counts and weights (hundreds of
+    // MB on a human-scale run) two to three times over data that is bit-identical
+    // apart from `combined`, which `refresh_combined` rewrites in place.
+    //
+    // `weights` (the raw conditional weights) is only read by Gibbs, so it is
+    // populated only when Gibbs will actually run.
+    let want_gibbs = !opts.skip_quant && opts.num_bootstraps == 0 && opts.num_gibbs_samples > 0;
+    let mut packed =
+        salmon_infer::PackedEqClasses::from_collapsed_with(&collapsed, num_refs, want_gibbs);
     let mut em = if opts.skip_quant && want_rough_abund {
         // `--deterministic` + bias map-only pass: run a SHORT EM on the NAIVE
         // eq-classes (uniform-weight, with library-incompatible placements dropped
@@ -782,9 +794,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // EM, and a zeroed alpha can never recover under the multiplicative
         // update (salmon keeps one continuous, untruncated vector).
         pre.min_alpha = 0.0;
-        optimize(&collapsed, num_refs, &pre, Some(&eff_lengths))
+        optimize_packed_with_init(&packed, &pre, true, None, Some(&eff_lengths))
     } else {
-        optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
+        optimize_packed_with_init(&packed, &opts.em, true, None, Some(&eff_lengths))
     };
 
     // ---- bias correction: re-estimate effective lengths --------------------
@@ -963,16 +975,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .collect();
         eff_lengths = corrected;
         collapsed.update_eff_lengths(&eff_lengths);
+        // Only the combined weights changed, so patch them into the existing
+        // packed layout rather than rebuilding it.
+        packed.refresh_combined(&collapsed);
         // Warm-start the single full convergence from the burn-in alphas, as
         // salmon continues the same vector after its in-loop correction.
         let warm = std::mem::take(&mut em.alphas);
-        em = optimize_with_init(
-            &collapsed,
-            num_refs,
-            &opts.em,
-            Some(&warm),
-            Some(&eff_lengths),
-        );
+        em = optimize_packed_with_init(&packed, &opts.em, true, Some(&warm), Some(&eff_lengths));
     }
     // The min-alpha truncation is applied inside the EM as a mass-preserving
     // redistribution (see `redistribute_truncated`): the truncated mass flows to
@@ -1018,7 +1027,6 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
     // ---- posterior uncertainty (bootstrap / Gibbs) + ambiguity --------------
     // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
-    let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
     let ambig = salmon_infer::ambiguity_counts(&packed);
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()

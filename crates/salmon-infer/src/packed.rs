@@ -67,6 +67,22 @@ impl PackedEqClasses {
     /// `combined_weights` are already populated
     /// ([`update_eff_lengths`](salmon_eqclass::CollapsedEqClasses::update_eff_lengths)).
     pub fn from_collapsed(eq: &CollapsedEqClasses, num_txps: usize) -> Self {
+        Self::from_collapsed_with(eq, num_txps, true)
+    }
+
+    /// As [`from_collapsed`](Self::from_collapsed), but `keep_weights == false`
+    /// leaves the raw `weights` array empty.
+    ///
+    /// `weights` is read only by the Gibbs sampler; the EM path uses `combined`.
+    /// On a run without `--numGibbsSamples` it is therefore 8 bytes per CSR
+    /// incidence that is allocated, filled and never read — on the order of
+    /// 160 MB for a human-scale run. Callers that know Gibbs will not run pass
+    /// `false`.
+    pub fn from_collapsed_with(
+        eq: &CollapsedEqClasses,
+        num_txps: usize,
+        keep_weights: bool,
+    ) -> Self {
         let n = eq.classes.len();
         // Size the flat arrays up front. Growing them from empty costs a
         // reallocation plus a full copy at every doubling, and leaves a transient
@@ -91,7 +107,7 @@ impl PackedEqClasses {
         let mut labels = Vec::with_capacity(total_labels);
         let mut starts = Vec::with_capacity(n + 1);
         let mut combined = Vec::with_capacity(total_labels);
-        let mut weights = Vec::with_capacity(total_labels);
+        let mut weights = Vec::with_capacity(if keep_weights { total_labels } else { 0 });
         let mut counts = Vec::with_capacity(n);
         // The first class starts at offset 0; every later entry is appended after
         // that class's data has been copied in.
@@ -104,7 +120,9 @@ impl PackedEqClasses {
             }
             labels.extend_from_slice(&group.txps);
             combined.extend_from_slice(&value.combined_weights);
-            weights.extend_from_slice(&value.weights);
+            if keep_weights {
+                weights.extend_from_slice(&value.weights);
+            }
             counts.push(value.count);
             total += value.count;
             starts.push(labels.len() as u32);
@@ -118,6 +136,35 @@ impl PackedEqClasses {
             num_txps,
             total_count: total,
         }
+    }
+
+    /// Rewrite `combined` in place from `eq`'s current `combined_weights`,
+    /// leaving `labels`, `starts`, `counts` and `weights` untouched.
+    ///
+    /// Bias correction recomputes effective lengths and calls
+    /// [`CollapsedEqClasses::update_eff_lengths`], which changes *only* the
+    /// combined weights. Rebuilding the whole packed layout to pick that up
+    /// re-copies the labels and counts too — hundreds of MB on a human-scale run
+    /// — for arrays bit-identical to the ones already held.
+    ///
+    /// `eq` must be the class set the layout was built from. Classes are never
+    /// invalidated after construction (nothing clears `TranscriptGroup::valid`),
+    /// so the filter below matches the original build; the assertion pins that.
+    pub fn refresh_combined(&mut self, eq: &CollapsedEqClasses) {
+        let mut at = 0usize;
+        for (group, value) in &eq.classes {
+            if !group.valid {
+                continue;
+            }
+            let n = value.combined_weights.len();
+            self.combined[at..at + n].copy_from_slice(&value.combined_weights);
+            at += n;
+        }
+        assert_eq!(
+            at,
+            self.combined.len(),
+            "refresh_combined: class set changed since the packed layout was built"
+        );
     }
 
     /// Number of (valid) classes.
