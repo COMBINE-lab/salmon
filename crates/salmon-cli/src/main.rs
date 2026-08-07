@@ -431,6 +431,14 @@ struct QuantArgs {
     /// estimates to `quant.genes.sf`.
     #[arg(short = 'g', long = "geneMap", value_name = "FILE")]
     gene_map: Option<PathBuf>,
+    /// Ignore trailing transcript-version suffixes when joining `--geneMap`
+    /// entries to quantified transcripts, so `ENST00000456328.2` matches
+    /// `ENST00000456328`. Matches tximport's option of the same name. Needed
+    /// when the index was built from an Ensembl cDNA FASTA, which carries the
+    /// version in the identifier, and the annotation is an Ensembl GTF, which
+    /// puts it in a separate `transcript_version` attribute.
+    #[arg(long = "ignoreTxVersion")]
+    ignore_tx_version: bool,
     /// Worker threads (0 = all cores). salmon also runs one auxiliary thread for
     /// FASTQ parsing/decompression, so total CPU use can slightly exceed this
     /// value; on schedulers that enforce the limit, request one extra core.
@@ -885,20 +893,37 @@ fn long_read_redirect() -> ! {
     std::process::exit(2);
 }
 
+/// Where the `--geneMap` annotation is and how to join it to quantified
+/// transcripts. Carried together so the option travels with the path through
+/// every quantification path.
+#[derive(Clone, Debug)]
+struct GeneMapOpts {
+    path: PathBuf,
+    /// `--ignoreTxVersion`
+    ignore_tx_version: bool,
+}
+
+/// Name of the file under `aux_info/` listing transcripts the gene map did not
+/// cover. It sits beside `unmapped_names.txt` — which is about *fragments* that
+/// did not map — so the name says transcripts explicitly.
+const UNMATCHED_TXP_FILE: &str = "genemap_unmatched_txps.json";
+
 /// Aggregate transcript estimates to gene level and write `quant.genes.sf`.
 fn write_gene_level(
     out_dir: &std::path::Path,
-    gene_map: &std::path::Path,
+    gene_map: &GeneMapOpts,
     names: &[String],
     lengths: &[u32],
     eff_lengths: &[f64],
     tpm: &[f64],
     counts: &[f64],
 ) -> Result<()> {
-    // `read_transcript_gene_map` names the file in every error it returns, so
-    // wrapping it here would print the path twice.
-    let map = salmon_core::genemap::read_transcript_gene_map(gene_map)?;
-    let unmapped = salmon_core::genemap::write_gene_quant(
+    let map = salmon_core::genemap::read_transcript_gene_map(&gene_map.path)
+        .with_context(|| format!("reading gene map {}", gene_map.path.display()))?;
+    // Listed by name rather than only counted, so the failure survives a lost
+    // terminal and can be fed straight back into whatever built the annotation.
+    let unmatched_list = out_dir.join("aux_info").join(UNMATCHED_TXP_FILE);
+    let summary = salmon_core::genemap::write_gene_quant(
         &out_dir.join("quant.genes.sf"),
         names,
         lengths,
@@ -906,15 +931,82 @@ fn write_gene_level(
         tpm,
         counts,
         &map,
+        gene_map.ignore_tx_version,
+        Some(&unmatched_list),
     )
     .context("writing quant.genes.sf")?;
-    let n_genes = map.values().collect::<std::collections::HashSet<_>>().len();
-    if unmapped > 0 {
+
+    if summary.unmatched > 0 {
         eprintln!(
-            "warning: {unmapped} transcript(s) had no entry in the gene map and were omitted from quant.genes.sf"
+            "warning: {} of {} transcript(s) had no entry in the gene map. Each was written to \
+             quant.genes.sf as its own single-transcript gene, so those rows are named by \
+             transcript, not by gene. Their names are listed in {}",
+            summary.unmatched,
+            summary.total(),
+            unmatched_list.display()
         );
     }
-    println!("wrote gene-level estimates for {n_genes} genes to quant.genes.sf");
+    // A near-total mismatch means the identifiers do not line up, not that the
+    // annotation is merely incomplete. With the fallback in place the file is
+    // full-looking either way, so the row breakdown is the only thing that
+    // distinguishes a real gene-level result from a transcript list wearing its
+    // name — state it rather than leave it to be inferred.
+    if summary.match_rate_is_low() {
+        eprintln!(
+            "warning: the gene map matched only {} of {} quantified transcripts ({:.1}%), so of \
+             the {} rows in quant.genes.sf, {} are unmatched transcripts standing in as their \
+             own gene. Treat this output as transcript-level until the join is fixed.",
+            summary.matched,
+            summary.total(),
+            summary.match_rate() * 100.0,
+            summary.genes_written,
+            summary.unmatched
+        );
+        let would_match = salmon_core::genemap::matches_ignoring_tx_version(names, &map);
+        if !gene_map.ignore_tx_version && would_match > summary.matched {
+            eprintln!(
+                "warning: {would_match} would match with --ignoreTxVersion, which compares \
+                 identifiers without their trailing version suffix (e.g. {} vs {}). The Ensembl \
+                 cDNA FASTA carries transcript versions in the identifier while the GTF puts \
+                 them in a separate transcript_version attribute, so an index built from the \
+                 FASTA does not join to the GTF as-is.",
+                names
+                    .iter()
+                    .find(|n| !map.contains_key(*n))
+                    .map(String::as_str)
+                    .unwrap_or("ENST00000456328.2"),
+                map.keys()
+                    .next()
+                    .map(String::as_str)
+                    .unwrap_or("ENST00000456328"),
+            );
+        }
+    }
+    // Count the rows written, not the genes in the gene map: the two differ
+    // whenever the join is imperfect, and reporting the latter is what let a
+    // header-only quant.genes.sf be announced as a success (#1075).
+    //
+    // With the fallback in place the same trap reappears one step along, since
+    // a stand-in row is a transcript wearing a gene's place in the file. So the
+    // count is only called "genes" when every row is one; otherwise the split is
+    // spelled out, and the last line of the run agrees with the warnings above
+    // it rather than contradicting them.
+    if summary.unmatched == 0 {
+        println!(
+            "wrote gene-level estimates for {} genes to quant.genes.sf",
+            summary.genes_written
+        );
+    } else {
+        println!(
+            "wrote {} rows to quant.genes.sf: {} gene(s), plus {} unmatched transcript(s) as \
+             their own gene",
+            summary.genes_written,
+            // saturating: a stand-in row whose name collides with a real gene
+            // merges into it, so the two counts can overlap by one per collision.
+            summary.genes_written.saturating_sub(summary.unmatched),
+            summary.unmatched
+        );
+    }
     Ok(())
 }
 
@@ -936,7 +1028,7 @@ fn run_deterministic(
     rad_out: Option<PathBuf>,
     keep_rad: bool,
     bias_targets: Option<PathBuf>,
-    gene_map: Option<&std::path::Path>,
+    gene_map: Option<&GeneMapOpts>,
     out_dir: &std::path::Path,
 ) -> Result<()> {
     let bias_on = map_opts.seq_bias || map_opts.gc_bias || map_opts.pos_bias;
@@ -1050,7 +1142,7 @@ fn run_deterministic_align(
     opts: AlignQuantOptions,
     rad_out: Option<PathBuf>,
     keep_rad: bool,
-    gene_map: Option<&std::path::Path>,
+    gene_map: Option<&GeneMapOpts>,
     codec: ChunkCodec,
 ) -> Result<()> {
     let out_dir = opts.output_dir.clone();
@@ -1138,7 +1230,7 @@ fn run_genome_project(
     q: AlignQuantOptions,
     rad_out: Option<PathBuf>,
     keep_rad: bool,
-    gene_map: Option<&std::path::Path>,
+    gene_map: Option<&GeneMapOpts>,
 ) -> Result<()> {
     let out_dir = q.output_dir.clone();
     let explicit = rad_out.is_some();
@@ -1256,7 +1348,10 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         .num_threads(nthreads)
         .build_global();
     let out_dir = args.output.clone();
-    let gene_map = args.gene_map.clone();
+    let gene_map = args.gene_map.clone().map(|path| GeneMapOpts {
+        path,
+        ignore_tx_version: args.ignore_tx_version,
+    });
     // `--meta` (metagenomic preset) forces plain EM (no VBEM) and disables rich /
     // range-factorized equivalence classes, matching salmon's --meta. salmon's
     // preset also sets initUniform; the Rust offline EM already initializes
@@ -1356,7 +1451,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 opts,
                 args.write_rad.clone(),
                 args.keep_rad,
-                gene_map.as_deref(),
+                gene_map.as_ref(),
             );
         }
 
@@ -1370,7 +1465,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 opts,
                 args.write_rad.clone(),
                 args.keep_rad,
-                gene_map.as_deref(),
+                gene_map.as_ref(),
                 codec,
             );
         }
@@ -1619,7 +1714,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             rad_out,
             args.keep_rad,
             args.targets.clone(),
-            gene_map.as_deref(),
+            gene_map.as_ref(),
             &out_dir,
         );
     }

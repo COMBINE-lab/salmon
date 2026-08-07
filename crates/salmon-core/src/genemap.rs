@@ -183,12 +183,109 @@ fn extract_attr(attrs: &str, key: &str) -> Option<String> {
     None
 }
 
-/// Aggregate transcript-level estimates to gene level and write `quant.genes.sf`.
-/// Transcripts absent from `gene_map` are skipped (salmon's behavior); the count
-/// of skipped transcripts is returned for the caller to report.
+/// A match rate at or below this is reported as a problem rather than a note.
 ///
-/// All the input slices are parallel arrays: index `i` describes the same
-/// transcript in every one of them.
+/// The failure this guards against is total: a versioned/unversioned identifier
+/// mismatch matches *nothing*, and pairing an annotation with the FASTA it was
+/// built from matches essentially everything, so the two regimes are far apart
+/// and the exact cut is not delicate. Half is chosen because below it the
+/// majority of what was quantified is missing from `quant.genes.sf`, which is
+/// worth a look in any workflow, while deliberately partial annotations — a
+/// single-chromosome GTF, a spike-in-only map — stay well clear of being
+/// mistaken for correct. It gates a warning only; nothing fails.
+pub const LOW_MATCH_RATE: f64 = 0.5;
+
+/// What gene-level aggregation actually did, for the caller to report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GeneQuantSummary {
+    /// Quantified transcripts that found an entry in the gene map.
+    pub matched: usize,
+    /// Quantified transcripts with no entry. They are still written, each as its
+    /// own single-transcript gene, so they contribute rows to `quant.genes.sf`
+    /// and are listed by name in the unmatched-transcript file.
+    pub unmatched: usize,
+    /// Gene rows actually written — not the number of genes in the gene map.
+    /// Counts the `unmatched` fallback rows as well as the joined genes.
+    pub genes_written: usize,
+}
+
+impl GeneQuantSummary {
+    /// Quantified transcripts considered.
+    pub fn total(&self) -> usize {
+        self.matched + self.unmatched
+    }
+
+    /// Fraction of quantified transcripts that found a gene. An empty transcript
+    /// set is vacuously fully matched, so it does not trip the low-rate warning.
+    pub fn match_rate(&self) -> f64 {
+        if self.total() == 0 {
+            1.0
+        } else {
+            self.matched as f64 / self.total() as f64
+        }
+    }
+
+    /// Whether the caller should warn about how little the gene map matched.
+    pub fn match_rate_is_low(&self) -> bool {
+        self.match_rate() <= LOW_MATCH_RATE
+    }
+}
+
+/// Strip a trailing `.<digits>` version suffix, as tximport's `ignoreTxVersion`
+/// does. Identifiers whose last dot-separated part is not purely numeric are
+/// returned unchanged, which leaves GENCODE's `…_PAR_Y` suffixes alone.
+pub fn strip_tx_version(id: &str) -> &str {
+    match id.rsplit_once('.') {
+        Some((base, ver)) if !ver.is_empty() && ver.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => id,
+    }
+}
+
+/// How many of `names` would match if a version suffix were ignored on both
+/// sides. Purely diagnostic: it explains a poor match rate and never changes
+/// what is written.
+pub fn matches_ignoring_tx_version(names: &[String], gene_map: &HashMap<String, String>) -> usize {
+    let stripped: HashMap<&str, &str> = gene_map
+        .iter()
+        .map(|(t, g)| (strip_tx_version(t), g.as_str()))
+        .collect();
+    names
+        .iter()
+        .filter(|n| stripped.contains_key(strip_tx_version(n)))
+        .count()
+}
+
+/// Aggregate transcript-level estimates to gene level and write `quant.genes.sf`.
+///
+/// A transcript with no entry in `gene_map` is emitted as its own
+/// single-transcript gene, keyed by the transcript's own name — C++ salmon's
+/// `aggregateEstimatesToGeneLevel` behaviour. No abundance is dropped on the way
+/// to gene level, so downstream tools (`tximport` in particular, which has its
+/// own transcript-to-gene policy) see everything that was quantified and decide
+/// for themselves what to do with the leftovers.
+///
+/// What C++ got wrong was the reporting, not the aggregation: it warned once per
+/// unmatched transcript, so a failed join buried the signal under half a million
+/// lines. Here the names go to `unmatched_out` instead, and the caller reports
+/// the counts in [`GeneQuantSummary`] once.
+///
+/// Note that the fallback keys on the transcript name, so an unmatched
+/// transcript whose name collides with a real gene name in the map merges into
+/// that gene's row. C++ had the same property; it needs a gene named exactly
+/// like an unmapped transcript, which does not occur in practice for the
+/// Ensembl/GENCODE/RefSeq identifier schemes.
+///
+/// `unmatched_out`, when given, receives the unmatched transcript names as JSON
+/// (see [`write_unmatched_list`]) in `names` order, and is removed when nothing
+/// is unmatched so a stale list from an earlier run cannot be mistaken for a
+/// current one. The returned
+/// [`GeneQuantSummary`] is what the caller should report — in particular
+/// `genes_written`, which is the number of rows in the file and not the number
+/// of genes in the gene map.
+///
+/// With `ignore_tx_version`, identifiers are compared with a trailing `.<digits>`
+/// suffix removed on both sides (`--ignoreTxVersion`). Off by default: silently
+/// normalising identifiers is how a wrong join goes unnoticed in the first place.
 #[allow(clippy::too_many_arguments)]
 pub fn write_gene_quant(
     out_path: &Path,
@@ -198,19 +295,47 @@ pub fn write_gene_quant(
     tpm: &[f64],
     counts: &[f64],
     gene_map: &HashMap<String, String>,
-) -> io::Result<usize> {
+    ignore_tx_version: bool,
+    unmatched_out: Option<&Path>,
+) -> io::Result<GeneQuantSummary> {
+    // Re-key the map once when versions are ignored, rather than per lookup.
+    let stripped: Option<HashMap<&str, &str>> = ignore_tx_version.then(|| {
+        gene_map
+            .iter()
+            .map(|(t, g)| (strip_tx_version(t), g.as_str()))
+            .collect()
+    });
+
     // Group transcript indices by gene (gene name order is sorted for determinism).
     //
     // A `BTreeMap` iterates in sorted key order, unlike a `HashMap`; that is the
     // whole reason it is used here, so the output file is byte-identical between
     // runs.
     let mut genes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    let mut unmapped = 0usize;
+    let mut summary = GeneQuantSummary::default();
+    let mut unmatched: Vec<&str> = Vec::new();
     for (i, name) in names.iter().enumerate() {
-        match gene_map.get(name) {
-            Some(g) => genes.entry(g.as_str()).or_default().push(i),
-            None => unmapped += 1,
+        let gene = match &stripped {
+            Some(m) => m.get(strip_tx_version(name)).copied(),
+            None => gene_map.get(name).map(String::as_str),
+        };
+        match gene {
+            Some(g) => {
+                genes.entry(g).or_default().push(i);
+                summary.matched += 1;
+            }
+            // No entry: the transcript becomes its own gene, so its abundance
+            // still reaches the output. Recorded by name for the caller's list.
+            None => {
+                genes.entry(name.as_str()).or_default().push(i);
+                summary.unmatched += 1;
+                unmatched.push(name.as_str());
+            }
         }
+    }
+
+    if let Some(list_path) = unmatched_out {
+        write_unmatched_list(list_path, &unmatched)?;
     }
 
     // smallest positive double, matching salmon's `minTPM = denorm_min`.
@@ -247,28 +372,59 @@ pub fn write_gene_quant(
         )?;
     }
     w.flush()?;
-    Ok(unmapped)
+    summary.genes_written = genes.len();
+    Ok(summary)
+}
+
+/// JSON key holding the unmatched identifiers. Named for what the list *is*
+/// rather than for the file it sits in, so a consumer that has the parsed object
+/// but not the path still knows what it is looking at.
+const UNMATCHED_JSON_KEY: &str = "unmatched_transcripts";
+
+/// Write the names of transcripts the gene map did not cover, in `quant.sf`
+/// order, as a one-key JSON object:
+///
+/// ```json
+/// {
+///   "unmatched_transcripts": [
+///     "ENST00000456328.2",
+///     "ENST00000450305.3"
+///   ]
+/// }
+/// ```
+///
+/// JSON rather than one-per-line text so it parses without a bespoke reader,
+/// matching the other non-primary artifacts under `aux_info/`. Wrapped in an
+/// object rather than written as a bare array so the file can gain fields later
+/// without breaking consumers written against it today.
+///
+/// An empty list removes the file rather than writing an empty one: the run that
+/// produced it is the only thing that can be said to be current, and a stale
+/// list left over from a previous run in the same output directory would claim
+/// failures this run did not have.
+fn write_unmatched_list(path: &Path, unmatched: &[&str]) -> io::Result<()> {
+    if unmatched.is_empty() {
+        return match std::fs::remove_file(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        };
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // `to_string_pretty` puts one identifier per line, so the file stays as
+    // greppable as the text version it replaces.
+    let doc = serde_json::json!({ UNMATCHED_JSON_KEY: unmatched });
+    let body = serde_json::to_string_pretty(&doc).map_err(io::Error::other)?;
+    let mut w = io::BufWriter::new(std::fs::File::create(path)?);
+    writeln!(w, "{body}")?;
+    w.flush()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// An Ensembl-shaped GTF: a header comment, a `gene` feature carrying no
-    /// `transcript_id` (which must be skipped), and two transcripts.
-    const GTF: &str = "\
-#!genome-build GRCh38.p14
-1\thavana\tgene\t11869\t14409\t.\t+\t.\tgene_id \"ENSG00000290825\"; gene_name \"DDX11L16\";
-1\thavana\ttranscript\t11869\t14409\t.\t+\t.\tgene_id \"ENSG00000290825\"; transcript_id \"ENST00000456328\";
-1\thavana\ttranscript\t12010\t13670\t.\t+\t.\tgene_id \"ENSG00000223972\"; transcript_id \"ENST00000450305\";
-";
-
-    const TSV: &str = "\
-ENST00000456328\tENSG00000290825
-ENST00000450305\tENSG00000223972
-";
-
-    /// Per-test scratch directory, so cases can run concurrently.
     fn scratch(case: &str) -> std::path::PathBuf {
         let dir =
             std::env::temp_dir().join(format!("salmon_genemap_{}_{case}", std::process::id()));
@@ -276,174 +432,301 @@ ENST00000450305\tENSG00000223972
         dir
     }
 
-    use niffler::compression::Format;
+    /// The reference human bulk RNA-seq setup: an index built from the Ensembl
+    /// cDNA FASTA, whose headers carry the version inline, against an Ensembl
+    /// GTF, which splits it into a separate `transcript_version` attribute.
+    /// The join is a literal string compare, so nothing matches at all.
+    #[test]
+    fn versioned_quant_names_match_no_unversioned_gene_map_entry() {
+        let gtf = "\
+1\thavana\ttranscript\t11869\t14409\t.\t+\t.\tgene_id \"ENSG00000290825\"; gene_version \"2\"; transcript_id \"ENST00000456328\"; transcript_version \"2\";
+1\thavana\ttranscript\t12010\t13670\t.\t+\t.\tgene_id \"ENSG00000223972\"; gene_version \"6\"; transcript_id \"ENST00000450305\"; transcript_version \"3\";
+";
+        let gtf_path = scratch("nomatch").join("annotation.gtf");
+        std::fs::write(&gtf_path, gtf).unwrap();
+        let map = read_transcript_gene_map(&gtf_path).unwrap();
+        assert_eq!(map.len(), 2);
+        assert!(
+            map.contains_key("ENST00000456328"),
+            "GTF keys are unversioned"
+        );
 
-    /// Compress `body` into a single member of `format`. Every niffler encoder
-    /// finishes its stream on drop, so the returned bytes are complete.
-    fn compress(body: &str, format: Format) -> Vec<u8> {
-        let mut buf = Vec::new();
-        {
-            let mut w =
-                niffler::get_writer(Box::new(&mut buf), format, niffler::Level::Six).unwrap();
-            w.write_all(body.as_bytes()).unwrap();
-        }
-        buf
-    }
+        // ...but quant.sf names them as the cDNA FASTA does.
+        let names: Vec<String> = vec!["ENST00000456328.2".into(), "ENST00000450305.3".into()];
+        let out = scratch("nomatch").join("quant.genes.sf");
+        let list = scratch("nomatch").join("genemap_unmatched_txps.json");
+        let summary = write_gene_quant(
+            &out,
+            &names,
+            &[1000, 2000],
+            &[800.0, 1800.0],
+            &[10.0, 20.0],
+            &[100.0, 200.0],
+            &map,
+            false,
+            Some(&list),
+        )
+        .unwrap();
 
-    fn write_fixture(case: &str, name: &str, body: &str, format: Format) -> std::path::PathBuf {
-        let path = scratch(case).join(name);
-        match format {
-            Format::No => std::fs::write(&path, body).unwrap(),
-            _ => std::fs::write(&path, compress(body, format)).unwrap(),
-        }
-        path
-    }
-
-    /// Every accepted spelling of a gene map must yield the same two pairs.
-    fn assert_expected_map(map: &HashMap<String, String>) {
-        assert_eq!(map.len(), 2, "unexpected entries: {map:?}");
         assert_eq!(
-            map.get("ENST00000456328").map(String::as_str),
-            Some("ENSG00000290825")
+            summary.unmatched, 2,
+            "every transcript should fail to match"
+        );
+        assert_eq!(summary.matched, 0);
+        assert_eq!(summary.match_rate(), 0.0);
+        assert!(summary.match_rate_is_low());
+
+        // Nothing is dropped: each unmatched transcript stands in as its own
+        // gene, so the abundance still reaches gene level for tximport to
+        // re-aggregate under its own policy.
+        assert_eq!(summary.genes_written, 2);
+        let body = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(body.lines().count(), 3, "header + 2 rows: {body:?}");
+        let row = body
+            .lines()
+            .find(|l| l.starts_with("ENST00000456328.2\t"))
+            .unwrap_or_else(|| panic!("rows are keyed by transcript name: {body:?}"));
+        assert_eq!(row.split('\t').nth(4), Some("100.000"), "reads preserved");
+        // Mass is conserved through the join even when nothing joins.
+        let reads: f64 = body
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').nth(4).unwrap().parse::<f64>().unwrap())
+            .sum();
+        assert_eq!(reads, 300.0);
+
+        // And the failure is recorded where it outlives the terminal. Asserted
+        // through a JSON parse, not on the raw text, so the test pins the
+        // document a consumer sees rather than the formatting around it.
+        let listed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&list).unwrap()).unwrap();
+        assert_eq!(
+            listed[UNMATCHED_JSON_KEY],
+            serde_json::json!(["ENST00000456328.2", "ENST00000450305.3"]),
+            "listed under the documented key, in quant.sf order"
         );
         assert_eq!(
-            map.get("ENST00000450305").map(String::as_str),
-            Some("ENSG00000223972")
+            listed.as_object().unwrap().len(),
+            1,
+            "one key, so a consumer can match on it exactly"
         );
+
+        // The diagnosis the warning is built on: the identifiers differ only by
+        // the version suffix, so ignoring it would match everything.
+        assert_eq!(matches_ignoring_tx_version(&names, &map), 2);
+    }
+
+    /// An unmatched transcript named exactly like a gene in the map merges into
+    /// that gene's row rather than adding one. C++ behaved the same way; this
+    /// pins it so the collision is a known property and not a surprise.
+    #[test]
+    fn a_fallback_row_colliding_with_a_real_gene_name_merges_into_it() {
+        let mut gm = HashMap::new();
+        gm.insert("t1".to_string(), "G".to_string());
+        let names = vec!["t1".to_string(), "G".to_string()];
+        let out = scratch("collide").join("quant.genes.sf");
+        let s = write_gene_quant(
+            &out,
+            &names,
+            &[10, 20],
+            &[8.0, 18.0],
+            &[1.0, 2.0],
+            &[3.0, 4.0],
+            &gm,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.matched, 1);
+        assert_eq!(s.unmatched, 1);
+        assert_eq!(s.genes_written, 1, "both land on the row named G");
+        let body = std::fs::read_to_string(&out).unwrap();
+        let row = body.lines().find(|l| l.starts_with("G\t")).unwrap();
+        assert_eq!(row.split('\t').nth(4), Some("7.000"), "3 + 4 reads");
+    }
+
+    /// A clean run must not leave the previous run's failure list behind: an
+    /// empty list is the absence of the file, not an empty file.
+    #[test]
+    fn a_stale_unmatched_list_is_removed_when_everything_matches() {
+        let mut gm = HashMap::new();
+        gm.insert("t1".to_string(), "G".to_string());
+        let out = scratch("stale").join("quant.genes.sf");
+        let list = scratch("stale").join("genemap_unmatched_txps.json");
+        std::fs::write(&list, "leftover_from_a_previous_run\n").unwrap();
+
+        let s = write_gene_quant(
+            &out,
+            &["t1".to_string()],
+            &[10],
+            &[8.0],
+            &[1.0],
+            &[3.0],
+            &gm,
+            false,
+            Some(&list),
+        )
+        .unwrap();
+        assert_eq!(s.unmatched, 0);
+        assert!(!list.exists(), "stale list must not survive a clean run");
+    }
+
+    /// The same input as the mismatch case, with `--ignoreTxVersion` on: the
+    /// join succeeds and the gene rows appear.
+    #[test]
+    fn ignore_tx_version_matches_versioned_names_to_an_unversioned_map() {
+        let mut gm = HashMap::new();
+        gm.insert("ENST00000456328".to_string(), "ENSG00000290825".to_string());
+        gm.insert("ENST00000450305".to_string(), "ENSG00000223972".to_string());
+        let names = vec![
+            "ENST00000456328.2".to_string(),
+            "ENST00000450305.3".to_string(),
+        ];
+        let out = scratch("ignorever").join("quant.genes.sf");
+
+        let off = write_gene_quant(
+            &out,
+            &names,
+            &[1000, 2000],
+            &[800.0, 1800.0],
+            &[10.0, 20.0],
+            &[100.0, 200.0],
+            &gm,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(off.matched, 0, "default must not strip versions");
+        // Two rows either way; the flag changes what they are named after, and
+        // that is the whole difference the warnings have to convey.
+        assert_eq!(off.unmatched, 2);
+        assert_eq!(off.genes_written, 2);
+        let off_body = std::fs::read_to_string(&out).unwrap();
+        assert!(
+            off_body.contains("ENST00000456328.2\t"),
+            "rows keyed by transcript when the join fails: {off_body:?}"
+        );
+
+        let on = write_gene_quant(
+            &out,
+            &names,
+            &[1000, 2000],
+            &[800.0, 1800.0],
+            &[10.0, 20.0],
+            &[100.0, 200.0],
+            &gm,
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(on.matched, 2);
+        assert_eq!(on.unmatched, 0);
+        assert_eq!(on.genes_written, 2);
+        assert!(!on.match_rate_is_low());
+
+        let body = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(body.lines().count(), 3, "header + 2 genes: {body:?}");
+        // Counts must survive the join unchanged.
+        let row = body
+            .lines()
+            .find(|l| l.starts_with("ENSG00000290825\t"))
+            .unwrap();
+        assert_eq!(row.split('\t').nth(4), Some("100.000"));
+    }
+
+    /// Stripping applies to both sides, so a versioned gene map joins to
+    /// unversioned quant names too.
+    #[test]
+    fn ignore_tx_version_strips_the_gene_map_side_as_well() {
+        let mut gm = HashMap::new();
+        gm.insert("ENST00000456328.2".to_string(), "ENSG1".to_string());
+        let names = vec!["ENST00000456328".to_string()];
+        let out = scratch("ignorever2").join("quant.genes.sf");
+        let s =
+            write_gene_quant(&out, &names, &[10], &[8.0], &[1.0], &[3.0], &gm, true, None).unwrap();
+        assert_eq!(s.matched, 1);
+        assert_eq!(s.genes_written, 1);
     }
 
     #[test]
-    fn reads_plain_gtf() {
-        let p = write_fixture("plain", "annotation.gtf", GTF, Format::No);
-        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
+    fn summary_counts_genes_written_not_gene_map_size() {
+        // The gene map knows three genes; only one of them is quantified.
+        let mut gm = HashMap::new();
+        gm.insert("t1".to_string(), "G".to_string());
+        gm.insert("t2".to_string(), "H".to_string());
+        gm.insert("t3".to_string(), "I".to_string());
+        let names = vec!["t1".to_string(), "zzz".to_string()];
+        let out = scratch("written").join("quant.genes.sf");
+        let summary = write_gene_quant(
+            &out,
+            &names,
+            &[10, 20],
+            &[8.0, 18.0],
+            &[1.0, 2.0],
+            &[3.0, 4.0],
+            &gm,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(summary.matched, 1);
+        assert_eq!(summary.unmatched, 1);
+        // Two rows (gene G, plus `zzz` standing in for itself) — not the 3 genes
+        // the map knows about. Reporting the map's size is what let a
+        // header-only file be announced as a success in #1075.
+        assert_eq!(summary.genes_written, 2, "rows written, not 3 map genes");
+        assert_eq!(summary.total(), 2);
+        assert_eq!(summary.match_rate(), 0.5);
+        assert!(summary.match_rate_is_low(), "50% is at the threshold");
     }
 
     #[test]
-    fn reads_two_column_tsv() {
-        let p = write_fixture("tsv", "t2g.tsv", TSV, Format::No);
-        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
-    }
-
-    /// Gzip is how Ensembl and GENCODE ship annotations. This also pins the
-    /// GTF-vs-TSV decision: the last extension here is `gz`, and routing the
-    /// decompressed GTF to the TSV branch would yield `{"1": "havana"}` instead.
-    #[test]
-    fn reads_gzipped_gtf() {
-        let p = write_fixture("gzip", "annotation.gtf.gz", GTF, Format::Gzip);
-        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
-    }
-
-    #[test]
-    fn reads_gzipped_tsv() {
-        let p = write_fixture("gziptsv", "t2g.tsv.gz", TSV, Format::Gzip);
-        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
-    }
-
-    /// Every codec niffler decodes, under the suffix people actually use — and
-    /// each of these names ends in something other than `gtf`, so this pins the
-    /// suffix stripping in `has_gtf_extension` for all of them at once.
-    #[test]
-    fn reads_every_supported_codec() {
-        for (name, format) in [
-            ("annotation.gtf.gz", Format::Gzip),
-            ("annotation.gtf.bz2", Format::Bzip),
-            ("annotation.gtf.xz", Format::Lzma),
-            ("annotation.gtf.zst", Format::Zstd),
-        ] {
-            let p = write_fixture("codecs", name, GTF, format);
-            let map =
-                read_transcript_gene_map(&p).unwrap_or_else(|e| panic!("{name} ({format:?}): {e}"));
-            assert_expected_map(&map);
-        }
-    }
-
-    /// Compression is sniffed from the magic bytes, so a gzipped file that kept
-    /// a bare `.gtf` name is still read as a compressed GTF.
-    #[test]
-    fn reads_gzip_content_under_a_plain_name() {
-        let p = write_fixture("misnamed", "annotation.gtf", GTF, Format::Gzip);
-        assert_expected_map(&read_transcript_gene_map(&p).unwrap());
-    }
-
-    /// A multi-member gzip stream (concatenated members) must be read in full,
-    /// not truncated at the first member's end. This is also what makes a BGZF
-    /// annotation work, since BGZF is a multi-member gzip.
-    #[test]
-    fn reads_multi_member_gzip() {
-        let path = scratch("multimember").join("annotation.gtf.gz");
-        // split the fixture so each half becomes its own gzip member
-        let (head, tail) = GTF.split_at(GTF.find("1\thavana\ttranscript\t12010").unwrap());
-        let mut bytes = compress(head, Format::Gzip);
-        bytes.extend_from_slice(&compress(tail, Format::Gzip));
-        std::fs::write(&path, &bytes).unwrap();
-        assert_expected_map(&read_transcript_gene_map(&path).unwrap());
-    }
-
-    /// Binary that matches no codec's magic bytes is passed through as text and
-    /// fails on UTF-8. The error has to name the file and say what was expected.
-    #[test]
-    fn binary_input_names_the_file_and_hints_at_the_cause() {
-        let path = scratch("binary").join("annotation.gtf");
-        std::fs::write(&path, [0x00, 0xff, 0xfe, 0x01, 0x80, 0x81, 0x82, 0x83]).unwrap();
-        let err = read_transcript_gene_map(&path).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        let msg = err.to_string();
-        assert!(msg.contains("annotation.gtf"), "{msg}");
-        assert!(msg.contains("valid UTF-8"), "{msg}");
-        assert!(msg.contains("gzip"), "{msg}");
-    }
-
-    /// A truncated gzip must still report the file, and must not be mistaken for
-    /// the not-text case — the decoder's own message is preserved.
-    #[test]
-    fn truncated_gzip_names_the_file() {
-        let full = compress(GTF, Format::Gzip);
-        let path = scratch("truncated").join("annotation.gtf.gz");
-        std::fs::write(&path, &full[..full.len() / 2]).unwrap();
-        let err = read_transcript_gene_map(&path).unwrap_err();
-        assert!(err.to_string().contains("annotation.gtf.gz"), "{err}");
-    }
-
-    /// niffler needs five bytes to sniff a format and errors on anything
-    /// shorter. A gene map that small is plain text by construction, so it must
-    /// still parse rather than fail as an unreadable file.
-    #[test]
-    fn reads_a_file_shorter_than_the_sniff_window() {
-        let path = scratch("tiny").join("t2g.tsv");
-        std::fs::write(&path, "t\tg\n").unwrap(); // four bytes
-        let map = read_transcript_gene_map(&path).unwrap();
-        assert_eq!(map.get("t").map(String::as_str), Some("g"));
-    }
-
-    /// The CLI no longer prefixes the path, so a missing file has to name itself.
-    #[test]
-    fn missing_file_names_the_path() {
-        let path = scratch("missing").join("nope.gtf");
-        let err = read_transcript_gene_map(&path).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert!(err.to_string().contains("nope.gtf"), "{err}");
+    fn full_match_does_not_trip_the_low_rate_warning() {
+        let mut gm = HashMap::new();
+        gm.insert("t1".to_string(), "G".to_string());
+        gm.insert("t2".to_string(), "G".to_string());
+        let names = vec!["t1".to_string(), "t2".to_string()];
+        let out = scratch("full").join("quant.genes.sf");
+        let summary = write_gene_quant(
+            &out,
+            &names,
+            &[10, 20],
+            &[8.0, 18.0],
+            &[1.0, 2.0],
+            &[3.0, 4.0],
+            &gm,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(summary.match_rate(), 1.0);
+        assert!(!summary.match_rate_is_low());
+        assert_eq!(summary.genes_written, 1);
+        // Nothing to suggest when everything already matches.
+        assert_eq!(matches_ignoring_tx_version(&names, &gm), 2);
     }
 
     #[test]
-    fn gtf_extension_detection_ignores_compression_suffix() {
-        // one entry per suffix in COMPRESSION_SUFFIXES, plus the bare forms
-        for name in [
-            "a.gtf",
-            "a.gff3",
-            "a.gtf.gz",
-            "a.GTF.GZ",
-            "a.gff.gz",
-            "a.gtf.bgz",
-            "a.gtf.bgzf",
-            "a.gtf.bz2",
-            "a.gtf.xz",
-            "a.gtf.zst",
-        ] {
-            assert!(has_gtf_extension(Path::new(name)), "{name}");
-        }
-        for name in ["t2g.tsv", "t2g.tsv.gz", "t2g", "t2g.txt.gz", "t2g.tsv.zst"] {
-            assert!(!has_gtf_extension(Path::new(name)), "{name}");
-        }
+    fn version_stripping_leaves_non_numeric_suffixes_alone() {
+        assert_eq!(strip_tx_version("ENST00000456328.2"), "ENST00000456328");
+        assert_eq!(strip_tx_version("ENST00000456328.12"), "ENST00000456328");
+        assert_eq!(strip_tx_version("ENST00000456328"), "ENST00000456328");
+        // GENCODE PAR_Y entries must survive intact.
+        assert_eq!(
+            strip_tx_version("ENST00000456328.2_PAR_Y"),
+            "ENST00000456328.2_PAR_Y"
+        );
+        // a name that is dotted but not versioned
+        assert_eq!(strip_tx_version("gene.symbol"), "gene.symbol");
+        assert_eq!(strip_tx_version("t."), "t.");
+    }
+
+    /// An empty transcript set must not be reported as a mismatch.
+    #[test]
+    fn empty_transcript_set_is_not_low() {
+        let s = GeneQuantSummary::default();
+        assert_eq!(s.match_rate(), 1.0);
+        assert!(!s.match_rate_is_low());
     }
 
     #[test]
@@ -475,8 +758,11 @@ ENST00000450305\tENSG00000223972
         let dir = std::env::temp_dir().join(format!("gq_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("quant.genes.sf");
-        let unmapped = write_gene_quant(&p, &names, &lengths, &eff, &tpm, &counts, &gm).unwrap();
-        assert_eq!(unmapped, 0);
+        let summary =
+            write_gene_quant(&p, &names, &lengths, &eff, &tpm, &counts, &gm, false, None).unwrap();
+        assert_eq!(summary.unmatched, 0);
+        assert_eq!(summary.matched, 3);
+        assert_eq!(summary.genes_written, 2);
         let body = std::fs::read_to_string(&p).unwrap();
         let g_line = body.lines().find(|l| l.starts_with("G\t")).unwrap();
         let f: Vec<&str> = g_line.split('\t').collect();

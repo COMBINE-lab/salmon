@@ -65,10 +65,30 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
   alignment more closely.
 - `--allowDovetail` — now honored in `--sketch` as well (admits dovetailed
   short-insert fragments).
+- `--ignoreTxVersion` — compare `-g/--geneMap` identifiers without their trailing
+  `.N` version suffix, as tximport's option of the same name does. Off by
+  default. Needed for an Ensembl cDNA index against an Ensembl GTF, where the
+  FASTA carries the version in the identifier and the GTF puts it in a separate
+  `transcript_version` attribute.
 
 ## Behavior differences to be aware of
 
 - **Sketch orphan rule** defaults to the relaxed policy (see `--sketchStrictOrphans`).
+- **`-g/--geneMap`: unmatched transcripts are reported differently, not
+  aggregated differently.** As in C++ salmon's `aggregateEstimatesToGeneLevel`, a
+  transcript with no gene-map entry is emitted as its own single-transcript gene,
+  named after the transcript, so nothing quantified is dropped on the way to gene
+  level and `tximport` can apply its own transcript-to-gene policy to the whole
+  file. What changed is the reporting: C++ warned once *per unmatched transcript*
+  (half a million lines on a failed join), while 2.x warns once with the count
+  and writes the names to `aux_info/genemap_unmatched_txps.json`, under an
+  `unmatched_transcripts` key.
+  That file is removed when nothing is unmatched, so its presence always refers
+  to the current run. 2.x additionally warns when the match rate is at or below
+  50%, says how many transcripts would match without the version suffix, and
+  names `--ignoreTxVersion`. Note that a `quant.genes.sf` whose rows are mostly
+  stand-ins is transcript-level output under a gene-level file name — the run's
+  closing line says so explicitly when any row is a stand-in.
 - **Selective-alignment chain pruning:** 2.0 currently defaults
   `--orphanChainSubThresh` and `--postMergeChainSubThresh` to `0.0` (off) — it
   aligns every candidate, which is marginally more sensitive than C++ (which uses
@@ -82,5 +102,5 @@ Index/quant basics, `quant.sf`, `cmd_info.json`, `lib_format_counts.json`,
 `aux_info/meta_info.json`, `--libType/-l`, `--threads/-p`, `-k/--kmerLen`,
 `-m/--minimizerLen`, `-n/--no-clip` (poly-A clipping, on by default),
 `--seqBias`, `--gcBias`, `--posBias`, `--numBootstraps`, `--numGibbsSamples`,
-`--useEM`, `--meta` (metagenomic preset), `--dumpEq`, `-g/--geneMap`, decoys, and
+`--useEM`, `--meta` (metagenomic preset), `--dumpEq`, decoys, and
 `salmon quantmerge`.

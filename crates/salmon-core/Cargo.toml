@@ -11,6 +11,9 @@ description = "Shared core types for the Rust port of salmon (transcripts, libra
 [dependencies]
 thiserror = { workspace = true }
 serde = { workspace = true }
+# the unmatched-transcript list under aux_info/ is JSON, like the other
+# non-primary artifacts salmon writes there
+serde_json = { workspace = true }
 tracing = { workspace = true }
 # transparent decompression of compressed --geneMap annotations
 niffler = { workspace = true }
