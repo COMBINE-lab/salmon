@@ -17,7 +17,6 @@ salmon-eqclass = { workspace = true }
 salmon-infer = { workspace = true }
 salmon-rad = { workspace = true }
 piscem-rs = { workspace = true }
-rapidgzip-core = { workspace = true }
 paraseq = "0.4"
 anyhow = { workspace = true }
 serde = { workspace = true }

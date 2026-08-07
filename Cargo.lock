@@ -1651,15 +1651,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libz-rs-sys"
-version = "0.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03dcace986b149f29509af6ca70e6182bccce916b644424ecf484faa8ddc899a"
-dependencies = [
- "zlib-rs",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2258,9 +2249,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.8.0"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f6e9058c77c33b01a4cd9c03b9c823aae7331c30645a790e66509e2b2ac40ae"
+checksum = "7d22949be8fb80f58c9507cca3eb628d83b4db83ff71864de02f0fa9c0046653"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2270,19 +2261,16 @@ dependencies = [
  "epserde",
  "flate2",
  "indicatif",
- "libc",
  "mem_dbg",
  "mimalloc",
  "niffler",
  "paraseq",
- "rapidgzip-core",
  "seq_geom_parser",
  "serde",
  "serde_json",
  "smallvec",
  "sshash-lib",
  "sux",
- "sysinfo",
  "tiny-dict",
  "tracing",
  "tracing-subscriber",
@@ -2477,16 +2465,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core 0.10.1",
-]
-
-[[package]]
-name = "rapidgzip-core"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1894813e4bddc60a4d75c2d9b85573a7d20bbdda81e97933c2c230042f22e4c5"
-dependencies = [
- "crossbeam-deque",
- "libz-rs-sys",
 ]
 
 [[package]]
@@ -2793,7 +2771,6 @@ dependencies = [
  "noodles-sam",
  "paraseq",
  "piscem-rs",
- "rapidgzip-core",
  "rayon",
  "salmon-core",
  "salmon-eqclass",
@@ -3995,9 +3972,9 @@ dependencies = [
 
 [[package]]
 name = "zlib-rs"
-version = "0.6.7"
+version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
+checksum = "b142a20ec14a91d5bc708c1dc21b080c550113d8aa77afa29635673a65dd02c5"
 
 [[package]]
 name = "zmij"

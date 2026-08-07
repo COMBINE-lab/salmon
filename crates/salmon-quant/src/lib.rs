@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
+use flate2::read::MultiGzDecoder;
 
 use piscem_rs::io::fastx::{reader_with_batch_size, Collection, CollectionType};
 use piscem_rs::mapping::hit_searcher::SkippingStrategy;
@@ -1226,28 +1227,18 @@ fn dump_eq_classes(
     Ok(())
 }
 
-/// Open a read file through piscem-rs's decoder selection.
+/// Open a (optionally gzipped) read file as a boxed reader.
 ///
-/// `plan` decides whether this file gets the parallel gzip decoder or the
-/// serial one; `open_input` applies that and hands back the decoder control
-/// handle when the parallel path is taken, so the caller can supervise the
-/// worker budget across every file in the run.
-///
-/// Decoder selection lives entirely in `open_input`: it picks the parallel gzip
-/// decoder, the serial one, or a plain file reader as appropriate, so there is
-/// no salmon-side fallback to maintain.
-fn open_reader_planned(
-    path: &Path,
-    plan: &piscem_rs::io::fastx::ThreadBudget,
-    handles: &mut Vec<rapidgzip_core::DecoderHandle>,
-) -> Result<Box<dyn std::io::Read + Send>> {
-    let opened =
-        piscem_rs::io::fastx::open_input(path, plan.per_file_ceiling, plan.initial_per_file)
-            .with_context(|| format!("opening {}", path.display()))?;
-    if let Some(h) = opened.handle {
-        handles.push(h);
+/// Boxed as `dyn Read` so the plain and gzipped cases have one type and the
+/// parser below does not need to be generic over them; `Send` because paraseq
+/// moves the reader onto worker threads.
+fn open_reader(path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
+    let f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    if path.extension().and_then(|e| e.to_str()) == Some("gz") {
+        Ok(Box::new(MultiGzDecoder::new(f)))
+    } else {
+        Ok(Box::new(f))
     }
-    Ok(opened.reader)
 }
 
 /// Drive the mapping pass over single-end input.
@@ -1256,41 +1247,19 @@ fn open_reader_planned(
 /// the processor, and it calls back into [`processor`] with batches of records on
 /// each worker thread.
 fn run_single(paths: &[PathBuf], proc: &mut QuantProcessor, nthreads: usize) -> Result<()> {
-    let plan = piscem_rs::io::fastx::plan_thread_budget(nthreads, paths.len());
-    let mut handles = Vec::new();
     let mut readers = Vec::with_capacity(paths.len());
     for p in paths {
         readers.push(
-            reader_with_batch_size(open_reader_planned(p, &plan, &mut handles)?)
+            reader_with_batch_size(open_reader(p)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", p.display()))?,
         );
     }
-    let budget = piscem_rs::io::decode_budget::DecodeBudget::spawn(handles, plan.decode_budget);
     let collection = Collection::new(readers, CollectionType::Single)
         .map_err(|e| anyhow::anyhow!("building read collection: {e}"))?;
     collection
         .process_parallel(proc, nthreads, None)
         .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
-    report_decode_budget(budget, plan.decode_budget);
     Ok(())
-}
-
-/// Log what the decoder supervisor actually spent, so a run that chose the
-/// parallel path can be told apart from one that did not.
-fn report_decode_budget(
-    budget: Option<piscem_rs::io::decode_budget::DecodeBudget>,
-    configured: usize,
-) {
-    if let Some(b) = budget {
-        let r = b.finish();
-        tracing::info!(
-            "decoder threads: peak {} worker + {} auxiliary (budget {}); peak busy {}",
-            r.peak_worker_threads,
-            r.peak_auxiliary_threads,
-            configured,
-            r.peak_busy_workers,
-        );
-    }
 }
 
 /// Drive the mapping pass over paired-end input.
@@ -1308,25 +1277,21 @@ fn run_paired(
         mates1.len() == mates2.len(),
         "mates1 and mates2 must have the same number of files"
     );
-    let plan = piscem_rs::io::fastx::plan_thread_budget(nthreads, mates1.len() * 2);
-    let mut handles = Vec::new();
     let mut readers = Vec::with_capacity(mates1.len() * 2);
     for (a, b) in mates1.iter().zip(mates2.iter()) {
         readers.push(
-            reader_with_batch_size(open_reader_planned(a, &plan, &mut handles)?)
+            reader_with_batch_size(open_reader(a)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", a.display()))?,
         );
         readers.push(
-            reader_with_batch_size(open_reader_planned(b, &plan, &mut handles)?)
+            reader_with_batch_size(open_reader(b)?)
                 .map_err(|e| anyhow::anyhow!("opening {}: {e}", b.display()))?,
         );
     }
-    let budget = piscem_rs::io::decode_budget::DecodeBudget::spawn(handles, plan.decode_budget);
     let collection = Collection::new(readers, CollectionType::Paired)
         .map_err(|e| anyhow::anyhow!("building paired read collection: {e}"))?;
     collection
         .process_parallel_paired(proc, nthreads, None)
         .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
-    report_decode_budget(budget, plan.decode_budget);
     Ok(())
 }
