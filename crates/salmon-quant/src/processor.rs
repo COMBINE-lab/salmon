@@ -514,10 +514,20 @@ fn record_discrete(sh: &Shared, maps: &[ScoredMapping], acc: &salmon_model::Disc
 ///
 /// Counting, library detection, and FLD training always run; `log_fm` is the
 /// current minibatch's forgetting mass (used only when `use_online`).
+///
+/// `fld_pmf`/`fld_cmf` are the batch's fragment-length snapshot pair, taken once
+/// by the caller (see the batch loops). They are passed in rather than read here
+/// because the snapshot only changes at `refresh_online`, which runs at the batch
+/// boundary — so re-reading it per fragment would re-acquire two `RwLock`s and
+/// bump two `Arc` refcounts, on cache lines every worker shares, to obtain a value
+/// that provably cannot have changed.
+#[allow(clippy::too_many_arguments)]
 fn record(
     sh: &Shared,
     maps: &[ScoredMapping],
     log_fm: f64,
+    fld_pmf: &[f64],
+    fld_cmf: &[f64],
     seqbias: Option<&mut (SBModel, SBModel)>,
     gcbias: Option<&mut GcFragModel>,
     posbias: Option<&mut (Vec<SimplePosBias>, Vec<SimplePosBias>)>,
@@ -578,9 +588,25 @@ fn record(
     // num_mapped`. C++ salmon likewise counts a fragment as mapped only once it
     // has a compatible mapping.
     sh.num_mapped.fetch_add(1, Ordering::Relaxed);
-    // Classify the fragment as orphan when its best compatible mapping has only
-    // one mate of a pair placed (PairedEndLeft / PairedEndRight). Single-end
-    // libraries never count as orphan here.
+    // Classify the fragment as orphan when only one mate of a pair was placed
+    // (PairedEndLeft / PairedEndRight). Single-end libraries never count as
+    // orphan here.
+    //
+    // Reading `compat[0]` is sound because every surviving mapping of a fragment
+    // carries the SAME status, so the first is as good as any:
+    //   * selective alignment: `map_read_pair_into` drops all orphans as soon as
+    //     one non-decoy concordant pair survives, and `finalize_mappings_counted_into`
+    //     never emits decoy mappings — so the set is either all-paired or
+    //     all-orphan;
+    //   * sketch: `map_read_pair_sketch_into` derives one `status` from the
+    //     fragment's `map_type` and stamps it on every accepted hit.
+    // Note `compat` is ordered by transcript id (finalize sorts by `tid`), not by
+    // score, so this must not be read as "the best mapping" — it is "the status
+    // this fragment mapped with", which is well defined.
+    debug_assert!(
+        compat.iter().all(|(m, _)| m.status == compat[0].0.status),
+        "a fragment's surviving mappings must share one status"
+    );
     if matches!(
         compat[0].0.status,
         MateStatus::PairedEndLeft | MateStatus::PairedEndRight
@@ -588,20 +614,18 @@ fn record(
         sh.num_orphan.fetch_add(1, Ordering::Relaxed);
     }
 
-    // Capture ONE immutable FLD snapshot pair (PMF + CMF) for this fragment — a
-    // pair of cheap `Arc` clones, no per-fragment allocation — and share it
-    // between the online posterior and the persistent eq-class weight. Indexing
-    // the same snapshot for every mapping guarantees that transcripts sharing a
-    // fragment length (in particular exact-duplicate transcripts) receive an
-    // identical fragment-length probability even if another thread refreshes the
-    // shared snapshot meanwhile. Reading the live FLD per mapping (racing atomic
-    // loads on a concurrently-updated distribution) returned slightly different
-    // values for the same length and let the VBEM α<1 prior break duplicate
-    // symmetry. Mirrors C++ salmon's per-worker `LogCMFCache`. Empty until the
-    // first online refresh (the pre-burn-in window, where the FLD term is not
-    // folded in anyway).
-    let fld_pmf = sh.fld.online_snapshot();
-    let fld_cmf = sh.fld.online_cmf_snapshot();
+    // `fld_pmf`/`fld_cmf` are ONE immutable FLD snapshot pair (PMF + CMF), taken
+    // once per batch by the caller and shared here between the online posterior
+    // and the persistent eq-class weight. Indexing the same snapshot for every
+    // mapping guarantees that transcripts sharing a fragment length (in
+    // particular exact-duplicate transcripts) receive an identical
+    // fragment-length probability even if another thread refreshes the shared
+    // snapshot meanwhile. Reading the live FLD per mapping (racing atomic loads
+    // on a concurrently-updated distribution) returned slightly different values
+    // for the same length and let the VBEM α<1 prior break duplicate symmetry.
+    // Mirrors C++ salmon's per-worker `LogCMFCache`. Empty until the first online
+    // refresh (the pre-burn-in window, where the FLD term is not folded in
+    // anyway).
 
     // Per-fragment bias-collection weights. With online (dual-phase) inference
     // these are abundance-aware posteriors `softmax(mass_t + log w_t)`, which
@@ -646,8 +670,8 @@ fn record(
                             sh.model_single_frag_prob,
                             sh.paired_lib,
                             sh.no_frag_length_dist,
-                            &fld_pmf,
-                            &fld_cmf,
+                            fld_pmf,
+                            fld_cmf,
                         );
                         let log_cov = if *w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
                         (m.tid, log_cov + start_pos_prob + log_frag_prob)
@@ -762,8 +786,8 @@ fn record(
                 sh.model_single_frag_prob,
                 sh.paired_lib,
                 sh.no_frag_length_dist,
-                &fld_pmf,
-                &fld_cmf,
+                fld_pmf,
+                fld_cmf,
             )
         })
         .collect();
@@ -931,6 +955,15 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         } else {
             0.0
         };
+        // One FLD snapshot pair for the whole batch. The shared snapshot is only
+        // replaced by `refresh_online`, which runs at the batch boundary, so a
+        // per-fragment re-read would take two `RwLock`s and bump two `Arc`
+        // refcounts — on cache lines shared by every worker — to fetch a value
+        // that cannot have changed. Taking it here also makes the per-fragment
+        // view *more* stable than before: previously a concurrent refresh could
+        // land between two fragments of the same batch.
+        let fld_pmf = sh.fld.online_snapshot();
+        let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it), so the
         // per-fragment result Vec isn't reallocated per read.
         let mut maps: Vec<ScoredMapping> = Vec::new();
@@ -1021,6 +1054,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     &sh,
                     &maps,
                     log_fm,
+                    &fld_pmf,
+                    &fld_cmf,
                     seqbias.as_mut(),
                     gcbias.as_mut(),
                     posbias.as_mut(),
@@ -1085,6 +1120,9 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         } else {
             0.0
         };
+        // One FLD snapshot pair for the whole batch (see the paired-end loop).
+        let fld_pmf = sh.fld.online_snapshot();
+        let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it).
         let mut maps: Vec<ScoredMapping> = Vec::new();
         for rec in records {
@@ -1142,6 +1180,8 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     &sh,
                     &maps,
                     log_fm,
+                    &fld_pmf,
+                    &fld_cmf,
                     seqbias.as_mut(),
                     gcbias.as_mut(),
                     posbias.as_mut(),
