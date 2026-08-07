@@ -221,6 +221,76 @@ impl Counters {
     }
 }
 
+/// Index into a fragment's `placements` slice.
+///
+/// The record path carries two different kinds of position: an index into
+/// `placements` (a fragment's candidate mappings) and a position within
+/// `compat` (the strand-compatible subset). They coincide only when nothing is
+/// filtered out — which is to say on unstranded libraries but not stranded ones
+/// — so confusing them mis-weights bias on stranded libraries specifically,
+/// with no panic and no test failure on unstranded data. Giving each its own
+/// type makes that mistake a compile error.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub(crate) struct MapIdx(usize);
+
+impl MapIdx {
+    /// The placement this refers to.
+    ///
+    /// A method rather than `placements[i]`, so a map index cannot silently be
+    /// used on a buffer that is aligned to `compat` instead.
+    #[inline]
+    fn get(self, placements: &[ScoredMapping]) -> &ScoredMapping {
+        &placements[self.0]
+    }
+}
+
+/// Position within `compat`, and so within every buffer aligned to it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub(crate) struct CompatIdx(usize);
+
+/// A per-fragment buffer holding exactly one entry per `compat` element.
+///
+/// Indexable only by [`CompatIdx`], so indexing it with a [`MapIdx`] does not
+/// compile. The alignment was previously enforced by comments alone.
+///
+/// `#[repr(transparent)]` with `#[inline]` accessors, so this compiles to the
+/// same code as indexing the `Vec` directly.
+#[derive(Default)]
+#[repr(transparent)]
+pub(crate) struct CompatAligned<T>(Vec<T>);
+
+impl<T> CompatAligned<T> {
+    #[inline]
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+    #[inline]
+    fn extend<I: IntoIterator<Item = T>>(&mut self, it: I) {
+        self.0.extend(it);
+    }
+    #[inline]
+    fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.0.iter()
+    }
+}
+
+impl<T> From<Vec<T>> for CompatAligned<T> {
+    #[inline]
+    fn from(v: Vec<T>) -> Self {
+        Self(v)
+    }
+}
+
+impl<T> std::ops::Index<CompatIdx> for CompatAligned<T> {
+    type Output = T;
+    #[inline]
+    fn index(&self, i: CompatIdx) -> &T {
+        &self.0[i.0]
+    }
+}
+
 /// Reusable per-fragment working buffers for [`record`].
 ///
 /// `record` runs once per fragment and used to allocate five throwaway `Vec`s
@@ -232,13 +302,13 @@ impl Counters {
 #[derive(Default)]
 pub(crate) struct RecordScratch {
     /// strand-compatible mappings and their (possibly penalised) weights
-    compat: Vec<(usize, f64)>,
+    compat: Vec<(MapIdx, f64)>,
     /// `(tid, log-weight)` inputs to the online posterior
     online_in: Vec<(u32, f64)>,
     /// abundance-aware (or score-only) per-mapping bias-collection weights
-    bias_w: Vec<f64>,
+    bias_w: CompatAligned<f64>,
     /// per-mapping fragment-length log-probability
-    log_fps: Vec<f64>,
+    log_fps: CompatAligned<f64>,
     /// `(tid, conditional probability)` before duplicate-tid merging
     pairs: Vec<(u32, f64)>,
 }
@@ -469,13 +539,13 @@ fn collect_context(
 fn collect_gc(
     sh: &Shared,
     placements: &[ScoredMapping],
-    compat: &[(usize, f64)],
-    bias_w: &[f64],
+    compat: &[(MapIdx, f64)],
+    bias_w: &CompatAligned<f64>,
     gc: &mut GcFragModel,
 ) {
     let Some(store) = sh.gc_store else { return };
-    for (k, &(i, _)) in compat.iter().enumerate() {
-        let m = &placements[i];
+    for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+        let m = i.get(placements);
         if m.status != MateStatus::PairedEndPaired || m.fragment_len <= 0 {
             continue;
         }
@@ -500,15 +570,15 @@ fn collect_gc(
 fn collect_pos(
     sh: &Shared,
     placements: &[ScoredMapping],
-    compat: &[(usize, f64)],
-    bias_w: &[f64],
+    compat: &[(MapIdx, f64)],
+    bias_w: &CompatAligned<f64>,
     pos: &mut (Vec<SimplePosBias>, Vec<SimplePosBias>),
 ) {
     let Some(length_class) = sh.length_class else {
         return;
     };
-    for (k, &(i, _)) in compat.iter().enumerate() {
-        let m = &placements[i];
+    for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+        let m = i.get(placements);
         // `bias_w` is aligned to `compat`, indexed by `k`, not by `i`.
         if bias_w[k] <= 0.0 {
             continue;
@@ -669,14 +739,14 @@ fn record(
             .filter_map(|(i, m)| match expected {
                 Some(exp) => {
                     if is_compatible(exp, m.format, m.is_fw, m.status) {
-                        Some((i, m.weight))
+                        Some((MapIdx(i), m.weight))
                     } else if sh.ignore_incompat {
                         None
                     } else {
-                        Some((i, m.weight * sh.incompat_prior))
+                        Some((MapIdx(i), m.weight * sh.incompat_prior))
                     }
                 }
-                None => Some((i, m.weight)),
+                None => Some((MapIdx(i), m.weight)),
             }),
     );
     if compat.is_empty() {
@@ -710,11 +780,11 @@ fn record(
     debug_assert!(
         compat
             .iter()
-            .all(|&(i, _)| placements[i].status == placements[compat[0].0].status),
+            .all(|&(i, _)| i.get(placements).status == compat[0].0.get(placements).status),
         "a fragment's surviving mappings must share one status"
     );
     if matches!(
-        placements[compat[0].0].status,
+        compat[0].0.get(placements).status,
         MateStatus::PairedEndLeft | MateStatus::PairedEndRight
     ) {
         counters.orphan += 1;
@@ -748,48 +818,48 @@ fn record(
     //   logFragProb  = the shared `frag_log_prob` term (proper-pair conditioned
     //                  PMF, or the orphan / single-end ambiguous-length weight).
     // Used for abundance-aware bias collection and abundance-aware FLD training.
-    let online_post: Option<Vec<f64>> =
-        sh.online
-            .filter(|o| sh.use_online && o.collecting())
-            .map(|online| {
-                let use_aux = online.num_assigned() >= sh.pre_burnin;
-                online_in.clear();
-                online_in.extend(compat.iter().map(|&(i, w)| {
-                    let m = &placements[i];
-                    {
-                        let ref_len = sh.salmon.ref_len(m.tid as usize);
-                        let rl = ref_len.max(1) as f64;
-                        let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
-                        let flen = m.fragment_len as f64;
-                        let start_pos_prob = if proper {
-                            if flen <= rl {
-                                -((rl - flen + 1.0).ln())
-                            } else {
-                                LOG_EPSILON
-                            }
+    let online_post: Option<CompatAligned<f64>> = sh
+        .online
+        .filter(|o| sh.use_online && o.collecting())
+        .map(|online| {
+            let use_aux = online.num_assigned() >= sh.pre_burnin;
+            online_in.clear();
+            online_in.extend(compat.iter().map(|&(i, w)| {
+                let m = i.get(placements);
+                {
+                    let ref_len = sh.salmon.ref_len(m.tid as usize);
+                    let rl = ref_len.max(1) as f64;
+                    let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
+                    let flen = m.fragment_len as f64;
+                    let start_pos_prob = if proper {
+                        if flen <= rl {
+                            -((rl - flen + 1.0).ln())
                         } else {
-                            -(rl.ln())
-                        };
-                        let log_frag_prob = frag_log_prob(
-                            m,
-                            ref_len as i32,
-                            use_aux,
-                            sh.model_single_frag_prob,
-                            sh.paired_lib,
-                            sh.no_frag_length_dist,
-                            fld_pmf,
-                            fld_cmf,
-                        );
-                        let log_cov = if w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
-                        (m.tid, log_cov + start_pos_prob + log_frag_prob)
-                    }
-                }));
-                online.assign_fragment(online_in, log_fm)
-            });
+                            LOG_EPSILON
+                        }
+                    } else {
+                        -(rl.ln())
+                    };
+                    let log_frag_prob = frag_log_prob(
+                        m,
+                        ref_len as i32,
+                        use_aux,
+                        sh.model_single_frag_prob,
+                        sh.paired_lib,
+                        sh.no_frag_length_dist,
+                        fld_pmf,
+                        fld_cmf,
+                    );
+                    let log_cov = if w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
+                    (m.tid, log_cov + start_pos_prob + log_frag_prob)
+                }
+            }));
+            CompatAligned::from(online.assign_fragment(online_in, log_fm))
+        });
     bias_w.clear();
     if collecting {
         if let Some(post) = &online_post {
-            bias_w.extend_from_slice(post);
+            bias_w.extend(post.iter().copied());
         } else {
             let wsum: f64 = compat.iter().map(|&(_, w)| w).sum();
             bias_w.extend(
@@ -804,8 +874,8 @@ fn record(
 
     if collect_now {
         if let Some(obs) = seqbias {
-            for (k, &(i, _)) in compat.iter().enumerate() {
-                collect_context(sh.salmon, &placements[i], bias_w[k], obs);
+            for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+                collect_context(sh.salmon, i.get(placements), bias_w[k], obs);
             }
         }
         if let Some(gc) = gcbias {
@@ -829,8 +899,8 @@ fn record(
         // implied length, concentrating the FLD as salmon does (vs adding every
         // best pair at full weight, which overdisperses it). Frozen after the
         // training window (`online_post` is `None`).
-        for (k, &(i, _)) in compat.iter().enumerate() {
-            let m = &placements[i];
+        for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+            let m = i.get(placements);
             let conc = m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
                 && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
@@ -846,7 +916,7 @@ fn record(
         // is true but `online_post` is `None`, the training window has closed and
         // the FLD is intentionally frozen — so this branch is skipped.)
         if compat.len() == 1 {
-            let m = &placements[compat[0].0];
+            let m = &compat[0].0.get(placements);
             if m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
                 && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
@@ -885,7 +955,7 @@ fn record(
     // mini-batch boundary, so it is never empty here.
     log_fps.clear();
     log_fps.extend(compat.iter().map(|&(i, _)| {
-        let m = &placements[i];
+        let m = i.get(placements);
         let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
         frag_log_prob(
             m,
@@ -919,7 +989,7 @@ fn record(
         compat
             .iter()
             .zip(log_fps.iter())
-            .map(|(&(i, w), &lfp)| (placements[i].tid, (w.ln() + lfp - log_denom).exp())),
+            .map(|(&(i, w), &lfp)| (i.get(placements).tid, (w.ln() + lfp - log_denom).exp())),
     );
 
     // Build the equivalence class: sorted transcript ids + weights, combining
