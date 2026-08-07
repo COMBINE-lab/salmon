@@ -429,12 +429,12 @@ impl EquivalenceClassBuilder {
     /// class *indices* — which the EM uses everywhere — are identical on every
     /// run, no matter what order the threads happened to insert them in.
     pub fn finish(self) -> CollapsedEqClasses {
-        let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::with_capacity(self.map.len());
-        // Drain the concurrent map into a plain vector. Iteration order of a
-        // hash map is arbitrary, hence the sort on the next line.
-        self.map
-            .iter()
-            .for_each(|e| classes.push((e.key().clone(), e.value().clone())));
+        // Move the entries out of the concurrent map rather than cloning them.
+        // `self` is owned here, so the map is dropped either way; cloning would
+        // deep-copy every `txps`/`bins`/`acc` vector and hold two full copies of
+        // the largest structure in the run at once. Iteration order of a hash map
+        // is arbitrary, hence the sort on the next line.
+        let mut classes: Vec<(TranscriptGroup, TGValue)> = self.map.into_iter().collect();
         classes.sort_by(|a, b| a.0.txps.cmp(&b.0.txps));
         // Materialize f64 weights from each class's order-independent fixed-point
         // accumulator (the sort above already makes the class *order* stable).
