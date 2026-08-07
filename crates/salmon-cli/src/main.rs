@@ -537,6 +537,18 @@ struct QuantArgs {
     /// deleted once quantification finishes). Ignored without --deterministic.
     #[arg(long = "keepRad")]
     keep_rad: bool,
+    /// `-a --deterministic`: keep the intermediate RAD in memory instead of
+    /// writing it to disk.
+    ///
+    /// Deterministic alignment mode writes an intermediate RAD, reads it back,
+    /// then deletes it. This skips the file entirely — one fewer full write and
+    /// every re-read served from memory — at the cost of holding the whole image
+    /// resident. Output is unchanged: the bytes are the same either way.
+    ///
+    /// Ignored when the RAD is itself a deliverable (`--writeRad`, `--keepRad`,
+    /// `--skipQuant`), which force the on-disk path.
+    #[arg(long = "radInMemory")]
+    rad_in_memory: bool,
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
@@ -1144,6 +1156,7 @@ fn run_deterministic_align(
     keep_rad: bool,
     gene_map: Option<&GeneMapOpts>,
     codec: ChunkCodec,
+    in_memory: bool,
 ) -> Result<()> {
     let out_dir = opts.output_dir.clone();
     // An explicit `--writeRad PATH` is honoured and kept; otherwise a temp under
@@ -1154,24 +1167,47 @@ fn run_deterministic_align(
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
 
+    // The intermediate can stay in memory when nobody wants the file: an
+    // explicit `--writeRad`, `--keepRad` and `--skipQuant` all make the RAD a
+    // deliverable, so those force the on-disk path regardless of the flag.
+    let want_file = explicit || keep_rad || opts.skip_quant;
+    let use_memory = in_memory && !want_file;
+
     // Phase 1 — one BAM pass: write placements + bake FLD / library format
     // (+ rough abundances when bias is on) so phase 2 is a single baked pass.
-    let summary = salmon_align::write_alignment_rad(&opts, &rad_path, codec)
+    let dest = if use_memory {
+        salmon_align::RadDest::Memory
+    } else {
+        salmon_align::RadDest::Path(&rad_path)
+    };
+    let out = salmon_align::write_alignment_rad_to(&opts, &dest, codec)
         .context("deterministic alignment RAD-write pass failed")?;
+    let summary = out.summary;
     let pct = if summary.num_processed > 0 {
         100.0 * summary.num_mapped as f64 / summary.num_processed as f64
     } else {
         0.0
     };
     tracing::info!(
-        "deterministic: wrote {} / {} aligned fragments ({:.2}%) to the intermediate RAD; quantifying",
+        "deterministic: wrote {} / {} aligned fragments ({:.2}%) to {}; quantifying",
         summary.num_mapped,
         summary.num_processed,
-        pct
+        pct,
+        if use_memory {
+            "an in-memory intermediate RAD".to_string()
+        } else {
+            format!("the intermediate RAD at {}", rad_path.display())
+        }
     );
 
     // Phase 2 — quantify from the fully-baked RAD (single pass, order-independent).
-    let res = quantify_rad(&opts, &rad_path).context("deterministic requant pass failed")?;
+    // The reader cannot tell the two sources apart; the bytes are identical.
+    let rad_src = match &out.bytes {
+        Some(b) => salmon_align::RadSource::Bytes(b),
+        None => salmon_align::RadSource::Path(&rad_path),
+    };
+    let res = salmon_align::quantify_rad_source(&opts, &rad_src)
+        .context("deterministic requant pass failed")?;
     let pct2 = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64
     } else {
@@ -1195,7 +1231,9 @@ fn run_deterministic_align(
             &res.counts,
         )?;
     }
-    if explicit || keep_rad || opts.skip_quant {
+    if use_memory {
+        // Nothing was written, so nothing to keep or remove.
+    } else if want_file {
         tracing::info!("kept intermediate RAD at {}", rad_path.display());
     } else if let Err(e) = std::fs::remove_file(&rad_path) {
         tracing::warn!(
@@ -1467,6 +1505,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 args.keep_rad,
                 gene_map.as_ref(),
                 codec,
+                args.rad_in_memory,
             );
         }
 

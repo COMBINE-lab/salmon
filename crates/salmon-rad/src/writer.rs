@@ -26,7 +26,7 @@
 //! aggregation downstream, not from file order.
 
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use libradicl::chunk::ChunkBuf;
@@ -38,10 +38,46 @@ use libradicl::ChunkCodec;
 use crate::record::{SalmonBulkContext, SalmonBulkRecord};
 use crate::{schema, RadProfile, BAKED_ABUND, BAKED_FLD, BAKED_LIBFMT, BAKED_SCORE_KIND};
 
-/// Shared, thread-safe RAD output sink for one file.
+/// Where a [`RadOutputWriter`]'s bytes go.
+///
+/// `libradicl`'s writer is already generic over `Write + Seek` (it needs `Seek`
+/// for the header backpatching at finalize), so supporting an in-memory image
+/// costs only this dispatch. It is an enum rather than a type parameter
+/// deliberately: a generic would leak through every worker that holds a
+/// `&RadOutputWriter`, for a choice made once at construction.
+enum Sink {
+    File(BufWriter<File>),
+    Memory(Cursor<Vec<u8>>),
+}
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Sink::File(w) => w.write(buf),
+            Sink::Memory(w) => w.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Sink::File(w) => w.flush(),
+            Sink::Memory(w) => w.flush(),
+        }
+    }
+}
+
+impl Seek for Sink {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Sink::File(w) => w.seek(pos),
+            Sink::Memory(w) => w.seek(pos),
+        }
+    }
+}
+
+/// Shared, thread-safe RAD output sink.
 pub struct RadOutputWriter {
-    /// The underlying file, wrapped so that appends from many threads are safe.
-    ccw: ConcurrentChunkWriter<BufWriter<File>>,
+    /// The underlying sink, wrapped so that appends from many threads are safe.
+    ccw: ConcurrentChunkWriter<Sink>,
     /// Which profile records are written in (decides the per-hit layout).
     ctx: SalmonBulkContext,
     /// reserved-slot lengths, so baked values are padded/truncated to fit exactly.
@@ -80,7 +116,7 @@ impl RadOutputWriter {
             schema::build_prelude(profile, is_paired, ref_names, ref_lengths, fld_len, codec);
         // `BufWriter` batches small writes into large ones; without it every
         // chunk append would become a separate system call.
-        let file = BufWriter::new(File::create(path)?);
+        let file = Sink::File(BufWriter::new(File::create(path)?));
         // Writing the prelude here means the file is valid (if empty) from the
         // moment it is created.
         let fw = RadFileWriter::new(file, &prelude, &file_tag_map)?;
@@ -90,6 +126,46 @@ impl RadOutputWriter {
             fld_len,
             num_refs: ref_names.len(),
             // Nothing is baked until the run finishes.
+            pending_fld: None,
+            pending_abund: None,
+            pending_libfmt: None,
+            pending_score_kind: None,
+            codec,
+        })
+    }
+
+    /// Create a RAD image held entirely in memory.
+    ///
+    /// Same prelude, same records, same backpatching as [`create`](Self::create)
+    /// — only the destination differs, so the bytes are indistinguishable from a
+    /// file's and any reader accepts them.
+    ///
+    /// This exists for the `--deterministic` pipeline, which writes an
+    /// intermediate RAD, reads it back (up to five separate passes, depending on
+    /// what has to be derived), then deletes it. Keeping it in memory removes a
+    /// full write and every one of those re-reads. The trade is explicit and the
+    /// caller makes it: the whole image is resident instead of on disk.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_in_memory(
+        ref_names: &[&str],
+        ref_lengths: &[u32],
+        is_paired: bool,
+        profile: RadProfile,
+        fld_len: usize,
+        codec: ChunkCodec,
+    ) -> anyhow::Result<Self> {
+        let (prelude, file_tag_map): (RadPrelude, _) =
+            schema::build_prelude(profile, is_paired, ref_names, ref_lengths, fld_len, codec);
+        let fw = RadFileWriter::new(
+            Sink::Memory(Cursor::new(Vec::new())),
+            &prelude,
+            &file_tag_map,
+        )?;
+        Ok(Self {
+            ccw: ConcurrentChunkWriter::new(fw),
+            ctx: SalmonBulkContext { profile },
+            fld_len,
+            num_refs: ref_names.len(),
             pending_fld: None,
             pending_abund: None,
             pending_libfmt: None,
@@ -152,6 +228,27 @@ impl RadOutputWriter {
     /// appended afterwards. Call after all workers have flushed and dropped their
     /// references.
     pub fn finalize(self) -> anyhow::Result<()> {
+        self.finalize_sink()?;
+        Ok(())
+    }
+
+    /// Finalize and take the completed image, for a writer built by
+    /// [`create_in_memory`](Self::create_in_memory).
+    ///
+    /// Returns an error if this writer is backed by a file — the caller asked for
+    /// bytes from something that put them on disk, which is a programming error
+    /// rather than a runtime condition.
+    pub fn finalize_into_bytes(self) -> anyhow::Result<Vec<u8>> {
+        match self.finalize_sink()? {
+            Sink::Memory(c) => Ok(c.into_inner()),
+            Sink::File(_) => {
+                anyhow::bail!("finalize_into_bytes called on a file-backed RAD writer")
+            }
+        }
+    }
+
+    /// Backpatch the baked slots, finalize, and hand back the sink.
+    fn finalize_sink(self) -> anyhow::Result<Sink> {
         // Move the fields out before consuming `self.ccw` below.
         let fld_len = self.fld_len;
         let num_refs = self.num_refs;
@@ -194,9 +291,8 @@ impl RadOutputWriter {
         if flags != 0 {
             w.backpatch_file_tag_value(crate::BAKED_FLAGS_TAG, &TagValue::U8(flags))?;
         }
-        // Writes the final chunk count into the header and flushes the file.
-        w.finalize()?;
-        Ok(())
+        // Writes the final chunk count into the header and flushes the sink.
+        w.finalize()
     }
 }
 

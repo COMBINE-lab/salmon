@@ -40,9 +40,11 @@ mod error_model;
 mod genome_project;
 mod rad;
 
-pub use bam_rad::{write_alignment_rad, AlignRadSummary};
+pub use bam_rad::{
+    write_alignment_rad, write_alignment_rad_to, AlignRadOutput, AlignRadSummary, RadDest,
+};
 pub use genome_project::{project_genome_bam_to_rad, GenomeProjectOptions, ProjectionArtifacts};
-pub use rad::quantify_rad;
+pub use rad::{quantify_rad, quantify_rad_source, RadSource};
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};

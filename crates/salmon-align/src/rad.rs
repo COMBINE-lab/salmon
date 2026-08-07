@@ -355,16 +355,55 @@ fn process_rad_fragment(placements: &[RadPlacement], cfg: &FragCfg) -> bool {
 
 /// Open the file and read its prelude + file-tag values, returning the reader
 /// positioned at the first chunk.
-fn open_prelude(path: &Path) -> Result<(BufReader<File>, RadPrelude, TagMap)> {
-    let mut reader = BufReader::new(
-        File::open(path).with_context(|| format!("opening RAD file {}", path.display()))?,
-    );
+fn open_prelude<'a>(src: &'a RadSource) -> Result<(Box<dyn RadRead + 'a>, RadPrelude, TagMap)> {
+    let mut reader = src.reader()?;
     let prelude = RadPrelude::from_bytes(&mut reader).context("parsing RAD prelude")?;
     let file_tag_map = prelude
         .file_tags
         .parse_tags_from_bytes(&mut reader)
         .context("parsing RAD file tags")?;
     Ok((reader, prelude, file_tag_map))
+}
+
+/// A rewindable RAD byte stream. `libradicl`'s `ParallelRadReader` needs
+/// `BufRead + Seek`, and the producer runs on its own thread, hence `Send`.
+pub trait RadRead: std::io::BufRead + std::io::Seek + Send {}
+impl<T: std::io::BufRead + std::io::Seek + Send> RadRead for T {}
+
+/// Where this run's RAD image lives.
+///
+/// Quantifying a RAD opens it up to five separate times (the prelude probe, the
+/// FLD-derivation pass, the bias pass, the eq-class pass, and the fused pass),
+/// so the source has to be re-openable rather than a single stream. For a file
+/// that is another `File::open`; for an in-memory image it is a fresh `Cursor`
+/// over the same bytes, which costs nothing.
+pub enum RadSource<'a> {
+    /// A RAD file on disk.
+    Path(&'a Path),
+    /// A complete RAD image already in memory — byte-for-byte what would have
+    /// been written to disk. Produced by the `--deterministic` pipeline when it
+    /// is told to keep its intermediate in memory.
+    Bytes(&'a [u8]),
+}
+
+impl RadSource<'_> {
+    /// Open a fresh stream positioned at the start of the image.
+    fn reader<'a>(&'a self) -> Result<Box<dyn RadRead + 'a>> {
+        Ok(match self {
+            RadSource::Path(p) => Box::new(BufReader::new(
+                File::open(p).with_context(|| format!("opening RAD file {}", p.display()))?,
+            )),
+            RadSource::Bytes(b) => Box::new(std::io::Cursor::new(*b)),
+        })
+    }
+
+    /// Human-readable description for log lines and error context.
+    fn describe(&self) -> String {
+        match self {
+            RadSource::Path(p) => p.display().to_string(),
+            RadSource::Bytes(b) => format!("<in-memory RAD, {} bytes>", b.len()),
+        }
+    }
 }
 
 /// Reference lengths from the RAD `ref_lengths` file tag (one per reference).
@@ -521,7 +560,7 @@ fn load_baked_score_kind(file_tag_map: &TagMap) -> u8 {
 /// pool that weights each fragment into the shared equivalence-class builder.
 #[allow(clippy::too_many_arguments)]
 fn run_rad_pass<R>(
-    path: &Path,
+    src: &RadSource,
     nthreads: usize,
     cfg: &FragCfg,
     num_processed: &AtomicU64,
@@ -531,7 +570,7 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
+    let (reader, prelude, file_tag_map) = open_prelude(src)?;
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
@@ -573,7 +612,7 @@ where
 /// unique-fragment FLD, made order-independent by using *all* unique fragments
 /// plus a global-count orientation choice instead of a file-order sample quota.
 fn derive_fld<R>(
-    path: &Path,
+    src: &RadSource,
     nthreads: usize,
     fld_max: usize,
     fld_mean: f64,
@@ -590,7 +629,7 @@ where
     // mapping pass uses, so a derived FLD and a baked one agree.
     let acc = DiscreteFld::new(fld_max);
 
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
+    let (reader, prelude, file_tag_map) = open_prelude(src)?;
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
@@ -911,7 +950,7 @@ fn collect_bias_fragment(placements: &[RadPlacement], cfg: &BiasCfg, local: &mut
 /// sequence / GC / positional observations.
 #[allow(clippy::type_complexity)]
 fn run_bias_pass<R>(
-    path: &Path,
+    src: &RadSource,
     nthreads: usize,
     cfg: &BiasCfg,
     seq: bool,
@@ -928,7 +967,7 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
+    let (reader, prelude, file_tag_map) = open_prelude(src)?;
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
@@ -967,7 +1006,7 @@ where
 /// and a second RAD read (see the pass matrix in [`quantify_rad`]).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn run_rad_eq_and_bias_pass<R>(
-    path: &Path,
+    src: &RadSource,
     nthreads: usize,
     cfg: &FragCfg,
     bias_cfg: &BiasCfg,
@@ -987,7 +1026,7 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
+    let (reader, prelude, file_tag_map) = open_prelude(src)?;
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
@@ -1028,7 +1067,17 @@ where
 // ---------------------------------------------------------------------------
 
 /// Quantify from a RAD file (`salmon quant --rad`).
+/// Quantify from a RAD file on disk. Convenience wrapper over
+/// [`quantify_rad_source`] for the common case.
 pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQuantResult> {
+    quantify_rad_source(opts, &RadSource::Path(rad_path))
+}
+
+/// Quantify from any [`RadSource`] — a file, or an image already in memory.
+pub fn quantify_rad_source(
+    opts: &AlignQuantOptions,
+    rad_src: &RadSource,
+) -> Result<AlignQuantResult> {
     let start_time = asctime_now();
     let run_timer = std::time::Instant::now();
     let mut timer = PhaseTimer::new();
@@ -1046,7 +1095,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     );
 
     // Header: profile, reference names + lengths (from the RAD file tags).
-    let (_reader, prelude, file_tag_map) = open_prelude(rad_path)?;
+    let (_reader, prelude, file_tag_map) = open_prelude(rad_src)?;
     let profile = salmon_rad::detect_input_profile(&prelude)?;
     let names: Vec<String> = prelude.hdr.ref_names.clone();
     let lengths = ref_lengths_from_tags(&prelude, &file_tag_map)?;
@@ -1062,7 +1111,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         RadInputProfile::Salmon(salmon_rad::RadProfile::SelectiveAlignment)
     );
     tracing::info!(
-        "quantifying from RAD ({}), {num_refs} references",
+        "quantifying from RAD {} ({}), {num_refs} references",
+        rad_src.describe(),
         match profile {
             RadInputProfile::PiscemBulk => "piscem bulk",
             RadInputProfile::Salmon(salmon_rad::RadProfile::Sketch) => "salmon sketch",
@@ -1133,7 +1183,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     } else if derive_fld_pass {
         let (f, detected) = match profile {
             RadInputProfile::PiscemBulk => derive_fld::<PiscemBulkReadRecord>(
-                rad_path,
+                rad_src,
                 nthreads,
                 opts.fld_max,
                 opts.fld_mean,
@@ -1141,7 +1191,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 prepare_eqb.as_ref(),
             )?,
             RadInputProfile::Salmon(_) => derive_fld::<SalmonBulkRecord>(
-                rad_path,
+                rad_src,
                 nthreads,
                 opts.fld_max,
                 opts.fld_mean,
@@ -1318,7 +1368,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             };
             let obs = match profile {
                 RadInputProfile::PiscemBulk => run_rad_eq_and_bias_pass::<PiscemBulkReadRecord>(
-                    rad_path,
+                    rad_src,
                     nthreads,
                     &cfg,
                     &bias_cfg,
@@ -1331,7 +1381,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                     &num_mapped,
                 )?,
                 RadInputProfile::Salmon(_) => run_rad_eq_and_bias_pass::<SalmonBulkRecord>(
-                    rad_path,
+                    rad_src,
                     nthreads,
                     &cfg,
                     &bias_cfg,
@@ -1348,14 +1398,14 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         } else {
             match profile {
                 RadInputProfile::PiscemBulk => run_rad_pass::<PiscemBulkReadRecord>(
-                    rad_path,
+                    rad_src,
                     nthreads,
                     &cfg,
                     &num_processed,
                     &num_mapped,
                 )?,
                 RadInputProfile::Salmon(_) => run_rad_pass::<SalmonBulkRecord>(
-                    rad_path,
+                    rad_src,
                     nthreads,
                     &cfg,
                     &num_processed,
@@ -1450,7 +1500,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             };
             let (seq_obs, gc_obs, pos_obs) = match profile {
                 RadInputProfile::PiscemBulk => run_bias_pass::<PiscemBulkReadRecord>(
-                    rad_path,
+                    rad_src,
                     nthreads,
                     &bias_cfg,
                     opts.seq_bias,
@@ -1460,7 +1510,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                     opts.gc_bins,
                 )?,
                 RadInputProfile::Salmon(_) => run_bias_pass::<SalmonBulkRecord>(
-                    rad_path,
+                    rad_src,
                     nthreads,
                     &bias_cfg,
                     opts.seq_bias,

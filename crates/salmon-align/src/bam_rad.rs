@@ -76,11 +76,38 @@ pub struct AlignRadSummary {
 
 /// Project a name-grouped transcriptome BAM into a fully-baked salmon RAD at
 /// `rad_path`. Reference ids/names/lengths come from the BAM `@SQ` header.
+/// Where [`write_alignment_rad_to`] should put the RAD it produces.
+pub enum RadDest<'a> {
+    /// Write to this path.
+    Path(&'a Path),
+    /// Build the image in memory and hand it back.
+    Memory,
+}
+
+/// The outcome of a BAM-to-RAD pass: the counts, plus the image itself when it
+/// was built in memory.
+pub struct AlignRadOutput {
+    pub summary: AlignRadSummary,
+    /// `Some` only for [`RadDest::Memory`].
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Write the alignment RAD to a file. Thin wrapper over
+/// [`write_alignment_rad_to`] for the common case.
 pub fn write_alignment_rad(
     opts: &AlignQuantOptions,
     rad_path: &Path,
     codec: ChunkCodec,
 ) -> Result<AlignRadSummary> {
+    Ok(write_alignment_rad_to(opts, &RadDest::Path(rad_path), codec)?.summary)
+}
+
+/// As [`write_alignment_rad`], but the destination is chosen by the caller.
+pub fn write_alignment_rad_to(
+    opts: &AlignQuantOptions,
+    dest: &RadDest,
+    codec: ChunkCodec,
+) -> Result<AlignRadOutput> {
     let header = read_alignment_header(&opts.bam)?;
     if coordinate_sorted_unusable(&header) {
         bail!(
@@ -138,15 +165,25 @@ pub fn write_alignment_rad(
         opts.deterministic_error_model && ref_bytes.is_some() && !opts.no_error_model;
 
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let mut writer = RadOutputWriter::create(
-        rad_path,
-        &name_refs,
-        &lengths,
-        is_paired,
-        RadProfile::SelectiveAlignment,
-        opts.fld_max + 1,
-        codec,
-    )?;
+    let mut writer = match dest {
+        RadDest::Path(rad_path) => RadOutputWriter::create(
+            rad_path,
+            &name_refs,
+            &lengths,
+            is_paired,
+            RadProfile::SelectiveAlignment,
+            opts.fld_max + 1,
+            codec,
+        )?,
+        RadDest::Memory => RadOutputWriter::create_in_memory(
+            &name_refs,
+            &lengths,
+            is_paired,
+            RadProfile::SelectiveAlignment,
+            opts.fld_max + 1,
+            codec,
+        )?,
+    };
 
     let fld = DiscreteFld::new(opts.fld_max);
     let naive = bias_on.then(NaiveEqBuilder::new);
@@ -208,8 +245,14 @@ pub fn write_alignment_rad(
         writer.set_initial_abundances(&em.alphas);
     }
 
-    writer.finalize()?;
-    Ok(summary)
+    let bytes = match dest {
+        RadDest::Path(_) => {
+            writer.finalize()?;
+            None
+        }
+        RadDest::Memory => Some(writer.finalize_into_bytes()?),
+    };
+    Ok(AlignRadOutput { summary, bytes })
 }
 
 fn reduce_summary(parts: Vec<(u64, u64)>) -> AlignRadSummary {
