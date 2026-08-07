@@ -103,6 +103,22 @@ pub fn take_last_map_stats() -> MapStats {
 
 /// Collect mapping candidates for one read, using either the sparse-k-mer path
 /// or the extended uni-MEM path per [`MapConfig::use_unimems`].
+/// The `is_left` argument piscem's collectors take, which salmon does not use.
+///
+/// `HitSearcher` keeps two raw-hit buffers, `left_hits` and `right_hits`, so a
+/// paired-end caller can hold both mates' hits at once and join them itself.
+/// salmon never reads them that way: each `collect_candidates` call drains the
+/// buffer into an owned `Vec<MappingCandidate>` before the next call runs, and
+/// pairing happens afterwards in `join_reads_and_filter` (and `merge_se_mappings`
+/// for orphans). `right_hits()` is consequently never read on its own anywhere in
+/// this crate.
+///
+/// Which buffer gets used is therefore not observable, and every call site passes
+/// this same value rather than a mate-dependent one. Verified rather than
+/// assumed: flipping the second mate to `false` produces a byte-identical
+/// `quant.sf` (COMBINE-lab/salmon#1091).
+const MATE_BUFFER_UNUSED: bool = true;
+
 fn collect_candidates<'idx, R: RefProvider>(
     index: &'idx ReferenceIndex,
     hs: &mut HitSearcher<'idx>,
@@ -142,7 +158,14 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
     cfg: &MapConfig,
 ) {
     let cands = consensus_filter(
-        best_per_target(collect_candidates(index, hs, refs, read, true, cfg)),
+        best_per_target(collect_candidates(
+            index,
+            hs,
+            refs,
+            read,
+            MATE_BUFFER_UNUSED,
+            cfg,
+        )),
         cfg.collect.consensus_fraction,
     );
     let had_candidates = !cands.is_empty();
@@ -234,8 +257,14 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
     // not be the placement that forms a valid concordant pair. `join_reads_and_filter`
     // selects the pairing-compatible chain per target over all candidates, and
     // de-duplicates orphans to one per (tid, is_fw) itself.
-    let left = consensus_filter(collect_candidates(index, hs, refs, r1, true, cfg), cf);
-    let right = consensus_filter(collect_candidates(index, hs, refs, r2, true, cfg), cf);
+    let left = consensus_filter(
+        collect_candidates(index, hs, refs, r1, MATE_BUFFER_UNUSED, cfg),
+        cf,
+    );
+    let right = consensus_filter(
+        collect_candidates(index, hs, refs, r2, MATE_BUFFER_UNUSED, cfg),
+        cf,
+    );
     let joints = join_reads_and_filter(left, right, &cfg.pair);
 
     let had_candidates = !joints.is_empty();
@@ -453,7 +482,14 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
     cfg: &MapConfig,
 ) -> Option<DebugMapping> {
     let cands = consensus_filter(
-        best_per_target(collect_candidates(index, hs, refs, read, true, cfg)),
+        best_per_target(collect_candidates(
+            index,
+            hs,
+            refs,
+            read,
+            MATE_BUFFER_UNUSED,
+            cfg,
+        )),
         cfg.collect.consensus_fraction,
     );
     let best = cands.iter().max_by_key(|c| c.chain.covered_read_bases())?;
