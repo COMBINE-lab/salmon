@@ -178,9 +178,10 @@ pub fn matches_ignoring_tx_version(names: &[String], gene_map: &HashMap<String, 
 /// like an unmapped transcript, which does not occur in practice for the
 /// Ensembl/GENCODE/RefSeq identifier schemes.
 ///
-/// `unmatched_out`, when given, receives one unmatched transcript name per line
-/// in `names` order, and is removed when nothing is unmatched so a stale list
-/// from an earlier run cannot be mistaken for a current one. The returned
+/// `unmatched_out`, when given, receives the unmatched transcript names as JSON
+/// (see [`write_unmatched_list`]) in `names` order, and is removed when nothing
+/// is unmatched so a stale list from an earlier run cannot be mistaken for a
+/// current one. The returned
 /// [`GeneQuantSummary`] is what the caller should report — in particular
 /// `genes_written`, which is the number of rows in the file and not the number
 /// of genes in the gene map.
@@ -267,9 +268,27 @@ pub fn write_gene_quant(
     Ok(summary)
 }
 
-/// Write the names of transcripts the gene map did not cover, one per line, in
-/// `quant.sf` order. No header and no second column, so the file is directly
-/// usable as `grep -f` input or a one-column read in R/pandas.
+/// JSON key holding the unmatched identifiers. Named for what the list *is*
+/// rather than for the file it sits in, so a consumer that has the parsed object
+/// but not the path still knows what it is looking at.
+const UNMATCHED_JSON_KEY: &str = "unmatched_transcripts";
+
+/// Write the names of transcripts the gene map did not cover, in `quant.sf`
+/// order, as a one-key JSON object:
+///
+/// ```json
+/// {
+///   "unmatched_transcripts": [
+///     "ENST00000456328.2",
+///     "ENST00000450305.3"
+///   ]
+/// }
+/// ```
+///
+/// JSON rather than one-per-line text so it parses without a bespoke reader,
+/// matching the other non-primary artifacts under `aux_info/`. Wrapped in an
+/// object rather than written as a bare array so the file can gain fields later
+/// without breaking consumers written against it today.
 ///
 /// An empty list removes the file rather than writing an empty one: the run that
 /// produced it is the only thing that can be said to be current, and a stale
@@ -285,10 +304,12 @@ fn write_unmatched_list(path: &Path, unmatched: &[&str]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    // `to_string_pretty` puts one identifier per line, so the file stays as
+    // greppable as the text version it replaces.
+    let doc = serde_json::json!({ UNMATCHED_JSON_KEY: unmatched });
+    let body = serde_json::to_string_pretty(&doc).map_err(io::Error::other)?;
     let mut w = io::BufWriter::new(std::fs::File::create(path)?);
-    for name in unmatched {
-        writeln!(w, "{name}")?;
-    }
+    writeln!(w, "{body}")?;
     w.flush()
 }
 
@@ -325,7 +346,7 @@ mod tests {
         // ...but quant.sf names them as the cDNA FASTA does.
         let names: Vec<String> = vec!["ENST00000456328.2".into(), "ENST00000450305.3".into()];
         let out = scratch("nomatch").join("quant.genes.sf");
-        let list = scratch("nomatch").join("genemap_unmatched_txps.txt");
+        let list = scratch("nomatch").join("genemap_unmatched_txps.json");
         let summary = write_gene_quant(
             &out,
             &names,
@@ -366,12 +387,20 @@ mod tests {
             .sum();
         assert_eq!(reads, 300.0);
 
-        // And the failure is recorded where it outlives the terminal.
-        let listed = std::fs::read_to_string(&list).unwrap();
+        // And the failure is recorded where it outlives the terminal. Asserted
+        // through a JSON parse, not on the raw text, so the test pins the
+        // document a consumer sees rather than the formatting around it.
+        let listed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&list).unwrap()).unwrap();
         assert_eq!(
-            listed.lines().collect::<Vec<_>>(),
-            ["ENST00000456328.2", "ENST00000450305.3"],
-            "listed in quant.sf order, one per line, no header"
+            listed[UNMATCHED_JSON_KEY],
+            serde_json::json!(["ENST00000456328.2", "ENST00000450305.3"]),
+            "listed under the documented key, in quant.sf order"
+        );
+        assert_eq!(
+            listed.as_object().unwrap().len(),
+            1,
+            "one key, so a consumer can match on it exactly"
         );
 
         // The diagnosis the warning is built on: the identifiers differ only by
@@ -415,7 +444,7 @@ mod tests {
         let mut gm = HashMap::new();
         gm.insert("t1".to_string(), "G".to_string());
         let out = scratch("stale").join("quant.genes.sf");
-        let list = scratch("stale").join("genemap_unmatched_txps.txt");
+        let list = scratch("stale").join("genemap_unmatched_txps.json");
         std::fs::write(&list, "leftover_from_a_previous_run\n").unwrap();
 
         let s = write_gene_quant(

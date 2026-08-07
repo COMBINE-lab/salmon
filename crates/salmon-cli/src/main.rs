@@ -871,9 +871,9 @@ struct GeneMapOpts {
 }
 
 /// Name of the file under `aux_info/` listing transcripts the gene map did not
-/// cover, one per line. It sits beside `unmapped_names.txt` — which is about
-/// *fragments* that did not map — so the name says transcripts explicitly.
-const UNMATCHED_TXP_FILE: &str = "genemap_unmatched_txps.txt";
+/// cover. It sits beside `unmapped_names.txt` — which is about *fragments* that
+/// did not map — so the name says transcripts explicitly.
+const UNMATCHED_TXP_FILE: &str = "genemap_unmatched_txps.json";
 
 /// Aggregate transcript estimates to gene level and write `quant.genes.sf`.
 fn write_gene_level(

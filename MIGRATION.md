@@ -81,7 +81,8 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
   level and `tximport` can apply its own transcript-to-gene policy to the whole
   file. What changed is the reporting: C++ warned once *per unmatched transcript*
   (half a million lines on a failed join), while 2.x warns once with the count
-  and writes the names to `aux_info/genemap_unmatched_txps.txt`, one per line.
+  and writes the names to `aux_info/genemap_unmatched_txps.json`, under an
+  `unmatched_transcripts` key.
   That file is removed when nothing is unmatched, so its presence always refers
   to the current run. 2.x additionally warns when the match rate is at or below
   50%, says how many transcripts would match without the version suffix, and

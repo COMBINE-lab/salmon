@@ -150,8 +150,16 @@ transcript-level output under a gene-level name, and no abundance is lost.
 salmon warns when the match rate is at or below 50%, says how many rows are
 stand-ins, reports how many transcripts *would* have matched, names the flag
 below, and lists every unmatched identifier in
-`aux_info/genemap_unmatched_txps.txt` (one per line, removed when there are
-none).
+`aux_info/genemap_unmatched_txps.json` (removed when there are none):
+
+```json
+{
+  "unmatched_transcripts": [
+    "ENST00000622028.1",
+    "ENST00000456328.2"
+  ]
+}
+```
 
 Either pass `--ignoreTxVersion`, which compares identifiers without the trailing
 `.N` on both sides — the same semantics as tximport's option of the same name —
