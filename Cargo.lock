@@ -2738,6 +2738,7 @@ name = "salmon-map"
 version = "2.4.1"
 dependencies = [
  "ahash",
+ "hashbrown 0.15.5",
  "ksw2rs",
  "piscem-rs",
  "salmon-core",

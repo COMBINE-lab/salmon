@@ -212,14 +212,14 @@ pub fn align_chain(
 }
 
 thread_local! {
-    /// Per-thread cache of gap/flank DP scores, keyed by the exact (query, ref)
-    /// substring pair — salmon's alignment cache, to avoid re-running identical
-    /// DPs (common for shared gaps/flanks across the candidate placements of one
+    /// Per-thread cache of gap/flank DP scores, keyed by the exact (kind, query,
+    /// ref) triple — salmon's alignment cache, to avoid re-running identical DPs
+    /// (common for shared gaps/flanks across the candidate placements of one
     /// read). salmon scopes this cache per read; we instead bound it by size
     /// (see [`GAP_CACHE_CAP`]) so it cannot grow without limit over a whole run
     /// — an unbounded thread-local here cost tens of GB on a 36M-read library.
-    static GAP_CACHE: std::cell::RefCell<ahash::AHashMap<(Box<[u8]>, Box<[u8]>), i32>> =
-        std::cell::RefCell::new(ahash::AHashMap::new());
+    static GAP_CACHE: std::cell::RefCell<GapCache> =
+        std::cell::RefCell::new(GapCache::default());
     /// Per-thread ksw2 scratch. This reuses both the ksw DP workspace/result and
     /// the DNA5-encoded query/target buffers between small gap/flank DPs.
     static KSW_SCRATCH: std::cell::RefCell<KswScratch> =
@@ -246,25 +246,132 @@ impl Default for KswScratch {
     }
 }
 
-/// Maximum number of cached (query, ref) DP scores per thread. The cache exists
-/// to dedup identical inter-MEM gap / flank alignments across one read's
+/// Maximum number of cached (kind, query, ref) DP scores per thread. The cache
+/// exists to dedup identical inter-MEM gap / flank alignments across one read's
 /// candidate targets, where the working set is tiny; cross-read reuse is rare
 /// (flanks are read-specific). When the cap is hit we clear the whole cache,
 /// keeping peak memory at a few MB per thread instead of unbounded growth.
 const GAP_CACHE_CAP: usize = 32_768;
 
-/// Insert into the gap/flank cache, clearing it first if it has reached the cap.
-#[inline]
-fn gap_cache_insert(
-    c: &std::cell::RefCell<ahash::AHashMap<(Box<[u8]>, Box<[u8]>), i32>>,
-    key: (Box<[u8]>, Box<[u8]>),
+/// Which DP a cache entry holds. Gap and flank scores come from *different*
+/// functions (`ksw2_gap_global` vs `ksw2_flank_extend`) over the same kind of
+/// byte pair, so the discriminant is part of the key. It used to be smuggled in
+/// as a trailing `0`/`1` byte appended to the query, which worked only because
+/// no ACGT base equals `0x00` or `0x01` — an unasserted assumption about read
+/// content guarding a silently-wrong-score failure mode.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+enum GapKind {
+    /// inter-MEM gap, both substrings fully consumed
+    Gap = 0,
+    /// read flank anchored on its left (3' flank)
+    FlankLeftAnchored = 1,
+    /// read flank anchored on its right (5' flank)
+    FlankRightAnchored = 2,
+}
+
+/// One cached DP score. `seqs` holds the query bytes followed by the target
+/// bytes in a single allocation (rather than two `Box<[u8]>`), so a miss costs
+/// one allocation instead of two.
+struct GapEntry {
+    kind: GapKind,
+    seqs: Box<[u8]>,
+    qlen: u32,
     score: i32,
-) {
-    let mut m = c.borrow_mut();
-    if m.len() >= GAP_CACHE_CAP {
-        m.clear();
+}
+
+/// Per-thread exact memo table for gap/flank DP scores.
+///
+/// Uses `hashbrown::HashTable` rather than a `HashMap` so a lookup can probe
+/// with the *borrowed* `(kind, query, target)` triple. A `HashMap` keyed by owned
+/// bytes forces the caller to materialize the key before it can ask whether the
+/// entry exists, which meant two heap allocations and two frees on **every**
+/// probe, cache hits included — pure overhead on the hottest inner loop in the
+/// mapper. Only a miss allocates now, and only once.
+///
+/// The comparison is still byte-exact, so a hit always returns the score that
+/// the DP would have produced. (A digest-only key would have been cheaper still,
+/// but it trades exactness for a collision probability, and a wrong alignment
+/// score is not a trade worth making here.)
+struct GapCache {
+    table: hashbrown::HashTable<GapEntry>,
+    hasher: ahash::RandomState,
+}
+
+impl Default for GapCache {
+    fn default() -> Self {
+        Self {
+            table: hashbrown::HashTable::new(),
+            // Fixed seeds: the lookup is byte-exact so the seed cannot affect
+            // results, but pinning it keeps bucket layout (and therefore
+            // profiling runs) reproducible.
+            hasher: ahash::RandomState::with_seeds(
+                0x51_7c_c1_b7,
+                0x27_22_0a_95,
+                0x9e_37_79_b9,
+                0x85_eb_ca_6b,
+            ),
+        }
     }
-    m.insert(key, score);
+}
+
+/// Hash a borrowed cache key. Must stay in lockstep with [`GapCache::eq`].
+///
+/// A free function rather than a method so the rehash-on-growth closure can call
+/// it while the table itself is mutably borrowed.
+#[inline]
+fn gap_hash(hasher: &ahash::RandomState, kind: GapKind, q: &[u8], t: &[u8]) -> u64 {
+    use std::hash::{BuildHasher, Hash, Hasher};
+    let mut h = hasher.build_hasher();
+    (kind as u8).hash(&mut h);
+    q.hash(&mut h);
+    t.hash(&mut h);
+    h.finish()
+}
+
+impl GapCache {
+    /// Exact equality between a stored entry and a borrowed key.
+    #[inline]
+    fn eq(e: &GapEntry, kind: GapKind, q: &[u8], t: &[u8]) -> bool {
+        e.kind == kind
+            && e.qlen as usize == q.len()
+            && e.seqs.len() == q.len() + t.len()
+            && &e.seqs[..q.len()] == q
+            && &e.seqs[q.len()..] == t
+    }
+
+    /// Cached score for this key, if present. Allocates nothing.
+    #[inline]
+    fn get(&self, kind: GapKind, q: &[u8], t: &[u8]) -> Option<i32> {
+        let h = gap_hash(&self.hasher, kind, q, t);
+        self.table
+            .find(h, |e| Self::eq(e, kind, q, t))
+            .map(|e| e.score)
+    }
+
+    /// Record a score, clearing the whole table first if it has reached the cap.
+    fn insert(&mut self, kind: GapKind, q: &[u8], t: &[u8], score: i32) {
+        let GapCache { table, hasher } = self;
+        if table.len() >= GAP_CACHE_CAP {
+            table.clear();
+        }
+        let h = gap_hash(hasher, kind, q, t);
+        let mut seqs = Vec::with_capacity(q.len() + t.len());
+        seqs.extend_from_slice(q);
+        seqs.extend_from_slice(t);
+        let entry = GapEntry {
+            kind,
+            seqs: seqs.into_boxed_slice(),
+            qlen: q.len() as u32,
+            score,
+        };
+        // The hash is a pure function of the entry's own key, so rehashing on
+        // growth just recomputes it.
+        table.insert_unique(h, entry, |e| {
+            let (q, t) = e.seqs.split_at(e.qlen as usize);
+            gap_hash(hasher, e.kind, q, t)
+        });
+    }
 }
 
 /// PuffAligner-style score: each MEM contributes an exact-match score and only
@@ -472,15 +579,12 @@ fn cached_gap_score(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
         return 0;
     }
     GAP_CACHE.with(|c| {
-        let key = (
-            qg.to_vec().into_boxed_slice(),
-            tg.to_vec().into_boxed_slice(),
-        );
-        if let Some(&s) = c.borrow().get(&key) {
+        // Probe with the borrowed slices; nothing is allocated unless we miss.
+        if let Some(s) = c.borrow().get(GapKind::Gap, qg, tg) {
             return s;
         }
         let s = ksw2_gap_global(qg, tg, cfg);
-        gap_cache_insert(c, key, s);
+        c.borrow_mut().insert(GapKind::Gap, qg, tg, s);
         s
     })
 }
@@ -489,16 +593,18 @@ fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: boo
     if qf.is_empty() {
         return 0;
     }
+    // The anchor side selects a different DP, so it is part of the key.
+    let kind = if anchor_right {
+        GapKind::FlankRightAnchored
+    } else {
+        GapKind::FlankLeftAnchored
+    };
     GAP_CACHE.with(|c| {
-        // distinguish flank orientation in the key
-        let mut qk = qf.to_vec();
-        qk.push(if anchor_right { 1 } else { 0 });
-        let key = (qk.into_boxed_slice(), tf.to_vec().into_boxed_slice());
-        if let Some(&s) = c.borrow().get(&key) {
+        if let Some(s) = c.borrow().get(kind, qf, tf) {
             return s;
         }
         let s = ksw2_flank_extend(qf, tf, cfg, anchor_right);
-        gap_cache_insert(c, key, s);
+        c.borrow_mut().insert(kind, qf, tf, s);
         s
     })
 }
