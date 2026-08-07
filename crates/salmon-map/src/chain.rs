@@ -321,8 +321,7 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
         // read_start, i.e. duplicate anchors) only affect colinear tie-breaks.
         sorted.clear();
         sorted.extend_from_slice(mems);
-        sorted
-            .sort_unstable_by(|a, b| (a.ref_start, a.read_start).cmp(&(b.ref_start, b.read_start)));
+        sorted.sort_unstable_by_key(|m| (m.ref_start, m.read_start));
 
         f.clear();
         f.resize(n, 0.0); // best score ending at i

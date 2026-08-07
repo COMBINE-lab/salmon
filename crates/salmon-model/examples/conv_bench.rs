@@ -43,7 +43,7 @@ fn main() {
 
     // Build a realistic transcript-length distribution: log-normal-ish around
     // ~1.5 kb with a long tail, clamped to [80, 15000] — close to GRCh38 cDNA.
-    let bases = [b'A', b'C', b'G', b'T'];
+    let bases = *b"ACGT";
     let mut seqs: Vec<Vec<u8>> = Vec::with_capacity(n);
     let mut prefixes: Vec<Vec<u32>> = Vec::with_capacity(n);
     for _ in 0..n {

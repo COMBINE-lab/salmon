@@ -42,7 +42,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use flate2::read::MultiGzDecoder;
 
 use piscem_rs::io::fastx::{reader_with_batch_size, Collection, CollectionType};
 use piscem_rs::mapping::hit_searcher::SkippingStrategy;
@@ -1227,20 +1226,6 @@ fn dump_eq_classes(
     Ok(())
 }
 
-/// Open a (optionally gzipped) read file as a boxed reader.
-///
-/// Boxed as `dyn Read` so the plain and gzipped cases have one type and the
-/// parser below does not need to be generic over them; `Send` because paraseq
-/// moves the reader onto worker threads.
-fn open_reader(path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
-    let f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    if path.extension().and_then(|e| e.to_str()) == Some("gz") {
-        Ok(Box::new(MultiGzDecoder::new(f)))
-    } else {
-        Ok(Box::new(f))
-    }
-}
-
 /// Open a read file through piscem-rs's decoder selection.
 ///
 /// `plan` decides whether this file gets the parallel gzip decoder or the
@@ -1248,8 +1233,9 @@ fn open_reader(path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
 /// handle when the parallel path is taken, so the caller can supervise the
 /// worker budget across every file in the run.
 ///
-/// Falls back to [`open_reader`] when the parallel decoder is not compiled in,
-/// so the plain path is unchanged.
+/// Decoder selection lives entirely in `open_input`: it picks the parallel gzip
+/// decoder, the serial one, or a plain file reader as appropriate, so there is
+/// no salmon-side fallback to maintain.
 fn open_reader_planned(
     path: &Path,
     plan: &piscem_rs::io::fastx::ThreadBudget,

@@ -102,7 +102,7 @@ fn deterministic_bam_writes_rad_and_quantifies() {
 /// txA and mismatches an (independent) txB at ~3/4 of positions, so once the
 /// model has learned that matches dominate, the correct placement scores higher.
 fn tx_seqs() -> (String, String) {
-    const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+    const BASES: [u8; 4] = *b"ACGT";
     let gen = |mut s: u64| -> String {
         (0..50_000)
             .map(|_| {

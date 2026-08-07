@@ -226,8 +226,8 @@ impl FragmentLengthDistribution {
         // offset can go negative conceptually; use isize math then bound-check.
         // Centring the kernel on `len` means the observation contributes most to
         // its own bin and progressively less to its neighbours.
-        let mut offset = len as isize - half as isize;
-        for &k in &self.kernel {
+        let start = len as isize - half as isize;
+        for (offset, &k) in (start..).zip(self.kernel.iter()) {
             if offset > 0 && (offset as usize) < self.hist.len() {
                 let o = offset as usize;
                 // Adding logs multiplies the observation's mass by the kernel
@@ -237,7 +237,6 @@ impl FragmentLengthDistribution {
                 self.sum.log_add_assign((o as f64).ln() + k_mass);
                 self.tot_mass.log_add_assign(k_mass);
             }
-            offset += 1;
         }
     }
 

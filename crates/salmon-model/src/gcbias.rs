@@ -875,7 +875,7 @@ mod tests {
         // Cached context (GcContext::desc) must be bit-identical to the
         // per-fragment gc_desc for every fragment the convolution can visit
         // (fragStart in 0..ref_len-fl, fragEnd = fragStart+fl-1).
-        let bases = [b'A', b'C', b'G', b'T', b'C', b'G', b'A', b'T', b'G', b'C'];
+        let bases = *b"ACGTCGATGC";
         let seq: Vec<u8> = (0..200).map(|i| bases[(i * 7 + 3) % bases.len()]).collect();
         let p = gc_prefix(&seq);
         let v = GcView::Dense(&p);
@@ -902,7 +902,7 @@ mod tests {
         // The rank-bitvector view must return identical cumulative GC (and hence
         // identical gc_desc) to the dense prefix, for an offset window of a
         // concatenated buffer.
-        let bases = [b'A', b'C', b'G', b'T', b'G', b'C', b'A', b'T'];
+        let bases = *b"ACGTGCAT";
         let pad: Vec<u8> = (0..37).map(|i| bases[(i * 3) % bases.len()]).collect();
         let seq: Vec<u8> = (0..150).map(|i| bases[(i * 5 + 1) % bases.len()]).collect();
         // concat = [pad | seq], so the transcript sits at offset pad.len().

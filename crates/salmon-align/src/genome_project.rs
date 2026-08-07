@@ -362,8 +362,8 @@ fn record_to_genomic_alignment<R: sam::alignment::Record>(
         sequence: None, // soft-clip rescue (use_fasta) is off in this MVP
         is_paired: flags.is_segmented(),
         is_first_in_pair: flags.is_first_segment(),
-        xs_strand: strand_tag(rec, [b'X', b'S']),
-        ts_strand: strand_tag(rec, [b't', b's']),
+        xs_strand: strand_tag(rec, *b"XS"),
+        ts_strand: strand_tag(rec, *b"ts"),
         hit_index,
         mate_ref_id,
         mate_ref_start,
