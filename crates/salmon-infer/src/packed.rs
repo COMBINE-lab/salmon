@@ -62,11 +62,79 @@ pub struct PackedEqClasses {
     pub total_count: u64,
 }
 
+/// Which posterior-sampling method a run will use, if any.
+///
+/// Bootstrap and Gibbs are mutually exclusive — the CLI rejects both together —
+/// so this is the single place that fact is written down. Deriving it once and
+/// passing it around replaces a `bool` at each call site whose meaning ("does
+/// this run need the raw per-mapping weights?") was only recoverable by knowing
+/// which sampler reads which array.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PosteriorMethod {
+    /// Point estimate only; no posterior replicates.
+    #[default]
+    None,
+    /// Non-parametric bootstrap over the equivalence classes.
+    Bootstrap { replicates: u32 },
+    /// Collapsed Gibbs sampling.
+    Gibbs { samples: u32 },
+}
+
+impl PosteriorMethod {
+    /// Resolve from the raw option values.
+    ///
+    /// `skip_quant` suppresses both. Bootstrap wins if both counts are somehow
+    /// non-zero, matching the historical dispatch order — though the CLI now
+    /// rejects that combination, so it should be unreachable from a real run.
+    pub fn resolve(skip_quant: bool, num_bootstraps: u32, num_gibbs_samples: u32) -> Self {
+        if skip_quant {
+            Self::None
+        } else if num_bootstraps > 0 {
+            Self::Bootstrap {
+                replicates: num_bootstraps,
+            }
+        } else if num_gibbs_samples > 0 {
+            Self::Gibbs {
+                samples: num_gibbs_samples,
+            }
+        } else {
+            Self::None
+        }
+    }
+
+    /// Whether the run needs [`PackedEqClasses::weights`], the raw per-mapping
+    /// conditional weights.
+    ///
+    /// Only the Gibbs sampler reads them; the EM and the bootstrap use
+    /// `combined`. On a human-scale run that array is ~8 bytes per CSR
+    /// incidence, so skipping it saves on the order of 160 MB that would be
+    /// allocated, filled and never read.
+    pub fn needs_raw_weights(self) -> bool {
+        matches!(self, Self::Gibbs { .. })
+    }
+}
+
 impl PackedEqClasses {
     /// Build the packed layout from a finalized [`CollapsedEqClasses`] whose
     /// `combined_weights` are already populated
     /// ([`update_eff_lengths`](salmon_eqclass::CollapsedEqClasses::update_eff_lengths)).
     pub fn from_collapsed(eq: &CollapsedEqClasses, num_txps: usize) -> Self {
+        Self::from_collapsed_for(eq, num_txps, PosteriorMethod::Gibbs { samples: 1 })
+    }
+
+    /// As [`from_collapsed`](Self::from_collapsed), but skips the raw weights
+    /// leaves the raw `weights` array empty.
+    ///
+    /// `weights` is read only by the Gibbs sampler; the EM path uses `combined`.
+    /// On a run without `--numGibbsSamples` it is therefore 8 bytes per CSR
+    /// incidence that is allocated, filled and never read — on the order of
+    /// 160 MB for a human-scale run. Callers that know Gibbs will not run pass
+    /// `false`.
+    pub fn from_collapsed_for(
+        eq: &CollapsedEqClasses,
+        num_txps: usize,
+        method: PosteriorMethod,
+    ) -> Self {
         let n = eq.classes.len();
         // Size the flat arrays up front. Growing them from empty costs a
         // reallocation plus a full copy at every doubling, and leaves a transient
@@ -91,7 +159,8 @@ impl PackedEqClasses {
         let mut labels = Vec::with_capacity(total_labels);
         let mut starts = Vec::with_capacity(n + 1);
         let mut combined = Vec::with_capacity(total_labels);
-        let mut weights = Vec::with_capacity(total_labels);
+        let keep_weights = method.needs_raw_weights();
+        let mut weights = Vec::with_capacity(if keep_weights { total_labels } else { 0 });
         let mut counts = Vec::with_capacity(n);
         // The first class starts at offset 0; every later entry is appended after
         // that class's data has been copied in.
@@ -104,7 +173,9 @@ impl PackedEqClasses {
             }
             labels.extend_from_slice(&group.txps);
             combined.extend_from_slice(&value.combined_weights);
-            weights.extend_from_slice(&value.weights);
+            if keep_weights {
+                weights.extend_from_slice(&value.weights);
+            }
             counts.push(value.count);
             total += value.count;
             starts.push(labels.len() as u32);
@@ -118,6 +189,35 @@ impl PackedEqClasses {
             num_txps,
             total_count: total,
         }
+    }
+
+    /// Rewrite `combined` in place from `eq`'s current `combined_weights`,
+    /// leaving `labels`, `starts`, `counts` and `weights` untouched.
+    ///
+    /// Bias correction recomputes effective lengths and calls
+    /// [`CollapsedEqClasses::update_eff_lengths`], which changes *only* the
+    /// combined weights. Rebuilding the whole packed layout to pick that up
+    /// re-copies the labels and counts too — hundreds of MB on a human-scale run
+    /// — for arrays bit-identical to the ones already held.
+    ///
+    /// `eq` must be the class set the layout was built from. Classes are never
+    /// invalidated after construction (nothing clears `TranscriptGroup::valid`),
+    /// so the filter below matches the original build; the assertion pins that.
+    pub fn refresh_combined(&mut self, eq: &CollapsedEqClasses) {
+        let mut at = 0usize;
+        for (group, value) in &eq.classes {
+            if !group.valid {
+                continue;
+            }
+            let n = value.combined_weights.len();
+            self.combined[at..at + n].copy_from_slice(&value.combined_weights);
+            at += n;
+        }
+        assert_eq!(
+            at,
+            self.combined.len(),
+            "refresh_combined: class set changed since the packed layout was built"
+        );
     }
 
     /// Number of (valid) classes.

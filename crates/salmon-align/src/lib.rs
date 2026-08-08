@@ -63,7 +63,7 @@ use salmon_core::{
     ReadType,
 };
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
-use salmon_infer::{optimize, optimize_with_init, EmOptions};
+use salmon_infer::EmOptions;
 use salmon_model::FragmentLengthDistribution;
 
 const SALMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1779,6 +1779,19 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             .map(|&p| p * frac_observed + uniform_prior * (1.0 - frac_observed))
             .collect()
     });
+    // The packed CSR layout is built once and reused by the EM, the post-bias
+    // re-run and bootstrap / Gibbs (see the reads-mode driver for the rationale).
+    // `weights` is Gibbs-only, so it is populated only when Gibbs will run.
+    // One resolution of which posterior method (if any) this run will use; the
+    // packed layout and the dispatch below both read it, so the precedence is
+    // stated once rather than restated at each site.
+    let posterior = salmon_infer::PosteriorMethod::resolve(
+        opts.skip_quant,
+        opts.num_bootstraps,
+        opts.num_gibbs_samples,
+    );
+    let mut packed =
+        salmon_infer::PackedEqClasses::from_collapsed_for(&collapsed, num_refs, posterior);
     // `--initUniform` forces the plain uniform EM start; otherwise warm-start
     // from the online-estimate-blended init.
     let mut em = if opts.skip_quant {
@@ -1791,12 +1804,12 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
-        optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
+        salmon_infer::optimize_packed_with_init(&packed, &opts.em, true, None, Some(&eff_lengths))
     } else {
-        optimize_with_init(
-            &collapsed,
-            num_refs,
+        salmon_infer::optimize_packed_with_init(
+            &packed,
             &opts.em,
+            true,
             init_alphas.as_deref(),
             Some(&eff_lengths),
         )
@@ -1825,7 +1838,15 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             opts.no_bias_length_threshold,
         );
         collapsed.update_eff_lengths(&eff_lengths);
-        em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+        // Only the combined weights changed; patch them in place.
+        packed.refresh_combined(&collapsed);
+        em = salmon_infer::optimize_packed_with_init(
+            &packed,
+            &opts.em,
+            true,
+            None,
+            Some(&eff_lengths),
+        );
     }
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
@@ -1880,7 +1901,6 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // layout is identical to reads mode — alignment mode simply feeds it from the
     // BAM-derived eq-classes — so the same `salmon_infer` samplers apply. Bootstrap
     // takes precedence over Gibbs, matching reads mode.
-    let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
     let ambig = salmon_infer::ambiguity_counts(&packed);
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()

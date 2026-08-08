@@ -565,7 +565,16 @@ struct QuantArgs {
     #[arg(long = "numBootstraps", default_value_t = 0)]
     num_bootstraps: u32,
     /// Number of Gibbs posterior samples (mutually exclusive with bootstraps).
-    #[arg(long = "numGibbsSamples", default_value_t = 0)]
+    ///
+    /// `conflicts_with` makes that exclusivity real. It was previously only
+    /// stated in this doc comment and resolved silently by dispatch order, so
+    /// passing both ran the bootstrap and ignored the Gibbs request without
+    /// saying so.
+    #[arg(
+        long = "numGibbsSamples",
+        default_value_t = 0,
+        conflicts_with = "num_bootstraps"
+    )]
     num_gibbs_samples: u32,
     /// Gibbs thinning factor.
     #[arg(long = "thinningFactor", default_value_t = 16)]
