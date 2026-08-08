@@ -543,25 +543,17 @@ fn base_2bit(b: u8) -> u8 {
     }
 }
 
-/// Load a (optionally gzip'd) transcriptome FASTA and return the (ASCII) base
-/// sequences aligned to the BAM's reference order (`names`); a name absent from
-/// the FASTA yields an empty sequence (its model contributions are skipped). The
-/// same bytes feed both the error model (2-bit on the fly) and the bias models.
+/// Load a (optionally compressed) transcriptome FASTA and return the (ASCII)
+/// base sequences aligned to the BAM's reference order (`names`); a name absent
+/// from the FASTA yields an empty sequence (its model contributions are
+/// skipped). The same bytes feed both the error model (2-bit on the fly) and the
+/// bias models.
+///
+/// Compression is detected from content, so gzip/BGZF, bzip2, xz and zstd all
+/// work regardless of how the file is named.
 fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut magic = [0u8; 2];
-    let is_gz = {
-        use std::io::Read;
-        let mut f = std::fs::File::open(path)?;
-        f.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b]
-    };
-    let reader: Box<dyn BufRead> = if is_gz {
-        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(
-            file,
-        )))
-    } else {
-        Box::new(std::io::BufReader::new(file))
-    };
+    let reader: Box<dyn BufRead> = salmon_core::compress::open_maybe_compressed(path)
+        .with_context(|| format!("opening {}", path.display()))?;
 
     let mut by_name: HashMap<String, Vec<u8>> = HashMap::new();
     let mut cur_name: Option<String> = None;
@@ -660,24 +652,27 @@ fn kind_to_op(k: Kind) -> AlnOp {
     }
 }
 
-/// Does this path name a SAM file (plain or gzipped) rather than a BAM?
+/// Does this path name a SAM file rather than a BAM, whatever it is compressed
+/// with?
+///
+/// SAM-vs-BAM is a name question, and compression is a content question, so any
+/// compression suffix is stripped before asking: `aln.sam.zst` is a SAM file
+/// that happens to be zstd, and routing it to the BAM reader produced a report
+/// about an invalid BGZF header for a file that was never BGZF.
 fn is_sam_path(p: &Path) -> bool {
     let s = p.to_string_lossy().to_ascii_lowercase();
-    s.ends_with(".sam") || s.ends_with(".sam.gz")
+    salmon_core::compress::strip_compression_extension(&s).ends_with(".sam")
 }
 
-/// Open a SAM file (transparently gunzipping `.sam.gz`) as a noodles reader over
-/// a boxed `BufRead`, so plain and gzipped inputs share one concrete type.
+/// Open a SAM file (transparently decompressing it) as a noodles reader over a
+/// boxed `BufRead`, so every input shares one concrete type.
+///
+/// Compression is detected from content, so the stream is decoded correctly
+/// however it was compressed. Which files reach here at all is a separate,
+/// name-based question, answered by [`is_sam_path`].
 fn open_sam_reader(path: &Path) -> Result<sam::io::Reader<Box<dyn BufRead + Send>>> {
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let lower = path.to_string_lossy().to_ascii_lowercase();
-    let inner: Box<dyn BufRead + Send> = if lower.ends_with(".gz") {
-        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(
-            file,
-        )))
-    } else {
-        Box::new(std::io::BufReader::new(file))
-    };
+    let inner = salmon_core::compress::open_maybe_compressed(path)
+        .with_context(|| format!("opening {}", path.display()))?;
     Ok(sam::io::Reader::new(inner))
 }
 

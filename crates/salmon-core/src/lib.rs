@@ -31,6 +31,7 @@
 //! them: it is the shared bottom of the stack, which is why it must stay light.
 
 pub mod atomic;
+pub mod compress;
 pub mod diagnostics;
 pub mod error;
 pub mod genemap;
