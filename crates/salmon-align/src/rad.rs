@@ -1394,9 +1394,16 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // Built once and reused by every EM below plus bootstrap / Gibbs; only
     // `combined` changes after bias correction, and `refresh_combined` patches
     // that in place. `weights` is Gibbs-only.
-    let want_gibbs = !opts.skip_quant && opts.num_bootstraps == 0 && opts.num_gibbs_samples > 0;
+    // One resolution of which posterior method (if any) this run will use; the
+    // packed layout and the dispatch below both read it, so the precedence is
+    // stated once rather than restated at each site.
+    let posterior = salmon_infer::PosteriorMethod::resolve(
+        opts.skip_quant,
+        opts.num_bootstraps,
+        opts.num_gibbs_samples,
+    );
     let mut packed =
-        salmon_infer::PackedEqClasses::from_collapsed_with(&collapsed, num_refs, want_gibbs);
+        salmon_infer::PackedEqClasses::from_collapsed_for(&collapsed, num_refs, posterior);
     let em = if opts.skip_quant {
         salmon_infer::EmResult {
             alphas: vec![0.0; num_refs],

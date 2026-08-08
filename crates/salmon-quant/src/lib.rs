@@ -757,9 +757,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     //
     // `weights` (the raw conditional weights) is only read by Gibbs, so it is
     // populated only when Gibbs will actually run.
-    let want_gibbs = !opts.skip_quant && opts.num_bootstraps == 0 && opts.num_gibbs_samples > 0;
+    // One resolution of which posterior method (if any) this run will use; the
+    // packed layout and the dispatch below both read it, so the precedence is
+    // stated once rather than restated at each site.
+    let posterior = salmon_infer::PosteriorMethod::resolve(
+        opts.skip_quant,
+        opts.num_bootstraps,
+        opts.num_gibbs_samples,
+    );
     let mut packed =
-        salmon_infer::PackedEqClasses::from_collapsed_with(&collapsed, num_refs, want_gibbs);
+        salmon_infer::PackedEqClasses::from_collapsed_for(&collapsed, num_refs, posterior);
     let mut em = if opts.skip_quant && want_rough_abund {
         // `--deterministic` + bias map-only pass: run a SHORT EM on the NAIVE
         // eq-classes (uniform-weight, with library-incompatible placements dropped
@@ -1028,28 +1035,30 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // ---- posterior uncertainty (bootstrap / Gibbs) + ambiguity --------------
     // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
     let ambig = salmon_infer::ambiguity_counts(&packed);
-    let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
-        Vec::new()
-    } else if opts.num_bootstraps > 0 {
-        salmon_infer::bootstrap(&packed, &opts.em, opts.num_bootstraps, 0x5A13_0000)
-    } else if opts.num_gibbs_samples > 0 {
-        // Gibbs prior follows the main optimizer (salmon): with VBEM and a
-        // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
-        // 1e-3 per transcript. The rust VBEM uses a constant per-transcript prior.
-        let prior = if opts.em.use_vbem {
-            opts.em.vb_prior.max(1.0)
-        } else {
-            1e-3
-        };
-        let gopts = salmon_infer::GibbsOptions {
-            num_samples: opts.num_gibbs_samples,
-            thinning: opts.thinning_factor,
-            prior,
-            per_transcript_prior: true,
-        };
-        salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
-    } else {
-        Vec::new()
+    // Same `posterior` the packed layout was built for, so the run cannot decide
+    // it needs Gibbs after the weights it reads were skipped.
+    let bootstraps: Vec<Vec<f64>> = match posterior {
+        salmon_infer::PosteriorMethod::None => Vec::new(),
+        salmon_infer::PosteriorMethod::Bootstrap { replicates } => {
+            salmon_infer::bootstrap(&packed, &opts.em, replicates, 0x5A13_0000)
+        }
+        salmon_infer::PosteriorMethod::Gibbs { samples } => {
+            // Gibbs prior follows the main optimizer (salmon): with VBEM and a
+            // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
+            // 1e-3 per transcript. The rust VBEM uses a constant per-transcript prior.
+            let prior = if opts.em.use_vbem {
+                opts.em.vb_prior.max(1.0)
+            } else {
+                1e-3
+            };
+            let gopts = salmon_infer::GibbsOptions {
+                num_samples: samples,
+                thinning: opts.thinning_factor,
+                prior,
+                per_transcript_prior: true,
+            };
+            salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
+        }
     };
     timer.mark("posterior");
 

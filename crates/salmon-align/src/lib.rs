@@ -1782,9 +1782,16 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // The packed CSR layout is built once and reused by the EM, the post-bias
     // re-run and bootstrap / Gibbs (see the reads-mode driver for the rationale).
     // `weights` is Gibbs-only, so it is populated only when Gibbs will run.
-    let want_gibbs = !opts.skip_quant && opts.num_bootstraps == 0 && opts.num_gibbs_samples > 0;
+    // One resolution of which posterior method (if any) this run will use; the
+    // packed layout and the dispatch below both read it, so the precedence is
+    // stated once rather than restated at each site.
+    let posterior = salmon_infer::PosteriorMethod::resolve(
+        opts.skip_quant,
+        opts.num_bootstraps,
+        opts.num_gibbs_samples,
+    );
     let mut packed =
-        salmon_infer::PackedEqClasses::from_collapsed_with(&collapsed, num_refs, want_gibbs);
+        salmon_infer::PackedEqClasses::from_collapsed_for(&collapsed, num_refs, posterior);
     // `--initUniform` forces the plain uniform EM start; otherwise warm-start
     // from the online-estimate-blended init.
     let mut em = if opts.skip_quant {
