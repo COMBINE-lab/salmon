@@ -2676,6 +2676,7 @@ dependencies = [
  "salmon-index",
  "salmon-map",
  "salmon-quant",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]
