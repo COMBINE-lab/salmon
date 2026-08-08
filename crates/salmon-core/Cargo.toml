@@ -20,3 +20,8 @@ niffler = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+flate2 = { workspace = true }
+zstd = { workspace = true }
+tempfile = { workspace = true }
