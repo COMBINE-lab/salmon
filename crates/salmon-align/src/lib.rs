@@ -1559,25 +1559,31 @@ pub fn source_program_lines(header: &noodles_sam::Header) -> Vec<String> {
         })
         .collect();
 
-    // A RAD string tag is length-prefixed with a `u16`, and that length is cast
-    // rather than checked, so an over-long value wraps and corrupts the file
-    // instead of failing. Drop whole trailing records until the chain fits: a
-    // shortened chain is a poor outcome, an unreadable RAD a far worse one.
-    while !lines.is_empty() && joined_len(&lines) > salmon_rad::MAX_FILE_TAG_STRING_LEN {
+    // libradicl bounds an over-long tag value rather than letting it wrap the
+    // length field, but it bounds by *bytes*, which here would cut a record in
+    // half and leave a `@PG` line whose command is silently wrong. Dropping whole
+    // trailing records instead keeps every record that survives intact and
+    // truthful, so ask whether the chain fits and shorten it ourselves.
+    while !lines.is_empty() && !chain_fits(&lines) {
         let dropped = lines.pop().unwrap_or_default();
         tracing::warn!(
-            "the @PG chain is longer than the {} bytes a RAD string tag holds; \
-             dropping its trailing record ({}...) so the file stays readable",
-            salmon_rad::MAX_FILE_TAG_STRING_LEN,
+            "the @PG chain is longer than a RAD string tag can hold; dropping its \
+             trailing record ({}...) so no record is left half-written",
             dropped.chars().take(60).collect::<String>()
         );
     }
     lines
 }
 
-/// Length of the newline-joined form the RAD tag actually stores.
-fn joined_len(lines: &[String]) -> usize {
-    lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1)
+/// Whether the joined `@PG` chain fits a RAD string tag.
+///
+/// Asks the format rather than restating its width: the limit belongs to
+/// libradicl, and hard-coding it here is how the two would drift.
+fn chain_fits(lines: &[String]) -> bool {
+    salmon_rad::value_fits(
+        &libradicl::rad_types::TagValue::String(lines.join("\n")),
+        &libradicl::rad_types::RadType::String,
+    )
 }
 
 /// Escape the characters that frame the joined `@PG` representation.
