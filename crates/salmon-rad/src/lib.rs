@@ -237,7 +237,17 @@ pub const INDEX_DECOY_SEQ_HASH_TAG: &str = "index_decoy_seq_hash";
 /// See [`INDEX_SEQ_HASH_TAG`].
 pub const INDEX_DECOY_NAME_HASH_TAG: &str = "index_decoy_name_hash";
 /// File-tag name: whether the index was built with `--keepDuplicates`.
+///
+/// Written only when the index actually recorded it; absent means unknown,
+/// which a reader must not collapse to `false`.
 pub const KEEP_DUPLICATES_TAG: &str = "keep_duplicates";
+/// File-tag name: the `@PG` header records of the BAM these fragments came from,
+/// verbatim, one per line.
+///
+/// Stored as the raw SAM lines rather than a parsed structure so nothing the
+/// aligner recorded is dropped in transit; a reader parses them back out for
+/// `meta_info.json`. Present only for a RAD derived from an alignment file.
+pub const SOURCE_PROGRAMS_TAG: &str = "source_programs";
 
 /// File-tag name: how the fragments in this RAD were produced.
 ///
@@ -290,6 +300,11 @@ pub struct WriterProvenance {
     pub mapping_type: MappingType,
     /// identity of the index the mappings were made against, when there is one
     pub index: Option<IndexProvenance>,
+    /// verbatim `@PG` lines from the source BAM, when the fragments came from
+    /// one; empty otherwise. Propagates what the aligner said about itself, so a
+    /// requant reports how the alignments were produced and not merely that they
+    /// were alignments.
+    pub source_programs: Vec<String>,
 }
 
 /// Identity of the index a mapping pass ran against, recorded in the RAD.
@@ -312,8 +327,9 @@ pub struct IndexProvenance {
     pub decoy_seq_hash: String,
     /// hash of the decoy names (empty when the index has no decoys)
     pub decoy_name_hash: String,
-    /// whether the index was built with `--keepDuplicates`
-    pub keep_duplicates: bool,
+    /// whether the index was built with `--keepDuplicates`; `None` when the
+    /// index predates recording it, which must not be reported as `false`
+    pub keep_duplicates: Option<bool>,
 }
 
 /// Counters describing what a mapping pass *saw*, as opposed to what it wrote.

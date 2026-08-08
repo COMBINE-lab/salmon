@@ -271,6 +271,15 @@ impl AlignQuantOptions {
 }
 
 /// Quantification results.
+/// What a quantification run read its fragments from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FragmentSource {
+    /// an alignment file given with `-a`
+    Bam,
+    /// a RAD file given with `--rad`, or written as a `--deterministic` intermediate
+    Rad,
+}
+
 #[derive(Debug, Clone)]
 pub struct AlignQuantResult {
     pub names: Vec<String>,
@@ -290,6 +299,13 @@ pub struct AlignQuantResult {
     /// what the RAD says about the mapping pass that produced it; empty for a
     /// BAM input, which has no RAD provenance to read
     pub provenance: crate::rad::RadProvenance,
+    /// verbatim `@PG` lines describing how the fragments were produced: read
+    /// from a BAM's header directly, or carried through a BAM-derived RAD
+    pub source_programs: Vec<String>,
+    /// what this run actually read, which decides which metadata is even
+    /// applicable — an index hash is missing from a RAD requant but simply does
+    /// not apply to a BAM, and blaming a RAD that was never read would be wrong
+    pub source: FragmentSource,
     /// fragment mass dropped in the final min-alpha redistribution (every member
     /// of an equivalence class truncated); normally 0.
     pub inference_truncated_mass: f64,
@@ -1398,6 +1414,88 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
 /// the reliable signal that records are usably grouped is `GO:query`. So we only
 /// reject when coordinate-sorted AND not query-grouped. (Query-name *sorted* files
 /// report `SO:queryname`, not coordinate, and pass.)
+/// One `@PG` header record: what a program said about how it touched the file.
+///
+/// `command_line` is the field that actually answers "how was this BAM made";
+/// the rest identify the program well enough to make sense of it.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct SourceProgram {
+    /// `ID` — unique within the file, and the link target of `PP`
+    pub id: String,
+    /// `PN` — program name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program_name: Option<String>,
+    /// `VN` — program version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// `CL` — the command line the program was invoked with
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_line: Option<String>,
+    /// `PP` — the previous program in the chain, so the order is recoverable
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_id: Option<String>,
+    /// `DS` — free-text description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Render a BAM header's `@PG` chain as verbatim SAM lines.
+///
+/// Kept as text on the way into a RAD so nothing the aligner recorded is dropped
+/// in transit; [`parse_source_programs`] reads them back.
+pub fn source_program_lines(header: &noodles_sam::Header) -> Vec<String> {
+    header
+        .programs()
+        .as_ref()
+        .iter()
+        .map(|(id, program)| {
+            let mut line = format!("@PG\tID:{}", String::from_utf8_lossy(id.as_ref()));
+            // Every tag the aligner wrote is carried through, standard or not:
+            // this is provenance, not a schema to validate against.
+            for (tag, value) in program.other_fields() {
+                let t: &[u8; 2] = tag.as_ref();
+                line.push_str(&format!(
+                    "\t{}:{}",
+                    String::from_utf8_lossy(t),
+                    String::from_utf8_lossy(value.as_ref())
+                ));
+            }
+            line
+        })
+        .collect()
+}
+
+/// Parse `@PG` lines produced by [`source_program_lines`] back into records.
+///
+/// Unknown tags are ignored rather than rejected: a `@PG` record may carry
+/// anything, and provenance that fails to parse is worse than provenance that
+/// reports only the fields it understands.
+pub fn parse_source_programs(lines: &[String]) -> Vec<SourceProgram> {
+    lines
+        .iter()
+        .filter(|l| l.starts_with("@PG\t"))
+        .map(|line| {
+            let mut prog = SourceProgram::default();
+            for field in line.split('\t').skip(1) {
+                let Some((tag, value)) = field.split_once(':') else {
+                    continue;
+                };
+                let value = value.to_string();
+                match tag {
+                    "ID" => prog.id = value,
+                    "PN" => prog.program_name = Some(value),
+                    "VN" => prog.version = Some(value),
+                    "CL" => prog.command_line = Some(value),
+                    "PP" => prog.previous_id = Some(value),
+                    "DS" => prog.description = Some(value),
+                    _ => {}
+                }
+            }
+            prog
+        })
+        .collect()
+}
+
 fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
     let Some(hd) = header.header() else {
         return false;
@@ -1940,6 +2038,9 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         // orphans; both are reported as unknown rather than as zero.
         num_orphan: None,
         provenance: crate::rad::RadProvenance::default(),
+        // Straight from the BAM being quantified, no RAD in between.
+        source_programs: source_program_lines(&header),
+        source: FragmentSource::Bam,
         names,
         lengths,
         eff_lengths,
@@ -2051,7 +2152,11 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         /// 100% because a RAD holds only the fragments that mapped.
         meta_info_complete: bool,
         #[serde(skip_serializing_if = "Vec::is_empty")]
-        incomplete_meta_info_fields: Vec<&'static str>,
+        incomplete_meta_info_fields: Vec<salmon_core::MissingMetaField>,
+        /// what the source BAM's `@PG` chain said about how it was produced;
+        /// omitted when the fragments did not come from an alignment file
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        alignment_provenance: Vec<SourceProgram>,
         num_em_iterations: u32,
         em_converged: bool,
         detected_library_type: Option<String>,
@@ -2077,7 +2182,27 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     // `meta_info_complete` records for whoever reads the results later.
     let counters = res.provenance.counters;
     let index_prov = res.provenance.index.clone().unwrap_or_default();
-    let incomplete_meta_info_fields = res.provenance.missing_meta_info_fields();
+    // Only a RAD requant can be short of the mapping pass's own record of itself.
+    // Alignment mode never had index hashes — that is by design, not a gap — and
+    // it counts its own fragments, so nothing there is missing for want of an
+    // upstream.
+    let mut incomplete_meta_info_fields = match res.source {
+        FragmentSource::Rad => res.provenance.missing_meta_info_fields(),
+        FragmentSource::Bam => Vec::new(),
+    };
+    // What the aligner recorded about itself, carried through a BAM-derived RAD.
+    // A BAM with no `@PG` chain is itself worth recording: the gap is upstream,
+    // and saying so is more useful than an empty field the reader must interpret.
+    let alignment_provenance = crate::parse_source_programs(&res.source_programs);
+    let from_alignments = res.source == FragmentSource::Bam
+        || res.provenance.mapping_type == Some(salmon_rad::MappingType::Alignment);
+    if from_alignments && alignment_provenance.is_empty() {
+        incomplete_meta_info_fields.push(salmon_core::MissingMetaField::bam(
+            "alignment_provenance",
+            "the source BAM's header carries no @PG records, so how its \
+             alignments were produced is not recorded anywhere in the file",
+        ));
+    }
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),
         samp_type: "none".to_string(),
@@ -2107,7 +2232,11 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
             .mapping_type
             .map_or("alignment", |m| m.as_str())
             .to_string(),
-        keep_duplicates: res.provenance.index.as_ref().map(|p| p.keep_duplicates),
+        keep_duplicates: res
+            .provenance
+            .index
+            .as_ref()
+            .and_then(|p| p.keep_duplicates),
         index_seq_hash: index_prov.seq_hash,
         index_name_hash: index_prov.name_hash,
         index_seq_hash512: index_prov.seq_hash512,
@@ -2133,6 +2262,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_orphan: res.num_orphan,
         meta_info_complete: incomplete_meta_info_fields.is_empty(),
         incomplete_meta_info_fields,
+        alignment_provenance,
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,

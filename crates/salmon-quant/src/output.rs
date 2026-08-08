@@ -331,7 +331,10 @@ struct MetaInfo {
     pos_bias_correct: bool,
     num_bias_bins: usize,
     mapping_type: String,
-    keep_duplicates: bool,
+    /// how the index was built; omitted when the index predates recording it,
+    /// rather than reported as a `false` the run cannot actually vouch for
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_duplicates: Option<bool>,
     index_seq_hash: String,
     index_name_hash: String,
     index_seq_hash512: String,
@@ -359,11 +362,13 @@ struct MetaInfo {
     num_orphan: u64,
     /// whether every field here is a true observation of the run.
     ///
-    /// Always `true` on this path: it mapped the reads itself, so nothing is
-    /// inferred. A requant from a RAD that does not record what its mapping pass
-    /// observed reports `false` and names the affected fields (see the `--rad`
-    /// path in `salmon-align`).
+    /// Mapping the reads directly supplies almost everything, but not quite
+    /// everything: an index built before it recorded how it was built cannot say,
+    /// and guessing would be worse than saying so. Each gap is listed below with
+    /// the upstream responsible, so it is actionable.
     meta_info_complete: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    incomplete_meta_info_fields: Vec<crate::MissingMetaField>,
     /// range-factorization bins used for equivalence classes (0 = disabled)
     range_factorization_bins: u32,
     /// EM/VBEM convergence
@@ -382,6 +387,16 @@ struct MetaInfo {
 }
 
 fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Result<()> {
+    // Mapping the reads answers nearly everything directly; what it cannot
+    // answer comes from the index, which may predate recording it.
+    let mut missing_meta_info_fields = Vec::new();
+    if res.keep_duplicates.is_none() {
+        missing_meta_info_fields.push(crate::MissingMetaField::index(
+            "keep_duplicates",
+            "this index predates recording how it was built; rebuild the index \
+             to record it",
+        ));
+    }
     let percent_mapped = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64
     } else {
@@ -453,7 +468,8 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
         num_orphan: res.num_orphan,
-        meta_info_complete: true,
+        meta_info_complete: missing_meta_info_fields.is_empty(),
+        incomplete_meta_info_fields: missing_meta_info_fields,
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,

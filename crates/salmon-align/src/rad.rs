@@ -441,34 +441,66 @@ pub struct RadProvenance {
     pub index: Option<salmon_rad::IndexProvenance>,
     /// how the fragments were produced; `None` for a RAD that does not say
     pub mapping_type: Option<salmon_rad::MappingType>,
+    /// verbatim `@PG` lines from the BAM behind these fragments, when there was
+    /// one; empty for a RAD produced by mapping reads
+    pub source_programs: Vec<String>,
 }
 
 impl RadProvenance {
     /// The `meta_info.json` fields this file cannot support, in output order.
     ///
     /// Empty ⇒ the requant reproduces the mapping run's `meta_info.json`.
-    pub fn missing_meta_info_fields(&self) -> Vec<&'static str> {
+    pub fn missing_meta_info_fields(&self) -> Vec<salmon_core::MissingMetaField> {
+        use salmon_core::MissingMetaField as M;
         let mut missing = Vec::new();
         if self.counters.is_none() {
-            missing.extend([
-                "num_processed",
-                "percent_mapped",
-                "num_dovetail_fragments",
-                "num_fragments_filtered_vm",
-                "num_alignments_below_threshold_for_mapped_fragments_vm",
-                "num_decoy_fragments",
-            ]);
+            const REASON: &str = "the RAD does not record what its mapping pass \
+                                  observed; only fragments that mapped are in the file, \
+                                  so this cannot be recovered from it. RADs written by \
+                                  salmon 2.5.0 and later carry it.";
+            missing.extend(
+                [
+                    "num_processed",
+                    "percent_mapped",
+                    "num_dovetail_fragments",
+                    "num_fragments_filtered_vm",
+                    "num_alignments_below_threshold_for_mapped_fragments_vm",
+                    "num_decoy_fragments",
+                ]
+                .map(|f| M::rad(f, REASON)),
+            );
         }
-        if self.index.is_none() {
-            missing.extend([
+        // Alignment-derived fragments never had a salmon index behind them, so
+        // index identity is not applicable rather than missing — reporting it as
+        // a gap would tell a user to fix something that cannot exist.
+        let index_applicable = self.mapping_type != Some(salmon_rad::MappingType::Alignment);
+        match &self.index {
+            None if !index_applicable => {}
+            None => {
+                const REASON: &str = "the RAD does not identify the index its mappings \
+                                      were made against, and the `--rad` path loads no \
+                                      index of its own";
+                missing.extend(
+                    [
+                        "keep_duplicates",
+                        "index_seq_hash",
+                        "index_name_hash",
+                        "index_seq_hash512",
+                        "index_name_hash512",
+                        "index_decoy_seq_hash",
+                        "index_decoy_name_hash",
+                    ]
+                    .map(|f| M::rad(f, REASON)),
+                );
+            }
+            // The index was identified but predates recording how it was built,
+            // so this one field is unknown while the hashes are exact.
+            Some(p) if p.keep_duplicates.is_none() => missing.push(M::index(
                 "keep_duplicates",
-                "index_seq_hash",
-                "index_name_hash",
-                "index_seq_hash512",
-                "index_name_hash512",
-                "index_decoy_seq_hash",
-                "index_decoy_name_hash",
-            ]);
+                "the index that produced this RAD predates recording it; \
+                 rebuild the index to record it",
+            )),
+            Some(_) => {}
         }
         missing
     }
@@ -520,14 +552,14 @@ fn warn_incomplete_provenance(provenance: &RadProvenance) {
     if missing.is_empty() {
         return;
     }
+    let fields: Vec<&str> = missing.iter().map(|m| m.field).collect();
     tracing::warn!(
-        "this RAD does not record what the mapping pass observed, so these \
-         meta_info.json fields cannot be reproduced and are reported as \
-         placeholders: {}. In particular the mapping rate will read 100%, since \
-         a RAD holds only the fragments that mapped. RAD files written by salmon \
-         2.5.0 and later carry this information; `meta_info_complete` in \
-         meta_info.json records that this run's did not.",
-        missing.join(", ")
+        "this RAD cannot supply every meta_info.json field, so these are reported \
+         as placeholders: {}. Where the mapping-pass counters are missing the \
+         mapping rate reads 100%, since a RAD holds only the fragments that \
+         mapped. `meta_info_complete` in meta_info.json records this, with the \
+         reason for each field.",
+        fields.join(", ")
     );
 }
 
@@ -566,11 +598,19 @@ fn load_provenance(file_tag_map: &TagMap) -> RadProvenance {
         name_hash512: string_tag(salmon_rad::INDEX_NAME_HASH512_TAG),
         decoy_seq_hash: string_tag(salmon_rad::INDEX_DECOY_SEQ_HASH_TAG),
         decoy_name_hash: string_tag(salmon_rad::INDEX_DECOY_NAME_HASH_TAG),
-        keep_duplicates: matches!(
-            file_tag_map.get(salmon_rad::KEEP_DUPLICATES_TAG),
-            Some(TagValue::U8(1))
-        ),
+        // Absent ⇒ the writing index never recorded it; that is unknown, not
+        // `false`, and is reported as a missing field rather than guessed.
+        keep_duplicates: match file_tag_map.get(salmon_rad::KEEP_DUPLICATES_TAG) {
+            Some(TagValue::U8(v)) => Some(*v == 1),
+            _ => None,
+        },
     });
+    // Split back into the lines they were joined from; an aligner's command line
+    // may contain anything except a newline, so this round-trips.
+    let source_programs = match file_tag_map.get(salmon_rad::SOURCE_PROGRAMS_TAG) {
+        Some(TagValue::String(v)) if !v.is_empty() => v.split('\n').map(str::to_string).collect(),
+        _ => Vec::new(),
+    };
     let mapping_type = match file_tag_map.get(salmon_rad::MAPPING_TYPE_TAG) {
         Some(TagValue::String(v)) => salmon_rad::MappingType::from_str_tag(v),
         _ => None,
@@ -579,6 +619,7 @@ fn load_provenance(file_tag_map: &TagMap) -> RadProvenance {
         counters,
         index,
         mapping_type,
+        source_programs,
     }
 }
 
@@ -1750,6 +1791,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         num_processed,
         num_mapped,
         num_orphan: Some(num_orphan),
+        source_programs: provenance.source_programs.clone(),
+        source: crate::FragmentSource::Rad,
         provenance,
         inference_truncated_mass,
         num_eq_classes,

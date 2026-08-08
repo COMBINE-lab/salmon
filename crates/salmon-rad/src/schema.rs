@@ -127,11 +127,18 @@ pub fn build_prelude(
                 crate::INDEX_DECOY_NAME_HASH_TAG,
                 TagValue::String(prov.decoy_name_hash.clone()),
             ),
-            (
-                crate::KEEP_DUPLICATES_TAG,
-                TagValue::U8(prov.keep_duplicates as u8),
-            ),
         ]);
+        // Only when the index recorded it: an absent tag reads as unknown, while
+        // a written `0` would read as a definite "duplicates were collapsed".
+        if let Some(keep) = prov.keep_duplicates {
+            file_tag_values.push((crate::KEEP_DUPLICATES_TAG, TagValue::U8(keep as u8)));
+        }
+    }
+    if !provenance.source_programs.is_empty() {
+        file_tag_values.push((
+            crate::SOURCE_PROGRAMS_TAG,
+            TagValue::String(provenance.source_programs.join("\n")),
+        ));
     }
     // Score interpretation, only meaningful for the scored (SA) profile. Reserved
     // as the default (raw AS) and backpatched at finalize if the write run scored

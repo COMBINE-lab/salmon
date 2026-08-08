@@ -23,8 +23,9 @@ fn test_prov() -> salmon_rad::WriterProvenance {
             name_hash512: "namehash512".into(),
             decoy_seq_hash: String::new(),
             decoy_name_hash: String::new(),
-            keep_duplicates: false,
+            keep_duplicates: Some(false),
         }),
+        source_programs: vec![],
     }
 }
 
@@ -126,6 +127,12 @@ fn read_all(
 
 /// Read one file tag by name from a written RAD file.
 fn read_file_tag(path: &std::path::Path, name: &str) -> TagValue {
+    read_file_tag_opt(path, name).unwrap_or_else(|| panic!("missing file tag {name}"))
+}
+
+/// Like `read_file_tag`, but `None` when the tag is absent — the distinction the
+/// unknown-vs-false cases turn on.
+fn read_file_tag_opt(path: &std::path::Path, name: &str) -> Option<TagValue> {
     let mut data = Vec::new();
     std::fs::File::open(path)
         .unwrap()
@@ -134,7 +141,7 @@ fn read_file_tag(path: &std::path::Path, name: &str) -> TagValue {
     let mut rc = Cursor::new(data);
     let prelude = RadPrelude::from_bytes(&mut rc).unwrap();
     let ftm = prelude.file_tags.parse_tags_from_bytes(&mut rc).unwrap();
-    ftm.get(name).unwrap().clone()
+    ftm.get(name).cloned()
 }
 
 fn check_roundtrip(profile: RadProfile, expected_detect: RadInputProfile) {
@@ -435,4 +442,84 @@ fn unbaked_counters_are_distinguishable_from_zero() {
         read_file_tag(&path, salmon_rad::NUM_PROCESSED_TAG),
         TagValue::U64(0)
     ));
+}
+
+/// `keep_duplicates` must survive as three distinct states, not two: an index
+/// that predates recording it is *unknown*, and reporting that as `false` would
+/// state as fact something no one observed.
+#[test]
+fn unknown_keep_duplicates_is_not_written_as_false() {
+    for (keep, expect_tag) in [
+        (Some(true), Some(1u8)),
+        (Some(false), Some(0)),
+        (None, None),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rad");
+        let mut prov = test_prov();
+        prov.index.as_mut().unwrap().keep_duplicates = keep;
+
+        let w = RadOutputWriter::create(
+            &path,
+            &["t0", "t1", "t2"],
+            &[100u32, 200, 300],
+            true,
+            RadProfile::SelectiveAlignment,
+            1024,
+            ChunkCodec::None,
+            &prov,
+        )
+        .unwrap();
+        w.finalize().unwrap();
+
+        let got = match read_file_tag_opt(&path, salmon_rad::KEEP_DUPLICATES_TAG) {
+            Some(TagValue::U8(v)) => Some(v),
+            None => None,
+            other => panic!("keep_duplicates should be a u8 or absent, got {other:?}"),
+        };
+        assert_eq!(got, expect_tag, "for keep_duplicates = {keep:?}");
+    }
+}
+
+/// A BAM-derived RAD carries the aligner's `@PG` chain verbatim, so a requant
+/// can report how the alignments were produced rather than only that they were
+/// alignments. Tab-separated fields must survive the join/split round trip.
+#[test]
+fn source_programs_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.rad");
+    let lines = vec![
+        "@PG\tID:bowtie2\tPN:bowtie2\tVN:2.4.5\tCL:bowtie2-align-s --wrapper basic-0 -x idx"
+            .to_string(),
+        "@PG\tID:samtools\tPN:samtools\tPP:bowtie2\tVN:1.17\tCL:samtools view -b".to_string(),
+    ];
+    let prov = salmon_rad::WriterProvenance {
+        mapping_type: salmon_rad::MappingType::Alignment,
+        index: None,
+        source_programs: lines.clone(),
+    };
+    let w = RadOutputWriter::create(
+        &path,
+        &["t0", "t1", "t2"],
+        &[100u32, 200, 300],
+        true,
+        RadProfile::SelectiveAlignment,
+        1024,
+        ChunkCodec::None,
+        &prov,
+    )
+    .unwrap();
+    w.finalize().unwrap();
+
+    match read_file_tag(&path, salmon_rad::SOURCE_PROGRAMS_TAG) {
+        TagValue::String(v) => {
+            let got: Vec<&str> = v.split('\n').collect();
+            assert_eq!(got, lines, "the @PG chain must survive verbatim");
+        }
+        other => panic!("source_programs should be a string, got {other:?}"),
+    }
+    match read_file_tag(&path, salmon_rad::MAPPING_TYPE_TAG) {
+        TagValue::String(v) => assert_eq!(v, "alignment"),
+        other => panic!("mapping_type should be a string, got {other:?}"),
+    }
 }

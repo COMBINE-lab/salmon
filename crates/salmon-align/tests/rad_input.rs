@@ -39,6 +39,7 @@ fn prov() -> salmon_rad::WriterProvenance {
     salmon_rad::WriterProvenance {
         mapping_type: salmon_rad::MappingType::Mapping,
         index: None,
+        source_programs: vec![],
     }
 }
 
@@ -943,4 +944,41 @@ fn all_bias_rad_is_thread_invariant() {
             && !parallel.bias_dump.exp5_pos.is_empty(),
         "sequence and positional bias dumps should be populated"
     );
+}
+
+/// The `@PG` chain a BAM carries must parse back into the fields
+/// `meta_info.json` reports, including a command line containing spaces and
+/// colons — the characters most likely to break a naive split.
+#[test]
+fn source_program_lines_parse_back() {
+    let lines = vec![
+        "@PG\tID:bowtie2\tPN:bowtie2\tVN:2.4.5\tCL:bowtie2 -x idx -1 a.fq -2 b.fq --rg-id x:y"
+            .to_string(),
+        "@PG\tID:samtools\tPN:samtools\tPP:bowtie2\tVN:1.17\tDS:sorted".to_string(),
+    ];
+    let progs = salmon_align::parse_source_programs(&lines);
+    assert_eq!(progs.len(), 2);
+
+    assert_eq!(progs[0].id, "bowtie2");
+    assert_eq!(progs[0].program_name.as_deref(), Some("bowtie2"));
+    assert_eq!(progs[0].version.as_deref(), Some("2.4.5"));
+    assert_eq!(
+        progs[0].command_line.as_deref(),
+        Some("bowtie2 -x idx -1 a.fq -2 b.fq --rg-id x:y"),
+        "a command line's own colons must not truncate it"
+    );
+    assert_eq!(progs[0].previous_id, None);
+
+    assert_eq!(progs[1].previous_id.as_deref(), Some("bowtie2"));
+    assert_eq!(progs[1].description.as_deref(), Some("sorted"));
+
+    // Non-@PG lines and unknown tags are ignored rather than rejected: provenance
+    // that fails to parse is worse than provenance reporting what it understands.
+    let mixed = vec![
+        "@HD\tVN:1.6".to_string(),
+        "@PG\tID:x\tZZ:unknown-tag".to_string(),
+    ];
+    let progs = salmon_align::parse_source_programs(&mixed);
+    assert_eq!(progs.len(), 1);
+    assert_eq!(progs[0].id, "x");
 }

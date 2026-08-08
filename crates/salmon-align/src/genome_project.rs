@@ -160,6 +160,9 @@ pub fn project_genome_bam_to_rad(
         &salmon_rad::WriterProvenance {
             mapping_type: salmon_rad::MappingType::Alignment,
             index: None,
+            // Carry the aligner's own account of how these alignments were made,
+            // so a requant reports the command line and not merely "a BAM".
+            source_programs: crate::source_program_lines(&header),
         },
     )?;
 
