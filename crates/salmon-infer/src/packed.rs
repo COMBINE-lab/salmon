@@ -49,7 +49,14 @@ pub struct PackedEqClasses {
     ///
     /// The extra trailing entry is what lets class `i`'s span be written without
     /// a special case for the last class.
-    pub starts: Vec<u32>,
+    ///
+    /// `u64` rather than `u32` because these are cumulative *incidence* counts,
+    /// not transcript ids: they grow with the whole dataset, and past
+    /// `u32::MAX` a narrower offset wrapped silently and handed the optimizer
+    /// slices belonging to other classes. One entry per class, so the width
+    /// costs ~3.5% of the packed structure at any scale — a fixed and small
+    /// price for having no ceiling at all (#1097).
+    pub starts: Vec<u64>,
     /// flat `combined_weights` (`weight/effLen`), aligned to `labels`; used by EM
     pub combined: Vec<f64>,
     /// flat raw conditional weights, aligned to `labels`; used by Gibbs
@@ -146,16 +153,6 @@ impl PackedEqClasses {
             .filter(|(g, _)| g.valid)
             .map(|(g, _)| g.txps.len())
             .sum();
-        // The CSR offsets below are `u32`. Past `u32::MAX` incidences the `as u32`
-        // cast would wrap silently and `class()` would hand the optimizer slices
-        // belonging to other classes — wrong abundances with no diagnostic. Fail
-        // loudly instead.
-        assert!(
-            total_labels <= u32::MAX as usize,
-            "equivalence-class CSR needs {total_labels} incidences, which exceeds \
-             the u32 offset limit ({}); please report this input",
-            u32::MAX
-        );
         let mut labels = Vec::with_capacity(total_labels);
         let mut starts = Vec::with_capacity(n + 1);
         let mut combined = Vec::with_capacity(total_labels);
@@ -164,7 +161,7 @@ impl PackedEqClasses {
         let mut counts = Vec::with_capacity(n);
         // The first class starts at offset 0; every later entry is appended after
         // that class's data has been copied in.
-        starts.push(0u32);
+        starts.push(0u64);
         let mut total = 0u64;
         for (group, value) in &eq.classes {
             // Classes the optimizer marked degenerate are simply not carried over.
@@ -178,7 +175,7 @@ impl PackedEqClasses {
             }
             counts.push(value.count);
             total += value.count;
-            starts.push(labels.len() as u32);
+            starts.push(labels.len() as u64);
         }
         Self {
             labels,
@@ -230,6 +227,10 @@ impl PackedEqClasses {
     ///
     /// Returning borrowed slices means no allocation and no copying: this is
     /// called once per class per iteration, millions of times per run.
+    ///
+    /// The `as usize` narrowing cannot lose anything: an offset only exceeds
+    /// `usize` on a 32-bit target, where `labels` would have had to exceed a
+    /// 16 GB allocation to get there.
     #[inline]
     pub fn class(&self, i: usize) -> (&[u32], &[f64]) {
         let s = self.starts[i] as usize;
