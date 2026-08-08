@@ -449,6 +449,28 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     profile,
                     fld_len,
                     opts.rad_codec,
+                    // Identity of the index these mappings were made against, so a
+                    // requant reports the provenance of the run that produced the
+                    // records rather than of whatever index it was handed.
+                    &salmon_rad::WriterProvenance {
+                        mapping_type: if opts.sketch {
+                            salmon_rad::MappingType::Pseudo
+                        } else {
+                            salmon_rad::MappingType::Mapping
+                        },
+                        index: Some(salmon_rad::IndexProvenance {
+                            seq_hash: salmon.info().seq_hash.clone(),
+                            name_hash: salmon.info().name_hash.clone(),
+                            seq_hash512: salmon.info().seq_hash512.clone(),
+                            name_hash512: salmon.info().name_hash512.clone(),
+                            decoy_seq_hash: salmon.info().decoy_seq_hash.clone(),
+                            decoy_name_hash: salmon.info().decoy_name_hash.clone(),
+                            // Not persisted in the index (see `info.json`), so the
+                            // mapping pass reports the same constant the reads
+                            // path does.
+                            keep_duplicates: false,
+                        }),
+                    },
                 )
                 .context("opening RAD output")?,
             )
@@ -1027,6 +1049,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         if let Some(f) = resolved_fmt {
             rw.set_library_format(f.format_id());
         }
+        // What the pass *saw*, which the records cannot show: a RAD holds only
+        // the fragments that mapped, so without these a requant would report a
+        // 100% mapping rate by construction.
+        rw.set_map_counters(salmon_rad::MapCounters {
+            num_processed: num_processed.load(Ordering::Relaxed),
+            num_dovetail: num_dovetail.load(Ordering::Relaxed),
+            num_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),
+            num_below_threshold_vm: num_below_threshold_vm.load(Ordering::Relaxed),
+            num_decoy_fragments: num_decoy.load(Ordering::Relaxed),
+        });
         rw.finalize().context("finalizing RAD output")?;
     }
 

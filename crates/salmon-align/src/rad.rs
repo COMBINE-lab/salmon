@@ -428,6 +428,160 @@ fn warn_baked_fld_overrides(
     );
 }
 
+/// What a RAD file says about the mapping pass that produced it.
+///
+/// Every field is `None` when the file does not carry it. That distinction is
+/// the point: a missing count is not a zero, and reporting it as one is how a
+/// requant ends up claiming a 100% mapping rate.
+#[derive(Clone, Debug, Default)]
+pub struct RadProvenance {
+    /// counters describing what the mapping pass saw
+    pub counters: Option<salmon_rad::MapCounters>,
+    /// identity of the index the mappings were made against
+    pub index: Option<salmon_rad::IndexProvenance>,
+    /// how the fragments were produced; `None` for a RAD that does not say
+    pub mapping_type: Option<salmon_rad::MappingType>,
+}
+
+impl RadProvenance {
+    /// The `meta_info.json` fields this file cannot support, in output order.
+    ///
+    /// Empty ⇒ the requant reproduces the mapping run's `meta_info.json`.
+    pub fn missing_meta_info_fields(&self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if self.counters.is_none() {
+            missing.extend([
+                "num_processed",
+                "percent_mapped",
+                "num_dovetail_fragments",
+                "num_fragments_filtered_vm",
+                "num_alignments_below_threshold_for_mapped_fragments_vm",
+                "num_decoy_fragments",
+            ]);
+        }
+        if self.index.is_none() {
+            missing.extend([
+                "keep_duplicates",
+                "index_seq_hash",
+                "index_name_hash",
+                "index_seq_hash512",
+                "index_name_hash512",
+                "index_decoy_seq_hash",
+                "index_decoy_name_hash",
+            ]);
+        }
+        missing
+    }
+}
+
+/// Fragment tallies accumulated while *reading* a RAD.
+///
+/// Deliberately not named after the `meta_info.json` fields they feed: `records`
+/// is how many records the file holds, which equals the mapping pass's
+/// `num_processed` only if every fragment mapped. Conflating the two is what made
+/// a requant report a 100% mapping rate; the real count comes from
+/// [`RadProvenance`].
+#[derive(Default)]
+struct RadTallies {
+    /// records present in the file
+    records: AtomicU64,
+    /// records with at least one library-compatible placement
+    mapped: AtomicU64,
+    /// mapped records placed as orphans (only one mate mapped)
+    orphans: AtomicU64,
+}
+
+impl RadTallies {
+    fn tally(&self, assigned: bool, placements: &[RadPlacement]) {
+        self.records.fetch_add(1, Ordering::Relaxed);
+        if !assigned {
+            return;
+        }
+        self.mapped.fetch_add(1, Ordering::Relaxed);
+        // A fragment's surviving mappings share one status, so the first is
+        // representative — the same definition the mapping pass counts by.
+        if matches!(
+            placements.first().map(|p| p.status),
+            Some(MateStatus::PairedEndLeft | MateStatus::PairedEndRight)
+        ) {
+            self.orphans.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Warn, once, that the RAD cannot support every `meta_info.json` field.
+///
+/// A warning rather than an error: the file is perfectly quantifiable, and
+/// refusing to use a piscem RAD over reporting metadata would be a poor trade.
+/// The same information is recorded in `meta_info.json` itself, so a result read
+/// long after the run still says which of its fields are unreliable.
+fn warn_incomplete_provenance(provenance: &RadProvenance) {
+    let missing = provenance.missing_meta_info_fields();
+    if missing.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        "this RAD does not record what the mapping pass observed, so these \
+         meta_info.json fields cannot be reproduced and are reported as \
+         placeholders: {}. In particular the mapping rate will read 100%, since \
+         a RAD holds only the fragments that mapped. RAD files written by salmon \
+         2.5.0 and later carry this information; `meta_info_complete` in \
+         meta_info.json records that this run's did not.",
+        missing.join(", ")
+    );
+}
+
+/// Read the mapping-pass provenance a salmon writer baked into the header.
+///
+/// Absent for a RAD salmon did not write, and for one written before provenance
+/// existed; the caller warns and proceeds rather than failing, since the file is
+/// still perfectly quantifiable — only its `meta_info.json` is diminished.
+fn load_provenance(file_tag_map: &TagMap) -> RadProvenance {
+    use libradicl::rad_types::TagValue;
+    let flags = match file_tag_map.get(salmon_rad::BAKED_FLAGS_TAG) {
+        Some(TagValue::U8(f)) => *f,
+        _ => 0,
+    };
+    let u64_tag = |name: &str| match file_tag_map.get(name) {
+        Some(TagValue::U64(v)) => *v,
+        _ => 0,
+    };
+    // The counter slots are reserved as zeros, so only the flag distinguishes
+    // "observed none" from "never filled in".
+    let counters = (flags & salmon_rad::BAKED_MAP_COUNTERS != 0).then(|| salmon_rad::MapCounters {
+        num_processed: u64_tag(salmon_rad::NUM_PROCESSED_TAG),
+        num_dovetail: u64_tag(salmon_rad::NUM_DOVETAIL_TAG),
+        num_filtered_vm: u64_tag(salmon_rad::NUM_FILTERED_VM_TAG),
+        num_below_threshold_vm: u64_tag(salmon_rad::NUM_BELOW_THRESH_VM_TAG),
+        num_decoy_fragments: u64_tag(salmon_rad::NUM_DECOY_FRAGMENTS_TAG),
+    });
+    let string_tag = |name: &str| match file_tag_map.get(name) {
+        Some(TagValue::String(v)) => v.clone(),
+        _ => String::new(),
+    };
+    let index = (flags & salmon_rad::BAKED_INDEX_PROV != 0).then(|| salmon_rad::IndexProvenance {
+        seq_hash: string_tag(salmon_rad::INDEX_SEQ_HASH_TAG),
+        name_hash: string_tag(salmon_rad::INDEX_NAME_HASH_TAG),
+        seq_hash512: string_tag(salmon_rad::INDEX_SEQ_HASH512_TAG),
+        name_hash512: string_tag(salmon_rad::INDEX_NAME_HASH512_TAG),
+        decoy_seq_hash: string_tag(salmon_rad::INDEX_DECOY_SEQ_HASH_TAG),
+        decoy_name_hash: string_tag(salmon_rad::INDEX_DECOY_NAME_HASH_TAG),
+        keep_duplicates: matches!(
+            file_tag_map.get(salmon_rad::KEEP_DUPLICATES_TAG),
+            Some(TagValue::U8(1))
+        ),
+    });
+    let mapping_type = match file_tag_map.get(salmon_rad::MAPPING_TYPE_TAG) {
+        Some(TagValue::String(v)) => salmon_rad::MappingType::from_str_tag(v),
+        _ => None,
+    };
+    RadProvenance {
+        counters,
+        index,
+        mapping_type,
+    }
+}
+
 /// Load a fragment-length distribution baked into the RAD header by salmon's
 /// writer, if present (the `baked_flags` byte has the FLD bit set and a non-empty
 /// `frag_length_dist` log-PMF tag exists).
@@ -520,13 +674,7 @@ fn load_baked_score_kind(file_tag_map: &TagMap) -> u8 {
 /// Run the parallel RAD pass: `ParallelRadReader` feeds MetaChunks to a worker
 /// pool that weights each fragment into the shared equivalence-class builder.
 #[allow(clippy::too_many_arguments)]
-fn run_rad_pass<R>(
-    path: &Path,
-    nthreads: usize,
-    cfg: &FragCfg,
-    num_processed: &AtomicU64,
-    num_mapped: &AtomicU64,
-) -> Result<()>
+fn run_rad_pass<R>(path: &Path, nthreads: usize, cfg: &FragCfg, tallies: &RadTallies) -> Result<()>
 where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
@@ -543,11 +691,9 @@ where
                 for mc in chunks {
                     for chunk in mc.iter() {
                         for rec in &chunk.reads {
-                            let assigned = process_rad_fragment(&rec.placements(), cfg);
-                            num_processed.fetch_add(1, Ordering::Relaxed);
-                            if assigned {
-                                num_mapped.fetch_add(1, Ordering::Relaxed);
-                            }
+                            let pls = rec.placements();
+                            let assigned = process_rad_fragment(&pls, cfg);
+                            tallies.tally(assigned, &pls);
                         }
                     }
                 }
@@ -976,8 +1122,7 @@ fn run_rad_eq_and_bias_pass<R>(
     pos: bool,
     cond_gc_bins: usize,
     gc_bins: usize,
-    num_processed: &AtomicU64,
-    num_mapped: &AtomicU64,
+    tallies: &RadTallies,
 ) -> Result<(
     Option<(SBModel, SBModel)>,
     Option<GcFragModel>,
@@ -1004,10 +1149,7 @@ where
                         for rec in &chunk.reads {
                             let pls = rec.placements();
                             let assigned = process_rad_fragment(&pls, cfg);
-                            num_processed.fetch_add(1, Ordering::Relaxed);
-                            if assigned {
-                                num_mapped.fetch_add(1, Ordering::Relaxed);
-                            }
+                            tallies.tally(assigned, &pls);
                             collect_bias_fragment(&pls, bias_cfg, &mut local);
                         }
                     }
@@ -1048,6 +1190,11 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // Header: profile, reference names + lengths (from the RAD file tags).
     let (_reader, prelude, file_tag_map) = open_prelude(rad_path)?;
     let profile = salmon_rad::detect_input_profile(&prelude)?;
+    // What the mapping pass recorded about itself. Absent for a RAD salmon did
+    // not write; the run proceeds either way, but its `meta_info.json` then says
+    // which fields it could not honour.
+    let provenance = load_provenance(&file_tag_map);
+    warn_incomplete_provenance(&provenance);
     let names: Vec<String> = prelude.hdr.ref_names.clone();
     let lengths = ref_lengths_from_tags(&prelude, &file_tag_map)?;
     let num_refs = names.len();
@@ -1268,8 +1415,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     });
 
     let eq_builder = EquivalenceClassBuilder::new();
-    let num_processed = AtomicU64::new(0);
-    let num_mapped = AtomicU64::new(0);
+    let tallies = RadTallies::default();
 
     // When the abundances that weight bias collection are known up FRONT (baked by
     // the write run / `--deterministic`), eq-building and bias collection can share
@@ -1327,8 +1473,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                     opts.pos_bias,
                     opts.cond_gc_bins,
                     opts.gc_bins,
-                    &num_processed,
-                    &num_mapped,
+                    &tallies,
                 )?,
                 RadInputProfile::Salmon(_) => run_rad_eq_and_bias_pass::<SalmonBulkRecord>(
                     rad_path,
@@ -1340,33 +1485,29 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                     opts.pos_bias,
                     opts.cond_gc_bins,
                     opts.gc_bins,
-                    &num_processed,
-                    &num_mapped,
+                    &tallies,
                 )?,
             };
             Some(obs)
         } else {
             match profile {
-                RadInputProfile::PiscemBulk => run_rad_pass::<PiscemBulkReadRecord>(
-                    rad_path,
-                    nthreads,
-                    &cfg,
-                    &num_processed,
-                    &num_mapped,
-                )?,
-                RadInputProfile::Salmon(_) => run_rad_pass::<SalmonBulkRecord>(
-                    rad_path,
-                    nthreads,
-                    &cfg,
-                    &num_processed,
-                    &num_mapped,
-                )?,
+                RadInputProfile::PiscemBulk => {
+                    run_rad_pass::<PiscemBulkReadRecord>(rad_path, nthreads, &cfg, &tallies)?
+                }
+                RadInputProfile::Salmon(_) => {
+                    run_rad_pass::<SalmonBulkRecord>(rad_path, nthreads, &cfg, &tallies)?
+                }
             }
             None
         }
     };
-    let num_processed = num_processed.into_inner();
-    let num_mapped = num_mapped.into_inner();
+    let num_records = tallies.records.into_inner();
+    let num_mapped = tallies.mapped.into_inner();
+    let num_orphan = tallies.orphans.into_inner();
+    // How many fragments the *mapper* saw, which only the header can say; falling
+    // back to the record count is what yields a 100% rate, so it is reported as
+    // such (see `warn_incomplete_provenance`).
+    let num_processed = provenance.counters.map_or(num_records, |c| c.num_processed);
     tracing::info!("mapped {num_mapped} / {num_processed} fragments from RAD");
 
     // ---- inference ---------------------------------------------------------
@@ -1608,6 +1749,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         counts,
         num_processed,
         num_mapped,
+        num_orphan: Some(num_orphan),
+        provenance,
         inference_truncated_mass,
         num_eq_classes,
         frag_len_mean: fld.mean(),

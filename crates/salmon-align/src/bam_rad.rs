@@ -146,6 +146,12 @@ pub fn write_alignment_rad(
         RadProfile::SelectiveAlignment,
         opts.fld_max + 1,
         codec,
+        // Fragments came from an external aligner, and there is no salmon index
+        // behind them; a reader reads the absent index as "unknown".
+        &salmon_rad::WriterProvenance {
+            mapping_type: salmon_rad::MappingType::Alignment,
+            index: None,
+        },
     )?;
 
     let fld = DiscreteFld::new(opts.fld_max);

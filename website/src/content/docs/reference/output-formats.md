@@ -267,7 +267,7 @@ sequence of `[u32 nbytes][u32 nrec][records…]` chunks) is libradicl's contract
 salmon writes a bulk profile that piscem `map-bulk` can also produce and read.
 See the [RAD I/O guide](../../guides/rad-and-determinism/) for usage.
 
-Two salmon-relevant details on top of the base format:
+Three salmon-relevant details on top of the base format:
 
 - **Baked header tags.** A salmon-written RAD records, as file-level tags, an
   order-independent fragment-length distribution, initial abundances, and the
@@ -275,6 +275,35 @@ Two salmon-relevant details on top of the base format:
   these to quantify in a single pass and to apply `-l A` concordance filtering
   without re-inference; a piscem RAD carries none of them and is handled with an
   extra derivation pass.
+- **Mapping-pass provenance.** A RAD holds only the fragments that *mapped*, so
+  nothing in the records can say how many were *observed*. Without that, a
+  requant reports a 100% mapping rate by construction. salmon therefore records
+  what its mapping pass saw, as file-level tags:
+
+  | tag | meaning |
+  | --- | --- |
+  | `num_processed` | fragments observed, mapped or not |
+  | `num_dovetail_fragments` | fragments whose mappings were dovetailed |
+  | `num_fragments_filtered_vm` | fragments dropped by the score filter |
+  | `num_alignments_below_threshold_vm` | below-threshold alignments among mapped fragments |
+  | `num_decoy_fragments` | fragments whose best mapping was to a decoy |
+  | `index_seq_hash`, `index_name_hash`, and the `512` / `decoy` variants | identity of the index the mappings were made against |
+  | `keep_duplicates` | how that index was built |
+  | `mapping_type` | `mapping`, `pseudo` or `alignment` |
+
+  The counters are only final at end of pass, so their slots are reserved and
+  backpatched at finalize; the `BAKED_MAP_COUNTERS` bit in `baked_flags` says
+  they were filled, since a reserved slot and a genuine count of zero are
+  otherwise indistinguishable. The index identity is known up front and written
+  directly, flagged by `BAKED_INDEX_PROV`. `mapping_type` is recorded rather than
+  inferred from the record profile, because a BAM-derived RAD is written in the
+  selective-alignment profile although its fragments came from an aligner.
+
+  Quantifying a RAD that lacks these — a piscem RAD, or one written by salmon
+  before 2.5.0 — still works. salmon warns, names the affected fields, and sets
+  `meta_info_complete: false` in `meta_info.json` with the list repeated in
+  `incomplete_meta_info_fields`, so a result read long after the run still says
+  which of its numbers are placeholders.
 - **Chunk compression (`chunk_codec`).** With compression enabled (the default;
   see `--radCompress`), each chunk's record payload is compressed independently
   and the `nbytes` field is the **compressed** size; the uncompressed size is

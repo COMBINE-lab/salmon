@@ -34,6 +34,14 @@ fn write_rad(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Provenance for RADs these tests write, standing in for a mapping pass.
+fn prov() -> salmon_rad::WriterProvenance {
+    salmon_rad::WriterProvenance {
+        mapping_type: salmon_rad::MappingType::Mapping,
+        index: None,
+    }
+}
+
 fn write_rad_codec(
     path: &Path,
     ref_names: &[&str],
@@ -43,8 +51,17 @@ fn write_rad_codec(
     baked_log_pmf: Option<&[f64]>,
     codec: salmon_rad::ChunkCodec,
 ) {
-    let mut w =
-        RadOutputWriter::create(path, ref_names, ref_lengths, true, profile, 1024, codec).unwrap();
+    let mut w = RadOutputWriter::create(
+        path,
+        ref_names,
+        ref_lengths,
+        true,
+        profile,
+        1024,
+        codec,
+        &prov(),
+    )
+    .unwrap();
     if let Some(pmf) = baked_log_pmf {
         w.set_frag_length_dist(pmf);
     }
@@ -649,6 +666,7 @@ fn auto_orientation_derives_fld_from_majority_bucket() {
         RadProfile::Sketch,
         1024,
         salmon_rad::ChunkCodec::None,
+        &prov(),
     )
     .unwrap();
     let ctx: SalmonBulkContext = *w.context();
@@ -725,6 +743,7 @@ fn baked_library_format_is_authoritative_under_auto() {
         RadProfile::Sketch,
         1024,
         salmon_rad::ChunkCodec::None,
+        &prov(),
     )
     .unwrap();
     let ctx: SalmonBulkContext = *w.context();

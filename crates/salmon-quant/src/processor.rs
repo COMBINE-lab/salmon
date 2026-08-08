@@ -457,6 +457,17 @@ fn record_discrete(sh: &Shared, maps: &[ScoredMapping], acc: &salmon_model::Disc
         return;
     }
     sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+    // Same orphan definition `record` uses: a fragment's surviving mappings share
+    // one status, so the first is representative. Counting it here is what lets
+    // `--deterministic` report the concordant/orphan split in
+    // `lib_format_counts.json` instead of calling every mapped fragment
+    // concordant.
+    if matches!(
+        maps[0].status,
+        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+    ) {
+        sh.num_orphan.fetch_add(1, Ordering::Relaxed);
+    }
     // A uniquely-mapped proper pair unambiguously implies its fragment length and
     // orientation; its observed format also feeds order-independent `-l A`
     // detection. Uses the raw mapping (like the RAD records written this pass, and

@@ -189,6 +189,152 @@ pub const INITIAL_ABUNDANCES_TAG: &str = "initial_abundances";
 /// concordance filtering under `-l A` without re-inferring the type (the write
 /// run already detected it). Absent ⇒ the reader auto-detects from the RAD.
 pub const LIBRARY_FORMAT_TAG: &str = "library_format";
+// ---------------------------------------------------------------------------
+// Mapping-pass provenance.
+//
+// The counters and index identity below are observations of the *mapping* pass,
+// not of the fragments it emitted, so a reader cannot recover them from the
+// records: a RAD holds only the fragments that mapped. Without them a requant
+// can say how many fragments it quantified but not how many were seen, so it
+// reports a 100% mapping rate by construction.
+//
+// Two groups, because they become known at different times. The index identity
+// is known before the first record is written, so it is written directly. The
+// counters are only final once the pass ends, so their slots are reserved and
+// backpatched at finalize, exactly like the FLD (see [`BAKED_MAP_COUNTERS`]).
+// ---------------------------------------------------------------------------
+
+/// File-tag name: total fragments the mapping pass *observed*, mapped or not.
+///
+/// The one quantity a RAD reader can never derive, and the one every mapping-rate
+/// figure depends on.
+pub const NUM_PROCESSED_TAG: &str = "num_processed";
+/// File-tag name: fragments whose mappings were dovetailed.
+pub const NUM_DOVETAIL_TAG: &str = "num_dovetail_fragments";
+/// File-tag name: fragments dropped by the mapping-score filter.
+pub const NUM_FILTERED_VM_TAG: &str = "num_fragments_filtered_vm";
+/// File-tag name: alignments scoring below threshold among mapped fragments.
+pub const NUM_BELOW_THRESH_VM_TAG: &str = "num_alignments_below_threshold_vm";
+/// File-tag name: fragments whose best mapping was to a decoy.
+///
+/// Decoy mappings are filtered before records are written, so this count is
+/// unrecoverable from the file itself.
+pub const NUM_DECOY_FRAGMENTS_TAG: &str = "num_decoy_fragments";
+/// File-tag names identifying the index the mappings were made against.
+///
+/// Recorded from the mapping pass rather than read from whatever index the
+/// requant happens to be given: these describe the index that actually produced
+/// the records, which is what the provenance in `meta_info.json` claims.
+pub const INDEX_SEQ_HASH_TAG: &str = "index_seq_hash";
+/// See [`INDEX_SEQ_HASH_TAG`].
+pub const INDEX_NAME_HASH_TAG: &str = "index_name_hash";
+/// See [`INDEX_SEQ_HASH_TAG`].
+pub const INDEX_SEQ_HASH512_TAG: &str = "index_seq_hash512";
+/// See [`INDEX_SEQ_HASH_TAG`].
+pub const INDEX_NAME_HASH512_TAG: &str = "index_name_hash512";
+/// See [`INDEX_SEQ_HASH_TAG`].
+pub const INDEX_DECOY_SEQ_HASH_TAG: &str = "index_decoy_seq_hash";
+/// See [`INDEX_SEQ_HASH_TAG`].
+pub const INDEX_DECOY_NAME_HASH_TAG: &str = "index_decoy_name_hash";
+/// File-tag name: whether the index was built with `--keepDuplicates`.
+pub const KEEP_DUPLICATES_TAG: &str = "keep_duplicates";
+
+/// File-tag name: how the fragments in this RAD were produced.
+///
+/// Recorded explicitly rather than inferred from the record profile, because the
+/// two do not agree: a BAM-derived RAD is written in the selective-alignment
+/// profile but its fragments came from an aligner, not from salmon's mapper.
+pub const MAPPING_TYPE_TAG: &str = "mapping_type";
+
+/// How the fragments in a RAD were produced; `meta_info.json`'s `mapping_type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MappingType {
+    /// salmon's selective-alignment mapper
+    Mapping,
+    /// salmon's sketch (pseudoalignment) mapper
+    Pseudo,
+    /// an external aligner, via a BAM
+    Alignment,
+}
+
+impl MappingType {
+    /// The string salmon reports in `meta_info.json`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mapping => "mapping",
+            Self::Pseudo => "pseudo",
+            Self::Alignment => "alignment",
+        }
+    }
+
+    /// Parse the tag written by [`Self::as_str`]; `None` for anything else.
+    pub fn from_str_tag(s: &str) -> Option<Self> {
+        match s {
+            "mapping" => Some(Self::Mapping),
+            "pseudo" => Some(Self::Pseudo),
+            "alignment" => Some(Self::Alignment),
+            _ => None,
+        }
+    }
+}
+
+/// What a writer records about the pass that produced a RAD.
+///
+/// Grouped rather than passed as loose arguments because the parts are not
+/// independent: a BAM-derived RAD has a `mapping_type` but no index behind it,
+/// and `None` there must reach the reader as "unknown" rather than as empty
+/// strings that look like real hashes.
+#[derive(Clone, Debug)]
+pub struct WriterProvenance {
+    /// how the fragments were produced
+    pub mapping_type: MappingType,
+    /// identity of the index the mappings were made against, when there is one
+    pub index: Option<IndexProvenance>,
+}
+
+/// Identity of the index a mapping pass ran against, recorded in the RAD.
+///
+/// Lets a requant report the same index provenance the original run did. It has
+/// to be recorded rather than read back from the index at requant time, both
+/// because the `--rad` path loads no index at all and because the user may hand
+/// it a different one than the mappings were made against.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexProvenance {
+    /// hash of the reference sequences
+    pub seq_hash: String,
+    /// hash of the reference names
+    pub name_hash: String,
+    /// 512-bit form of [`Self::seq_hash`]
+    pub seq_hash512: String,
+    /// 512-bit form of [`Self::name_hash`]
+    pub name_hash512: String,
+    /// hash of the decoy sequences (empty when the index has no decoys)
+    pub decoy_seq_hash: String,
+    /// hash of the decoy names (empty when the index has no decoys)
+    pub decoy_name_hash: String,
+    /// whether the index was built with `--keepDuplicates`
+    pub keep_duplicates: bool,
+}
+
+/// Counters describing what a mapping pass *saw*, as opposed to what it wrote.
+///
+/// Every field here is unrecoverable from the records: a RAD contains only the
+/// fragments that mapped, so without these a reader cannot report a mapping rate
+/// (see [`NUM_PROCESSED_TAG`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapCounters {
+    /// total fragments observed, mapped or not
+    pub num_processed: u64,
+    /// fragments whose mappings were dovetailed
+    pub num_dovetail: u64,
+    /// fragments dropped by the mapping-score filter
+    pub num_filtered_vm: u64,
+    /// alignments below threshold among mapped fragments
+    pub num_below_threshold_vm: u64,
+    /// fragments whose best mapping was to a decoy
+    pub num_decoy_fragments: u64,
+}
+
 /// [`BAKED_FLAGS_TAG`] bit: a fragment-length distribution is present.
 pub const BAKED_FLD: u8 = 0x01;
 /// [`BAKED_FLAGS_TAG`] bit: initial abundance estimates are present.
@@ -207,6 +353,13 @@ pub const BAKED_SCORE_KIND: u8 = 0x08;
 /// must never require it, or they would reject legitimate files from other
 /// tools.
 pub const WRITE_COMPLETE: u8 = 0x10;
+/// [`BAKED_FLAGS_TAG`] bit: the mapping-pass counters hold real values.
+///
+/// Distinguishes "the pass observed zero of these" from "nobody filled the
+/// slot", which a zero alone cannot: the slots are reserved as zeros.
+pub const BAKED_MAP_COUNTERS: u8 = 0x20;
+/// [`BAKED_FLAGS_TAG`] bit: the index-identity tags are present.
+pub const BAKED_INDEX_PROV: u8 = 0x40;
 
 /// File-tag name: how a reader should interpret the per-hit `alignment_score`
 /// (present only in the selective-alignment profile). A `u8`:

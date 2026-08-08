@@ -280,6 +280,16 @@ pub struct AlignQuantResult {
     pub counts: Vec<f64>,
     pub num_processed: u64,
     pub num_mapped: u64,
+    /// mapped fragments placed as orphans (only one mate mapped).
+    ///
+    /// `Some` whenever the records were tallied, which is any RAD input —
+    /// orphan status is in the records themselves, so this works for a piscem
+    /// RAD too, independently of whether the file carries salmon's provenance.
+    /// `None` for a BAM input, which this path does not tally.
+    pub num_orphan: Option<u64>,
+    /// what the RAD says about the mapping pass that produced it; empty for a
+    /// BAM input, which has no RAD provenance to read
+    pub provenance: crate::rad::RadProvenance,
     /// fragment mass dropped in the final min-alpha redistribution (every member
     /// of an equivalence class truncated); normally 0.
     pub inference_truncated_mass: f64,
@@ -1926,6 +1936,10 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     timer.mark("posterior");
 
     let result = AlignQuantResult {
+        // A BAM input carries no RAD provenance, and this path does not tally
+        // orphans; both are reported as unknown rather than as zero.
+        num_orphan: None,
+        provenance: crate::rad::RadProvenance::default(),
         names,
         lengths,
         eff_lengths,
@@ -1997,7 +2011,12 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         pos_bias_correct: bool,
         num_bias_bins: usize,
         mapping_type: String,
-        // index hashes are empty in alignment mode (no salmon index)
+        /// how the index was built; known only from a salmon RAD's provenance,
+        /// omitted (rather than guessed) for a BAM input
+        #[serde(skip_serializing_if = "Option::is_none")]
+        keep_duplicates: Option<bool>,
+        // empty in alignment mode (no salmon index); recovered from the RAD's
+        // provenance when quantifying one salmon wrote
         index_seq_hash: String,
         index_name_hash: String,
         index_seq_hash512: String,
@@ -2019,7 +2038,20 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_decoy_fragments: u64,
         inference_truncated_mass: f64,
         num_bootstraps: u32,
+        /// mapped fragments placed as orphans; counted from RAD records, so
+        /// omitted for a BAM input where this path does not tally them
+        #[serde(skip_serializing_if = "Option::is_none")]
+        num_orphan: Option<u64>,
         range_factorization_bins: u32,
+        /// whether every field above is a true observation of the run.
+        ///
+        /// `false` means the RAD quantified from did not record what its mapping
+        /// pass observed, so the fields named in `incomplete_meta_info_fields`
+        /// are placeholders — most visibly `percent_mapped`, which then reads
+        /// 100% because a RAD holds only the fragments that mapped.
+        meta_info_complete: bool,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        incomplete_meta_info_fields: Vec<&'static str>,
         num_em_iterations: u32,
         em_converged: bool,
         detected_library_type: Option<String>,
@@ -2040,13 +2072,25 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     } else {
         vec!["gzipped".to_string()]
     };
+    // A salmon-written RAD records what its mapping pass saw; anything else
+    // leaves these unknown, which the reader has already warned about and which
+    // `meta_info_complete` records for whoever reads the results later.
+    let counters = res.provenance.counters;
+    let index_prov = res.provenance.index.clone().unwrap_or_default();
+    let incomplete_meta_info_fields = res.provenance.missing_meta_info_fields();
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),
         samp_type: "none".to_string(),
         opt_type: if opts.em.use_vbem { "vb" } else { "em" }.to_string(),
         quant_errors: vec![],
         num_libraries: 1,
-        library_types: vec![opts.lib_type.clone()],
+        // The format actually applied, not the `-l A` that requested detection:
+        // reads mode reports the resolved one, and a RAD carries it baked, so a
+        // requant can report it too.
+        library_types: vec![res
+            .detected_library_type
+            .clone()
+            .unwrap_or_else(|| opts.lib_type.clone())],
         frag_dist_length: res.frag_len_dist.len(),
         frag_length_mean: res.frag_len_mean,
         frag_length_sd: res.frag_len_sd,
@@ -2055,13 +2099,21 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         gc_bias_correct: opts.gc_bias,
         pos_bias_correct: opts.pos_bias,
         num_bias_bins: 0,
-        mapping_type: "alignment".to_string(),
-        index_seq_hash: String::new(),
-        index_name_hash: String::new(),
-        index_seq_hash512: String::new(),
-        index_name_hash512: String::new(),
-        index_decoy_seq_hash: String::new(),
-        index_decoy_name_hash: String::new(),
+        // What the RAD says its producer was; a BAM input has no RAD to ask, and
+        // an older or foreign RAD does not record it, so both fall back to the
+        // value this path has always reported.
+        mapping_type: res
+            .provenance
+            .mapping_type
+            .map_or("alignment", |m| m.as_str())
+            .to_string(),
+        keep_duplicates: res.provenance.index.as_ref().map(|p| p.keep_duplicates),
+        index_seq_hash: index_prov.seq_hash,
+        index_name_hash: index_prov.name_hash,
+        index_seq_hash512: index_prov.seq_hash512,
+        index_name_hash512: index_prov.name_hash512,
+        index_decoy_seq_hash: index_prov.decoy_seq_hash,
+        index_decoy_name_hash: index_prov.decoy_name_hash,
         num_valid_targets: res.names.len(),
         num_decoy_targets: 0,
         num_eq_classes: res.num_eq_classes,
@@ -2070,13 +2122,17 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         length_classes: res.length_classes.clone(),
         num_processed: res.num_processed,
         num_mapped: res.num_mapped,
-        num_dovetail_fragments: 0,
-        num_fragments_filtered_vm: 0,
-        num_alignments_below_threshold_for_mapped_fragments_vm: 0,
+        num_dovetail_fragments: counters.map_or(0, |c| c.num_dovetail),
+        num_fragments_filtered_vm: counters.map_or(0, |c| c.num_filtered_vm),
+        num_alignments_below_threshold_for_mapped_fragments_vm: counters
+            .map_or(0, |c| c.num_below_threshold_vm),
         percent_mapped: pct,
         num_decoy_fragments: 0,
         inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
+        num_orphan: res.num_orphan,
+        meta_info_complete: incomplete_meta_info_fields.is_empty(),
+        incomplete_meta_info_fields,
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
@@ -2092,6 +2148,42 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         dir.join("aux_info").join("meta_info.json"),
         serde_json::to_string_pretty(&meta)?,
     )?;
+
+    // lib_format_counts.json — reads mode writes one, so a RAD requant should
+    // too, or a pipeline that reads it breaks on the requant of its own output.
+    // The concordant/orphan split comes from the records' fragment types, which
+    // is why it is available here at all.
+    if let Some(num_orphan) = res.num_orphan {
+        #[derive(Serialize)]
+        struct LibCounts {
+            read_files: Vec<String>,
+            expected_format: String,
+            compatible_fragment_ratio: f64,
+            num_compatible_fragments: u64,
+            num_assigned_fragments: u64,
+            num_frags_with_concordant_consistent_mappings: u64,
+            num_frags_with_inconsistent_or_orphan_mappings: u64,
+            strand_mapping_bias: f64,
+        }
+        let counts = LibCounts {
+            // The RAD is the input; the reads that produced it are not known here.
+            read_files: vec![],
+            expected_format: res
+                .detected_library_type
+                .clone()
+                .unwrap_or_else(|| opts.lib_type.clone()),
+            compatible_fragment_ratio: 1.0,
+            num_compatible_fragments: res.num_mapped,
+            num_assigned_fragments: res.num_mapped,
+            num_frags_with_concordant_consistent_mappings: res.num_mapped - num_orphan,
+            num_frags_with_inconsistent_or_orphan_mappings: num_orphan,
+            strand_mapping_bias: 0.0,
+        };
+        std::fs::write(
+            dir.join("lib_format_counts.json"),
+            serde_json::to_string_pretty(&counts)?,
+        )?;
+    }
 
     // aux_info/bootstrap/{names.tsv.gz, bootstraps.gz}: posterior samples in the
     // same layout reads mode uses (gzipped tab-separated names; gzipped raw

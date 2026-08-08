@@ -357,6 +357,13 @@ struct MetaInfo {
     num_bootstraps: u32,
     /// mapped fragments placed as orphans (only one mate mapped)
     num_orphan: u64,
+    /// whether every field here is a true observation of the run.
+    ///
+    /// Always `true` on this path: it mapped the reads itself, so nothing is
+    /// inferred. A requant from a RAD that does not record what its mapping pass
+    /// observed reports `false` and names the affected fields (see the `--rad`
+    /// path in `salmon-align`).
+    meta_info_complete: bool,
     /// range-factorization bins used for equivalence classes (0 = disabled)
     range_factorization_bins: u32,
     /// EM/VBEM convergence
@@ -446,6 +453,7 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
         num_orphan: res.num_orphan,
+        meta_info_complete: true,
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,

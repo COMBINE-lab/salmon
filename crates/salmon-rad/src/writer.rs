@@ -63,6 +63,12 @@ pub struct RadOutputWriter {
     /// non-default score interpretation (see [`crate::SCORE_KIND_TAG`]); only the
     /// scored (SA) profile reserves the slot, so set only in that profile.
     pending_score_kind: Option<u8>,
+    /// Mapping-pass counters, known only once the pass ends.
+    pending_counters: Option<crate::MapCounters>,
+    /// Whether index identity was written at create time. The tags are written
+    /// up front but `baked_flags` is only patched at finalize, so this carries
+    /// the fact across; without it a reader would ignore the tags it can see.
+    has_index_prov: bool,
     /// chunk compression codec applied by worker buffers (advertised in the header).
     codec: ChunkCodec,
 }
@@ -93,9 +99,17 @@ impl RadOutputWriter {
         profile: RadProfile,
         fld_len: usize,
         codec: ChunkCodec,
+        provenance: &crate::WriterProvenance,
     ) -> anyhow::Result<Self> {
-        let (prelude, file_tag_map): (RadPrelude, _) =
-            schema::build_prelude(profile, is_paired, ref_names, ref_lengths, fld_len, codec);
+        let (prelude, file_tag_map): (RadPrelude, _) = schema::build_prelude(
+            profile,
+            is_paired,
+            ref_names,
+            ref_lengths,
+            fld_len,
+            codec,
+            provenance,
+        );
         // Write to a sibling temporary path and rename onto `path` only once the
         // run has finalized successfully. A partial RAD therefore never appears
         // under the name the user asked for, so a later `--rad` run cannot pick
@@ -124,6 +138,8 @@ impl RadOutputWriter {
             pending_abund: None,
             pending_libfmt: None,
             pending_score_kind: None,
+            pending_counters: None,
+            has_index_prov: provenance.index.is_some(),
             codec,
         })
     }
@@ -165,6 +181,14 @@ impl RadOutputWriter {
     /// the header at finalize. Only valid on the scored (selective-alignment)
     /// profile, whose prelude reserves the slot; a no-op-worthy default
     /// ([`crate::SCORE_KIND_AS`]) need not be set (absent ⇒ that default).
+    /// Record what the mapping pass observed, to be baked at finalize.
+    ///
+    /// Without this a requant cannot report a mapping rate: the file holds only
+    /// the fragments that mapped, so it would report 100% by construction.
+    pub fn set_map_counters(&mut self, counters: crate::MapCounters) {
+        self.pending_counters = Some(counters);
+    }
+
     pub fn set_score_kind(&mut self, score_kind: u8) {
         self.pending_score_kind = Some(score_kind);
     }
@@ -195,6 +219,8 @@ impl RadOutputWriter {
         let pending_abund = self.pending_abund;
         let pending_libfmt = self.pending_libfmt;
         let pending_score_kind = self.pending_score_kind;
+        let pending_counters = self.pending_counters;
+        let has_index_prov = self.has_index_prov;
         // Unwrap the concurrent wrapper back into a plain writer; this succeeds
         // only once every worker handle is gone, which is what makes the
         // in-place patching below safe.
@@ -226,6 +252,21 @@ impl RadOutputWriter {
                 w.backpatch_file_tag_value(crate::SCORE_KIND_TAG, &TagValue::U8(k))?;
                 flags |= BAKED_SCORE_KIND;
             }
+        }
+        if let Some(c) = pending_counters {
+            for (tag, value) in [
+                (crate::NUM_PROCESSED_TAG, c.num_processed),
+                (crate::NUM_DOVETAIL_TAG, c.num_dovetail),
+                (crate::NUM_FILTERED_VM_TAG, c.num_filtered_vm),
+                (crate::NUM_BELOW_THRESH_VM_TAG, c.num_below_threshold_vm),
+                (crate::NUM_DECOY_FRAGMENTS_TAG, c.num_decoy_fragments),
+            ] {
+                w.backpatch_file_tag_value(tag, &TagValue::U64(value))?;
+            }
+            flags |= crate::BAKED_MAP_COUNTERS;
+        }
+        if has_index_prov {
+            flags |= crate::BAKED_INDEX_PROV;
         }
         // Reaching here means every chunk was written and the header is about to
         // be patched, so record completeness alongside whatever else was baked.
