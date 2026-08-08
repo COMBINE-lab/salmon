@@ -1229,9 +1229,16 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> Fr
     let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
     let mut sp_geom: Vec<(usize, usize, bool)> = Vec::with_capacity(placements.len());
     let mut sp_pl: Vec<usize> = Vec::with_capacity(placements.len());
-    // Whether any surviving placement paired both mates; folded into the loop
-    // below, which already computes `proper` for its own use.
-    let mut any_proper = false;
+    // Orphan bookkeeping, folded into the loop below so it costs two register
+    // ORs per surviving placement and no second pass.
+    //
+    // Deliberately *not* keyed on `proper`, which is `idxs.len() >= 2 && flen > 0`
+    // and so would call a both-mates placement with no reported fragment length an
+    // orphan. This mirrors `frag_format`, the canonical status derivation, which
+    // looks only at how many mates were placed and at the `0x1` multi-segment flag
+    // — the same signal #1057 turned on.
+    let mut any_both_mates = false;
+    let mut any_orphan = false;
     for (pi, pl) in placements.iter().enumerate() {
         let tid = pl.tid;
         let idxs = &pl.idxs;
@@ -1289,7 +1296,13 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> Fr
                 aux += ctx.incompat_prior.ln();
             }
         }
-        any_proper |= proper;
+        if idxs.len() >= 2 {
+            any_both_mates = true;
+        } else {
+            // A lone record is an orphan only if it belongs to a multi-segment
+            // template; a genuine single-end read has no mate to be missing.
+            any_orphan |= recs[idxs[0]].is_paired;
+        }
         sp_tid.push(tid);
         sp_eq.push(aux);
         sp_online.push(aux + start_pos);
@@ -1301,8 +1314,11 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> Fr
     if sp_tid.is_empty() {
         return FragmentOutcome::Unmapped;
     }
-    // Single-end libraries have no mate to be missing, so they are never orphans.
-    let outcome = if ctx.paired_lib && !any_proper {
+    // The fragment counts as an orphan only when nothing paired both mates, so a
+    // fragment that is a proper pair on one transcript and an orphan on another
+    // counts as a pair — the same "most complete status wins" rule the RAD
+    // fragment-level type uses.
+    let outcome = if any_orphan && !any_both_mates {
         FragmentOutcome::MappedOrphan
     } else {
         FragmentOutcome::Mapped
