@@ -337,6 +337,13 @@ carried, together with the upstream that could not supply it and why:
 
 `source` is `index`, `rad` or `bam`. The point is to distinguish "this run
 observed nothing" from "nobody could tell this run", and to name what to fix.
+
+`@PG` is optional in SAM and many tools write none, so an alignment input with no
+`@PG` chain is an ordinary outcome rather than an error — but it is still recorded
+(`alignment_provenance`, source `bam`), as is a chain that names its programs
+without carrying any `CL` field
+(`alignment_provenance[].command_line`). Both are reported identically whether
+the alignments are read from a BAM directly or through a BAM-derived RAD.
 Fields that are *not applicable* are not listed: alignment mode has no salmon
 index, so its absent index hashes are by design rather than a gap.
 

@@ -1442,14 +1442,16 @@ pub struct SourceProgram {
 /// Render a BAM header's `@PG` chain as verbatim SAM lines.
 ///
 /// Kept as text on the way into a RAD so nothing the aligner recorded is dropped
-/// in transit; [`parse_source_programs`] reads them back.
+/// in transit; [`parse_source_programs`] reads them back. Empty when the header
+/// has no `@PG` records at all, which is common enough — plenty of tools write
+/// none — that callers must treat it as ordinary rather than exceptional.
 pub fn source_program_lines(header: &noodles_sam::Header) -> Vec<String> {
     header
         .programs()
         .as_ref()
         .iter()
         .map(|(id, program)| {
-            let mut line = format!("@PG\tID:{}", String::from_utf8_lossy(id.as_ref()));
+            let mut line = format!("@PG\tID:{}", sanitize_header_value(id.as_ref()));
             // Every tag the aligner wrote is carried through, standard or not:
             // this is provenance, not a schema to validate against.
             for (tag, value) in program.other_fields() {
@@ -1457,12 +1459,22 @@ pub fn source_program_lines(header: &noodles_sam::Header) -> Vec<String> {
                 line.push_str(&format!(
                     "\t{}:{}",
                     String::from_utf8_lossy(t),
-                    String::from_utf8_lossy(value.as_ref())
+                    sanitize_header_value(value.as_ref())
                 ));
             }
             line
         })
         .collect()
+}
+
+/// Flatten the separators a SAM header value must not contain.
+///
+/// The spec forbids tabs and newlines here, but a malformed file can carry them,
+/// and they are exactly the two characters this round trip is framed by: a tab
+/// would invent a field and a newline would split one record into two. Replacing
+/// them keeps a bad header from silently corrupting the neighbouring provenance.
+fn sanitize_header_value(value: &[u8]) -> String {
+    String::from_utf8_lossy(value).replace(['\t', '\n', '\r'], " ")
 }
 
 /// Parse `@PG` lines produced by [`source_program_lines`] back into records.
@@ -2196,12 +2208,30 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     let alignment_provenance = crate::parse_source_programs(&res.source_programs);
     let from_alignments = res.source == FragmentSource::Bam
         || res.provenance.mapping_type == Some(salmon_rad::MappingType::Alignment);
-    if from_alignments && alignment_provenance.is_empty() {
-        incomplete_meta_info_fields.push(salmon_core::MissingMetaField::bam(
-            "alignment_provenance",
-            "the source BAM's header carries no @PG records, so how its \
-             alignments were produced is not recorded anywhere in the file",
-        ));
+    if from_alignments {
+        // `@PG` is optional in SAM and plenty of tools omit it, so its absence is
+        // an ordinary outcome — but it is still the record of how the alignments
+        // came about, and a reader deserves to be told it was unavailable rather
+        // than left to wonder whether salmon simply did not look.
+        if alignment_provenance.is_empty() {
+            incomplete_meta_info_fields.push(salmon_core::MissingMetaField::bam(
+                "alignment_provenance",
+                "the source BAM's header carries no @PG records, so how its \
+                 alignments were produced is not recorded anywhere in the file",
+            ));
+        } else if alignment_provenance
+            .iter()
+            .all(|p| p.command_line.is_none())
+        {
+            // The chain identifies the programs but not how they were invoked,
+            // which is the part that actually reproduces the alignments.
+            incomplete_meta_info_fields.push(salmon_core::MissingMetaField::bam(
+                "alignment_provenance[].command_line",
+                "the source BAM's @PG records name the programs but none carries \
+                 a CL field, so the commands that produced the alignments are not \
+                 recorded in the file",
+            ));
+        }
     }
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),

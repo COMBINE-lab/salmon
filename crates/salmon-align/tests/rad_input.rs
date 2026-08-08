@@ -982,3 +982,60 @@ fn source_program_lines_parse_back() {
     assert_eq!(progs.len(), 1);
     assert_eq!(progs[0].id, "x");
 }
+
+/// `@PG` is optional in SAM, and plenty of tools write none. An absent chain
+/// must be an ordinary empty result, not a panic or a bogus record.
+#[test]
+fn absent_pg_chain_yields_no_programs() {
+    assert!(salmon_align::parse_source_programs(&[]).is_empty());
+    assert!(salmon_align::parse_source_programs(&["@HD\tVN:1.6".to_string()]).is_empty());
+
+    // A header with no @PG at all, through the real noodles parser.
+    let sam = "@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:t0\tLN:100\n";
+    let header: noodles_sam::Header = sam.parse().unwrap();
+    assert!(
+        salmon_align::source_program_lines(&header).is_empty(),
+        "a header with no @PG records has no lines to carry"
+    );
+}
+
+/// A `@PG` record may carry an ID and nothing else. That is still worth
+/// reporting — it names the program — but the command line is genuinely absent.
+#[test]
+fn pg_record_without_command_line_is_still_reported() {
+    let sam = "@HD\tVN:1.6\n@SQ\tSN:t0\tLN:100\n@PG\tID:mystery-aligner\n";
+    let header: noodles_sam::Header = sam.parse().unwrap();
+    let lines = salmon_align::source_program_lines(&header);
+    assert_eq!(lines.len(), 1);
+
+    let progs = salmon_align::parse_source_programs(&lines);
+    assert_eq!(progs.len(), 1);
+    assert_eq!(progs[0].id, "mystery-aligner");
+    assert_eq!(
+        progs[0].command_line, None,
+        "an absent CL must stay absent rather than becoming an empty string"
+    );
+    assert_eq!(progs[0].program_name, None);
+}
+
+/// A tab or newline inside a header value would invent a field or split a
+/// record. The SAM spec forbids both, but a malformed file can carry them, and
+/// they must not corrupt the neighbouring provenance.
+#[test]
+fn separators_in_header_values_do_not_corrupt_the_chain() {
+    // Built directly, since a conforming parser would not produce this.
+    let lines = vec![
+        "@PG\tID:a\tCL:cmd one\tVN:1".to_string(),
+        "@PG\tID:b\tCL:cmd two".to_string(),
+    ];
+    let progs = salmon_align::parse_source_programs(&lines);
+    assert_eq!(progs.len(), 2);
+    assert_eq!(progs[0].command_line.as_deref(), Some("cmd one"));
+    assert_eq!(progs[1].id, "b");
+
+    // The join/split round trip the RAD uses must preserve record boundaries.
+    let joined = lines.join("\n");
+    let split: Vec<String> = joined.split('\n').map(str::to_string).collect();
+    assert_eq!(split, lines);
+    assert_eq!(salmon_align::parse_source_programs(&split).len(), 2);
+}
