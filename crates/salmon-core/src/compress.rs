@@ -42,7 +42,7 @@ use std::path::Path;
 /// reported as an error — an empty or stub input is the parser's business to
 /// diagnose, not this function's.
 pub fn open_maybe_compressed(path: &Path) -> io::Result<Box<dyn BufRead + Send>> {
-    Ok(BufReader::new(open_maybe_compressed_raw(path)?).into_boxed_bufread())
+    Ok(Box::new(BufReader::new(open_maybe_compressed_raw(path)?)))
 }
 
 /// As [`open_maybe_compressed`], but unbuffered, for callers that will impose
@@ -61,15 +61,26 @@ pub fn open_maybe_compressed_raw(path: &Path) -> io::Result<Box<dyn Read + Send>
     }
 }
 
-/// Helper so [`open_maybe_compressed`] can name its return type without a turbofish.
-trait IntoBoxedBufRead {
-    fn into_boxed_bufread(self) -> Box<dyn BufRead + Send>;
-}
-
-impl<R: BufRead + Send + 'static> IntoBoxedBufRead for R {
-    fn into_boxed_bufread(self) -> Box<dyn BufRead + Send> {
-        Box::new(self)
+/// Strip one trailing compression extension from a file name, if present.
+///
+/// This module decides *compression* from content, never from the name — but a
+/// caller may still have a name-based question to ask about what is underneath,
+/// such as whether an alignment file is SAM or BAM. `reads.sam.zst` is a SAM
+/// file, and asking "does this end in `.sam`" of the whole name answers no.
+///
+/// So this is not name-based compression detection creeping back in: it removes
+/// compression noise from a name so a *different* question can be asked of what
+/// remains. The suffixes are the ones [`open_maybe_compressed`] can actually
+/// decode.
+pub fn strip_compression_extension(name: &str) -> &str {
+    const EXTENSIONS: [&str; 7] = [".gz", ".bgz", ".zst", ".zstd", ".bz2", ".xz", ".lzma"];
+    let lower = name.to_ascii_lowercase();
+    for ext in EXTENSIONS {
+        if lower.ends_with(ext) {
+            return &name[..name.len() - ext.len()];
+        }
     }
+    name
 }
 
 #[cfg(test)]
@@ -149,6 +160,27 @@ mod tests {
             .read_to_string(&mut got)
             .unwrap();
         assert_eq!(got, ">a\nACGT\n>b\nTTTT\n");
+    }
+
+    /// Stripping a compression suffix lets a name-based format question see the
+    /// name underneath, which is how `foo.sam.zst` is recognised as SAM.
+    #[test]
+    fn strips_one_compression_extension() {
+        for (input, want) in [
+            ("a.sam.gz", "a.sam"),
+            ("a.sam.zst", "a.sam"),
+            ("a.sam.ZST", "a.sam"),
+            ("a.sam.bz2", "a.sam"),
+            ("a.sam.xz", "a.sam"),
+            ("a.sam", "a.sam"),
+            ("a.bam", "a.bam"),
+            // Only one is removed: the remaining name is what the caller asks about.
+            ("a.sam.gz.gz", "a.sam.gz"),
+            // A bare compression name has nothing underneath, and must not panic.
+            (".gz", ""),
+        ] {
+            assert_eq!(strip_compression_extension(input), want, "for {input}");
+        }
     }
 
     /// A file too short to sniff is plain text by construction, and must open

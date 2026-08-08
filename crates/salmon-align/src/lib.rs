@@ -626,18 +626,24 @@ fn kind_to_op(k: Kind) -> AlnOp {
     }
 }
 
-/// Does this path name a SAM file (plain or gzipped) rather than a BAM?
+/// Does this path name a SAM file rather than a BAM, whatever it is compressed
+/// with?
+///
+/// SAM-vs-BAM is a name question, and compression is a content question, so any
+/// compression suffix is stripped before asking: `aln.sam.zst` is a SAM file
+/// that happens to be zstd, and routing it to the BAM reader produced a report
+/// about an invalid BGZF header for a file that was never BGZF.
 fn is_sam_path(p: &Path) -> bool {
     let s = p.to_string_lossy().to_ascii_lowercase();
-    s.ends_with(".sam") || s.ends_with(".sam.gz")
+    salmon_core::compress::strip_compression_extension(&s).ends_with(".sam")
 }
 
 /// Open a SAM file (transparently decompressing it) as a noodles reader over a
 /// boxed `BufRead`, so every input shares one concrete type.
 ///
-/// Compression is detected from content rather than from the name, so a
-/// gzip/bzip2/xz/zstd SAM is read whatever it is called — `is_sam_path` still
-/// decides SAM-vs-BAM by extension, which is a different question.
+/// Compression is detected from content, so the stream is decoded correctly
+/// however it was compressed. Which files reach here at all is a separate,
+/// name-based question, answered by [`is_sam_path`].
 fn open_sam_reader(path: &Path) -> Result<sam::io::Reader<Box<dyn BufRead + Send>>> {
     let inner = salmon_core::compress::open_maybe_compressed(path)
         .with_context(|| format!("opening {}", path.display()))?;
