@@ -155,6 +155,15 @@ pub fn project_genome_bam_to_rad(
         RadProfile::SelectiveAlignment,
         opts.fld_max + 1,
         opts.rad_codec,
+        // Fragments came from an external aligner, and there is no salmon index
+        // behind them; a reader reads the absent index as "unknown".
+        &salmon_rad::WriterProvenance {
+            mapping_type: salmon_rad::MappingType::Alignment,
+            index: None,
+            // Carry the aligner's own account of how these alignments were made,
+            // so a requant reports the command line and not merely "a BAM".
+            source_programs: crate::source_program_lines(&header),
+        },
     )?;
 
     // Short-read projection only. Long-read genome quantification is out of scope

@@ -34,6 +34,15 @@ fn write_rad(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Provenance for RADs these tests write, standing in for a mapping pass.
+fn prov() -> salmon_rad::WriterProvenance {
+    salmon_rad::WriterProvenance {
+        mapping_type: salmon_rad::MappingType::Mapping,
+        index: None,
+        source_programs: vec![],
+    }
+}
+
 fn write_rad_codec(
     path: &Path,
     ref_names: &[&str],
@@ -43,8 +52,17 @@ fn write_rad_codec(
     baked_log_pmf: Option<&[f64]>,
     codec: salmon_rad::ChunkCodec,
 ) {
-    let mut w =
-        RadOutputWriter::create(path, ref_names, ref_lengths, true, profile, 1024, codec).unwrap();
+    let mut w = RadOutputWriter::create(
+        path,
+        ref_names,
+        ref_lengths,
+        true,
+        profile,
+        1024,
+        codec,
+        &prov(),
+    )
+    .unwrap();
     if let Some(pmf) = baked_log_pmf {
         w.set_frag_length_dist(pmf);
     }
@@ -649,6 +667,7 @@ fn auto_orientation_derives_fld_from_majority_bucket() {
         RadProfile::Sketch,
         1024,
         salmon_rad::ChunkCodec::None,
+        &prov(),
     )
     .unwrap();
     let ctx: SalmonBulkContext = *w.context();
@@ -725,6 +744,7 @@ fn baked_library_format_is_authoritative_under_auto() {
         RadProfile::Sketch,
         1024,
         salmon_rad::ChunkCodec::None,
+        &prov(),
     )
     .unwrap();
     let ctx: SalmonBulkContext = *w.context();
@@ -923,5 +943,143 @@ fn all_bias_rad_is_thread_invariant() {
             && !parallel.bias_dump.obs5_pos.is_empty()
             && !parallel.bias_dump.exp5_pos.is_empty(),
         "sequence and positional bias dumps should be populated"
+    );
+}
+
+/// The `@PG` chain a BAM carries must parse back into the fields
+/// `meta_info.json` reports, including a command line containing spaces and
+/// colons — the characters most likely to break a naive split.
+#[test]
+fn source_program_lines_parse_back() {
+    let lines = vec![
+        "@PG\tID:bowtie2\tPN:bowtie2\tVN:2.4.5\tCL:bowtie2 -x idx -1 a.fq -2 b.fq --rg-id x:y"
+            .to_string(),
+        "@PG\tID:samtools\tPN:samtools\tPP:bowtie2\tVN:1.17\tDS:sorted".to_string(),
+    ];
+    let progs = salmon_align::parse_source_programs(&lines);
+    assert_eq!(progs.len(), 2);
+
+    assert_eq!(progs[0].id, "bowtie2");
+    assert_eq!(progs[0].program_name.as_deref(), Some("bowtie2"));
+    assert_eq!(progs[0].version.as_deref(), Some("2.4.5"));
+    assert_eq!(
+        progs[0].command_line.as_deref(),
+        Some("bowtie2 -x idx -1 a.fq -2 b.fq --rg-id x:y"),
+        "a command line's own colons must not truncate it"
+    );
+    assert_eq!(progs[0].previous_id, None);
+
+    assert_eq!(progs[1].previous_id.as_deref(), Some("bowtie2"));
+    assert_eq!(progs[1].description.as_deref(), Some("sorted"));
+
+    // Non-@PG lines and unknown tags are ignored rather than rejected: provenance
+    // that fails to parse is worse than provenance reporting what it understands.
+    let mixed = vec![
+        "@HD\tVN:1.6".to_string(),
+        "@PG\tID:x\tZZ:unknown-tag".to_string(),
+    ];
+    let progs = salmon_align::parse_source_programs(&mixed);
+    assert_eq!(progs.len(), 1);
+    assert_eq!(progs[0].id, "x");
+}
+
+/// `@PG` is optional in SAM, and plenty of tools write none. An absent chain
+/// must be an ordinary empty result, not a panic or a bogus record.
+#[test]
+fn absent_pg_chain_yields_no_programs() {
+    assert!(salmon_align::parse_source_programs(&[]).is_empty());
+    assert!(salmon_align::parse_source_programs(&["@HD\tVN:1.6".to_string()]).is_empty());
+
+    // A header with no @PG at all, through the real noodles parser.
+    let sam = "@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:t0\tLN:100\n";
+    let header: noodles_sam::Header = sam.parse().unwrap();
+    assert!(
+        salmon_align::source_program_lines(&header).is_empty(),
+        "a header with no @PG records has no lines to carry"
+    );
+}
+
+/// A `@PG` record may carry an ID and nothing else. That is still worth
+/// reporting — it names the program — but the command line is genuinely absent.
+#[test]
+fn pg_record_without_command_line_is_still_reported() {
+    let sam = "@HD\tVN:1.6\n@SQ\tSN:t0\tLN:100\n@PG\tID:mystery-aligner\n";
+    let header: noodles_sam::Header = sam.parse().unwrap();
+    let lines = salmon_align::source_program_lines(&header);
+    assert_eq!(lines.len(), 1);
+
+    let progs = salmon_align::parse_source_programs(&lines);
+    assert_eq!(progs.len(), 1);
+    assert_eq!(progs[0].id, "mystery-aligner");
+    assert_eq!(
+        progs[0].command_line, None,
+        "an absent CL must stay absent rather than becoming an empty string"
+    );
+    assert_eq!(progs[0].program_name, None);
+}
+
+/// A tab or newline inside a header value would invent a field or split a
+/// record. RAD itself would carry either happily — it length-prefixes strings —
+/// so the constraint comes from this newline-joined, tab-separated
+/// representation, and escaping keeps it reversible rather than rewriting the
+/// value.
+#[test]
+fn separators_in_header_values_survive_escaping() {
+    // Built through the real parser, so the escaping is whatever the writer does.
+    let sam = "@HD\tVN:1.6\n@SQ\tSN:t0\tLN:100\n@PG\tID:a\tCL:x\n";
+    let header: noodles_sam::Header = sam.parse().unwrap();
+    assert_eq!(salmon_align::source_program_lines(&header).len(), 1);
+
+    // A value carrying the framing characters, and a literal backslash-n that
+    // must not be confused with an escaped newline.
+    let escaped = "@PG\tID:a\tCL:one\\ttwo\\nthree\\\\nfour\tVN:1".to_string();
+    let progs = salmon_align::parse_source_programs(std::slice::from_ref(&escaped));
+    assert_eq!(progs.len(), 1, "escapes must not split the record");
+    assert_eq!(
+        progs[0].command_line.as_deref(),
+        Some("one\ttwo\nthree\\nfour"),
+        "escapes must decode back to the original bytes"
+    );
+    assert_eq!(
+        progs[0].version.as_deref(),
+        Some("1"),
+        "later fields survive"
+    );
+
+    // The joined form the RAD stores must still split into whole records.
+    let lines = vec![escaped, "@PG\tID:b\tCL:plain".to_string()];
+    let joined = lines.join("\n");
+    let split: Vec<String> = joined.split('\n').map(str::to_string).collect();
+    assert_eq!(split, lines, "an escaped newline must not create a record");
+    assert_eq!(salmon_align::parse_source_programs(&split).len(), 2);
+}
+
+/// A RAD string tag is length-prefixed with a `u16` and the length is *cast*, so
+/// an over-long chain would wrap and corrupt the file rather than fail. The
+/// writer must fit the chain instead of handing one over.
+#[test]
+fn overlong_pg_chain_is_trimmed_to_what_a_rad_tag_holds() {
+    let long_cl = "x".repeat(20_000);
+    let mut sam = String::from("@HD\tVN:1.6\n@SQ\tSN:t0\tLN:100\n");
+    for i in 0..8 {
+        sam.push_str(&format!("@PG\tID:p{i}\tCL:{long_cl}\n"));
+    }
+    let header: noodles_sam::Header = sam.parse().unwrap();
+    let lines = salmon_align::source_program_lines(&header);
+
+    let joined_len = lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1);
+    assert!(
+        joined_len <= salmon_rad::MAX_FILE_TAG_STRING_LEN,
+        "the joined chain ({joined_len} bytes) must fit a u16 length"
+    );
+    assert!(
+        !lines.is_empty() && lines.len() < 8,
+        "records should be dropped, not all of them and not none: got {}",
+        lines.len()
+    );
+    // What survives is whole records, still parseable.
+    assert_eq!(
+        salmon_align::parse_source_programs(&lines).len(),
+        lines.len()
     );
 }

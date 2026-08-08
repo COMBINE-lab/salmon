@@ -267,7 +267,7 @@ sequence of `[u32 nbytes][u32 nrec][records…]` chunks) is libradicl's contract
 salmon writes a bulk profile that piscem `map-bulk` can also produce and read.
 See the [RAD I/O guide](../../guides/rad-and-determinism/) for usage.
 
-Two salmon-relevant details on top of the base format:
+Three salmon-relevant details on top of the base format:
 
 - **Baked header tags.** A salmon-written RAD records, as file-level tags, an
   order-independent fragment-length distribution, initial abundances, and the
@@ -275,6 +275,49 @@ Two salmon-relevant details on top of the base format:
   these to quantify in a single pass and to apply `-l A` concordance filtering
   without re-inference; a piscem RAD carries none of them and is handled with an
   extra derivation pass.
+- **Mapping-pass provenance.** A RAD holds only the fragments that *mapped*, so
+  nothing in the records can say how many were *observed*. Without that, a
+  requant reports a 100% mapping rate by construction. salmon therefore records
+  what its mapping pass saw, as file-level tags:
+
+  | tag | meaning |
+  | --- | --- |
+  | `num_processed` | fragments observed, mapped or not |
+  | `num_dovetail_fragments` | fragments whose mappings were dovetailed |
+  | `num_fragments_filtered_vm` | fragments dropped by the score filter |
+  | `num_alignments_below_threshold_vm` | below-threshold alignments among mapped fragments |
+  | `num_decoy_fragments` | fragments whose best mapping was to a decoy |
+  | `index_seq_hash`, `index_name_hash`, and the `512` / `decoy` variants | identity of the index the mappings were made against |
+  | `keep_duplicates` | how that index was built (omitted if the index predates recording it) |
+  | `mapping_type` | `mapping`, `pseudo` or `alignment` |
+  | `source_programs` | the source BAM's `@PG` lines, for an alignment-derived RAD |
+
+  The counters are only final at end of pass, so their slots are reserved and
+  backpatched at finalize; the `BAKED_MAP_COUNTERS` bit in `baked_flags` says
+  they were filled, since a reserved slot and a genuine count of zero are
+  otherwise indistinguishable. The index identity is known up front and written
+  directly, flagged by `BAKED_INDEX_PROV`. `mapping_type` is recorded rather than
+  inferred from the record profile, because a BAM-derived RAD is written in the
+  selective-alignment profile although its fragments came from an aligner.
+
+  Quantifying a RAD that lacks these — a piscem RAD, or one written by salmon
+  before 2.5.0 — still works. salmon warns, names the affected fields, and
+  records the gap in `meta_info.json` (see below).
+
+- **Alignment provenance.** A RAD built from a BAM carries that BAM's `@PG`
+  header chain, so a requant can report *how* the alignments were made
+  — the aligner, its version and its command line — rather than only that they
+  were alignments. It reappears as `alignment_provenance` in `meta_info.json`,
+  for both `-a` and a requant of a BAM-derived RAD.
+
+  The chain is stored as one string tag holding the `@PG` lines joined by
+  newlines. RAD imposes no restriction on the content — a string tag is an
+  explicit length followed by bytes — so the only constraints come from that
+  representation, and both are handled rather than assumed away: tabs, newlines
+  and backslashes inside a value are escaped so the framing stays unambiguous and
+  reversible, and because the length prefix is a `u16`, a chain longer than 64 KiB
+  has whole trailing records dropped (with a warning) rather than being allowed to
+  wrap the length and corrupt the file.
 - **Chunk compression (`chunk_codec`).** With compression enabled (the default;
   see `--radCompress`), each chunk's record payload is compressed independently
   and the `nbytes` field is the **compressed** size; the uncompressed size is
@@ -283,6 +326,38 @@ Two salmon-relevant details on top of the base format:
   (uncompressed)**, so every RAD produced before this feature, and every piscem
   RAD, reads as uncompressed automatically. Decompression happens in the reader,
   so record parsing downstream is identical for compressed and uncompressed RADs.
+
+### Metadata completeness
+
+Every `meta_info.json` carries `meta_info_complete`. When `false`,
+`incomplete_meta_info_fields` lists each field a complete description would have
+carried, together with the upstream that could not supply it and why:
+
+```json
+"meta_info_complete": false,
+"incomplete_meta_info_fields": [
+  {
+    "field": "keep_duplicates",
+    "source": "index",
+    "reason": "this index predates recording how it was built; rebuild the index to record it"
+  }
+]
+```
+
+`source` is `index`, `rad` or `bam`. The point is to distinguish "this run
+observed nothing" from "nobody could tell this run", and to name what to fix.
+
+`@PG` is optional in SAM and many tools write none, so an alignment input with no
+`@PG` chain is an ordinary outcome rather than an error — but it is still recorded
+(`alignment_provenance`, source `bam`), as is a chain that names its programs
+without carrying any `CL` field
+(`alignment_provenance[].command_line`). Both are reported identically whether
+the alignments are read from a BAM directly or through a BAM-derived RAD.
+Fields that are *not applicable* are not listed: alignment mode has no salmon
+index, so its absent index hashes are by design rather than a gap.
+
+Values that are unknown are omitted rather than guessed, so `keep_duplicates`
+being absent means exactly that — not `false`.
 
 ## Mapping alignment output
 

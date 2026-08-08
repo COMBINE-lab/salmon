@@ -61,6 +61,7 @@ pub fn build_prelude(
     ref_lengths: &[u32],
     fld_len: usize,
     codec: ChunkCodec,
+    provenance: &crate::WriterProvenance,
 ) -> (RadPrelude, TagMap) {
     let num_refs = ref_names.len();
     // File tags carry concrete values (written once, after the header). The
@@ -84,7 +85,61 @@ pub fn build_prelude(
             TagValue::ArrayF64(vec![0.0; num_refs]),
         ),
         (crate::LIBRARY_FORMAT_TAG, TagValue::U8(0)),
+        // Mapping-pass counters. Reserved as zeros and backpatched at finalize;
+        // the `BAKED_MAP_COUNTERS` flag says whether they were actually filled,
+        // since a real count of zero is indistinguishable from a placeholder.
+        (crate::NUM_PROCESSED_TAG, TagValue::U64(0)),
+        (crate::NUM_DOVETAIL_TAG, TagValue::U64(0)),
+        (crate::NUM_FILTERED_VM_TAG, TagValue::U64(0)),
+        (crate::NUM_BELOW_THRESH_VM_TAG, TagValue::U64(0)),
+        (crate::NUM_DECOY_FRAGMENTS_TAG, TagValue::U64(0)),
     ];
+    // Index identity, known before the first record, so written outright rather
+    // than reserved. Omitted entirely when the producer has no index (a BAM-derived
+    // RAD), because an absent tag says "unknown" and an empty string does not.
+    file_tag_values.push((
+        crate::MAPPING_TYPE_TAG,
+        TagValue::String(provenance.mapping_type.as_str().to_string()),
+    ));
+    if let Some(prov) = &provenance.index {
+        file_tag_values.extend([
+            (
+                crate::INDEX_SEQ_HASH_TAG,
+                TagValue::String(prov.seq_hash.clone()),
+            ),
+            (
+                crate::INDEX_NAME_HASH_TAG,
+                TagValue::String(prov.name_hash.clone()),
+            ),
+            (
+                crate::INDEX_SEQ_HASH512_TAG,
+                TagValue::String(prov.seq_hash512.clone()),
+            ),
+            (
+                crate::INDEX_NAME_HASH512_TAG,
+                TagValue::String(prov.name_hash512.clone()),
+            ),
+            (
+                crate::INDEX_DECOY_SEQ_HASH_TAG,
+                TagValue::String(prov.decoy_seq_hash.clone()),
+            ),
+            (
+                crate::INDEX_DECOY_NAME_HASH_TAG,
+                TagValue::String(prov.decoy_name_hash.clone()),
+            ),
+        ]);
+        // Only when the index recorded it: an absent tag reads as unknown, while
+        // a written `0` would read as a definite "duplicates were collapsed".
+        if let Some(keep) = prov.keep_duplicates {
+            file_tag_values.push((crate::KEEP_DUPLICATES_TAG, TagValue::U8(keep as u8)));
+        }
+    }
+    if !provenance.source_programs.is_empty() {
+        file_tag_values.push((
+            crate::SOURCE_PROGRAMS_TAG,
+            TagValue::String(provenance.source_programs.join("\n")),
+        ));
+    }
     // Score interpretation, only meaningful for the scored (SA) profile. Reserved
     // as the default (raw AS) and backpatched at finalize if the write run scored
     // by the deterministic error model instead (see [`crate::SCORE_KIND_TAG`]).

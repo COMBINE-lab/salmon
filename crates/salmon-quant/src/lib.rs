@@ -261,7 +261,7 @@ impl QuantOptions {
     }
 }
 
-pub use salmon_core::Diagnostic;
+pub use salmon_core::{Diagnostic, MissingMetaField};
 
 /// Quantification results (also written to disk by [`write_outputs`]).
 ///
@@ -295,7 +295,10 @@ pub struct QuantResult {
     /// [`Self::first_decoy_index`]); 0 when the index has no decoys
     pub num_decoys: usize,
     /// whether the index collapsed duplicate sequences (for meta_info)
-    pub keep_duplicates: bool,
+    /// whether the index was built with `--keepDuplicates`; `None` when the
+    /// index predates recording it, which is reported as a missing field rather
+    /// than guessed as `false`
+    pub keep_duplicates: Option<bool>,
     /// fragments dropped because their best alignment was to a decoy
     pub num_decoy_fragments: u64,
     /// fragments whose mates dovetail (overlap past each other)
@@ -449,6 +452,30 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     profile,
                     fld_len,
                     opts.rad_codec,
+                    // Identity of the index these mappings were made against, so a
+                    // requant reports the provenance of the run that produced the
+                    // records rather than of whatever index it was handed.
+                    &salmon_rad::WriterProvenance {
+                        mapping_type: if opts.sketch {
+                            salmon_rad::MappingType::Pseudo
+                        } else {
+                            salmon_rad::MappingType::Mapping
+                        },
+                        index: Some(salmon_rad::IndexProvenance {
+                            seq_hash: salmon.info().seq_hash.clone(),
+                            name_hash: salmon.info().name_hash.clone(),
+                            seq_hash512: salmon.info().seq_hash512.clone(),
+                            name_hash512: salmon.info().name_hash512.clone(),
+                            decoy_seq_hash: salmon.info().decoy_seq_hash.clone(),
+                            decoy_name_hash: salmon.info().decoy_name_hash.clone(),
+                            // `None` for an index built before this was
+                            // recorded; the RAD then omits the tag, so a
+                            // requant reports it unknown rather than `false`.
+                            keep_duplicates: salmon.info().keep_duplicates,
+                        }),
+                        // No BAM behind reads; nothing an aligner said to carry.
+                        source_programs: Vec::new(),
+                    },
                 )
                 .context("opening RAD output")?,
             )
@@ -1027,6 +1054,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         if let Some(f) = resolved_fmt {
             rw.set_library_format(f.format_id());
         }
+        // What the pass *saw*, which the records cannot show: a RAD holds only
+        // the fragments that mapped, so without these a requant would report a
+        // 100% mapping rate by construction.
+        rw.set_map_counters(salmon_rad::MapCounters {
+            num_processed: num_processed.load(Ordering::Relaxed),
+            num_dovetail: num_dovetail.load(Ordering::Relaxed),
+            num_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),
+            num_below_threshold_vm: num_below_threshold_vm.load(Ordering::Relaxed),
+            num_decoy_fragments: num_decoy.load(Ordering::Relaxed),
+        });
         rw.finalize().context("finalizing RAD output")?;
     }
 
@@ -1128,7 +1165,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,
         num_decoys: salmon.info().num_decoys,
-        keep_duplicates: false,
+        keep_duplicates: salmon.info().keep_duplicates,
         num_decoy_fragments: num_decoy.load(Ordering::Relaxed),
         num_dovetail_fragments: num_dovetail.load(Ordering::Relaxed),
         num_fragments_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),

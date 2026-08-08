@@ -253,6 +253,14 @@ pub struct IndexInfo {
     /// from `salmon_version`, the software release string below.
     #[serde(default)]
     pub index_version: u32,
+    /// whether the index was built with `--keepDuplicates`.
+    ///
+    /// `Option` rather than a defaulted `bool`: an index built before this was
+    /// recorded must read as *unknown*, not as `false`, or a quant run would
+    /// report a guess as an observation. `None` propagates into
+    /// `meta_info.json`'s `incomplete_meta_info_fields`.
+    #[serde(default)]
+    pub keep_duplicates: Option<bool>,
     /// salmon version that produced the index
     pub salmon_version: String,
     /// SHA-256/512 of the reference sequences and names, computed to byte-match
@@ -932,6 +940,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         first_decoy_index,
         num_decoys,
         index_version: INDEX_FORMAT_VERSION,
+        keep_duplicates: Some(opts.keep_duplicates),
         // `env!` reads an environment variable at compile time; Cargo sets this
         // one from Cargo.toml, so the recorded version is always this build's.
         salmon_version: env!("CARGO_PKG_VERSION").to_string(),
