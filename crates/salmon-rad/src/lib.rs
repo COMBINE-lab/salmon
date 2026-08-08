@@ -46,6 +46,7 @@ pub mod record;
 pub mod schema;
 pub mod writer;
 
+use libradicl::rad_types::{RadType, TagValue};
 /// Re-exported so consumers can select a RAD chunk compression codec without a
 /// direct libradicl dependency.
 pub use libradicl::ChunkCodec;
@@ -241,12 +242,17 @@ pub const INDEX_DECOY_NAME_HASH_TAG: &str = "index_decoy_name_hash";
 /// Written only when the index actually recorded it; absent means unknown,
 /// which a reader must not collapse to `false`.
 pub const KEEP_DUPLICATES_TAG: &str = "keep_duplicates";
-/// The longest string a RAD file tag can hold.
+/// Whether `value` can be written under `tag_type` without being shortened.
 ///
-/// A string tag is written as a `u16` length followed by its bytes, and that
-/// length is cast rather than checked, so anything longer wraps and corrupts the
-/// file rather than failing to write. Producers must fit their values to this.
-pub const MAX_FILE_TAG_STRING_LEN: usize = u16::MAX as usize;
+/// A thin pass-through to [`libradicl::rad_types::TagValue::fits`], re-exported
+/// so producers here ask the format how much it can hold rather than restating a
+/// width that is libradicl's to know. Since 0.17 an over-long value is bounded
+/// rather than allowed to wrap the length field, but bounding is silent, so a
+/// producer that would rather shorten deliberately — dropping whole records
+/// instead of cutting one in half — asks first.
+pub fn value_fits(value: &TagValue, tag_type: &RadType) -> bool {
+    value.fits(tag_type)
+}
 
 /// File-tag name: the `@PG` header records of the BAM these fragments came from,
 /// verbatim, one per line.

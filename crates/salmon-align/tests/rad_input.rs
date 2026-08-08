@@ -1067,10 +1067,13 @@ fn overlong_pg_chain_is_trimmed_to_what_a_rad_tag_holds() {
     let header: noodles_sam::Header = sam.parse().unwrap();
     let lines = salmon_align::source_program_lines(&header);
 
-    let joined_len = lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1);
+    // Asks libradicl, so the test cannot drift from the format's actual limit.
     assert!(
-        joined_len <= salmon_rad::MAX_FILE_TAG_STRING_LEN,
-        "the joined chain ({joined_len} bytes) must fit a u16 length"
+        salmon_rad::value_fits(
+            &libradicl::rad_types::TagValue::String(lines.join("\n")),
+            &libradicl::rad_types::RadType::String,
+        ),
+        "the joined chain must fit what a RAD string tag can hold"
     );
     assert!(
         !lines.is_empty() && lines.len() < 8,
