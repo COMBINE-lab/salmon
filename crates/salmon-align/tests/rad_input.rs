@@ -1033,7 +1033,7 @@ fn separators_in_header_values_survive_escaping() {
     // A value carrying the framing characters, and a literal backslash-n that
     // must not be confused with an escaped newline.
     let escaped = "@PG\tID:a\tCL:one\\ttwo\\nthree\\\\nfour\tVN:1".to_string();
-    let progs = salmon_align::parse_source_programs(&[escaped.clone()]);
+    let progs = salmon_align::parse_source_programs(std::slice::from_ref(&escaped));
     assert_eq!(progs.len(), 1, "escapes must not split the record");
     assert_eq!(
         progs[0].command_line.as_deref(),
