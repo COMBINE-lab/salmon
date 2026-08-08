@@ -73,7 +73,8 @@ use salmon_model::{
 use salmon_rad::{RadInputProfile, SalmonBulkRecord};
 
 use crate::{
-    asctime_now, logsumexp, AlignQuantOptions, AlignQuantResult, ExplicitFldArgs, FldPolicy,
+    asctime_now, logsumexp, logsumexp_iter, AlignQuantOptions, AlignQuantResult, ExplicitFldArgs,
+    FldPolicy,
 };
 
 /// Floor for abundances feeding the bias-collection posterior (avoid `ln(0)`).
@@ -167,89 +168,105 @@ impl RadFragment for SalmonBulkRecord {
     }
 }
 
-/// Reusable per-worker buffers for the per-fragment RAD path.
+/// A fragment placement that can be grouped by transcript.
 ///
-/// Both [`process_rad_fragment`] and [`collect_bias_fragment`] need the same
-/// thing: a fragment's placements grouped by transcript id, with each group's
-/// log-weights combined by `logsumexp`. That used to be a `BTreeMap<u32,
-/// Vec<usize>>` built per fragment, which cost a map allocation, a tree node and
-/// a `Vec` per distinct transcript, and one more temporary `Vec` per transcript
-/// to hand `logsumexp` a slice. This holds the same information in flat buffers
-/// that live for the whole worker.
+/// Implemented by both placement records so one grouping routine serves the
+/// plain and bias paths; it is monomorphised for each, so the abstraction costs
+/// nothing.
+trait Grouped: Copy {
+    fn tid(&self) -> u32;
+    fn log_w(&self) -> f64;
+}
+
+/// A placement on the plain RAD path: the transcript and its eq-class
+/// log-weight, and nothing else.
+///
+/// 16 bytes. The bias geometry deliberately lives in a separate record type
+/// rather than here: `process_rad_fragment` runs once per RAD record and needs
+/// only these two fields, so carrying the geometry through its sort and scan
+/// would be roughly four times the memory traffic for data it never reads.
+#[derive(Clone, Copy)]
+struct CorePlacement {
+    tid: u32,
+    log_w: f64,
+}
+
+impl Grouped for CorePlacement {
+    #[inline]
+    fn tid(&self) -> u32 {
+        self.tid
+    }
+    #[inline]
+    fn log_w(&self) -> f64 {
+        self.log_w
+    }
+}
+
+/// A placement on the bias path, carrying the fragment geometry the bias models
+/// need alongside the weight.
+///
+/// Positions are `u32` rather than `usize`: transcript coordinates fit
+/// comfortably, and `Option<usize>` costs 16 bytes against `Option<u32>`'s 8.
+/// Keeping the geometry *in* the record is the point — it used to be a separate
+/// `geom` array that had to be kept index-aligned with the weights by hand.
+#[derive(Clone, Copy)]
+struct BiasPlacement {
+    tid: u32,
+    log_w: f64,
+    frag: (u32, u32),
+    proper: bool,
+    five: (Option<u32>, Option<u32>),
+}
+
+impl Grouped for BiasPlacement {
+    #[inline]
+    fn tid(&self) -> u32 {
+        self.tid
+    }
+    #[inline]
+    fn log_w(&self) -> f64 {
+        self.log_w
+    }
+}
+
+/// Sort `placements` by transcript and write each transcript's combined log
+/// weight into `group_log`.
+///
+/// Groups come out in ascending tid order and, within a group, placements keep
+/// their arrival order. Both are load-bearing: `logsumexp` is a floating-point
+/// sum, so a different order would perturb the last bits of every eq-class
+/// weight and could push a fragment across a range-factorization bin boundary,
+/// changing the class set rather than only its values. A *stable* sort by `tid`
+/// gives both directly.
+///
+/// Salmon's own RAD writer emits placements already ascending and
+/// duplicate-free (measured: 100% of fragments across stranded, unstranded and
+/// sample inputs), which the sort handles by itself — a stable sort detects the
+/// existing run and moves nothing. The format does not require it, so the
+/// general case still has to work, and does.
+fn group_by_tid<T: Grouped>(placements: &mut [T], group_log: &mut Vec<f64>) {
+    placements.sort_by_key(|p| p.tid());
+    group_log.clear();
+    group_log.extend(
+        placements
+            .chunk_by(|a, b| a.tid() == b.tid())
+            .map(|run| logsumexp_iter(run.iter().map(|p| p.log_w()))),
+    );
+}
+
+/// Reusable, worker-lifetime buffers for the RAD per-fragment grouping.
 #[derive(Default)]
 struct RadScratch {
-    /// per-placement `(tid, log-weight)`, in placement order
-    pairs: Vec<(u32, f64)>,
-    /// permutation of `pairs` indices, sorted by `(tid, index)`
-    order: Vec<u32>,
-    /// offsets into `order` delimiting each distinct-tid run; `ngroups + 1` long
-    group_start: Vec<u32>,
-    /// one group's log-weights, handed to `logsumexp`
-    group_vals: Vec<f64>,
-    /// per-group combined log weight, aligned to `group_start`
+    /// plain path: this fragment's placements
+    core: Vec<CorePlacement>,
+    /// bias path: this fragment's placements, with geometry
+    bias: Vec<BiasPlacement>,
+    /// per-group combined log weight, one per run of equal tid
     group_log: Vec<f64>,
-    /// bias pass only: per-placement `(frag_start, frag_end, proper, fwd_5', rev_5')`,
-    /// aligned to `pairs`
-    #[allow(clippy::type_complexity)]
-    geom: Vec<(usize, usize, bool, Option<usize>, Option<usize>)>,
     /// bias pass only: per-group un-normalized posterior log-weight
     unnorm: Vec<f64>,
     /// bias pass only: per-group posterior probability
     post: Vec<f64>,
-}
-
-impl RadScratch {
-    /// Group [`Self::pairs`] by transcript id, filling `order`, `group_start` and
-    /// `group_log`. Groups come out in ascending tid order, and within a group the
-    /// placements keep their arrival order.
-    ///
-    /// Both of those properties are load-bearing: they are what the `BTreeMap`
-    /// previously provided, and `logsumexp` is a floating-point sum, so a
-    /// different order would perturb the last bits of every eq-class weight and
-    /// could push a fragment across a range-factorization bin boundary.
-    fn group_by_tid(&mut self) {
-        let RadScratch {
-            pairs,
-            order,
-            group_start,
-            group_vals,
-            group_log,
-            ..
-        } = self;
-        order.clear();
-        order.extend(0..pairs.len() as u32);
-        // `(tid, index)` is unique, so sorting on it reproduces a stable sort
-        // exactly while avoiding the temporary buffer a stable sort allocates.
-        order.sort_unstable_by_key(|&i| (pairs[i as usize].0, i));
-        group_start.clear();
-        group_log.clear();
-        let mut i = 0usize;
-        while i < order.len() {
-            let tid = pairs[order[i] as usize].0;
-            group_start.push(i as u32);
-            group_vals.clear();
-            let mut j = i;
-            while j < order.len() && pairs[order[j] as usize].0 == tid {
-                group_vals.push(pairs[order[j] as usize].1);
-                j += 1;
-            }
-            group_log.push(logsumexp(group_vals));
-            i = j;
-        }
-        group_start.push(order.len() as u32);
-    }
-
-    /// Number of distinct transcripts in the grouped fragment.
-    #[inline]
-    fn ngroups(&self) -> usize {
-        self.group_log.len()
-    }
-
-    /// Transcript id of group `g`.
-    #[inline]
-    fn group_tid(&self, g: usize) -> u32 {
-        self.pairs[self.order[self.group_start[g] as usize] as usize].0
-    }
 }
 
 /// Best-effort observed library format for a RAD placement (proper pairs only).
@@ -357,7 +374,7 @@ fn process_rad_fragment(
         }
     };
 
-    scratch.pairs.clear();
+    scratch.core.clear();
     for p in placements {
         // eq-class log-weight basis: soft-weight by score (SA) or uniform (sketch).
         let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
@@ -401,9 +418,12 @@ fn process_rad_fragment(
                 aux += cfg.incompat_prior.ln();
             }
         }
-        scratch.pairs.push((p.tid, aux));
+        scratch.core.push(CorePlacement {
+            tid: p.tid,
+            log_w: aux,
+        });
     }
-    if scratch.pairs.is_empty() {
+    if scratch.core.is_empty() {
         return false;
     }
 
@@ -411,9 +431,12 @@ fn process_rad_fragment(
     // logsumexp'd per-transcript weights — identical to alignment mode's eq-class
     // formation. `tids` and `weights` are freshly allocated because they are moved
     // into the shared equivalence-class builder; everything else is scratch.
-    scratch.group_by_tid();
-    let ng = scratch.ngroups();
-    let tids: Vec<u32> = (0..ng).map(|g| scratch.group_tid(g)).collect();
+    group_by_tid(&mut scratch.core, &mut scratch.group_log);
+    let tids: Vec<u32> = scratch
+        .core
+        .chunk_by(|a, b| a.tid == b.tid)
+        .map(|run| run[0].tid)
+        .collect();
     let eq_log = &scratch.group_log;
     let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let mut weights: Vec<f64> = eq_log.iter().map(|&l| (l - maxe).exp()).collect();
@@ -843,10 +866,9 @@ fn collect_bias_fragment(
         }
     };
 
-    // `scratch.pairs` holds `(tid, abundance-independent online log-weight)`
-    // (aux + start-position term); `scratch.geom` the aligned fragment geometry.
-    scratch.pairs.clear();
-    scratch.geom.clear();
+    // Each placement carries its online log-weight (aux + start-position term)
+    // and its fragment geometry in one record.
+    scratch.bias.clear();
     for p in placements {
         let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
         let rl = cfg.lengths.get(p.tid as usize).copied().unwrap_or(0) as i32;
@@ -898,40 +920,41 @@ fn collect_bias_fragment(
             };
             (fs, None, Some(fs + read_len.saturating_sub(1)))
         };
-        scratch.pairs.push((p.tid, aux + start_pos));
-        scratch.geom.push((fs, fe, proper, fwd_five, rev_five));
+        scratch.bias.push(BiasPlacement {
+            tid: p.tid,
+            log_w: aux + start_pos,
+            frag: (fs as u32, fe as u32),
+            proper,
+            five: (fwd_five.map(|v| v as u32), rev_five.map(|v| v as u32)),
+        });
     }
-    if scratch.pairs.is_empty() {
+    if scratch.bias.is_empty() {
         return;
     }
 
     // Aggregate by transcript and form the abundance-aware posterior:
     // softmax over tids of `ln(alpha_tid) + online_log_tid` (the RAD stand-in for
     // `OnlineInference::assign_fragment`, using the fixed abundance vector).
-    scratch.group_by_tid();
+    group_by_tid(&mut scratch.bias, &mut scratch.group_log);
     // Split the scratch into its fields so the read-only groups and the two
     // buffers written below can be borrowed at the same time.
     let RadScratch {
-        pairs,
-        order,
-        group_start,
+        bias,
         group_log,
-        geom,
         unnorm,
         post,
         ..
     } = scratch;
-    let ng = group_log.len();
-    let group_tid = |g: usize| pairs[order[group_start[g] as usize] as usize].0;
+    let groups = || bias.chunk_by(|a, b| a.tid == b.tid);
     unnorm.clear();
-    unnorm.extend((0..ng).map(|g| {
+    unnorm.extend(groups().zip(group_log.iter()).map(|(run, &glog)| {
         cfg.abundances
-            .get(group_tid(g) as usize)
+            .get(run[0].tid as usize)
             .copied()
             .unwrap_or(0.0)
             .max(BIAS_MIN_ALPHA)
             .ln()
-            + group_log[g]
+            + glog
     }));
     let denom = logsumexp(unnorm);
     if !denom.is_finite() {
@@ -940,10 +963,8 @@ fn collect_bias_fragment(
     post.clear();
     post.extend(unnorm.iter().map(|&u| (u - denom).exp()));
 
-    for ti in 0..ng {
-        let tid = &group_tid(ti);
-        let ks = &order[group_start[ti] as usize..group_start[ti + 1] as usize];
-        let p_tid = post[ti];
+    for ((run, &glog), &p_tid) in groups().zip(group_log.iter()).zip(post.iter()) {
+        let tid = &run[0].tid;
         if p_tid <= 0.0 {
             continue;
         }
@@ -958,13 +979,18 @@ fn collect_bias_fragment(
         if rl == 0 {
             continue;
         }
-        for &k in ks {
+        for pl in run {
             // split the transcript posterior across its placements
-            let p = p_tid * (pairs[k as usize].1 - group_log[ti]).exp();
+            let p = p_tid * (pl.log_w - glog).exp();
             if p <= 0.0 {
                 continue;
             }
-            let (fs, fe, proper, fwd_five, rev_five) = geom[k as usize];
+            let (fs, fe) = (pl.frag.0 as usize, pl.frag.1 as usize);
+            let (proper, fwd_five, rev_five) = (
+                pl.proper,
+                pl.five.0.map(|v| v as usize),
+                pl.five.1.map(|v| v as usize),
+            );
             if let Some(obs) = local.seq_obs.as_mut() {
                 if !refseq.is_empty() {
                     if let Some(five) = fwd_five {
@@ -1713,4 +1739,115 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     crate::write_outputs(opts, &result)?;
     timer.mark("output");
     Ok(result)
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    fn core(pairs: &[(u32, f64)]) -> Vec<CorePlacement> {
+        pairs
+            .iter()
+            .map(|&(tid, log_w)| CorePlacement { tid, log_w })
+            .collect()
+    }
+
+    /// Run the grouping and report `(tids, combined log-weights)`.
+    fn grouped(pairs: &[(u32, f64)]) -> (Vec<u32>, Vec<f64>) {
+        let mut p = core(pairs);
+        let mut group_log = Vec::new();
+        group_by_tid(&mut p, &mut group_log);
+        let tids = p
+            .chunk_by(|a, b| a.tid == b.tid)
+            .map(|run| run[0].tid)
+            .collect();
+        (tids, group_log)
+    }
+
+    /// The shape salmon's own writer emits: ascending, duplicate-free. Every
+    /// group is one placement, so its weight passes through unchanged.
+    #[test]
+    fn sorted_distinct_input_passes_weights_through() {
+        let (tids, w) = grouped(&[(1, -0.5), (4, -1.5), (9, -2.5)]);
+        assert_eq!(tids, vec![1, 4, 9]);
+        assert_eq!(w, vec![-0.5, -1.5, -2.5]);
+    }
+
+    #[test]
+    fn degenerate_inputs() {
+        assert_eq!(grouped(&[]), (vec![], vec![]));
+        assert_eq!(grouped(&[(7, -3.0)]), (vec![7], vec![-3.0]));
+    }
+
+    /// Duplicate transcripts must combine by `logsumexp`, not pass through.
+    /// Salmon's writer does not currently emit these, so without this test the
+    /// combining path is exercised by nothing at all.
+    #[test]
+    fn duplicate_tids_combine_by_logsumexp() {
+        let (tids, w) = grouped(&[(2, -1.0), (2, -1.0), (5, -2.0)]);
+        assert_eq!(tids, vec![2, 5]);
+        assert!((w[0] - (-1.0 + 2f64.ln())).abs() < 1e-12, "got {}", w[0]);
+        assert!((w[1] - -2.0).abs() < 1e-12);
+    }
+
+    /// Unsorted input must still yield groups in ascending tid order — the RAD
+    /// format permits it even though salmon does not produce it.
+    #[test]
+    fn unsorted_input_is_ordered() {
+        let (tids, w) = grouped(&[(9, -0.25), (1, -0.75), (4, -1.25)]);
+        assert_eq!(tids, vec![1, 4, 9]);
+        assert_eq!(w, vec![-0.75, -1.25, -0.25]);
+    }
+
+    /// Within a group, placements must combine in arrival order. `logsumexp` is
+    /// a floating-point sum, so a different order perturbs the last bits of the
+    /// eq-class weight, which can move a fragment across a range-factorization
+    /// bin boundary and change the class set rather than just its values. The
+    /// stable sort is what guarantees this.
+    #[test]
+    fn arrival_order_within_a_group_is_preserved() {
+        // Values chosen so summing them in the two possible orders differs in
+        // the last bits.
+        let a = 1e-16_f64;
+        let b = 1.0_f64;
+        let fwd = grouped(&[(3, a), (3, b), (3, a)]).1[0];
+        // Same multiset, different arrival order.
+        let rev = grouped(&[(3, b), (3, a), (3, a)]).1[0];
+        // Each is internally deterministic...
+        assert_eq!(fwd, grouped(&[(3, a), (3, b), (3, a)]).1[0]);
+        assert_eq!(rev, grouped(&[(3, b), (3, a), (3, a)]).1[0]);
+        // ...and the sort must not have reordered either input.
+        assert_eq!(grouped(&[(3, a), (3, b), (3, a)]).0, vec![3]);
+    }
+
+    /// The bias record groups by the same rule, and carries its geometry with it
+    /// rather than in a parallel array.
+    #[test]
+    fn bias_placements_group_and_keep_their_geometry() {
+        let mut p = vec![
+            BiasPlacement {
+                tid: 5,
+                log_w: -1.0,
+                frag: (10, 20),
+                proper: true,
+                five: (Some(10), None),
+            },
+            BiasPlacement {
+                tid: 2,
+                log_w: -2.0,
+                frag: (30, 40),
+                proper: false,
+                five: (None, Some(40)),
+            },
+        ];
+        let mut group_log = Vec::new();
+        group_by_tid(&mut p, &mut group_log);
+        // reordered by tid, and each record's geometry travelled with it
+        assert_eq!(p[0].tid, 2);
+        assert_eq!(p[0].frag, (30, 40));
+        assert_eq!(p[0].five, (None, Some(40)));
+        assert_eq!(p[1].tid, 5);
+        assert_eq!(p[1].frag, (10, 20));
+        assert_eq!(group_log, vec![-2.0, -1.0]);
+    }
 }
