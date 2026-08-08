@@ -837,6 +837,8 @@ struct PassAccum {
     )>,
     num_processed: u64,
     num_mapped: u64,
+    /// mapped fragments where every surviving placement placed only one mate
+    num_orphan: u64,
 }
 
 /// The online pass over an alignment record stream, structured as a persistent
@@ -929,7 +931,7 @@ where
         let mut workers = Vec::with_capacity(cfg.nthreads);
         for _ in 0..cfg.nthreads {
             let rx = rx.clone();
-            workers.push(scope.spawn(move || -> (Local, u64, u64) {
+            workers.push(scope.spawn(move || -> (Local, u64, u64, u64) {
                 let mut local = Local::new(
                     cfg.use_error_model,
                     cfg.error_bins,
@@ -941,6 +943,7 @@ where
                 );
                 let mut count = 0u64;
                 let mut mapped = 0u64;
+                let mut orphan = 0u64;
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
                     let ctx = FragCtx {
@@ -963,6 +966,9 @@ where
                     };
                     let mut since_flush = 0usize;
                     let mut batch_mapped = 0u64;
+                    // Plain locals, summed once per worker at the end: the
+                    // per-fragment cost is an increment, with no atomic traffic.
+                    let mut batch_orphan = 0u64;
                     for raw_group in &raw_batch {
                         frags.clear();
                         for r in raw_group {
@@ -970,8 +976,13 @@ where
                                 frags.push(f);
                             }
                         }
-                        if process_fragment(&frags, &ctx, &mut local) {
-                            batch_mapped += 1;
+                        match process_fragment(&frags, &ctx, &mut local) {
+                            FragmentOutcome::Unmapped => {}
+                            FragmentOutcome::Mapped => batch_mapped += 1,
+                            FragmentOutcome::MappedOrphan => {
+                                batch_mapped += 1;
+                                batch_orphan += 1;
+                            }
                         }
                         // Publish the error-model delta into the shared model
                         // every FLUSH_INTERVAL fragments so other workers' `basis`
@@ -996,6 +1007,7 @@ where
                     }
                     count += raw_batch.len() as u64;
                     mapped += batch_mapped;
+                    orphan += batch_orphan;
                     // Live progress: every fragment in the BAM is "processed";
                     // only fragments with a surviving strand-compatible placement
                     // are "mapped" (so percent_mapped is correct on stranded data).
@@ -1008,7 +1020,7 @@ where
                             .fetch_add(batch_mapped, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-                (local, count, mapped)
+                (local, count, mapped, orphan)
             }));
         }
         drop(rx); // workers hold their own clones; lets the queue disconnect
@@ -1029,13 +1041,15 @@ where
         );
         let mut total = 0u64;
         let mut total_mapped = 0u64;
+        let mut total_orphan = 0u64;
         for w in workers {
-            let (local, count, mapped) = w
+            let (local, count, mapped, orphan) = w
                 .join()
                 .map_err(|_| anyhow::anyhow!("alignment worker thread panicked"))?;
             merged = merged.merge(local);
             total += count;
             total_mapped += mapped;
+            total_orphan += orphan;
         }
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
@@ -1045,6 +1059,7 @@ where
         // They differ only for stranded libraries; matches reads-mode (#1025).
         acc.num_processed = total;
         acc.num_mapped = total_mapped;
+        acc.num_orphan = total_orphan;
         Ok(())
     })
 }
@@ -1174,7 +1189,24 @@ impl Local {
 /// caller counts a fragment as *mapped* only when this returns `true`, so a
 /// stranded library does not over-report `num_mapped` for fragments whose every
 /// alignment is strand-incompatible (the alignment-mode analog of #1025).
-fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bool {
+/// What became of one fragment.
+///
+/// Distinguishes the two mapped cases so `-a` can report the concordant/orphan
+/// split the reads path does, without a second pass over the placements.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FragmentOutcome {
+    /// no reported alignment survived compatibility filtering
+    Unmapped,
+    /// assigned, with at least one placement pairing both mates
+    Mapped,
+    /// assigned in a paired library, but every surviving placement placed only
+    /// one mate. Matches the RAD fragment-level rule, which takes the *most
+    /// complete* status across hits: a fragment that is a proper pair on one
+    /// transcript and an orphan on another counts as a pair.
+    MappedOrphan,
+}
+
+fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> FragmentOutcome {
     use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
     // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
     const LOG_EPSILON: f64 = -23.998_158_637_57;
@@ -1197,6 +1229,9 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
     let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
     let mut sp_geom: Vec<(usize, usize, bool)> = Vec::with_capacity(placements.len());
     let mut sp_pl: Vec<usize> = Vec::with_capacity(placements.len());
+    // Whether any surviving placement paired both mates; folded into the loop
+    // below, which already computes `proper` for its own use.
+    let mut any_proper = false;
     for (pi, pl) in placements.iter().enumerate() {
         let tid = pl.tid;
         let idxs = &pl.idxs;
@@ -1254,6 +1289,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
                 aux += ctx.incompat_prior.ln();
             }
         }
+        any_proper |= proper;
         sp_tid.push(tid);
         sp_eq.push(aux);
         sp_online.push(aux + start_pos);
@@ -1263,8 +1299,14 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
     // a fragment whose every reported alignment was incompatible is a
     // zero-probability fragment: it is not assigned and joins no eq-class.
     if sp_tid.is_empty() {
-        return false;
+        return FragmentOutcome::Unmapped;
     }
+    // Single-end libraries have no mate to be missing, so they are never orphans.
+    let outcome = if ctx.paired_lib && !any_proper {
+        FragmentOutcome::MappedOrphan
+    } else {
+        FragmentOutcome::Mapped
+    };
 
     // Aggregate surviving placements by distinct transcript id (sorted).
     let mut agg: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
@@ -1402,7 +1444,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
         TranscriptGroup::from_sorted(tids)
     };
     ctx.eq_builder.add_group(group, weights, 1);
-    true
+    outcome
 }
 
 /// Is the input coordinate-sorted and *not* grouped by read name?
@@ -1874,7 +1916,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // is trained there too but not needed afterward. Scope `cfg`/`acc` so their
     // borrows (fld, eq_builder, online, ...) are released before the post-pass
     // effective-length / EM work below.
-    let (seq_obs, gc_obs, pos_obs, num_processed, num_mapped) = {
+    let (seq_obs, gc_obs, pos_obs, num_processed, num_mapped, num_orphan) = {
         let cfg = PassCfg {
             online: online.as_ref(),
             fld: &fld,
@@ -1908,6 +1950,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             pos_obs: None,
             num_processed: 0,
             num_mapped: 0,
+            num_orphan: 0,
         };
         stream_online_pass(&opts.bam, &cfg, &mut acc)?;
         (
@@ -1916,6 +1959,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             acc.pos_obs,
             acc.num_processed,
             acc.num_mapped,
+            acc.num_orphan,
         )
     };
 
@@ -2108,9 +2152,9 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     timer.mark("posterior");
 
     let result = AlignQuantResult {
-        // A BAM input carries no RAD provenance, and this path does not tally
-        // orphans; both are reported as unknown rather than as zero.
-        num_orphan: None,
+        // Tallied while streaming the BAM, so `-a` reports the same
+        // concordant/orphan split the reads path does.
+        num_orphan: Some(num_orphan),
         provenance: crate::rad::RadProvenance::default(),
         // Straight from the BAM being quantified, no RAD in between.
         source_programs: source_program_lines(&header),
