@@ -587,7 +587,12 @@ fn record(
     // quantifies as nothing — which also broke the invariant `Σ NumReads ==
     // num_mapped`. C++ salmon likewise counts a fragment as mapped only once it
     // has a compatible mapping.
-    sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+    // `fetch_add` returns the count *before* this fragment, which is what the
+    // burn-in gate below needs: the online gate reads `num_assigned()` before its
+    // own increment, and C++ evaluates `useAuxParams` before counting the current
+    // read. Reading the post-increment value would gate this fragment on a total
+    // that includes itself, differing from both by one.
+    let assigned_before_this = sh.num_mapped.fetch_add(1, Ordering::Relaxed);
     // Classify the fragment as orphan when only one mate of a pair was placed
     // (PairedEndLeft / PairedEndRight). Single-end libraries never count as
     // orphan here.
@@ -766,7 +771,15 @@ fn record(
     // differs and coarsening the range-factorized classes. The FLD term is only
     // applied once the auxiliary model is trained (after `pre_burnin` fragments),
     // matching salmon's `numPreAuxModelSamples` gating.
-    let use_aux = sh.num_processed.load(Ordering::Relaxed) >= sh.pre_burnin;
+    // Gate on *assigned* fragments, matching the online path above
+    // (`online.num_assigned()`) and C++'s `useAuxParams`, which tests
+    // `localNumAssignedFragments + numAssignedFragments` against
+    // `numPreBurninFrags`. This previously read `num_processed`, which counts
+    // every fragment reaching `record` — including ones with no mappings at all,
+    // and ones whose mappings were all library-incompatible — so the gate opened
+    // earlier than salmon intends, by a margin that grows as the mapping rate
+    // falls. See #1089.
+    let use_aux = assigned_before_this >= sh.pre_burnin;
     // Per-mapping FLD log-probability via the shared `frag_log_prob` term — the
     // same one the online posterior uses, reading the same per-fragment snapshot
     // pair captured above (so the two paths share one consistent FLD view, as
