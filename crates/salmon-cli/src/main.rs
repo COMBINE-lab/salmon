@@ -910,6 +910,43 @@ struct GeneMapOpts {
     path: PathBuf,
     /// `--ignoreTxVersion`
     ignore_tx_version: bool,
+    /// The parsed transcript → gene map, read before quantification starts.
+    ///
+    /// Held rather than re-read at the end because gene-level aggregation is the
+    /// last thing a run does: reading it there meant an unreadable annotation
+    /// failed the run *after* mapping, inference and `quant.sf` had all completed
+    /// (#1074). Loading it up front costs one parse of a file the run needs
+    /// anyway, and turns minutes of wasted work into an immediate error.
+    map: std::collections::HashMap<String, String>,
+}
+
+/// Read and validate `--geneMap` before any quantification work begins.
+///
+/// Returns `None` when the option was not given. Any failure — missing file,
+/// unreadable, malformed — surfaces here rather than after the run (#1074).
+fn load_gene_map(path: Option<PathBuf>, ignore_tx_version: bool) -> Result<Option<GeneMapOpts>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    tracing::warn!(
+        "tximport (R) and pytximport (Python) are the preferred way to obtain \
+         gene-level estimates from salmon output: they offer several ways to \
+         aggregate transcript abundances to the gene level, including one that \
+         computes an offset accounting for changes in average transcript length \
+         between samples. --geneMap may be removed in a future release."
+    );
+    let map = salmon_core::genemap::read_transcript_gene_map(&path)
+        .with_context(|| format!("reading gene map {}", path.display()))?;
+    tracing::info!(
+        "read {} transcript to gene mappings from {}",
+        map.len(),
+        path.display()
+    );
+    Ok(Some(GeneMapOpts {
+        path,
+        ignore_tx_version,
+        map,
+    }))
 }
 
 /// Name of the file under `aux_info/` listing transcripts the gene map did not
@@ -927,8 +964,8 @@ fn write_gene_level(
     tpm: &[f64],
     counts: &[f64],
 ) -> Result<()> {
-    let map = salmon_core::genemap::read_transcript_gene_map(&gene_map.path)
-        .with_context(|| format!("reading gene map {}", gene_map.path.display()))?;
+    // Parsed up front by `load_gene_map`, so nothing here can fail on a bad path.
+    let map = &gene_map.map;
     // Listed by name rather than only counted, so the failure survives a lost
     // terminal and can be fed straight back into whatever built the annotation.
     let unmatched_list = out_dir.join("aux_info").join(UNMATCHED_TXP_FILE);
@@ -939,7 +976,7 @@ fn write_gene_level(
         eff_lengths,
         tpm,
         counts,
-        &map,
+        map,
         gene_map.ignore_tx_version,
         Some(&unmatched_list),
     )
@@ -947,11 +984,12 @@ fn write_gene_level(
 
     if summary.unmatched > 0 {
         eprintln!(
-            "warning: {} of {} transcript(s) had no entry in the gene map. Each was written to \
-             quant.genes.sf as its own single-transcript gene, so those rows are named by \
-             transcript, not by gene. Their names are listed in {}",
+            "warning: {} of {} transcript(s) had no entry in the gene map {}. Each was \
+             written to quant.genes.sf as its own single-transcript gene, so those rows are \
+             named by transcript, not by gene. Their names are listed in {}",
             summary.unmatched,
             summary.total(),
+            gene_map.path.display(),
             unmatched_list.display()
         );
     }
@@ -971,7 +1009,7 @@ fn write_gene_level(
             summary.genes_written,
             summary.unmatched
         );
-        let would_match = salmon_core::genemap::matches_ignoring_tx_version(names, &map);
+        let would_match = salmon_core::genemap::matches_ignoring_tx_version(names, map);
         if !gene_map.ignore_tx_version && would_match > summary.matched {
             eprintln!(
                 "warning: {would_match} would match with --ignoreTxVersion, which compares \
@@ -1357,10 +1395,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         .num_threads(nthreads)
         .build_global();
     let out_dir = args.output.clone();
-    let gene_map = args.gene_map.clone().map(|path| GeneMapOpts {
-        path,
-        ignore_tx_version: args.ignore_tx_version,
-    });
+    let gene_map = load_gene_map(args.gene_map.clone(), args.ignore_tx_version)?;
     // `--meta` (metagenomic preset) forces plain EM (no VBEM) and disables rich /
     // range-factorized equivalence classes, matching salmon's --meta. salmon's
     // preset also sets initUniform; the Rust offline EM already initializes
@@ -2141,5 +2176,38 @@ mod tests {
             quant_args(&["--fldPolicy", "bogus"]).map(|_| ()).is_err(),
             "unknown policies must be rejected"
         );
+    }
+
+    /// `--geneMap` is read before any quantification work, so an unusable
+    /// annotation fails immediately rather than after mapping, inference and
+    /// `quant.sf` have all completed (#1074).
+    #[test]
+    fn gene_map_is_validated_before_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Absent option: nothing to load, and nothing to complain about.
+        assert!(load_gene_map(None, false).unwrap().is_none());
+
+        // A path that does not exist fails here, where no work has been done yet.
+        let missing = dir.path().join("nope.gtf");
+        let err = load_gene_map(Some(missing.clone()), false).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("nope.gtf"),
+            "the error should name the annotation, got: {err:#}"
+        );
+
+        // A usable annotation is parsed once, up front, and carried on the opts.
+        let gtf = dir.path().join("genes.gtf");
+        std::fs::write(
+            &gtf,
+            "chr1\tsrc\ttranscript\t1\t100\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T1\";\n\
+             chr1\tsrc\ttranscript\t1\t100\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T2\";\n",
+        )
+        .unwrap();
+        let opts = load_gene_map(Some(gtf.clone()), true).unwrap().unwrap();
+        assert_eq!(opts.path, gtf);
+        assert!(opts.ignore_tx_version);
+        assert_eq!(opts.map.get("T1").map(String::as_str), Some("G1"));
+        assert_eq!(opts.map.get("T2").map(String::as_str), Some("G1"));
     }
 }
