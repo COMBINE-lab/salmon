@@ -1044,7 +1044,11 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !maps.is_empty() {
                     let rec = build_rad_record(&maps);
-                    let _ = buf.write(&rec, rad.context());
+                    buf.write(&rec, rad.context()).map_err(|e| {
+                        paraseq::Error::from(std::io::Error::other(format!(
+                            "serializing RAD record: {e:#}"
+                        )))
+                    })?;
                 }
             }
             if let Some(acc) = sh.discrete_fld {
@@ -1072,7 +1076,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         self.shared.fld.refresh_online();
         flush_sam(self)?;
         flush_bam(self)?;
-        flush_rad(self);
+        flush_rad(self)?;
         Ok(())
     }
 
@@ -1081,7 +1085,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         merge_unmapped(self);
         flush_sam(self)?;
         flush_bam(self)?;
-        flush_rad(self);
+        flush_rad(self)?;
         Ok(())
     }
 }
@@ -1170,7 +1174,11 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !maps.is_empty() {
                     let radrec = build_rad_record(&maps);
-                    let _ = buf.write(&radrec, rad.context());
+                    buf.write(&radrec, rad.context()).map_err(|e| {
+                        paraseq::Error::from(std::io::Error::other(format!(
+                            "serializing RAD record: {e:#}"
+                        )))
+                    })?;
                 }
             }
             if let Some(acc) = sh.discrete_fld {
@@ -1198,7 +1206,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         self.shared.fld.refresh_online();
         flush_sam(self)?;
         flush_bam(self)?;
-        flush_rad(self);
+        flush_rad(self)?;
         Ok(())
     }
 
@@ -1207,7 +1215,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         merge_unmapped(self);
         flush_sam(self)?;
         flush_bam(self)?;
-        flush_rad(self);
+        flush_rad(self)?;
         Ok(())
     }
 }
@@ -1268,15 +1276,20 @@ fn build_rad_record(maps: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecord {
 }
 
 /// Flush this thread's accumulated RAD records as one chunk to the shared writer.
-fn flush_rad(proc: &mut QuantProcessor) {
+///
+/// Errors here are fatal and must propagate: this is the only point at which a
+/// RAD write actually reaches the filesystem, so discarding the result means a
+/// full disk (`ENOSPC`) or an I/O error silently yields a truncated RAD that the
+/// run then reports as successful. See salmon#1105.
+fn flush_rad(proc: &mut QuantProcessor) -> paraseq::Result<()> {
     if let (Some(rad), Some(buf)) = (proc.shared.rad, proc.rad_buf.as_mut()) {
         if buf.nrec() > 0 {
-            match buf.take_bytes() {
-                Ok(bytes) => {
-                    let _ = rad.append_chunk_bytes(&bytes);
-                }
-                Err(e) => tracing::error!("failed to serialize RAD chunk: {e}"),
-            }
+            let bytes = buf
+                .take_bytes()
+                .map_err(|e| paraseq::Error::from(std::io::Error::other(e.to_string())))?;
+            rad.append_chunk_bytes(&bytes)
+                .map_err(|e| paraseq::Error::from(std::io::Error::other(format!("{e:#}"))))?;
         }
     }
+    Ok(())
 }

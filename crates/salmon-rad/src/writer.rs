@@ -25,9 +25,10 @@
 //! unordered bag and salmon's determinism comes from order-independent
 //! aggregation downstream, not from file order.
 
+use anyhow::Context;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use libradicl::chunk::ChunkBuf;
 use libradicl::header::RadPrelude;
@@ -40,6 +41,10 @@ use crate::{schema, RadProfile, BAKED_ABUND, BAKED_FLD, BAKED_LIBFMT, BAKED_SCOR
 
 /// Shared, thread-safe RAD output sink for one file.
 pub struct RadOutputWriter {
+    /// where the finished file should end up
+    final_path: PathBuf,
+    /// where bytes are actually written until `finalize` renames it
+    partial_path: PathBuf,
     /// The underlying file, wrapped so that appends from many threads are safe.
     ccw: ConcurrentChunkWriter<BufWriter<File>>,
     /// Which profile records are written in (decides the per-hit layout).
@@ -62,6 +67,19 @@ pub struct RadOutputWriter {
     codec: ChunkCodec,
 }
 
+/// The sibling path a RAD file is written to before it is finalized.
+///
+/// Keeping it next to the destination (rather than in a temp dir) means the
+/// final rename is within one filesystem, so it is atomic; a cross-device rename
+/// would degrade to a copy and reintroduce the partial-file window this exists
+/// to close. The pid keeps concurrent runs targeting the same output from
+/// colliding.
+fn partial_path_for(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".partial-{}", std::process::id()));
+    path.with_file_name(name)
+}
+
 impl RadOutputWriter {
     /// Create a RAD file at `path`, writing the prelude + file tags for the
     /// given profile. `ref_names`/`ref_lengths` cover the full reference table.
@@ -78,13 +96,25 @@ impl RadOutputWriter {
     ) -> anyhow::Result<Self> {
         let (prelude, file_tag_map): (RadPrelude, _) =
             schema::build_prelude(profile, is_paired, ref_names, ref_lengths, fld_len, codec);
+        // Write to a sibling temporary path and rename onto `path` only once the
+        // run has finalized successfully. A partial RAD therefore never appears
+        // under the name the user asked for, so a later `--rad` run cannot pick
+        // one up believing it is complete. Rename rather than delete-on-error,
+        // because rename is atomic and also covers `SIGKILL`, where no cleanup
+        // code of ours would run at all.
+        let partial_path = partial_path_for(path);
         // `BufWriter` batches small writes into large ones; without it every
         // chunk append would become a separate system call.
-        let file = BufWriter::new(File::create(path)?);
+        let file = BufWriter::new(
+            File::create(&partial_path)
+                .with_context(|| format!("creating RAD output file {}", partial_path.display()))?,
+        );
         // Writing the prelude here means the file is valid (if empty) from the
         // moment it is created.
         let fw = RadFileWriter::new(file, &prelude, &file_tag_map)?;
         Ok(Self {
+            final_path: path.to_path_buf(),
+            partial_path,
             ccw: ConcurrentChunkWriter::new(fw),
             ctx: SalmonBulkContext { profile },
             fld_len,
@@ -142,7 +172,13 @@ impl RadOutputWriter {
     /// Append a fully-framed chunk (from [`FragmentChunkBuf::take_bytes`]) to the
     /// file. Thread-safe: takes `&self`, so every worker can call it directly.
     pub fn append_chunk_bytes(&self, bytes: &[u8]) -> anyhow::Result<()> {
-        self.ccw.append_chunk_bytes(bytes)
+        self.ccw.append_chunk_bytes(bytes).with_context(|| {
+            format!(
+                "writing RAD chunk to {}\n  \
+                 the incomplete file has been left there; it is NOT usable as `--rad` input",
+                self.partial_path.display()
+            )
+        })
     }
 
     /// Backpatch any baked FLD / abundances + the `baked_flags` marker, then flush
@@ -191,11 +227,40 @@ impl RadOutputWriter {
                 flags |= BAKED_SCORE_KIND;
             }
         }
-        if flags != 0 {
-            w.backpatch_file_tag_value(crate::BAKED_FLAGS_TAG, &TagValue::U8(flags))?;
-        }
+        // Reaching here means every chunk was written and the header is about to
+        // be patched, so record completeness alongside whatever else was baked.
+        // See `WRITE_COMPLETE`: readers treat this as confirmatory, never required.
+        flags |= crate::WRITE_COMPLETE;
+        w.backpatch_file_tag_value(crate::BAKED_FLAGS_TAG, &TagValue::U8(flags))?;
         // Writes the final chunk count into the header and flushes the file.
-        w.finalize()?;
+        let buf = w
+            .finalize()
+            .with_context(|| format!("finalizing {}", self.partial_path.display()))?;
+        // `into_inner` flushes, and unlike dropping the `BufWriter` it reports a
+        // failure to do so rather than swallowing it.
+        let file = buf.into_inner().map_err(|e| {
+            anyhow::anyhow!(
+                "flushing {}: {}",
+                self.partial_path.display(),
+                e.into_error()
+            )
+        })?;
+        // Flush to the device before the rename makes this the user-visible
+        // output. On NFS in particular a deferred `ENOSPC` surfaces only here, so
+        // dropping the handle instead would discard exactly the error this fix
+        // exists to report (salmon#1105).
+        file.sync_all()
+            .with_context(|| format!("flushing {} to disk", self.partial_path.display()))?;
+        // Only now does the output take the name the user asked for. Any failure
+        // before this point leaves the bytes under the `.partial-*` name, where a
+        // later `--rad` run will not mistake them for a complete file.
+        std::fs::rename(&self.partial_path, &self.final_path).with_context(|| {
+            format!(
+                "renaming {} to {}",
+                self.partial_path.display(),
+                self.final_path.display()
+            )
+        })?;
         Ok(())
     }
 }

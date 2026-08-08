@@ -198,6 +198,15 @@ pub const BAKED_LIBFMT: u8 = 0x04;
 /// [`BAKED_FLAGS_TAG`] bit: a non-default [`SCORE_KIND_TAG`] is present (the
 /// per-hit score is a quantized log-weight, not a raw aligner `AS`).
 pub const BAKED_SCORE_KIND: u8 = 0x08;
+/// [`BAKED_FLAGS_TAG`] bit: the writer reached finalize, so the file is complete.
+///
+/// This is **confirmatory only**. Its presence proves the file was fully
+/// written; its absence proves nothing, because a conforming producer may stream
+/// a RAD file without ever backpatching (the same reason `num_chunks == 0` is a
+/// valid "unknown chunk count" signal). Readers may use it as a fast path, but
+/// must never require it, or they would reject legitimate files from other
+/// tools.
+pub const WRITE_COMPLETE: u8 = 0x10;
 
 /// File-tag name: how a reader should interpret the per-hit `alignment_score`
 /// (present only in the selective-alignment profile). A `u8`:

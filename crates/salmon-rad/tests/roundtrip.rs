@@ -97,6 +97,19 @@ fn read_all(
     (prelude, ref_lengths, ctx, recs)
 }
 
+/// Read one file tag by name from a written RAD file.
+fn read_file_tag(path: &std::path::Path, name: &str) -> TagValue {
+    let mut data = Vec::new();
+    std::fs::File::open(path)
+        .unwrap()
+        .read_to_end(&mut data)
+        .unwrap();
+    let mut rc = Cursor::new(data);
+    let prelude = RadPrelude::from_bytes(&mut rc).unwrap();
+    let ftm = prelude.file_tags.parse_tags_from_bytes(&mut rc).unwrap();
+    ftm.get(name).unwrap().clone()
+}
+
 fn check_roundtrip(profile: RadProfile, expected_detect: RadInputProfile) {
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let recs = sample_records(profile);
@@ -219,4 +232,86 @@ fn concurrent_writer_counts_chunks() {
     let (prelude, _, _, got) = read_all(tmp.path());
     assert_eq!(prelude.hdr.num_chunks, 4, "one chunk per thread");
     assert_eq!(got.len(), 4, "all four records present");
+}
+
+/// A RAD file must only take the name the user asked for once it is complete.
+///
+/// Regression test for salmon#1105: a run that died mid-write (a full disk) left
+/// a truncated file at the requested path, and a later `--rad` run consumed it
+/// as if it were whole.
+#[test]
+fn abandoned_write_never_claims_the_final_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.rad");
+    let names = ["t0", "t1", "t2"];
+    let lens = [100u32, 200, 300];
+
+    let w = RadOutputWriter::create(
+        &path,
+        &names,
+        &lens,
+        true,
+        RadProfile::SelectiveAlignment,
+        1024,
+        ChunkCodec::None,
+    )
+    .unwrap();
+    let ctx: SalmonBulkContext = *w.context();
+    let mut cb = FragmentChunkBuf::with_capacity_codec(1024, ChunkCodec::None);
+    for r in &sample_records(RadProfile::SelectiveAlignment) {
+        cb.write(r, &ctx).unwrap();
+    }
+    w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
+    // Simulates the run dying before finalize: chunks are on disk, but the
+    // header was never backpatched.
+    drop(w);
+
+    assert!(
+        !path.exists(),
+        "an unfinalized write must not appear at the requested path"
+    );
+    let partials: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("out.rad.partial-"))
+        .collect();
+    assert_eq!(
+        partials.len(),
+        1,
+        "the incomplete bytes should remain under a `.partial-*` name, found {partials:?}"
+    );
+}
+
+/// `finalize` renames the partial into place and marks the file complete.
+#[test]
+fn finalize_renames_and_marks_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.rad");
+    write_file_codec(
+        &path,
+        RadProfile::SelectiveAlignment,
+        &sample_records(RadProfile::SelectiveAlignment),
+        ChunkCodec::None,
+    );
+
+    assert!(
+        path.exists(),
+        "finalize should rename the partial into place"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains(".partial-"))
+        .collect();
+    assert!(leftovers.is_empty(), "partial left behind: {leftovers:?}");
+
+    let flags = match read_file_tag(&path, salmon_rad::BAKED_FLAGS_TAG) {
+        TagValue::U8(v) => v,
+        other => panic!("baked_flags should be a u8, got {other:?}"),
+    };
+    assert_ne!(
+        flags & salmon_rad::WRITE_COMPLETE,
+        0,
+        "a finalized file should carry the confirmatory completeness bit"
+    );
 }
