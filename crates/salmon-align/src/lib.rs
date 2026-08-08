@@ -559,7 +559,10 @@ fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
     let mut cur_name: Option<String> = None;
     let mut cur_seq: Vec<u8> = Vec::new();
     for line in reader.lines() {
-        let line = line?;
+        // Named here as well as at open: decompression failures surface while
+        // reading, not while opening, so without this a truncated file reports a
+        // bare "unexpected end of file" with nothing to say which file.
+        let line = line.with_context(|| format!("reading {}", path.display()))?;
         if let Some(stripped) = line.strip_prefix('>') {
             if let Some(n) = cur_name.take() {
                 by_name.insert(n, std::mem::take(&mut cur_seq));
@@ -572,10 +575,39 @@ fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
     if let Some(n) = cur_name.take() {
         by_name.insert(n, cur_seq);
     }
-    Ok(names
+
+    // This is only reached when the user asked for the error or bias models and
+    // supplied `-t`, so a file with no records in it is a mistake, not a choice.
+    // Left unchecked it is silent: every reference resolves to an empty sequence,
+    // the models quietly contribute nothing, and the run reports success with
+    // numbers that differ from what was asked for.
+    anyhow::ensure!(
+        !by_name.is_empty(),
+        "no sequences found in {}: expected FASTA records beginning with '>'. \
+         The error and sequence-bias models are built from this file, so an empty \
+         or non-FASTA one would silently disable them rather than fail.",
+        path.display()
+    );
+
+    let seqs: Vec<Vec<u8>> = names
         .iter()
         .map(|n| by_name.remove(n).unwrap_or_default())
-        .collect())
+        .collect();
+    // Not an error: a transcriptome legitimately need not cover every reference
+    // in the alignment header. But *no* overlap means the wrong file, which
+    // otherwise presents as models that do nothing rather than as a mistake.
+    if seqs.iter().all(|s| s.is_empty()) {
+        tracing::warn!(
+            "none of the {} reference(s) in the alignment input were found in {}. \
+             The error and sequence-bias models will contribute nothing. This \
+             usually means the FASTA does not match the alignments — check that it \
+             is the transcriptome they were aligned against, and that identifiers \
+             match (versioned vs unversioned, or a GENCODE-style `|` header).",
+            names.len(),
+            path.display()
+        );
+    }
+    Ok(seqs)
 }
 
 /// One alignment record needed by the error model / weighting.
@@ -2694,5 +2726,67 @@ mod tests {
         let opts = AlignQuantOptions::new("x.rad".into(), "out".into());
         assert_eq!(opts.fld_policy, FldPolicy::Baked);
         assert!(!opts.explicit_fld_args.any());
+    }
+
+    /// `-t` is only read when the error or bias models need it, so a file with no
+    /// records in it is a mistake. Unchecked it is silent: every reference
+    /// resolves to an empty sequence and the models contribute nothing, while the
+    /// run reports success.
+    #[test]
+    fn empty_reference_fasta_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = vec!["t0".to_string(), "t1".to_string()];
+
+        for (label, contents) in [
+            ("empty file", ""),
+            ("no FASTA records", "just some text\nwith no header line\n"),
+        ] {
+            let p = dir.path().join("ref.fa");
+            std::fs::write(&p, contents).unwrap();
+            let err = load_ref_bytes(&p, &names).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("no sequences found") && msg.contains("ref.fa"),
+                "{label}: the error should say what is wrong and name the file, got: {msg}"
+            );
+        }
+    }
+
+    /// A read failure surfaces mid-stream rather than at open, so the path has to
+    /// be attached there too or a truncated file reports a bare
+    /// "unexpected end of file".
+    #[test]
+    fn read_errors_name_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("truncated.fa.gz");
+        // A gzip header and the start of a member, cut off before the end.
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        enc.write_all(b">t0\nACGTACGTACGTACGTACGTACGTACGT\n")
+            .unwrap();
+        let full = enc.finish().unwrap();
+        std::fs::write(&p, &full[..full.len() - 6]).unwrap();
+
+        let err = load_ref_bytes(&p, &["t0".to_string()]).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("truncated.fa.gz"),
+            "a mid-stream failure should still name the file, got: {msg}"
+        );
+    }
+
+    /// Partial coverage is legitimate — a transcriptome need not cover every
+    /// reference in the alignment header — so it must not be an error.
+    #[test]
+    fn partial_reference_coverage_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ref.fa");
+        std::fs::write(&p, ">t0\nACGT\n").unwrap();
+        let got = load_ref_bytes(&p, &["t0".to_string(), "absent".to_string()]).unwrap();
+        assert_eq!(got[0], b"ACGT");
+        assert!(
+            got[1].is_empty(),
+            "an absent reference yields an empty sequence"
+        );
     }
 }
