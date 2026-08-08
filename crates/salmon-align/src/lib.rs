@@ -1439,19 +1439,27 @@ pub struct SourceProgram {
     pub description: Option<String>,
 }
 
-/// Render a BAM header's `@PG` chain as verbatim SAM lines.
+/// Render a BAM header's `@PG` chain as SAM lines.
 ///
 /// Kept as text on the way into a RAD so nothing the aligner recorded is dropped
 /// in transit; [`parse_source_programs`] reads them back. Empty when the header
 /// has no `@PG` records at all, which is common enough — plenty of tools write
 /// none — that callers must treat it as ordinary rather than exceptional.
+///
+/// Values are escaped rather than passed through raw. RAD imposes nothing here:
+/// it stores a string as an explicit length followed by bytes, so it would carry
+/// any content. The constraint is entirely from *this* representation — records
+/// joined by newlines, fields by tabs — so those characters are escaped to keep
+/// the framing unambiguous, and [`parse_source_programs`] restores them. SAM
+/// forbids them in header values anyway, so it only matters for a malformed
+/// input, where preserving the value beats silently rewriting it.
 pub fn source_program_lines(header: &noodles_sam::Header) -> Vec<String> {
-    header
+    let mut lines: Vec<String> = header
         .programs()
         .as_ref()
         .iter()
         .map(|(id, program)| {
-            let mut line = format!("@PG\tID:{}", sanitize_header_value(id.as_ref()));
+            let mut line = format!("@PG\tID:{}", escape_header_value(id.as_ref()));
             // Every tag the aligner wrote is carried through, standard or not:
             // this is provenance, not a schema to validate against.
             for (tag, value) in program.other_fields() {
@@ -1459,22 +1467,76 @@ pub fn source_program_lines(header: &noodles_sam::Header) -> Vec<String> {
                 line.push_str(&format!(
                     "\t{}:{}",
                     String::from_utf8_lossy(t),
-                    sanitize_header_value(value.as_ref())
+                    escape_header_value(value.as_ref())
                 ));
             }
             line
         })
-        .collect()
+        .collect();
+
+    // A RAD string tag is length-prefixed with a `u16`, and that length is cast
+    // rather than checked, so an over-long value wraps and corrupts the file
+    // instead of failing. Drop whole trailing records until the chain fits: a
+    // shortened chain is a poor outcome, an unreadable RAD a far worse one.
+    while !lines.is_empty() && joined_len(&lines) > salmon_rad::MAX_FILE_TAG_STRING_LEN {
+        let dropped = lines.pop().unwrap_or_default();
+        tracing::warn!(
+            "the @PG chain is longer than the {} bytes a RAD string tag holds; \
+             dropping its trailing record ({}...) so the file stays readable",
+            salmon_rad::MAX_FILE_TAG_STRING_LEN,
+            dropped.chars().take(60).collect::<String>()
+        );
+    }
+    lines
 }
 
-/// Flatten the separators a SAM header value must not contain.
+/// Length of the newline-joined form the RAD tag actually stores.
+fn joined_len(lines: &[String]) -> usize {
+    lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1)
+}
+
+/// Escape the characters that frame the joined `@PG` representation.
 ///
-/// The spec forbids tabs and newlines here, but a malformed file can carry them,
-/// and they are exactly the two characters this round trip is framed by: a tab
-/// would invent a field and a newline would split one record into two. Replacing
-/// them keeps a bad header from silently corrupting the neighbouring provenance.
-fn sanitize_header_value(value: &[u8]) -> String {
-    String::from_utf8_lossy(value).replace(['\t', '\n', '\r'], " ")
+/// Backslash is escaped too, so the mapping is reversible: without it a value
+/// containing a literal backslash-n (two characters) would be indistinguishable
+/// from an escaped newline.
+fn escape_header_value(value: &[u8]) -> String {
+    let mut out = String::new();
+    for c in String::from_utf8_lossy(value).chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Reverse [`escape_header_value`]. An unrecognized escape is left as written,
+/// so text that was never escaped survives unchanged.
+fn unescape_header_value(value: &str) -> String {
+    let mut out = String::new();
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// Parse `@PG` lines produced by [`source_program_lines`] back into records.
@@ -1492,7 +1554,7 @@ pub fn parse_source_programs(lines: &[String]) -> Vec<SourceProgram> {
                 let Some((tag, value)) = field.split_once(':') else {
                     continue;
                 };
-                let value = value.to_string();
+                let value = unescape_header_value(value);
                 match tag {
                     "ID" => prog.id = value,
                     "PN" => prog.program_name = Some(value),

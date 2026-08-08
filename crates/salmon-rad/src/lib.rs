@@ -241,6 +241,13 @@ pub const INDEX_DECOY_NAME_HASH_TAG: &str = "index_decoy_name_hash";
 /// Written only when the index actually recorded it; absent means unknown,
 /// which a reader must not collapse to `false`.
 pub const KEEP_DUPLICATES_TAG: &str = "keep_duplicates";
+/// The longest string a RAD file tag can hold.
+///
+/// A string tag is written as a `u16` length followed by its bytes, and that
+/// length is cast rather than checked, so anything longer wraps and corrupts the
+/// file rather than failing to write. Producers must fit their values to this.
+pub const MAX_FILE_TAG_STRING_LEN: usize = u16::MAX as usize;
+
 /// File-tag name: the `@PG` header records of the BAM these fragments came from,
 /// verbatim, one per line.
 ///

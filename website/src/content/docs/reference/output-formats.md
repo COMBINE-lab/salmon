@@ -290,7 +290,7 @@ Three salmon-relevant details on top of the base format:
   | `index_seq_hash`, `index_name_hash`, and the `512` / `decoy` variants | identity of the index the mappings were made against |
   | `keep_duplicates` | how that index was built (omitted if the index predates recording it) |
   | `mapping_type` | `mapping`, `pseudo` or `alignment` |
-  | `source_programs` | the source BAM's `@PG` lines, verbatim, for an alignment-derived RAD |
+  | `source_programs` | the source BAM's `@PG` lines, for an alignment-derived RAD |
 
   The counters are only final at end of pass, so their slots are reserved and
   backpatched at finalize; the `BAKED_MAP_COUNTERS` bit in `baked_flags` says
@@ -305,10 +305,19 @@ Three salmon-relevant details on top of the base format:
   records the gap in `meta_info.json` (see below).
 
 - **Alignment provenance.** A RAD built from a BAM carries that BAM's `@PG`
-  header chain verbatim, so a requant can report *how* the alignments were made
+  header chain, so a requant can report *how* the alignments were made
   — the aligner, its version and its command line — rather than only that they
   were alignments. It reappears as `alignment_provenance` in `meta_info.json`,
   for both `-a` and a requant of a BAM-derived RAD.
+
+  The chain is stored as one string tag holding the `@PG` lines joined by
+  newlines. RAD imposes no restriction on the content — a string tag is an
+  explicit length followed by bytes — so the only constraints come from that
+  representation, and both are handled rather than assumed away: tabs, newlines
+  and backslashes inside a value are escaped so the framing stays unambiguous and
+  reversible, and because the length prefix is a `u16`, a chain longer than 64 KiB
+  has whole trailing records dropped (with a warning) rather than being allowed to
+  wrap the length and corrupt the file.
 - **Chunk compression (`chunk_codec`).** With compression enabled (the default;
   see `--radCompress`), each chunk's record payload is compressed independently
   and the `nbytes` field is the **compressed** size; the uncompressed size is

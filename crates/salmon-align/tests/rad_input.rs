@@ -1019,23 +1019,67 @@ fn pg_record_without_command_line_is_still_reported() {
 }
 
 /// A tab or newline inside a header value would invent a field or split a
-/// record. The SAM spec forbids both, but a malformed file can carry them, and
-/// they must not corrupt the neighbouring provenance.
+/// record. RAD itself would carry either happily — it length-prefixes strings —
+/// so the constraint comes from this newline-joined, tab-separated
+/// representation, and escaping keeps it reversible rather than rewriting the
+/// value.
 #[test]
-fn separators_in_header_values_do_not_corrupt_the_chain() {
-    // Built directly, since a conforming parser would not produce this.
-    let lines = vec![
-        "@PG\tID:a\tCL:cmd one\tVN:1".to_string(),
-        "@PG\tID:b\tCL:cmd two".to_string(),
-    ];
-    let progs = salmon_align::parse_source_programs(&lines);
-    assert_eq!(progs.len(), 2);
-    assert_eq!(progs[0].command_line.as_deref(), Some("cmd one"));
-    assert_eq!(progs[1].id, "b");
+fn separators_in_header_values_survive_escaping() {
+    // Built through the real parser, so the escaping is whatever the writer does.
+    let sam = "@HD\tVN:1.6\n@SQ\tSN:t0\tLN:100\n@PG\tID:a\tCL:x\n";
+    let header: noodles_sam::Header = sam.parse().unwrap();
+    assert_eq!(salmon_align::source_program_lines(&header).len(), 1);
 
-    // The join/split round trip the RAD uses must preserve record boundaries.
+    // A value carrying the framing characters, and a literal backslash-n that
+    // must not be confused with an escaped newline.
+    let escaped = "@PG\tID:a\tCL:one\\ttwo\\nthree\\\\nfour\tVN:1".to_string();
+    let progs = salmon_align::parse_source_programs(&[escaped.clone()]);
+    assert_eq!(progs.len(), 1, "escapes must not split the record");
+    assert_eq!(
+        progs[0].command_line.as_deref(),
+        Some("one\ttwo\nthree\\nfour"),
+        "escapes must decode back to the original bytes"
+    );
+    assert_eq!(
+        progs[0].version.as_deref(),
+        Some("1"),
+        "later fields survive"
+    );
+
+    // The joined form the RAD stores must still split into whole records.
+    let lines = vec![escaped, "@PG\tID:b\tCL:plain".to_string()];
     let joined = lines.join("\n");
     let split: Vec<String> = joined.split('\n').map(str::to_string).collect();
-    assert_eq!(split, lines);
+    assert_eq!(split, lines, "an escaped newline must not create a record");
     assert_eq!(salmon_align::parse_source_programs(&split).len(), 2);
+}
+
+/// A RAD string tag is length-prefixed with a `u16` and the length is *cast*, so
+/// an over-long chain would wrap and corrupt the file rather than fail. The
+/// writer must fit the chain instead of handing one over.
+#[test]
+fn overlong_pg_chain_is_trimmed_to_what_a_rad_tag_holds() {
+    let long_cl = "x".repeat(20_000);
+    let mut sam = String::from("@HD\tVN:1.6\n@SQ\tSN:t0\tLN:100\n");
+    for i in 0..8 {
+        sam.push_str(&format!("@PG\tID:p{i}\tCL:{long_cl}\n"));
+    }
+    let header: noodles_sam::Header = sam.parse().unwrap();
+    let lines = salmon_align::source_program_lines(&header);
+
+    let joined_len = lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1);
+    assert!(
+        joined_len <= salmon_rad::MAX_FILE_TAG_STRING_LEN,
+        "the joined chain ({joined_len} bytes) must fit a u16 length"
+    );
+    assert!(
+        !lines.is_empty() && lines.len() < 8,
+        "records should be dropped, not all of them and not none: got {}",
+        lines.len()
+    );
+    // What survives is whole records, still parseable.
+    assert_eq!(
+        salmon_align::parse_source_programs(&lines).len(),
+        lines.len()
+    );
 }
