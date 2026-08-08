@@ -247,10 +247,26 @@ impl Default for KswScratch {
 }
 
 /// Maximum number of cached (kind, query, ref) DP scores per thread. The cache
-/// exists to dedup identical inter-MEM gap / flank alignments across one read's
-/// candidate targets, where the working set is tiny; cross-read reuse is rare
-/// (flanks are read-specific). When the cap is hit we clear the whole cache,
-/// keeping peak memory at a few MB per thread instead of unbounded growth.
+/// dedups identical inter-MEM gap / flank alignments, both across one read's
+/// candidate targets and across reads. When the cap is hit we clear the whole
+/// cache, keeping peak memory at a few MB per thread instead of unbounded growth.
+///
+/// Measured hit rates on 10M paired reads against a GRCh38 cDNA index:
+///
+/// | cache | probes      | hits       | hit rate |
+/// |-------|-------------|------------|----------|
+/// | gap   |   5,044,438 |  4,550,348 |    90.2% |
+/// | flank | 113,786,498 | 57,614,418 |    50.6% |
+///
+/// An earlier version of this comment claimed "cross-read reuse is rare (flanks
+/// are read-specific)" and on that basis the flank cache looked close to
+/// useless. It is not: it avoids ~57.6M DP calls per run, and flank probes
+/// outnumber gap probes 22:1, so the flank path is where both the saved work and
+/// the allocator traffic actually are.
+///
+/// Note these caches are on the default (anchored) scoring path only.
+/// `--fullLengthAlignment` takes the whole-read `ksw2_align_score` branch and
+/// never reaches them (measured: zero probes).
 const GAP_CACHE_CAP: usize = 32_768;
 
 /// Which DP a cache entry holds. Gap and flank scores come from *different*
