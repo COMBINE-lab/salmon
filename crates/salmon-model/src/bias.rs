@@ -53,18 +53,28 @@ const POS_SMOOTH_FRAC: f64 = 0.1;
 /// constant to numerator and denominator leaves well-measured ratios essentially
 /// unchanged while pulling ill-measured ones toward the neutral value.
 pub fn positional_factor(obs: &[f64], exp: &[f64]) -> Vec<f64> {
+    let mut out = Vec::new();
+    positional_factor_into(obs, exp, &mut out);
+    out
+}
+
+/// [`positional_factor`] writing into a caller-provided buffer (cleared first),
+/// so a per-worker `Vec` can be reused across transcripts instead of allocating
+/// a fresh result for each one.
+///
+/// Computes exactly what [`positional_factor`] does; that function is now a thin
+/// wrapper, so the two cannot drift apart.
+pub fn positional_factor_into(obs: &[f64], exp: &[f64], out: &mut Vec<f64>) {
+    out.clear();
     let n = exp.len();
     if n == 0 {
-        return Vec::new();
+        return;
     }
     // Scaling the constant to the mean makes the smoothing strength independent
     // of the arbitrary units the densities happen to be in.
     let mean_exp: f64 = exp.iter().sum::<f64>() / n as f64;
     let c = (POS_SMOOTH_FRAC * mean_exp).max(f64::MIN_POSITIVE);
-    obs.iter()
-        .zip(exp)
-        .map(|(&o, &e)| (o + c) / (e + c))
-        .collect()
+    out.extend(obs.iter().zip(exp).map(|(&o, &e)| (o + c) / (e + c)));
 }
 
 /// The enabled bias terms for one transcript's effective-length correction.
