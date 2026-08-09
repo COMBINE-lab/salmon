@@ -794,26 +794,40 @@ fn record(
     // orphan here.
     //
     // Reading `compat[0]` is sound because every surviving mapping of a fragment
-    // carries the SAME status, so the first is as good as any:
+    // agrees on *orphan-ness*, which is the only thing this test distinguishes:
     //   * selective alignment: `map_read_pair_into` drops all orphans as soon as
     //     one non-decoy concordant pair survives, and `finalize_mappings_counted_into`
     //     never emits decoy mappings — so the set is either all-paired or
     //     all-orphan;
     //   * sketch: `map_read_pair_sketch_into` derives one `status` from the
     //     fragment's `map_type` and stamps it on every accepted hit.
+    //
+    // "All-orphan" does NOT mean one shared status: when neither mate pairs
+    // concordantly to a transcript, mate 1 can orphan onto transcript A while
+    // mate 2 orphans onto transcript B, leaving `PairedEndLeft` and
+    // `PairedEndRight` side by side. Measured on a GRCh38 decoy index, 525 of
+    // 300,000 fragments (0.19%) do exactly that, and no fragment ever mixes
+    // `PairedEndPaired` or `SingleEnd` with anything else. Both orphan statuses
+    // answer this test the same way, so which one sorts first cannot change the
+    // count — but asserting a single shared status was wrong, and aborted debug
+    // builds on any decoy-bearing index (#1115).
+    //
     // Note `compat` is ordered by transcript id (finalize sorts by `tid`), not by
     // score, so this must not be read as "the best mapping" — it is "the status
     // this fragment mapped with", which is well defined.
+    let is_orphan = |i: MapIdx| {
+        matches!(
+            i.get(placements).status,
+            MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+        )
+    };
     debug_assert!(
         compat
             .iter()
-            .all(|&(i, _)| i.get(placements).status == compat[0].0.get(placements).status),
-        "a fragment's surviving mappings must share one status"
+            .all(|&(i, _)| is_orphan(i) == is_orphan(compat[0].0)),
+        "a fragment's surviving mappings must agree on orphan-ness"
     );
-    if matches!(
-        compat[0].0.get(placements).status,
-        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-    ) {
+    if is_orphan(compat[0].0) {
         counters.orphan += 1;
     }
 
