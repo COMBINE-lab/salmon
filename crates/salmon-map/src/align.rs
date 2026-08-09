@@ -111,7 +111,7 @@ pub(crate) fn revcomp(s: &[u8]) -> Vec<u8> {
 
 /// Reverse-complement `s` into `out` (cleared first), reusing its allocation.
 #[inline]
-fn revcomp_into(s: &[u8], out: &mut Vec<u8>) {
+pub(crate) fn revcomp_into(s: &[u8], out: &mut Vec<u8>) {
     out.clear();
     out.extend(s.iter().rev().map(|&b| comp(b)));
 }

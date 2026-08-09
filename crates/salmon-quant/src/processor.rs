@@ -309,9 +309,10 @@ pub(crate) struct RecordScratch {
     log_fps: CompatAligned<f64>,
     /// `(tid, conditional probability)` before duplicate-tid merging
     pairs: Vec<(u32, f64)>,
-    /// reusable table for deduplicating a fragment with many raw mappings; stays
-    /// empty unless a fragment is large enough to take the mapper's hashed path
-    dedup: salmon_map::DedupScratch,
+    /// reusable buffers the mapper fills per fragment: raw mappings, the mate
+    /// reverse complement used in orphan recovery, and the dedup table for
+    /// fragments large enough to take the hashed path
+    map: salmon_map::MapScratch,
 }
 
 pub(crate) struct QuantProcessor<'a> {
@@ -720,7 +721,7 @@ fn record(
         log_fps,
         pairs,
         // Belongs to the mapping step, not to `record`.
-        dedup: _,
+        map: _,
     } = scratch;
 
     // Sample the observed library format for auto-detection (auto mode only).
@@ -1214,7 +1215,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     s1.as_ref(),
                     s2.as_ref(),
                     sh.map_cfg,
-                    &mut scratch.dedup,
+                    &mut scratch.map,
                 );
             }
             // Sketch mappings carry no per-hit decoy flag and bypass the
@@ -1375,7 +1376,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.salmon,
                     s.as_ref(),
                     sh.map_cfg,
-                    &mut scratch.dedup,
+                    &mut scratch.map,
                 );
             }
             // Sketch decoy policy (see the paired-end branch): drop decoy tids /
