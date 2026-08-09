@@ -78,7 +78,7 @@ cf1-rs = "0.5"
 piscem-rs = "0.6.4"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
-libradicl = { version = "0.16", features = ["zstd"] }
+libradicl = { version = "0.17", features = ["zstd"] }
 
 # dev / test helpers
 tempfile = "3"

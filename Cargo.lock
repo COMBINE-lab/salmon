@@ -1614,9 +1614,9 @@ dependencies = [
 
 [[package]]
 name = "libradicl"
-version = "0.16.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94299a663c37ed5a8ad1d759cae19af9b9bbd520aa90d8997457efe2bb5bd5ce"
+checksum = "7518c918544220380ff5ff33b243771a8757872150dd280e6cc9355cddf3043b"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1641,9 +1641,9 @@ dependencies = [
 
 [[package]]
 name = "libradicl-macros"
-version = "0.16.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9705ac0ed56e352381bec395e8822831b922f32a3857b04edf04017e912cb5a4"
+checksum = "9974b750aed4376bb9e67feede0446f5fbba1f3bcf398bf155e5ddee34828824"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2676,6 +2676,7 @@ dependencies = [
  "salmon-index",
  "salmon-map",
  "salmon-quant",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2684,11 +2685,14 @@ dependencies = [
 name = "salmon-core"
 version = "2.4.1"
 dependencies = [
+ "flate2",
  "niffler",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tracing",
+ "zstd",
 ]
 
 [[package]]

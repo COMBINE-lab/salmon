@@ -128,25 +128,13 @@ fn has_gtf_extension(path: &Path) -> bool {
 
 /// Open `path`, transparently decompressing it when it is compressed.
 ///
-/// [`niffler::get_reader`] sniffs the leading magic bytes and returns the
-/// matching decoder — gzip (via `MultiGzDecoder`, so concatenated members and
-/// BGZF are read in full rather than truncated at the first member), bzip2, xz
-/// and zstd — or the stream unchanged when it is plain text. Detection is by
-/// content, so a compressed annotation that kept a bare `.gtf` name still works.
+/// Delegates to [`crate::compress::open_maybe_compressed`] so the gene map is
+/// decoded by exactly the same rules as every other user-supplied input, and
+/// adds this module's path-annotated error context.
 fn open_maybe_compressed(path: &Path) -> io::Result<Box<dyn BufRead>> {
-    let open = || std::fs::File::open(path).map_err(|e| annotate_read_error(path, e));
-    match niffler::get_reader(Box::new(io::BufReader::new(open()?))) {
-        Ok((reader, _format)) => Ok(Box::new(io::BufReader::new(reader))),
-        // niffler reads five bytes to sniff and rejects anything shorter. No
-        // compressed file is that small, so a stub gene map is plain text by
-        // construction; re-open it and let the line loop handle it (an empty or
-        // header-only file still trips the `map.is_empty()` guard below).
-        Err(niffler::Error::FileTooShort) => Ok(Box::new(io::BufReader::new(open()?))),
-        Err(niffler::Error::IOError(e)) => Err(annotate_read_error(path, e)),
-        Err(e) => Err(annotate_read_error(
-            path,
-            io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
-        )),
+    match crate::compress::open_maybe_compressed(path) {
+        Ok(r) => Ok(r),
+        Err(e) => Err(annotate_read_error(path, e)),
     }
 }
 

@@ -63,7 +63,7 @@ use salmon_core::{
     ReadType,
 };
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
-use salmon_infer::{optimize, optimize_with_init, EmOptions};
+use salmon_infer::EmOptions;
 use salmon_model::FragmentLengthDistribution;
 
 const SALMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -271,6 +271,15 @@ impl AlignQuantOptions {
 }
 
 /// Quantification results.
+/// What a quantification run read its fragments from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FragmentSource {
+    /// an alignment file given with `-a`
+    Bam,
+    /// a RAD file given with `--rad`, or written as a `--deterministic` intermediate
+    Rad,
+}
+
 #[derive(Debug, Clone)]
 pub struct AlignQuantResult {
     pub names: Vec<String>,
@@ -280,6 +289,23 @@ pub struct AlignQuantResult {
     pub counts: Vec<f64>,
     pub num_processed: u64,
     pub num_mapped: u64,
+    /// mapped fragments placed as orphans (only one mate mapped).
+    ///
+    /// `Some` whenever the records were tallied, which is any RAD input —
+    /// orphan status is in the records themselves, so this works for a piscem
+    /// RAD too, independently of whether the file carries salmon's provenance.
+    /// `None` for a BAM input, which this path does not tally.
+    pub num_orphan: Option<u64>,
+    /// what the RAD says about the mapping pass that produced it; empty for a
+    /// BAM input, which has no RAD provenance to read
+    pub provenance: crate::rad::RadProvenance,
+    /// verbatim `@PG` lines describing how the fragments were produced: read
+    /// from a BAM's header directly, or carried through a BAM-derived RAD
+    pub source_programs: Vec<String>,
+    /// what this run actually read, which decides which metadata is even
+    /// applicable — an index hash is missing from a RAD requant but simply does
+    /// not apply to a BAM, and blaming a RAD that was never read would be wrong
+    pub source: FragmentSource,
     /// fragment mass dropped in the final min-alpha redistribution (every member
     /// of an equivalence class truncated); normally 0.
     pub inference_truncated_mass: f64,
@@ -533,31 +559,26 @@ fn base_2bit(b: u8) -> u8 {
     }
 }
 
-/// Load a (optionally gzip'd) transcriptome FASTA and return the (ASCII) base
-/// sequences aligned to the BAM's reference order (`names`); a name absent from
-/// the FASTA yields an empty sequence (its model contributions are skipped). The
-/// same bytes feed both the error model (2-bit on the fly) and the bias models.
+/// Load a (optionally compressed) transcriptome FASTA and return the (ASCII)
+/// base sequences aligned to the BAM's reference order (`names`); a name absent
+/// from the FASTA yields an empty sequence (its model contributions are
+/// skipped). The same bytes feed both the error model (2-bit on the fly) and the
+/// bias models.
+///
+/// Compression is detected from content, so gzip/BGZF, bzip2, xz and zstd all
+/// work regardless of how the file is named.
 fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut magic = [0u8; 2];
-    let is_gz = {
-        use std::io::Read;
-        let mut f = std::fs::File::open(path)?;
-        f.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b]
-    };
-    let reader: Box<dyn BufRead> = if is_gz {
-        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(
-            file,
-        )))
-    } else {
-        Box::new(std::io::BufReader::new(file))
-    };
+    let reader: Box<dyn BufRead> = salmon_core::compress::open_maybe_compressed(path)
+        .with_context(|| format!("opening {}", path.display()))?;
 
     let mut by_name: HashMap<String, Vec<u8>> = HashMap::new();
     let mut cur_name: Option<String> = None;
     let mut cur_seq: Vec<u8> = Vec::new();
     for line in reader.lines() {
-        let line = line?;
+        // Named here as well as at open: decompression failures surface while
+        // reading, not while opening, so without this a truncated file reports a
+        // bare "unexpected end of file" with nothing to say which file.
+        let line = line.with_context(|| format!("reading {}", path.display()))?;
         if let Some(stripped) = line.strip_prefix('>') {
             if let Some(n) = cur_name.take() {
                 by_name.insert(n, std::mem::take(&mut cur_seq));
@@ -570,10 +591,39 @@ fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
     if let Some(n) = cur_name.take() {
         by_name.insert(n, cur_seq);
     }
-    Ok(names
+
+    // This is only reached when the user asked for the error or bias models and
+    // supplied `-t`, so a file with no records in it is a mistake, not a choice.
+    // Left unchecked it is silent: every reference resolves to an empty sequence,
+    // the models quietly contribute nothing, and the run reports success with
+    // numbers that differ from what was asked for.
+    anyhow::ensure!(
+        !by_name.is_empty(),
+        "no sequences found in {}: expected FASTA records beginning with '>'. \
+         The error and sequence-bias models are built from this file, so an empty \
+         or non-FASTA one would silently disable them rather than fail.",
+        path.display()
+    );
+
+    let seqs: Vec<Vec<u8>> = names
         .iter()
         .map(|n| by_name.remove(n).unwrap_or_default())
-        .collect())
+        .collect();
+    // Not an error: a transcriptome legitimately need not cover every reference
+    // in the alignment header. But *no* overlap means the wrong file, which
+    // otherwise presents as models that do nothing rather than as a mistake.
+    if seqs.iter().all(|s| s.is_empty()) {
+        tracing::warn!(
+            "none of the {} reference(s) in the alignment input were found in {}. \
+             The error and sequence-bias models will contribute nothing. This \
+             usually means the FASTA does not match the alignments — check that it \
+             is the transcriptome they were aligned against, and that identifiers \
+             match (versioned vs unversioned, or a GENCODE-style `|` header).",
+            names.len(),
+            path.display()
+        );
+    }
+    Ok(seqs)
 }
 
 /// One alignment record needed by the error model / weighting.
@@ -650,24 +700,27 @@ fn kind_to_op(k: Kind) -> AlnOp {
     }
 }
 
-/// Does this path name a SAM file (plain or gzipped) rather than a BAM?
+/// Does this path name a SAM file rather than a BAM, whatever it is compressed
+/// with?
+///
+/// SAM-vs-BAM is a name question, and compression is a content question, so any
+/// compression suffix is stripped before asking: `aln.sam.zst` is a SAM file
+/// that happens to be zstd, and routing it to the BAM reader produced a report
+/// about an invalid BGZF header for a file that was never BGZF.
 fn is_sam_path(p: &Path) -> bool {
     let s = p.to_string_lossy().to_ascii_lowercase();
-    s.ends_with(".sam") || s.ends_with(".sam.gz")
+    salmon_core::compress::strip_compression_extension(&s).ends_with(".sam")
 }
 
-/// Open a SAM file (transparently gunzipping `.sam.gz`) as a noodles reader over
-/// a boxed `BufRead`, so plain and gzipped inputs share one concrete type.
+/// Open a SAM file (transparently decompressing it) as a noodles reader over a
+/// boxed `BufRead`, so every input shares one concrete type.
+///
+/// Compression is detected from content, so the stream is decoded correctly
+/// however it was compressed. Which files reach here at all is a separate,
+/// name-based question, answered by [`is_sam_path`].
 fn open_sam_reader(path: &Path) -> Result<sam::io::Reader<Box<dyn BufRead + Send>>> {
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let lower = path.to_string_lossy().to_ascii_lowercase();
-    let inner: Box<dyn BufRead + Send> = if lower.ends_with(".gz") {
-        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(
-            file,
-        )))
-    } else {
-        Box::new(std::io::BufReader::new(file))
-    };
+    let inner = salmon_core::compress::open_maybe_compressed(path)
+        .with_context(|| format!("opening {}", path.display()))?;
     Ok(sam::io::Reader::new(inner))
 }
 
@@ -827,6 +880,8 @@ struct PassAccum {
     )>,
     num_processed: u64,
     num_mapped: u64,
+    /// mapped fragments where every surviving placement placed only one mate
+    num_orphan: u64,
 }
 
 /// The online pass over an alignment record stream, structured as a persistent
@@ -919,7 +974,7 @@ where
         let mut workers = Vec::with_capacity(cfg.nthreads);
         for _ in 0..cfg.nthreads {
             let rx = rx.clone();
-            workers.push(scope.spawn(move || -> (Local, u64, u64) {
+            workers.push(scope.spawn(move || -> (Local, u64, u64, u64) {
                 let mut local = Local::new(
                     cfg.use_error_model,
                     cfg.error_bins,
@@ -931,6 +986,7 @@ where
                 );
                 let mut count = 0u64;
                 let mut mapped = 0u64;
+                let mut orphan = 0u64;
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
                     let ctx = FragCtx {
@@ -953,6 +1009,9 @@ where
                     };
                     let mut since_flush = 0usize;
                     let mut batch_mapped = 0u64;
+                    // Plain locals, summed once per worker at the end: the
+                    // per-fragment cost is an increment, with no atomic traffic.
+                    let mut batch_orphan = 0u64;
                     for raw_group in &raw_batch {
                         frags.clear();
                         for r in raw_group {
@@ -960,8 +1019,13 @@ where
                                 frags.push(f);
                             }
                         }
-                        if process_fragment(&frags, &ctx, &mut local) {
-                            batch_mapped += 1;
+                        match process_fragment(&frags, &ctx, &mut local) {
+                            FragmentOutcome::Unmapped => {}
+                            FragmentOutcome::Mapped => batch_mapped += 1,
+                            FragmentOutcome::MappedOrphan => {
+                                batch_mapped += 1;
+                                batch_orphan += 1;
+                            }
                         }
                         // Publish the error-model delta into the shared model
                         // every FLUSH_INTERVAL fragments so other workers' `basis`
@@ -986,6 +1050,7 @@ where
                     }
                     count += raw_batch.len() as u64;
                     mapped += batch_mapped;
+                    orphan += batch_orphan;
                     // Live progress: every fragment in the BAM is "processed";
                     // only fragments with a surviving strand-compatible placement
                     // are "mapped" (so percent_mapped is correct on stranded data).
@@ -998,7 +1063,7 @@ where
                             .fetch_add(batch_mapped, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-                (local, count, mapped)
+                (local, count, mapped, orphan)
             }));
         }
         drop(rx); // workers hold their own clones; lets the queue disconnect
@@ -1019,13 +1084,15 @@ where
         );
         let mut total = 0u64;
         let mut total_mapped = 0u64;
+        let mut total_orphan = 0u64;
         for w in workers {
-            let (local, count, mapped) = w
+            let (local, count, mapped, orphan) = w
                 .join()
                 .map_err(|_| anyhow::anyhow!("alignment worker thread panicked"))?;
             merged = merged.merge(local);
             total += count;
             total_mapped += mapped;
+            total_orphan += orphan;
         }
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
@@ -1035,6 +1102,7 @@ where
         // They differ only for stranded libraries; matches reads-mode (#1025).
         acc.num_processed = total;
         acc.num_mapped = total_mapped;
+        acc.num_orphan = total_orphan;
         Ok(())
     })
 }
@@ -1164,7 +1232,24 @@ impl Local {
 /// caller counts a fragment as *mapped* only when this returns `true`, so a
 /// stranded library does not over-report `num_mapped` for fragments whose every
 /// alignment is strand-incompatible (the alignment-mode analog of #1025).
-fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bool {
+/// What became of one fragment.
+///
+/// Distinguishes the two mapped cases so `-a` can report the concordant/orphan
+/// split the reads path does, without a second pass over the placements.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FragmentOutcome {
+    /// no reported alignment survived compatibility filtering
+    Unmapped,
+    /// assigned, with at least one placement pairing both mates
+    Mapped,
+    /// assigned in a paired library, but every surviving placement placed only
+    /// one mate. Matches the RAD fragment-level rule, which takes the *most
+    /// complete* status across hits: a fragment that is a proper pair on one
+    /// transcript and an orphan on another counts as a pair.
+    MappedOrphan,
+}
+
+fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> FragmentOutcome {
     use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
     // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
     const LOG_EPSILON: f64 = -23.998_158_637_57;
@@ -1187,6 +1272,16 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
     let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
     let mut sp_geom: Vec<(usize, usize, bool)> = Vec::with_capacity(placements.len());
     let mut sp_pl: Vec<usize> = Vec::with_capacity(placements.len());
+    // Orphan bookkeeping, folded into the loop below so it costs two register
+    // ORs per surviving placement and no second pass.
+    //
+    // Deliberately *not* keyed on `proper`, which is `idxs.len() >= 2 && flen > 0`
+    // and so would call a both-mates placement with no reported fragment length an
+    // orphan. This mirrors `frag_format`, the canonical status derivation, which
+    // looks only at how many mates were placed and at the `0x1` multi-segment flag
+    // — the same signal #1057 turned on.
+    let mut any_both_mates = false;
+    let mut any_orphan = false;
     for (pi, pl) in placements.iter().enumerate() {
         let tid = pl.tid;
         let idxs = &pl.idxs;
@@ -1244,6 +1339,13 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
                 aux += ctx.incompat_prior.ln();
             }
         }
+        if idxs.len() >= 2 {
+            any_both_mates = true;
+        } else {
+            // A lone record is an orphan only if it belongs to a multi-segment
+            // template; a genuine single-end read has no mate to be missing.
+            any_orphan |= recs[idxs[0]].is_paired;
+        }
         sp_tid.push(tid);
         sp_eq.push(aux);
         sp_online.push(aux + start_pos);
@@ -1253,8 +1355,17 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
     // a fragment whose every reported alignment was incompatible is a
     // zero-probability fragment: it is not assigned and joins no eq-class.
     if sp_tid.is_empty() {
-        return false;
+        return FragmentOutcome::Unmapped;
     }
+    // The fragment counts as an orphan only when nothing paired both mates, so a
+    // fragment that is a proper pair on one transcript and an orphan on another
+    // counts as a pair — the same "most complete status wins" rule the RAD
+    // fragment-level type uses.
+    let outcome = if any_orphan && !any_both_mates {
+        FragmentOutcome::MappedOrphan
+    } else {
+        FragmentOutcome::Mapped
+    };
 
     // Aggregate surviving placements by distinct transcript id (sorted).
     let mut agg: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
@@ -1392,7 +1503,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
         TranscriptGroup::from_sorted(tids)
     };
     ctx.eq_builder.add_group(group, weights, 1);
-    true
+    outcome
 }
 
 /// Is the input coordinate-sorted and *not* grouped by read name?
@@ -1404,6 +1515,168 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> bo
 /// the reliable signal that records are usably grouped is `GO:query`. So we only
 /// reject when coordinate-sorted AND not query-grouped. (Query-name *sorted* files
 /// report `SO:queryname`, not coordinate, and pass.)
+/// One `@PG` header record: what a program said about how it touched the file.
+///
+/// `command_line` is the field that actually answers "how was this BAM made";
+/// the rest identify the program well enough to make sense of it.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct SourceProgram {
+    /// `ID` — unique within the file, and the link target of `PP`
+    pub id: String,
+    /// `PN` — program name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program_name: Option<String>,
+    /// `VN` — program version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// `CL` — the command line the program was invoked with
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_line: Option<String>,
+    /// `PP` — the previous program in the chain, so the order is recoverable
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_id: Option<String>,
+    /// `DS` — free-text description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Render a BAM header's `@PG` chain as SAM lines.
+///
+/// Kept as text on the way into a RAD so nothing the aligner recorded is dropped
+/// in transit; [`parse_source_programs`] reads them back. Empty when the header
+/// has no `@PG` records at all, which is common enough — plenty of tools write
+/// none — that callers must treat it as ordinary rather than exceptional.
+///
+/// Values are escaped rather than passed through raw. RAD imposes nothing here:
+/// it stores a string as an explicit length followed by bytes, so it would carry
+/// any content. The constraint is entirely from *this* representation — records
+/// joined by newlines, fields by tabs — so those characters are escaped to keep
+/// the framing unambiguous, and [`parse_source_programs`] restores them. SAM
+/// forbids them in header values anyway, so it only matters for a malformed
+/// input, where preserving the value beats silently rewriting it.
+pub fn source_program_lines(header: &noodles_sam::Header) -> Vec<String> {
+    let mut lines: Vec<String> = header
+        .programs()
+        .as_ref()
+        .iter()
+        .map(|(id, program)| {
+            let mut line = format!("@PG\tID:{}", escape_header_value(id.as_ref()));
+            // Every tag the aligner wrote is carried through, standard or not:
+            // this is provenance, not a schema to validate against.
+            for (tag, value) in program.other_fields() {
+                let t: &[u8; 2] = tag.as_ref();
+                line.push_str(&format!(
+                    "\t{}:{}",
+                    String::from_utf8_lossy(t),
+                    escape_header_value(value.as_ref())
+                ));
+            }
+            line
+        })
+        .collect();
+
+    // libradicl bounds an over-long tag value rather than letting it wrap the
+    // length field, but it bounds by *bytes*, which here would cut a record in
+    // half and leave a `@PG` line whose command is silently wrong. Dropping whole
+    // trailing records instead keeps every record that survives intact and
+    // truthful, so ask whether the chain fits and shorten it ourselves.
+    while !lines.is_empty() && !chain_fits(&lines) {
+        let dropped = lines.pop().unwrap_or_default();
+        tracing::warn!(
+            "the @PG chain is longer than a RAD string tag can hold; dropping its \
+             trailing record ({}...) so no record is left half-written",
+            dropped.chars().take(60).collect::<String>()
+        );
+    }
+    lines
+}
+
+/// Whether the joined `@PG` chain fits a RAD string tag.
+///
+/// Asks the format rather than restating its width: the limit belongs to
+/// libradicl, and hard-coding it here is how the two would drift.
+fn chain_fits(lines: &[String]) -> bool {
+    salmon_rad::value_fits(
+        &libradicl::rad_types::TagValue::String(lines.join("\n")),
+        &libradicl::rad_types::RadType::String,
+    )
+}
+
+/// Escape the characters that frame the joined `@PG` representation.
+///
+/// Backslash is escaped too, so the mapping is reversible: without it a value
+/// containing a literal backslash-n (two characters) would be indistinguishable
+/// from an escaped newline.
+fn escape_header_value(value: &[u8]) -> String {
+    let mut out = String::new();
+    for c in String::from_utf8_lossy(value).chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Reverse [`escape_header_value`]. An unrecognized escape is left as written,
+/// so text that was never escaped survives unchanged.
+fn unescape_header_value(value: &str) -> String {
+    let mut out = String::new();
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Parse `@PG` lines produced by [`source_program_lines`] back into records.
+///
+/// Unknown tags are ignored rather than rejected: a `@PG` record may carry
+/// anything, and provenance that fails to parse is worse than provenance that
+/// reports only the fields it understands.
+pub fn parse_source_programs(lines: &[String]) -> Vec<SourceProgram> {
+    lines
+        .iter()
+        .filter(|l| l.starts_with("@PG\t"))
+        .map(|line| {
+            let mut prog = SourceProgram::default();
+            for field in line.split('\t').skip(1) {
+                let Some((tag, value)) = field.split_once(':') else {
+                    continue;
+                };
+                let value = unescape_header_value(value);
+                match tag {
+                    "ID" => prog.id = value,
+                    "PN" => prog.program_name = Some(value),
+                    "VN" => prog.version = Some(value),
+                    "CL" => prog.command_line = Some(value),
+                    "PP" => prog.previous_id = Some(value),
+                    "DS" => prog.description = Some(value),
+                    _ => {}
+                }
+            }
+            prog
+        })
+        .collect()
+}
+
 fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
     let Some(hd) = header.header() else {
         return false;
@@ -1708,7 +1981,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // is trained there too but not needed afterward. Scope `cfg`/`acc` so their
     // borrows (fld, eq_builder, online, ...) are released before the post-pass
     // effective-length / EM work below.
-    let (seq_obs, gc_obs, pos_obs, num_processed, num_mapped) = {
+    let (seq_obs, gc_obs, pos_obs, num_processed, num_mapped, num_orphan) = {
         let cfg = PassCfg {
             online: online.as_ref(),
             fld: &fld,
@@ -1742,6 +2015,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             pos_obs: None,
             num_processed: 0,
             num_mapped: 0,
+            num_orphan: 0,
         };
         stream_online_pass(&opts.bam, &cfg, &mut acc)?;
         (
@@ -1750,6 +2024,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             acc.pos_obs,
             acc.num_processed,
             acc.num_mapped,
+            acc.num_orphan,
         )
     };
 
@@ -1795,6 +2070,19 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             .map(|&p| p * frac_observed + uniform_prior * (1.0 - frac_observed))
             .collect()
     });
+    // The packed CSR layout is built once and reused by the EM, the post-bias
+    // re-run and bootstrap / Gibbs (see the reads-mode driver for the rationale).
+    // `weights` is Gibbs-only, so it is populated only when Gibbs will run.
+    // One resolution of which posterior method (if any) this run will use; the
+    // packed layout and the dispatch below both read it, so the precedence is
+    // stated once rather than restated at each site.
+    let posterior = salmon_infer::PosteriorMethod::resolve(
+        opts.skip_quant,
+        opts.num_bootstraps,
+        opts.num_gibbs_samples,
+    );
+    let mut packed =
+        salmon_infer::PackedEqClasses::from_collapsed_for(&collapsed, num_refs, posterior);
     // `--initUniform` forces the plain uniform EM start; otherwise warm-start
     // from the online-estimate-blended init.
     let mut em = if opts.skip_quant {
@@ -1807,12 +2095,12 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
-        optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
+        salmon_infer::optimize_packed_with_init(&packed, &opts.em, true, None, Some(&eff_lengths))
     } else {
-        optimize_with_init(
-            &collapsed,
-            num_refs,
+        salmon_infer::optimize_packed_with_init(
+            &packed,
             &opts.em,
+            true,
             init_alphas.as_deref(),
             Some(&eff_lengths),
         )
@@ -1841,7 +2129,15 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             opts.no_bias_length_threshold,
         );
         collapsed.update_eff_lengths(&eff_lengths);
-        em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+        // Only the combined weights changed; patch them in place.
+        packed.refresh_combined(&collapsed);
+        em = salmon_infer::optimize_packed_with_init(
+            &packed,
+            &opts.em,
+            true,
+            None,
+            Some(&eff_lengths),
+        );
     }
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
@@ -1896,7 +2192,6 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // layout is identical to reads mode — alignment mode simply feeds it from the
     // BAM-derived eq-classes — so the same `salmon_infer` samplers apply. Bootstrap
     // takes precedence over Gibbs, matching reads mode.
-    let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
     let ambig = salmon_infer::ambiguity_counts(&packed);
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()
@@ -1922,6 +2217,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     timer.mark("posterior");
 
     let result = AlignQuantResult {
+        // Tallied while streaming the BAM, so `-a` reports the same
+        // concordant/orphan split the reads path does.
+        num_orphan: Some(num_orphan),
+        provenance: crate::rad::RadProvenance::default(),
+        // Straight from the BAM being quantified, no RAD in between.
+        source_programs: source_program_lines(&header),
+        source: FragmentSource::Bam,
         names,
         lengths,
         eff_lengths,
@@ -1993,7 +2295,12 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         pos_bias_correct: bool,
         num_bias_bins: usize,
         mapping_type: String,
-        // index hashes are empty in alignment mode (no salmon index)
+        /// how the index was built; known only from a salmon RAD's provenance,
+        /// omitted (rather than guessed) for a BAM input
+        #[serde(skip_serializing_if = "Option::is_none")]
+        keep_duplicates: Option<bool>,
+        // empty in alignment mode (no salmon index); recovered from the RAD's
+        // provenance when quantifying one salmon wrote
         index_seq_hash: String,
         index_name_hash: String,
         index_seq_hash512: String,
@@ -2015,7 +2322,24 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_decoy_fragments: u64,
         inference_truncated_mass: f64,
         num_bootstraps: u32,
+        /// mapped fragments placed as orphans; counted from RAD records, so
+        /// omitted for a BAM input where this path does not tally them
+        #[serde(skip_serializing_if = "Option::is_none")]
+        num_orphan: Option<u64>,
         range_factorization_bins: u32,
+        /// whether every field above is a true observation of the run.
+        ///
+        /// `false` means the RAD quantified from did not record what its mapping
+        /// pass observed, so the fields named in `incomplete_meta_info_fields`
+        /// are placeholders — most visibly `percent_mapped`, which then reads
+        /// 100% because a RAD holds only the fragments that mapped.
+        meta_info_complete: bool,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        incomplete_meta_info_fields: Vec<salmon_core::MissingMetaField>,
+        /// what the source BAM's `@PG` chain said about how it was produced;
+        /// omitted when the fragments did not come from an alignment file
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        alignment_provenance: Vec<SourceProgram>,
         num_em_iterations: u32,
         em_converged: bool,
         detected_library_type: Option<String>,
@@ -2036,13 +2360,63 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     } else {
         vec!["gzipped".to_string()]
     };
+    // A salmon-written RAD records what its mapping pass saw; anything else
+    // leaves these unknown, which the reader has already warned about and which
+    // `meta_info_complete` records for whoever reads the results later.
+    let counters = res.provenance.counters;
+    let index_prov = res.provenance.index.clone().unwrap_or_default();
+    // Only a RAD requant can be short of the mapping pass's own record of itself.
+    // Alignment mode never had index hashes — that is by design, not a gap — and
+    // it counts its own fragments, so nothing there is missing for want of an
+    // upstream.
+    let mut incomplete_meta_info_fields = match res.source {
+        FragmentSource::Rad => res.provenance.missing_meta_info_fields(),
+        FragmentSource::Bam => Vec::new(),
+    };
+    // What the aligner recorded about itself, carried through a BAM-derived RAD.
+    // A BAM with no `@PG` chain is itself worth recording: the gap is upstream,
+    // and saying so is more useful than an empty field the reader must interpret.
+    let alignment_provenance = crate::parse_source_programs(&res.source_programs);
+    let from_alignments = res.source == FragmentSource::Bam
+        || res.provenance.mapping_type == Some(salmon_rad::MappingType::Alignment);
+    if from_alignments {
+        // `@PG` is optional in SAM and plenty of tools omit it, so its absence is
+        // an ordinary outcome — but it is still the record of how the alignments
+        // came about, and a reader deserves to be told it was unavailable rather
+        // than left to wonder whether salmon simply did not look.
+        if alignment_provenance.is_empty() {
+            incomplete_meta_info_fields.push(salmon_core::MissingMetaField::bam(
+                "alignment_provenance",
+                "the source BAM's header carries no @PG records, so how its \
+                 alignments were produced is not recorded anywhere in the file",
+            ));
+        } else if alignment_provenance
+            .iter()
+            .all(|p| p.command_line.is_none())
+        {
+            // The chain identifies the programs but not how they were invoked,
+            // which is the part that actually reproduces the alignments.
+            incomplete_meta_info_fields.push(salmon_core::MissingMetaField::bam(
+                "alignment_provenance[].command_line",
+                "the source BAM's @PG records name the programs but none carries \
+                 a CL field, so the commands that produced the alignments are not \
+                 recorded in the file",
+            ));
+        }
+    }
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),
         samp_type: "none".to_string(),
         opt_type: if opts.em.use_vbem { "vb" } else { "em" }.to_string(),
         quant_errors: vec![],
         num_libraries: 1,
-        library_types: vec![opts.lib_type.clone()],
+        // The format actually applied, not the `-l A` that requested detection:
+        // reads mode reports the resolved one, and a RAD carries it baked, so a
+        // requant can report it too.
+        library_types: vec![res
+            .detected_library_type
+            .clone()
+            .unwrap_or_else(|| opts.lib_type.clone())],
         frag_dist_length: res.frag_len_dist.len(),
         frag_length_mean: res.frag_len_mean,
         frag_length_sd: res.frag_len_sd,
@@ -2051,13 +2425,25 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         gc_bias_correct: opts.gc_bias,
         pos_bias_correct: opts.pos_bias,
         num_bias_bins: 0,
-        mapping_type: "alignment".to_string(),
-        index_seq_hash: String::new(),
-        index_name_hash: String::new(),
-        index_seq_hash512: String::new(),
-        index_name_hash512: String::new(),
-        index_decoy_seq_hash: String::new(),
-        index_decoy_name_hash: String::new(),
+        // What the RAD says its producer was; a BAM input has no RAD to ask, and
+        // an older or foreign RAD does not record it, so both fall back to the
+        // value this path has always reported.
+        mapping_type: res
+            .provenance
+            .mapping_type
+            .map_or("alignment", |m| m.as_str())
+            .to_string(),
+        keep_duplicates: res
+            .provenance
+            .index
+            .as_ref()
+            .and_then(|p| p.keep_duplicates),
+        index_seq_hash: index_prov.seq_hash,
+        index_name_hash: index_prov.name_hash,
+        index_seq_hash512: index_prov.seq_hash512,
+        index_name_hash512: index_prov.name_hash512,
+        index_decoy_seq_hash: index_prov.decoy_seq_hash,
+        index_decoy_name_hash: index_prov.decoy_name_hash,
         num_valid_targets: res.names.len(),
         num_decoy_targets: 0,
         num_eq_classes: res.num_eq_classes,
@@ -2066,13 +2452,18 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         length_classes: res.length_classes.clone(),
         num_processed: res.num_processed,
         num_mapped: res.num_mapped,
-        num_dovetail_fragments: 0,
-        num_fragments_filtered_vm: 0,
-        num_alignments_below_threshold_for_mapped_fragments_vm: 0,
+        num_dovetail_fragments: counters.map_or(0, |c| c.num_dovetail),
+        num_fragments_filtered_vm: counters.map_or(0, |c| c.num_filtered_vm),
+        num_alignments_below_threshold_for_mapped_fragments_vm: counters
+            .map_or(0, |c| c.num_below_threshold_vm),
         percent_mapped: pct,
         num_decoy_fragments: 0,
         inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
+        num_orphan: res.num_orphan,
+        meta_info_complete: incomplete_meta_info_fields.is_empty(),
+        incomplete_meta_info_fields,
+        alignment_provenance,
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
@@ -2088,6 +2479,42 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         dir.join("aux_info").join("meta_info.json"),
         serde_json::to_string_pretty(&meta)?,
     )?;
+
+    // lib_format_counts.json — reads mode writes one, so a RAD requant should
+    // too, or a pipeline that reads it breaks on the requant of its own output.
+    // The concordant/orphan split comes from the records' fragment types, which
+    // is why it is available here at all.
+    if let Some(num_orphan) = res.num_orphan {
+        #[derive(Serialize)]
+        struct LibCounts {
+            read_files: Vec<String>,
+            expected_format: String,
+            compatible_fragment_ratio: f64,
+            num_compatible_fragments: u64,
+            num_assigned_fragments: u64,
+            num_frags_with_concordant_consistent_mappings: u64,
+            num_frags_with_inconsistent_or_orphan_mappings: u64,
+            strand_mapping_bias: f64,
+        }
+        let counts = LibCounts {
+            // The RAD is the input; the reads that produced it are not known here.
+            read_files: vec![],
+            expected_format: res
+                .detected_library_type
+                .clone()
+                .unwrap_or_else(|| opts.lib_type.clone()),
+            compatible_fragment_ratio: 1.0,
+            num_compatible_fragments: res.num_mapped,
+            num_assigned_fragments: res.num_mapped,
+            num_frags_with_concordant_consistent_mappings: res.num_mapped - num_orphan,
+            num_frags_with_inconsistent_or_orphan_mappings: num_orphan,
+            strand_mapping_bias: 0.0,
+        };
+        std::fs::write(
+            dir.join("lib_format_counts.json"),
+            serde_json::to_string_pretty(&counts)?,
+        )?;
+    }
 
     // aux_info/bootstrap/{names.tsv.gz, bootstraps.gz}: posterior samples in the
     // same layout reads mode uses (gzipped tab-separated names; gzipped raw
@@ -2321,6 +2748,68 @@ mod tests {
         let opts = AlignQuantOptions::new("x.rad".into(), "out".into());
         assert_eq!(opts.fld_policy, FldPolicy::Baked);
         assert!(!opts.explicit_fld_args.any());
+    }
+
+    /// `-t` is only read when the error or bias models need it, so a file with no
+    /// records in it is a mistake. Unchecked it is silent: every reference
+    /// resolves to an empty sequence and the models contribute nothing, while the
+    /// run reports success.
+    #[test]
+    fn empty_reference_fasta_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = vec!["t0".to_string(), "t1".to_string()];
+
+        for (label, contents) in [
+            ("empty file", ""),
+            ("no FASTA records", "just some text\nwith no header line\n"),
+        ] {
+            let p = dir.path().join("ref.fa");
+            std::fs::write(&p, contents).unwrap();
+            let err = load_ref_bytes(&p, &names).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("no sequences found") && msg.contains("ref.fa"),
+                "{label}: the error should say what is wrong and name the file, got: {msg}"
+            );
+        }
+    }
+
+    /// A read failure surfaces mid-stream rather than at open, so the path has to
+    /// be attached there too or a truncated file reports a bare
+    /// "unexpected end of file".
+    #[test]
+    fn read_errors_name_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("truncated.fa.gz");
+        // A gzip header and the start of a member, cut off before the end.
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        enc.write_all(b">t0\nACGTACGTACGTACGTACGTACGTACGT\n")
+            .unwrap();
+        let full = enc.finish().unwrap();
+        std::fs::write(&p, &full[..full.len() - 6]).unwrap();
+
+        let err = load_ref_bytes(&p, &["t0".to_string()]).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("truncated.fa.gz"),
+            "a mid-stream failure should still name the file, got: {msg}"
+        );
+    }
+
+    /// Partial coverage is legitimate — a transcriptome need not cover every
+    /// reference in the alignment header — so it must not be an error.
+    #[test]
+    fn partial_reference_coverage_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ref.fa");
+        std::fs::write(&p, ">t0\nACGT\n").unwrap();
+        let got = load_ref_bytes(&p, &["t0".to_string(), "absent".to_string()]).unwrap();
+        assert_eq!(got[0], b"ACGT");
+        assert!(
+            got[1].is_empty(),
+            "an absent reference yields an empty sequence"
+        );
     }
 }
 

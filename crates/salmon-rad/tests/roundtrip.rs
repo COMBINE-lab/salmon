@@ -11,6 +11,24 @@ use salmon_rad::{
     RadOutputWriter, RadProfile, SalmonBulkContext, SalmonBulkRecord, FRAG_LEN_UNPAIRED,
 };
 
+/// Writer provenance standing in for a mapping pass, so the round-trip covers
+/// the provenance tags rather than only the shapes that omit them.
+fn test_prov() -> salmon_rad::WriterProvenance {
+    salmon_rad::WriterProvenance {
+        mapping_type: salmon_rad::MappingType::Mapping,
+        index: Some(salmon_rad::IndexProvenance {
+            seq_hash: "seqhash".into(),
+            name_hash: "namehash".into(),
+            seq_hash512: "seqhash512".into(),
+            name_hash512: "namehash512".into(),
+            decoy_seq_hash: String::new(),
+            decoy_name_hash: String::new(),
+            keep_duplicates: Some(false),
+        }),
+        source_programs: vec![],
+    }
+}
+
 fn sample_records(profile: RadProfile) -> Vec<SalmonBulkRecord> {
     let score = |s: i32| if profile.has_scores() { s } else { 0 };
     vec![
@@ -61,7 +79,17 @@ fn write_file_codec(
 ) {
     let names = ["t0", "t1", "t2"];
     let lens = [100u32, 200, 300];
-    let w = RadOutputWriter::create(path, &names, &lens, true, profile, 1024, codec).unwrap();
+    let w = RadOutputWriter::create(
+        path,
+        &names,
+        &lens,
+        true,
+        profile,
+        1024,
+        codec,
+        &test_prov(),
+    )
+    .unwrap();
     let ctx: SalmonBulkContext = *w.context();
     let mut cb = FragmentChunkBuf::with_capacity_codec(1024, codec);
     for r in recs {
@@ -95,6 +123,25 @@ fn read_all(
         recs.extend(chunk.reads);
     }
     (prelude, ref_lengths, ctx, recs)
+}
+
+/// Read one file tag by name from a written RAD file.
+fn read_file_tag(path: &std::path::Path, name: &str) -> TagValue {
+    read_file_tag_opt(path, name).unwrap_or_else(|| panic!("missing file tag {name}"))
+}
+
+/// Like `read_file_tag`, but `None` when the tag is absent — the distinction the
+/// unknown-vs-false cases turn on.
+fn read_file_tag_opt(path: &std::path::Path, name: &str) -> Option<TagValue> {
+    let mut data = Vec::new();
+    std::fs::File::open(path)
+        .unwrap()
+        .read_to_end(&mut data)
+        .unwrap();
+    let mut rc = Cursor::new(data);
+    let prelude = RadPrelude::from_bytes(&mut rc).unwrap();
+    let ftm = prelude.file_tags.parse_tags_from_bytes(&mut rc).unwrap();
+    ftm.get(name).cloned()
 }
 
 fn check_roundtrip(profile: RadProfile, expected_detect: RadInputProfile) {
@@ -189,6 +236,7 @@ fn concurrent_writer_counts_chunks() {
         RadProfile::Sketch,
         1024,
         ChunkCodec::None,
+        &test_prov(),
     )
     .unwrap();
     let ctx: SalmonBulkContext = *w.context();
@@ -219,4 +267,259 @@ fn concurrent_writer_counts_chunks() {
     let (prelude, _, _, got) = read_all(tmp.path());
     assert_eq!(prelude.hdr.num_chunks, 4, "one chunk per thread");
     assert_eq!(got.len(), 4, "all four records present");
+}
+
+/// A RAD file must only take the name the user asked for once it is complete.
+///
+/// Regression test for salmon#1105: a run that died mid-write (a full disk) left
+/// a truncated file at the requested path, and a later `--rad` run consumed it
+/// as if it were whole.
+#[test]
+fn abandoned_write_never_claims_the_final_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.rad");
+    let names = ["t0", "t1", "t2"];
+    let lens = [100u32, 200, 300];
+
+    let w = RadOutputWriter::create(
+        &path,
+        &names,
+        &lens,
+        true,
+        RadProfile::SelectiveAlignment,
+        1024,
+        ChunkCodec::None,
+        &test_prov(),
+    )
+    .unwrap();
+    let ctx: SalmonBulkContext = *w.context();
+    let mut cb = FragmentChunkBuf::with_capacity_codec(1024, ChunkCodec::None);
+    for r in &sample_records(RadProfile::SelectiveAlignment) {
+        cb.write(r, &ctx).unwrap();
+    }
+    w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
+    // Simulates the run dying before finalize: chunks are on disk, but the
+    // header was never backpatched.
+    drop(w);
+
+    assert!(
+        !path.exists(),
+        "an unfinalized write must not appear at the requested path"
+    );
+    let partials: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("out.rad.partial-"))
+        .collect();
+    assert_eq!(
+        partials.len(),
+        1,
+        "the incomplete bytes should remain under a `.partial-*` name, found {partials:?}"
+    );
+}
+
+/// `finalize` renames the partial into place and marks the file complete.
+#[test]
+fn finalize_renames_and_marks_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.rad");
+    write_file_codec(
+        &path,
+        RadProfile::SelectiveAlignment,
+        &sample_records(RadProfile::SelectiveAlignment),
+        ChunkCodec::None,
+    );
+
+    assert!(
+        path.exists(),
+        "finalize should rename the partial into place"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains(".partial-"))
+        .collect();
+    assert!(leftovers.is_empty(), "partial left behind: {leftovers:?}");
+
+    let flags = match read_file_tag(&path, salmon_rad::BAKED_FLAGS_TAG) {
+        TagValue::U8(v) => v,
+        other => panic!("baked_flags should be a u8, got {other:?}"),
+    };
+    assert_ne!(
+        flags & salmon_rad::WRITE_COMPLETE,
+        0,
+        "a finalized file should carry the confirmatory completeness bit"
+    );
+}
+
+/// A requant can only reproduce the mapping run's `meta_info.json` if the RAD
+/// records what the mapping pass *saw*, which its records cannot show: a RAD
+/// holds only the fragments that mapped.
+#[test]
+fn mapping_pass_provenance_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.rad");
+    let names = ["t0", "t1", "t2"];
+    let lens = [100u32, 200, 300];
+
+    let mut w = RadOutputWriter::create(
+        &path,
+        &names,
+        &lens,
+        true,
+        RadProfile::SelectiveAlignment,
+        1024,
+        ChunkCodec::None,
+        &test_prov(),
+    )
+    .unwrap();
+    let ctx: SalmonBulkContext = *w.context();
+    let mut cb = FragmentChunkBuf::with_capacity_codec(1024, ChunkCodec::None);
+    for r in &sample_records(RadProfile::SelectiveAlignment) {
+        cb.write(r, &ctx).unwrap();
+    }
+    w.append_chunk_bytes(&cb.take_bytes().unwrap()).unwrap();
+    // Only two of these fragments were written, out of ten the pass observed.
+    w.set_map_counters(salmon_rad::MapCounters {
+        num_processed: 10,
+        num_dovetail: 3,
+        num_filtered_vm: 4,
+        num_below_threshold_vm: 5,
+        num_decoy_fragments: 6,
+    });
+    w.finalize().unwrap();
+
+    let u64_tag = |name: &str| match read_file_tag(&path, name) {
+        TagValue::U64(v) => v,
+        other => panic!("{name} should be a u64, got {other:?}"),
+    };
+    assert_eq!(u64_tag(salmon_rad::NUM_PROCESSED_TAG), 10);
+    assert_eq!(u64_tag(salmon_rad::NUM_DOVETAIL_TAG), 3);
+    assert_eq!(u64_tag(salmon_rad::NUM_FILTERED_VM_TAG), 4);
+    assert_eq!(u64_tag(salmon_rad::NUM_BELOW_THRESH_VM_TAG), 5);
+    assert_eq!(u64_tag(salmon_rad::NUM_DECOY_FRAGMENTS_TAG), 6);
+
+    let flags = match read_file_tag(&path, salmon_rad::BAKED_FLAGS_TAG) {
+        TagValue::U8(v) => v,
+        other => panic!("baked_flags should be a u8, got {other:?}"),
+    };
+    assert_ne!(flags & salmon_rad::BAKED_MAP_COUNTERS, 0);
+    assert_ne!(flags & salmon_rad::BAKED_INDEX_PROV, 0);
+
+    match read_file_tag(&path, salmon_rad::INDEX_SEQ_HASH_TAG) {
+        TagValue::String(v) => assert_eq!(v, "seqhash"),
+        other => panic!("index_seq_hash should be a string, got {other:?}"),
+    }
+    match read_file_tag(&path, salmon_rad::MAPPING_TYPE_TAG) {
+        TagValue::String(v) => assert_eq!(v, "mapping"),
+        other => panic!("mapping_type should be a string, got {other:?}"),
+    }
+}
+
+/// A writer that records no counters must leave the flag clear, so a reader can
+/// tell "the pass observed none of these" from "nobody filled the slot" — the
+/// slots are reserved as zeros, so the values alone cannot say.
+#[test]
+fn unbaked_counters_are_distinguishable_from_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.rad");
+    write_file_codec(
+        &path,
+        RadProfile::SelectiveAlignment,
+        &sample_records(RadProfile::SelectiveAlignment),
+        ChunkCodec::None,
+    );
+    let flags = match read_file_tag(&path, salmon_rad::BAKED_FLAGS_TAG) {
+        TagValue::U8(v) => v,
+        other => panic!("baked_flags should be a u8, got {other:?}"),
+    };
+    assert_eq!(
+        flags & salmon_rad::BAKED_MAP_COUNTERS,
+        0,
+        "counters were never set, so the flag must stay clear"
+    );
+    assert!(matches!(
+        read_file_tag(&path, salmon_rad::NUM_PROCESSED_TAG),
+        TagValue::U64(0)
+    ));
+}
+
+/// `keep_duplicates` must survive as three distinct states, not two: an index
+/// that predates recording it is *unknown*, and reporting that as `false` would
+/// state as fact something no one observed.
+#[test]
+fn unknown_keep_duplicates_is_not_written_as_false() {
+    for (keep, expect_tag) in [
+        (Some(true), Some(1u8)),
+        (Some(false), Some(0)),
+        (None, None),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rad");
+        let mut prov = test_prov();
+        prov.index.as_mut().unwrap().keep_duplicates = keep;
+
+        let w = RadOutputWriter::create(
+            &path,
+            &["t0", "t1", "t2"],
+            &[100u32, 200, 300],
+            true,
+            RadProfile::SelectiveAlignment,
+            1024,
+            ChunkCodec::None,
+            &prov,
+        )
+        .unwrap();
+        w.finalize().unwrap();
+
+        let got = match read_file_tag_opt(&path, salmon_rad::KEEP_DUPLICATES_TAG) {
+            Some(TagValue::U8(v)) => Some(v),
+            None => None,
+            other => panic!("keep_duplicates should be a u8 or absent, got {other:?}"),
+        };
+        assert_eq!(got, expect_tag, "for keep_duplicates = {keep:?}");
+    }
+}
+
+/// A BAM-derived RAD carries the aligner's `@PG` chain verbatim, so a requant
+/// can report how the alignments were produced rather than only that they were
+/// alignments. Tab-separated fields must survive the join/split round trip.
+#[test]
+fn source_programs_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.rad");
+    let lines = vec![
+        "@PG\tID:bowtie2\tPN:bowtie2\tVN:2.4.5\tCL:bowtie2-align-s --wrapper basic-0 -x idx"
+            .to_string(),
+        "@PG\tID:samtools\tPN:samtools\tPP:bowtie2\tVN:1.17\tCL:samtools view -b".to_string(),
+    ];
+    let prov = salmon_rad::WriterProvenance {
+        mapping_type: salmon_rad::MappingType::Alignment,
+        index: None,
+        source_programs: lines.clone(),
+    };
+    let w = RadOutputWriter::create(
+        &path,
+        &["t0", "t1", "t2"],
+        &[100u32, 200, 300],
+        true,
+        RadProfile::SelectiveAlignment,
+        1024,
+        ChunkCodec::None,
+        &prov,
+    )
+    .unwrap();
+    w.finalize().unwrap();
+
+    match read_file_tag(&path, salmon_rad::SOURCE_PROGRAMS_TAG) {
+        TagValue::String(v) => {
+            let got: Vec<&str> = v.split('\n').collect();
+            assert_eq!(got, lines, "the @PG chain must survive verbatim");
+        }
+        other => panic!("source_programs should be a string, got {other:?}"),
+    }
+    match read_file_tag(&path, salmon_rad::MAPPING_TYPE_TAG) {
+        TagValue::String(v) => assert_eq!(v, "alignment"),
+        other => panic!("mapping_type should be a string, got {other:?}"),
+    }
 }

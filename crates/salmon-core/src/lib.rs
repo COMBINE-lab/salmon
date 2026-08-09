@@ -31,6 +31,7 @@
 //! them: it is the shared bottom of the stack, which is why it must stay light.
 
 pub mod atomic;
+pub mod compress;
 pub mod diagnostics;
 pub mod error;
 pub mod genemap;
@@ -48,7 +49,9 @@ pub mod transcript;
 // `salmon_core::transcript::Transcript`. It also lets a type move between
 // modules later without breaking every caller.
 pub use atomic::AtomicF64;
-pub use diagnostics::{input_diagnostics, peak_rss_kb, Diagnostic};
+pub use diagnostics::{
+    input_diagnostics, peak_rss_kb, Diagnostic, MetaFieldSource, MissingMetaField,
+};
 pub use libtype::{compatible_paired, compatible_single, is_compatible, observed_paired_format};
 pub use progress::ProgressCounters;
 pub use refprovider::RefProvider;
