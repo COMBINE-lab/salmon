@@ -445,6 +445,22 @@ fn pair_records(recs: &[FragRecord]) -> Vec<Placement> {
     placements
 }
 
+/// `log(Σ exp(xs))` over an iterator, numerically stable. `xs` is non-empty.
+///
+/// Same two passes and the same summation order as [`logsumexp`], so the two
+/// agree bit for bit; this form exists so a caller holding a run of records can
+/// avoid copying their weights into a scratch slice first.
+pub(crate) fn logsumexp_iter<I>(xs: I) -> f64
+where
+    I: Iterator<Item = f64> + Clone,
+{
+    let m = xs.clone().fold(f64::NEG_INFINITY, f64::max);
+    if m == f64::NEG_INFINITY {
+        return f64::NEG_INFINITY;
+    }
+    m + xs.map(|x| (x - m).exp()).sum::<f64>().ln()
+}
+
 /// `log(Σ exp(xs))`, numerically stable. `xs` is non-empty.
 fn logsumexp(xs: &[f64]) -> f64 {
     let m = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -2793,6 +2809,52 @@ mod tests {
         assert!(
             got[1].is_empty(),
             "an absent reference yields an empty sequence"
+        );
+    }
+}
+
+#[cfg(test)]
+mod logsumexp_tests {
+    use super::{logsumexp, logsumexp_iter};
+
+    /// `logsumexp_iter` exists so a caller holding a run of records can avoid
+    /// copying their weights into a scratch slice. It is only safe to use in
+    /// place of [`logsumexp`] if it agrees *bit for bit* — the eq-class weights
+    /// it produces feed range factorization, where a last-bit difference can
+    /// move a fragment across a bin boundary and change the class set.
+    #[test]
+    fn iter_form_agrees_bit_for_bit_with_the_slice_form() {
+        let cases: &[&[f64]] = &[
+            &[-1.0],
+            &[-1.0, -1.0],
+            &[0.0, -1.0, -2.0, -3.0],
+            &[-1e-16, -1.0, -1e-16],
+            &[-700.0, -700.5, -701.25],
+            &[f64::NEG_INFINITY, -2.0],
+            &[f64::NEG_INFINITY, f64::NEG_INFINITY],
+            &[-0.1, -0.2, -0.3, -0.4, -0.5, -0.6, -0.7],
+        ];
+        for xs in cases {
+            let a = logsumexp(xs);
+            let b = logsumexp_iter(xs.iter().copied());
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "slice={a} iter={b} for {xs:?} — the two forms must not diverge"
+            );
+        }
+    }
+
+    /// Order matters to the result, which is why the grouping sorts stably; the
+    /// two forms must agree on that too, not merely on sorted input.
+    #[test]
+    fn iter_form_matches_on_reordered_input() {
+        let xs = [-1e-16, -1.0, -1e-16, -2.0];
+        let mut rev = xs;
+        rev.reverse();
+        assert_eq!(
+            logsumexp(&rev).to_bits(),
+            logsumexp_iter(rev.iter().copied()).to_bits()
         );
     }
 }

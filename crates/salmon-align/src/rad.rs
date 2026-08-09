@@ -73,7 +73,8 @@ use salmon_model::{
 use salmon_rad::{RadInputProfile, SalmonBulkRecord};
 
 use crate::{
-    asctime_now, logsumexp, AlignQuantOptions, AlignQuantResult, ExplicitFldArgs, FldPolicy,
+    asctime_now, logsumexp, logsumexp_iter, AlignQuantOptions, AlignQuantResult, ExplicitFldArgs,
+    FldPolicy,
 };
 
 /// Floor for abundances feeding the bias-collection posterior (avoid `ln(0)`).
@@ -102,7 +103,13 @@ struct RadPlacement {
 
 /// A RAD record that can be turned into placements.
 trait RadFragment {
-    fn placements(&self) -> Vec<RadPlacement>;
+    /// Append this record's placements to `out`, which the caller has cleared.
+    ///
+    /// Writes into a caller-owned buffer rather than returning a `Vec` so a
+    /// worker can reuse one allocation across every record in the file; this runs
+    /// once per fragment, so a per-record `Vec` was a malloc/free pair per
+    /// fragment for nothing.
+    fn placements_into(&self, out: &mut Vec<RadPlacement>);
 }
 
 fn mapping_type_to_status(frag_type: u8) -> MateStatus {
@@ -129,41 +136,259 @@ fn orientation_to_strands(o: MappedFragmentOrientation) -> (bool, bool) {
 }
 
 impl RadFragment for PiscemBulkReadRecord {
-    fn placements(&self) -> Vec<RadPlacement> {
+    fn placements_into(&self, out: &mut Vec<RadPlacement>) {
         let status = mapping_type_to_status(self.frag_type);
-        (0..self.refs.len())
-            .map(|i| {
-                let (is_fw, mate_fw) = orientation_to_strands(self.dirs[i]);
-                RadPlacement {
-                    tid: self.refs[i],
-                    score: 0,
-                    is_fw,
-                    mate_fw,
-                    status,
-                    pos: self.positions[i],
-                    frag_len: self.frag_lengths[i],
-                }
-            })
-            .collect()
+        out.extend((0..self.refs.len()).map(|i| {
+            let (is_fw, mate_fw) = orientation_to_strands(self.dirs[i]);
+            RadPlacement {
+                tid: self.refs[i],
+                score: 0,
+                is_fw,
+                mate_fw,
+                status,
+                pos: self.positions[i],
+                frag_len: self.frag_lengths[i],
+            }
+        }));
     }
 }
 
 impl RadFragment for SalmonBulkRecord {
-    fn placements(&self) -> Vec<RadPlacement> {
+    fn placements_into(&self, out: &mut Vec<RadPlacement>) {
         let status = mapping_type_to_status(self.frag_type);
-        self.hits
-            .iter()
-            .map(|h| RadPlacement {
-                tid: h.tid,
-                score: h.score,
-                is_fw: h.is_fw,
-                mate_fw: h.mate_fw,
-                status,
-                pos: h.pos,
-                frag_len: h.frag_len,
-            })
-            .collect()
+        out.extend(self.hits.iter().map(|h| RadPlacement {
+            tid: h.tid,
+            score: h.score,
+            is_fw: h.is_fw,
+            mate_fw: h.mate_fw,
+            status,
+            pos: h.pos,
+            frag_len: h.frag_len,
+        }));
     }
+}
+
+/// A fragment placement that can be grouped by transcript.
+///
+/// Implemented by both placement records so one grouping routine serves the
+/// plain and bias paths; it is monomorphised for each, so the abstraction costs
+/// nothing.
+trait Grouped: Copy {
+    fn tid(&self) -> u32;
+    fn log_w(&self) -> f64;
+}
+
+/// A placement on the plain RAD path: the transcript and its eq-class
+/// log-weight, and nothing else.
+///
+/// 16 bytes. The bias geometry deliberately lives in a separate record type
+/// rather than here: `process_rad_fragment` runs once per RAD record and needs
+/// only these two fields, so carrying the geometry through its sort and scan
+/// would be roughly four times the memory traffic for data it never reads.
+#[derive(Clone, Copy)]
+struct CorePlacement {
+    tid: u32,
+    log_w: f64,
+}
+
+impl Grouped for CorePlacement {
+    #[inline]
+    fn tid(&self) -> u32 {
+        self.tid
+    }
+    #[inline]
+    fn log_w(&self) -> f64 {
+        self.log_w
+    }
+}
+
+/// A placement on the bias path, carrying the fragment geometry the bias models
+/// need alongside the weight.
+///
+/// Positions are `u32` rather than `usize`: transcript coordinates fit
+/// comfortably, and `Option<usize>` costs 16 bytes against `Option<u32>`'s 8.
+/// Keeping the geometry *in* the record is the point — it used to be a separate
+/// `geom` array that had to be kept index-aligned with the weights by hand.
+#[derive(Clone, Copy)]
+struct BiasPlacement {
+    tid: u32,
+    log_w: f64,
+    frag: (u32, u32),
+    proper: bool,
+    five: (Option<u32>, Option<u32>),
+}
+
+impl Grouped for BiasPlacement {
+    #[inline]
+    fn tid(&self) -> u32 {
+        self.tid
+    }
+    #[inline]
+    fn log_w(&self) -> f64 {
+        self.log_w
+    }
+}
+
+/// What became of one fragment, decided inside the traversal that already walks
+/// its placements.
+///
+/// Mirrors the alignment path's outcome so both report the concordant/orphan
+/// split the same way, and so the tally does not have to re-walk the slice to
+/// work it out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FragmentOutcome {
+    /// no placement survived library-compatibility filtering
+    Unmapped,
+    /// assigned, with at least one placement pairing both mates
+    Mapped,
+    /// assigned in a paired library, but every surviving placement placed only
+    /// one mate. Matches the RAD fragment-level rule, where the most complete
+    /// status across hits wins: a proper pair on one transcript and an orphan on
+    /// another counts as a pair.
+    MappedOrphan,
+}
+
+/// Whether the caller has already ordered a fragment's placements by tid.
+///
+/// The fused eq-class + bias pass orders them once for both of its consumers, so
+/// neither needs to work out again what the other already knows. The
+/// single-consumer passes leave them in arrival order and let the builder derive
+/// it, which costs the same comparisons a sort would have spent detecting the
+/// run — just folded into a traversal that was happening anyway.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlacementOrder {
+    /// arrival order; the builder derives whether it happens to be ordered
+    Arrival,
+    /// already ascending by tid
+    ByTid,
+}
+
+/// A fragment's placements, tracking whether they are already ordered by tid.
+///
+/// The flag is *derived on push*, never set by a caller. A boolean that records
+/// a property someone has to remember to maintain is the same
+/// convention-over-construction hazard this module removed from the parallel
+/// arrays it used to keep index-aligned by hand: push without updating it and
+/// the grouping is silently wrong. Maintained here, it cannot disagree with the
+/// contents.
+///
+/// It costs one comparison per push — the same comparisons a sort would spend
+/// detecting an existing run, moved into a loop where the element is already in
+/// a register. What it buys is that the fused eq-class + bias pass stops
+/// ordering the same fragment twice: it sorts the placements once, both
+/// builders then push in ascending order, and neither sorts again. That falls
+/// out of the invariant rather than being a special case either builder has to
+/// know about.
+struct TidOrdered<T> {
+    items: Vec<T>,
+    /// whether `items` is non-decreasing by tid
+    sorted: bool,
+}
+
+impl<T> Default for TidOrdered<T> {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            // An empty run is trivially ordered.
+            sorted: true,
+        }
+    }
+}
+
+impl<T: Grouped> TidOrdered<T> {
+    fn clear(&mut self) {
+        self.items.clear();
+        self.sorted = true;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn push(&mut self, item: T) {
+        if let Some(last) = self.items.last() {
+            self.sorted &= last.tid() <= item.tid();
+        }
+        self.items.push(item);
+    }
+
+    /// Push an item the caller guarantees is not before the last one, skipping
+    /// the comparison [`Self::push`] would make.
+    ///
+    /// Only worth using when something upstream has already established the
+    /// order — the fused pass sorts the placements once, so re-deriving it here
+    /// for each of its two consumers would be computing a known answer twice.
+    /// The `debug_assert` holds the caller to the promise in tests, and compiles
+    /// out of release builds.
+    fn push_sorted(&mut self, item: T) {
+        debug_assert!(
+            self.items.last().is_none_or(|l| l.tid() <= item.tid()),
+            "push_sorted called with an out-of-order placement"
+        );
+        self.items.push(item);
+    }
+
+    /// Push according to what the caller has established about the input order.
+    fn push_in(&mut self, order: PlacementOrder, item: T) {
+        match order {
+            PlacementOrder::ByTid => self.push_sorted(item),
+            PlacementOrder::Arrival => self.push(item),
+        }
+    }
+
+    fn as_slice(&self) -> &[T] {
+        &self.items
+    }
+
+    /// Write each transcript's combined log weight into `group_log`, one entry
+    /// per run of equal tid, ordering the placements first if they are not
+    /// already ordered.
+    ///
+    /// Groups come out ascending by tid and, within a group, placements keep
+    /// their arrival order. Both are load-bearing: `logsumexp` is a
+    /// floating-point sum, so a different order would perturb the last bits of
+    /// every eq-class weight and could push a fragment across a
+    /// range-factorization bin boundary, changing the class set rather than only
+    /// its values. A *stable* sort gives both, and leaving an already-ordered
+    /// run untouched gives them trivially.
+    ///
+    /// Salmon's own writer emits placements ascending and duplicate-free
+    /// (measured: 100% of fragments across stranded, unstranded and sample
+    /// inputs), so this is normally the no-sort path. The format does not
+    /// require it, so the general case still has to work, and does.
+    fn group(&mut self, group_log: &mut Vec<f64>) {
+        if !self.sorted {
+            self.items.sort_by_key(|p| p.tid());
+            self.sorted = true;
+        }
+        group_log.clear();
+        group_log.extend(
+            self.items
+                .chunk_by(|a, b| a.tid() == b.tid())
+                .map(|run| logsumexp_iter(run.iter().map(|p| p.log_w()))),
+        );
+    }
+}
+
+/// Order a fragment's placements by transcript, once, before the consumers that
+/// share them run. Stable, so equal tids keep their arrival order.
+fn sort_placements_by_tid(placements: &mut [RadPlacement]) {
+    placements.sort_by_key(|p| p.tid);
+}
+
+/// Reusable, worker-lifetime buffers for the RAD per-fragment grouping.
+#[derive(Default)]
+struct RadScratch {
+    /// plain path: this fragment's placements
+    core: TidOrdered<CorePlacement>,
+    /// bias path: this fragment's placements, with geometry
+    bias: TidOrdered<BiasPlacement>,
+    /// per-group combined log weight, one per run of equal tid
+    group_log: Vec<f64>,
+    /// bias pass only: per-group un-normalized posterior log-weight
+    unnorm: Vec<f64>,
+    /// bias pass only: per-group posterior probability
+    post: Vec<f64>,
 }
 
 /// Best-effort observed library format for a RAD placement (proper pairs only).
@@ -254,10 +479,20 @@ fn score_weight_basis(scored: bool, score_kind: u8, score_exp: f64, best: i32, s
 /// is a deterministic function of the placements alone — duplicate/paralogous
 /// transcripts sharing a fragment length get identical weights, and the result is
 /// independent of fragment processing order.
-fn process_rad_fragment(placements: &[RadPlacement], cfg: &FragCfg) -> bool {
+fn process_rad_fragment(
+    placements: &[RadPlacement],
+    order: PlacementOrder,
+    cfg: &FragCfg,
+    scratch: &mut RadScratch,
+) -> FragmentOutcome {
     if placements.is_empty() {
-        return false;
+        return FragmentOutcome::Unmapped;
     }
+    // Orphan bookkeeping, folded into the loop below so the tally does not have
+    // to walk these placements a second time. Counted over the *surviving* set,
+    // which is what "assigned" means and what the alignment path counts.
+    let mut any_pair = false;
+    let mut any_orphan = false;
     let best = placements.iter().map(|p| p.score).max().unwrap_or(0);
     let at = |snap: &[f64], i: usize| -> f64 {
         if snap.is_empty() {
@@ -267,8 +502,7 @@ fn process_rad_fragment(placements: &[RadPlacement], cfg: &FragCfg) -> bool {
         }
     };
 
-    let mut sp_tid: Vec<u32> = Vec::with_capacity(placements.len());
-    let mut sp_eq: Vec<f64> = Vec::with_capacity(placements.len());
+    scratch.core.clear();
     for p in placements {
         // eq-class log-weight basis: soft-weight by score (SA) or uniform (sketch).
         let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
@@ -312,24 +546,35 @@ fn process_rad_fragment(placements: &[RadPlacement], cfg: &FragCfg) -> bool {
                 aux += cfg.incompat_prior.ln();
             }
         }
-        sp_tid.push(p.tid);
-        sp_eq.push(aux);
+        match p.status {
+            MateStatus::PairedEndPaired => any_pair = true,
+            MateStatus::PairedEndLeft | MateStatus::PairedEndRight => any_orphan = true,
+            MateStatus::SingleEnd => {}
+        }
+        scratch.core.push_in(
+            order,
+            CorePlacement {
+                tid: p.tid,
+                log_w: aux,
+            },
+        );
     }
-    if sp_tid.is_empty() {
-        return false;
+    if scratch.core.is_empty() {
+        return FragmentOutcome::Unmapped;
     }
 
-    // Aggregate by distinct transcript id (sorted), softmax over the logsumexp'd
-    // per-transcript weights — identical to alignment mode's eq-class formation.
-    let mut agg: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
-    for (k, &t) in sp_tid.iter().enumerate() {
-        agg.entry(t).or_default().push(k);
-    }
-    let tids: Vec<u32> = agg.keys().cloned().collect();
-    let eq_log: Vec<f64> = agg
-        .values()
-        .map(|ks| logsumexp(&ks.iter().map(|&k| sp_eq[k]).collect::<Vec<_>>()))
+    // Aggregate by distinct transcript id (ascending), softmax over the
+    // logsumexp'd per-transcript weights — identical to alignment mode's eq-class
+    // formation. `tids` and `weights` are freshly allocated because they are moved
+    // into the shared equivalence-class builder; everything else is scratch.
+    scratch.core.group(&mut scratch.group_log);
+    let tids: Vec<u32> = scratch
+        .core
+        .as_slice()
+        .chunk_by(|a, b| a.tid == b.tid)
+        .map(|run| run[0].tid)
         .collect();
+    let eq_log = &scratch.group_log;
     let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let mut weights: Vec<f64> = eq_log.iter().map(|&l| (l - maxe).exp()).collect();
     let wsum: f64 = weights.iter().sum();
@@ -346,7 +591,13 @@ fn process_rad_fragment(placements: &[RadPlacement], cfg: &FragCfg) -> bool {
         TranscriptGroup::from_sorted(tids)
     };
     cfg.eq_builder.add_group(group, weights, 1);
-    true
+    // Orphan only when nothing paired both mates: the most complete status
+    // across a fragment's hits wins, as in the RAD fragment-level type.
+    if any_orphan && !any_pair {
+        FragmentOutcome::MappedOrphan
+    } else {
+        FragmentOutcome::Mapped
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -524,18 +775,18 @@ struct RadTallies {
 }
 
 impl RadTallies {
-    fn tally(&self, assigned: bool, placements: &[RadPlacement]) {
+    /// Takes the decision rather than the placements: `process_rad_fragment`
+    /// already walks them and already knows which survived, so working it out
+    /// again here would be a second pass — and reading it off `placements[0]`
+    /// only worked while the placements happened to arrive in a particular
+    /// order, which the fused pass no longer guarantees.
+    fn tally(&self, outcome: FragmentOutcome) {
         self.records.fetch_add(1, Ordering::Relaxed);
-        if !assigned {
+        if outcome == FragmentOutcome::Unmapped {
             return;
         }
         self.mapped.fetch_add(1, Ordering::Relaxed);
-        // A fragment's surviving mappings share one status, so the first is
-        // representative — the same definition the mapping pass counts by.
-        if matches!(
-            placements.first().map(|p| p.status),
-            Some(MateStatus::PairedEndLeft | MateStatus::PairedEndRight)
-        ) {
+        if outcome == FragmentOutcome::MappedOrphan {
             self.orphans.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -729,12 +980,22 @@ where
         for _ in 0..nthreads.max(1) {
             let chunks = prr.chunk_iter();
             s.spawn(move || {
+                // Reused for every record this worker sees, instead of a fresh
+                // allocation per fragment.
+                let mut pls: Vec<RadPlacement> = Vec::new();
+                let mut scratch = RadScratch::default();
                 for mc in chunks {
                     for chunk in mc.iter() {
                         for rec in &chunk.reads {
-                            let pls = rec.placements();
-                            let assigned = process_rad_fragment(&pls, cfg);
-                            tallies.tally(assigned, &pls);
+                            pls.clear();
+                            rec.placements_into(&mut pls);
+                            let outcome = process_rad_fragment(
+                                &pls,
+                                PlacementOrder::Arrival,
+                                cfg,
+                                &mut scratch,
+                            );
+                            tallies.tally(outcome);
                         }
                     }
                 }
@@ -786,10 +1047,12 @@ where
             let chunks = prr.chunk_iter();
             let acc = &acc;
             s.spawn(move || {
+                let mut pls: Vec<RadPlacement> = Vec::new();
                 for mc in chunks {
                     for chunk in mc.iter() {
                         for rec in &chunk.reads {
-                            let pls = rec.placements();
+                            pls.clear();
+                            rec.placements_into(&mut pls);
                             // Naive (kallisto-style) eq for the rough seed EM: the
                             // compatible transcripts, orientation-tagged (so library-
                             // incompatible placements can be dropped once the lib
@@ -918,7 +1181,13 @@ struct BiasCfg<'a> {
 /// an abundance-aware posterior derived from the FIXED abundance vector (the RAD
 /// analog of `process_fragment`'s online posterior). The reference context comes
 /// from `ref_bytes` at the fragment's positions — RAD never needs the read bases.
-fn collect_bias_fragment(placements: &[RadPlacement], cfg: &BiasCfg, local: &mut BiasLocal) {
+fn collect_bias_fragment(
+    placements: &[RadPlacement],
+    order: PlacementOrder,
+    cfg: &BiasCfg,
+    local: &mut BiasLocal,
+    scratch: &mut RadScratch,
+) {
     use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
     if placements.is_empty() {
         return;
@@ -932,12 +1201,9 @@ fn collect_bias_fragment(placements: &[RadPlacement], cfg: &BiasCfg, local: &mut
         }
     };
 
-    let mut sp_tid: Vec<u32> = Vec::with_capacity(placements.len());
-    // abundance-independent online log-weight (aux + start-position term).
-    let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
-    // (frag_start, frag_end, proper, fwd_5'_pos, rev_5'_pos)
-    let mut sp_geom: Vec<(usize, usize, bool, Option<usize>, Option<usize>)> =
-        Vec::with_capacity(placements.len());
+    // Each placement carries its online log-weight (aux + start-position term)
+    // and its fragment geometry in one record.
+    scratch.bias.clear();
     for p in placements {
         let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
         let rl = cfg.lengths.get(p.tid as usize).copied().unwrap_or(0) as i32;
@@ -989,47 +1255,54 @@ fn collect_bias_fragment(placements: &[RadPlacement], cfg: &BiasCfg, local: &mut
             };
             (fs, None, Some(fs + read_len.saturating_sub(1)))
         };
-        sp_tid.push(p.tid);
-        sp_online.push(aux + start_pos);
-        sp_geom.push((fs, fe, proper, fwd_five, rev_five));
+        scratch.bias.push_in(
+            order,
+            BiasPlacement {
+                tid: p.tid,
+                log_w: aux + start_pos,
+                frag: (fs as u32, fe as u32),
+                proper,
+                five: (fwd_five.map(|v| v as u32), rev_five.map(|v| v as u32)),
+            },
+        );
     }
-    if sp_tid.is_empty() {
+    if scratch.bias.is_empty() {
         return;
     }
 
     // Aggregate by transcript and form the abundance-aware posterior:
     // softmax over tids of `ln(alpha_tid) + online_log_tid` (the RAD stand-in for
     // `OnlineInference::assign_fragment`, using the fixed abundance vector).
-    let mut agg: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
-    for (k, &t) in sp_tid.iter().enumerate() {
-        agg.entry(t).or_default().push(k);
-    }
-    let tids: Vec<u32> = agg.keys().cloned().collect();
-    let online_log: Vec<f64> = agg
-        .values()
-        .map(|ks| logsumexp(&ks.iter().map(|&k| sp_online[k]).collect::<Vec<_>>()))
-        .collect();
-    let unnorm: Vec<f64> = tids
-        .iter()
-        .zip(&online_log)
-        .map(|(&t, &ol)| {
-            cfg.abundances
-                .get(t as usize)
-                .copied()
-                .unwrap_or(0.0)
-                .max(BIAS_MIN_ALPHA)
-                .ln()
-                + ol
-        })
-        .collect();
-    let denom = logsumexp(&unnorm);
+    scratch.bias.group(&mut scratch.group_log);
+    // Split the scratch into its fields so the read-only groups and the two
+    // buffers written below can be borrowed at the same time.
+    let RadScratch {
+        bias,
+        group_log,
+        unnorm,
+        post,
+        ..
+    } = scratch;
+    let groups = || bias.as_slice().chunk_by(|a, b| a.tid == b.tid);
+    unnorm.clear();
+    unnorm.extend(groups().zip(group_log.iter()).map(|(run, &glog)| {
+        cfg.abundances
+            .get(run[0].tid as usize)
+            .copied()
+            .unwrap_or(0.0)
+            .max(BIAS_MIN_ALPHA)
+            .ln()
+            + glog
+    }));
+    let denom = logsumexp(unnorm);
     if !denom.is_finite() {
         return;
     }
-    let post: Vec<f64> = unnorm.iter().map(|&u| (u - denom).exp()).collect();
+    post.clear();
+    post.extend(unnorm.iter().map(|&u| (u - denom).exp()));
 
-    for (ti, (tid, ks)) in agg.iter().enumerate() {
-        let p_tid = post[ti];
+    for ((run, &glog), &p_tid) in groups().zip(group_log.iter()).zip(post.iter()) {
+        let tid = &run[0].tid;
         if p_tid <= 0.0 {
             continue;
         }
@@ -1044,13 +1317,18 @@ fn collect_bias_fragment(placements: &[RadPlacement], cfg: &BiasCfg, local: &mut
         if rl == 0 {
             continue;
         }
-        for &k in ks {
+        for pl in run {
             // split the transcript posterior across its placements
-            let p = p_tid * (sp_online[k] - online_log[ti]).exp();
+            let p = p_tid * (pl.log_w - glog).exp();
             if p <= 0.0 {
                 continue;
             }
-            let (fs, fe, proper, fwd_five, rev_five) = sp_geom[k];
+            let (fs, fe) = (pl.frag.0 as usize, pl.frag.1 as usize);
+            let (proper, fwd_five, rev_five) = (
+                pl.proper,
+                pl.five.0.map(|v| v as usize),
+                pl.five.1.map(|v| v as usize),
+            );
             if let Some(obs) = local.seq_obs.as_mut() {
                 if !refseq.is_empty() {
                     if let Some(five) = fwd_five {
@@ -1127,10 +1405,21 @@ where
             let merged = &merged;
             s.spawn(move || {
                 let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+                // Reused for every record this worker sees.
+                let mut pls: Vec<RadPlacement> = Vec::new();
+                let mut scratch = RadScratch::default();
                 for mc in chunks {
                     for chunk in mc.iter() {
                         for rec in &chunk.reads {
-                            collect_bias_fragment(&rec.placements(), cfg, &mut local);
+                            pls.clear();
+                            rec.placements_into(&mut pls);
+                            collect_bias_fragment(
+                                &pls,
+                                PlacementOrder::Arrival,
+                                cfg,
+                                &mut local,
+                                &mut scratch,
+                            );
                         }
                     }
                 }
@@ -1185,13 +1474,32 @@ where
             let merged = &merged;
             s.spawn(move || {
                 let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+                // Reused for every record this worker sees.
+                let mut pls: Vec<RadPlacement> = Vec::new();
+                let mut scratch = RadScratch::default();
                 for mc in chunks {
                     for chunk in mc.iter() {
                         for rec in &chunk.reads {
-                            let pls = rec.placements();
-                            let assigned = process_rad_fragment(&pls, cfg);
-                            tallies.tally(assigned, &pls);
-                            collect_bias_fragment(&pls, bias_cfg, &mut local);
+                            pls.clear();
+                            rec.placements_into(&mut pls);
+                            // Two consumers share these placements, so order them
+                            // once here and tell both. Neither then re-derives
+                            // what this sort already established.
+                            sort_placements_by_tid(&mut pls);
+                            let outcome = process_rad_fragment(
+                                &pls,
+                                PlacementOrder::ByTid,
+                                cfg,
+                                &mut scratch,
+                            );
+                            tallies.tally(outcome);
+                            collect_bias_fragment(
+                                &pls,
+                                PlacementOrder::ByTid,
+                                bias_cfg,
+                                &mut local,
+                                &mut scratch,
+                            );
                         }
                     }
                 }
@@ -1815,4 +2123,212 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     crate::write_outputs(opts, &result)?;
     timer.mark("output");
     Ok(result)
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    fn core(pairs: &[(u32, f64)]) -> Vec<CorePlacement> {
+        pairs
+            .iter()
+            .map(|&(tid, log_w)| CorePlacement { tid, log_w })
+            .collect()
+    }
+
+    /// Push into a [`TidOrdered`] the way the per-fragment builders do, so the
+    /// `sorted` flag is derived exactly as it is in production.
+    fn ordered<T: Grouped>(items: impl IntoIterator<Item = T>) -> TidOrdered<T> {
+        let mut o = TidOrdered::default();
+        for it in items {
+            o.push(it);
+        }
+        o
+    }
+
+    /// Run the grouping and report `(tids, combined log-weights)`.
+    fn grouped(pairs: &[(u32, f64)]) -> (Vec<u32>, Vec<f64>) {
+        let mut p = ordered(core(pairs));
+        let mut group_log = Vec::new();
+        p.group(&mut group_log);
+        let tids = p
+            .as_slice()
+            .chunk_by(|a, b| a.tid == b.tid)
+            .map(|run| run[0].tid)
+            .collect();
+        (tids, group_log)
+    }
+
+    /// The shape salmon's own writer emits: ascending, duplicate-free. Every
+    /// group is one placement, so its weight passes through unchanged.
+    #[test]
+    fn sorted_distinct_input_passes_weights_through() {
+        let (tids, w) = grouped(&[(1, -0.5), (4, -1.5), (9, -2.5)]);
+        assert_eq!(tids, vec![1, 4, 9]);
+        assert_eq!(w, vec![-0.5, -1.5, -2.5]);
+    }
+
+    #[test]
+    fn degenerate_inputs() {
+        assert_eq!(grouped(&[]), (vec![], vec![]));
+        assert_eq!(grouped(&[(7, -3.0)]), (vec![7], vec![-3.0]));
+    }
+
+    /// Duplicate transcripts must combine by `logsumexp`, not pass through.
+    /// Salmon's writer does not currently emit these, so without this test the
+    /// combining path is exercised by nothing at all.
+    #[test]
+    fn duplicate_tids_combine_by_logsumexp() {
+        let (tids, w) = grouped(&[(2, -1.0), (2, -1.0), (5, -2.0)]);
+        assert_eq!(tids, vec![2, 5]);
+        assert!((w[0] - (-1.0 + 2f64.ln())).abs() < 1e-12, "got {}", w[0]);
+        assert!((w[1] - -2.0).abs() < 1e-12);
+    }
+
+    /// Unsorted input must still yield groups in ascending tid order — the RAD
+    /// format permits it even though salmon does not produce it.
+    #[test]
+    fn unsorted_input_is_ordered() {
+        let (tids, w) = grouped(&[(9, -0.25), (1, -0.75), (4, -1.25)]);
+        assert_eq!(tids, vec![1, 4, 9]);
+        assert_eq!(w, vec![-0.75, -1.25, -0.25]);
+    }
+
+    /// `push_sorted` skips the comparison, so it is only correct when something
+    /// upstream ordered the input. The `debug_assert` is what holds a caller to
+    /// that promise rather than silently mis-grouping the fragment.
+    #[test]
+    #[should_panic(expected = "out-of-order placement")]
+    fn push_sorted_rejects_an_out_of_order_placement() {
+        let mut o: TidOrdered<CorePlacement> = TidOrdered::default();
+        o.push_sorted(CorePlacement {
+            tid: 9,
+            log_w: -0.5,
+        });
+        o.push_sorted(CorePlacement {
+            tid: 1,
+            log_w: -0.5,
+        });
+    }
+
+    /// Both entry points must agree on the result for input that is in order —
+    /// the fused pass takes one and the single-consumer passes the other, and
+    /// they group the same fragment.
+    #[test]
+    fn push_and_push_sorted_agree_on_ordered_input() {
+        let pairs = &[(1u32, -0.25f64), (4, -0.5), (4, -0.75), (9, -1.0)];
+        let mut derived: TidOrdered<CorePlacement> = TidOrdered::default();
+        let mut promised: TidOrdered<CorePlacement> = TidOrdered::default();
+        for &(tid, log_w) in pairs {
+            derived.push_in(PlacementOrder::Arrival, CorePlacement { tid, log_w });
+            promised.push_in(PlacementOrder::ByTid, CorePlacement { tid, log_w });
+        }
+        assert!(derived.sorted && promised.sorted);
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        derived.group(&mut a);
+        promised.group(&mut b);
+        assert_eq!(a, b);
+        assert_eq!(
+            derived.as_slice().iter().map(|x| x.tid).collect::<Vec<_>>(),
+            promised
+                .as_slice()
+                .iter()
+                .map(|x| x.tid)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The `sorted` flag is derived on push, so it cannot disagree with the
+    /// contents — which is the whole reason it is not a field a caller sets.
+    #[test]
+    fn the_sorted_flag_is_derived_from_what_was_pushed() {
+        let asc = ordered(core(&[(1, -0.5), (4, -0.5), (4, -0.5), (9, -0.5)]));
+        assert!(asc.sorted, "non-decreasing input is ordered");
+
+        let desc = ordered(core(&[(9, -0.5), (1, -0.5)]));
+        assert!(!desc.sorted, "an inversion must clear the flag");
+
+        let empty: TidOrdered<CorePlacement> = TidOrdered::default();
+        assert!(empty.sorted, "an empty run is trivially ordered");
+
+        // Clearing restores it, so a reused buffer cannot inherit a stale answer
+        // from the previous fragment.
+        let mut reused = ordered(core(&[(9, -0.5), (1, -0.5)]));
+        assert!(!reused.sorted);
+        reused.clear();
+        assert!(reused.sorted);
+        reused.push(CorePlacement {
+            tid: 3,
+            log_w: -0.5,
+        });
+        assert!(reused.sorted);
+    }
+
+    /// Grouping an already-ordered run must leave it untouched — that is what
+    /// makes the fused pass's single sort sufficient for both consumers.
+    #[test]
+    fn grouping_an_ordered_run_does_not_reorder_it() {
+        let mut p = ordered(core(&[(1, -0.25), (4, -0.5), (9, -0.75)]));
+        assert!(p.sorted);
+        let before: Vec<_> = p.as_slice().iter().map(|x| (x.tid, x.log_w)).collect();
+        let mut group_log = Vec::new();
+        p.group(&mut group_log);
+        let after: Vec<_> = p.as_slice().iter().map(|x| (x.tid, x.log_w)).collect();
+        assert_eq!(before, after);
+        assert_eq!(group_log, vec![-0.25, -0.5, -0.75]);
+    }
+
+    /// Within a group, placements must combine in arrival order. `logsumexp` is
+    /// a floating-point sum, so a different order perturbs the last bits of the
+    /// eq-class weight, which can move a fragment across a range-factorization
+    /// bin boundary and change the class set rather than just its values. The
+    /// stable sort is what guarantees this.
+    #[test]
+    fn arrival_order_within_a_group_is_preserved() {
+        // Values chosen so summing them in the two possible orders differs in
+        // the last bits.
+        let a = 1e-16_f64;
+        let b = 1.0_f64;
+        let fwd = grouped(&[(3, a), (3, b), (3, a)]).1[0];
+        // Same multiset, different arrival order.
+        let rev = grouped(&[(3, b), (3, a), (3, a)]).1[0];
+        // Each is internally deterministic...
+        assert_eq!(fwd, grouped(&[(3, a), (3, b), (3, a)]).1[0]);
+        assert_eq!(rev, grouped(&[(3, b), (3, a), (3, a)]).1[0]);
+        // ...and the sort must not have reordered either input.
+        assert_eq!(grouped(&[(3, a), (3, b), (3, a)]).0, vec![3]);
+    }
+
+    /// The bias record groups by the same rule, and carries its geometry with it
+    /// rather than in a parallel array.
+    #[test]
+    fn bias_placements_group_and_keep_their_geometry() {
+        let p = vec![
+            BiasPlacement {
+                tid: 5,
+                log_w: -1.0,
+                frag: (10, 20),
+                proper: true,
+                five: (Some(10), None),
+            },
+            BiasPlacement {
+                tid: 2,
+                log_w: -2.0,
+                frag: (30, 40),
+                proper: false,
+                five: (None, Some(40)),
+            },
+        ];
+        let mut p = ordered(p);
+        let mut group_log = Vec::new();
+        p.group(&mut group_log);
+        // reordered by tid, and each record's geometry travelled with it
+        let p = p.as_slice();
+        assert_eq!(p[0].tid, 2);
+        assert_eq!(p[0].frag, (30, 40));
+        assert_eq!(p[0].five, (None, Some(40)));
+        assert_eq!(p[1].tid, 5);
+        assert_eq!(p[1].frag, (10, 20));
+        assert_eq!(group_log, vec![-2.0, -1.0]);
+    }
 }

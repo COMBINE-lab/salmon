@@ -49,6 +49,9 @@ scc = "3"
 dashmap = "6"
 # fast (non-DoS-resistant) hasher for hot per-read integer-keyed maps
 ahash = "0.8"
+# raw hash table, for caches that must probe with a borrowed key (no key
+# allocation on a lookup that hits)
+hashbrown = "0.15"
 # numerics
 statrs = "0.19"
 # rng (PCG, matching salmon's pcg usage)
