@@ -656,3 +656,95 @@ fn pseudoalignment_quantification_tracks_truth() {
         );
     }
 }
+
+/// Regression test for #1115: a fragment whose two mates orphan onto *different*
+/// transcripts.
+///
+/// When neither mate pairs concordantly to a transcript, `map_read_pair_into`
+/// does not run its orphan-suppression `retain`, so mate 1 can survive as a
+/// `PairedEndLeft` mapping on transcript A while mate 2 survives as a
+/// `PairedEndRight` on transcript B. `record` then sees two *different*
+/// `MateStatus` values in one fragment.
+///
+/// A `debug_assert` there used to require every surviving mapping to share one
+/// status, which aborted debug builds on any index where this occurs — measured
+/// at 525 of 300,000 fragments on a GRCh38 decoy index. The invariant that
+/// actually holds, and the only one the code depends on, is that the mappings
+/// agree on *orphan-ness*: both statuses are orphans, so the orphan counter is
+/// well defined either way.
+///
+/// The fixture forces the case directly: each fragment's R1 is drawn from `a`
+/// and its R2 from `b`, so no concordant pair exists anywhere.
+///
+/// In a release build the assertion is compiled out and this only checks the
+/// counting; in a debug build it is the actual regression check.
+#[test]
+fn mates_orphaning_to_different_transcripts_are_one_orphan_fragment() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    // Two unrelated transcripts: no shared k-mers, so nothing pairs across them.
+    let a = gen_seq(900, 101);
+    let b = gen_seq(900, 202);
+    let fasta = dir.join("txome.fa");
+    {
+        let mut fa = std::fs::File::create(&fasta).unwrap();
+        for (name, seq) in [("a", &a), ("b", &b)] {
+            writeln!(fa, ">{name}").unwrap();
+            fa.write_all(seq).unwrap();
+            writeln!(fa).unwrap();
+        }
+    }
+
+    // R1 from `a`, R2 (reverse complement, as an inward pair would be) from `b`.
+    // Each mate places on its own transcript; the fragment has no proper pair.
+    const N: usize = 200;
+    let r1p = dir.join("reads_1.fq");
+    let r2p = dir.join("reads_2.fq");
+    let mut w = FastqWriters {
+        r1: std::io::BufWriter::new(std::fs::File::create(&r1p).unwrap()),
+        r2: std::io::BufWriter::new(std::fs::File::create(&r2p).unwrap()),
+    };
+    for i in 0..N {
+        let pos = (i * 3) % (900 - READ_LEN);
+        let s1 = a[pos..pos + READ_LEN].to_vec();
+        let s2 = revcomp(&b[pos..pos + READ_LEN]);
+        w.write_pair(i, &s1, &s2);
+    }
+    w.r1.flush().unwrap();
+    w.r2.flush().unwrap();
+    drop(w);
+
+    let idx_dir = dir.join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let out = dir.join("quant");
+    let mut opts = QuantOptions::new(idx_dir, out);
+    opts.mates1 = vec![r1p];
+    opts.mates2 = vec![r2p];
+    opts.lib_type = "IU".to_string();
+    opts.num_threads = 1;
+
+    // The assertion fires during `record`, so reaching a result at all is the
+    // regression check in a debug build.
+    let res = quantify(&opts).expect("quantify must not abort on mixed-orphan fragments");
+
+    // Every fragment placed, and each counts once — as an orphan, not a pair.
+    assert_eq!(
+        res.num_mapped, N as u64,
+        "expected all {N} mixed-orphan fragments to map"
+    );
+    let counts = counts_by_name(&res);
+    let total: f64 = res.counts.iter().sum();
+    assert!(
+        (total - N as f64).abs() < 1.0,
+        "mass must be conserved: Σ NumReads {total} vs {N} fragments ({counts:?})"
+    );
+    // Both transcripts carry orphan evidence, so neither should be empty.
+    assert!(
+        counts["a"] > 0.0 && counts["b"] > 0.0,
+        "both transcripts should receive orphan mass: {counts:?}"
+    );
+}
