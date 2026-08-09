@@ -42,7 +42,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use thread_broker::{BusyMeter, Consumer, EngagementPolicy, ResizeError, Work};
 
 /// Engagement threshold for sketch (pseudoalignment) mode.
@@ -119,6 +119,159 @@ impl Consumer for MappingConsumer {
     }
 }
 
+
+/// A reader over one opened input, whatever decoder it ended up with.
+pub type Input = paraseq::fastx::Reader<Box<dyn std::io::Read + Send>>;
+
+/// Everything the mapping pass needs once the decode/map split is decided.
+///
+/// Owns the decoder pool for the run: dropping it would retire the decode
+/// workers out from under readers still pulling from them.
+pub struct MappingPlan {
+    /// Opened inputs, in the order paraseq expects (paired mates adjacent).
+    pub readers: Vec<Input>,
+    /// The mapping pool — resizable, and what the broker actually acts on.
+    pub map_pool: paraseq::parallel::ThreadPool,
+    /// Where mapping threads report the time they spend mapping.
+    pub busy: Arc<BusyMeter>,
+    /// Advisory by construction: a broker failure records itself and is never
+    /// allowed to fail the run or truncate its output. piscem learned this the
+    /// hard way — an error propagating out after mapping finished unwound past
+    /// the output finalisation and left a file that parsed but was empty.
+    pub broker: piscem_rs::io::broker::AdvisoryBroker,
+    pub map_threads: usize,
+    pub decode_slots: usize,
+    pub parallel: bool,
+    _decode_pool: Option<rapidgzip_core::DecoderPool>,
+}
+
+/// Decide the decoder, size the budget, open every input, and arm the broker.
+///
+/// `groups` is one entry per fragment source: `[r1]` single-end, `[r1, r2]`
+/// paired. Groups rather than a flat path list because paired `fill` reads both
+/// mates together, so a group is the unit that can or cannot be decoded in
+/// parallel — and because a non-seekable input among them must not cost the
+/// regular files their parallel decoder.
+pub fn plan(
+    groups: &[Vec<std::path::PathBuf>],
+    budget: usize,
+    pref: piscem_rs::io::calibrate::DecoderPreference,
+    policy: EngagementPolicy,
+) -> Result<MappingPlan> {
+    let decision = piscem_rs::io::calibrate::choose_decoder(groups, budget, pref, policy);
+    let num_files: usize = groups.iter().map(|g| g.len()).sum();
+    let mut exec = piscem_rs::io::fastx::plan_thread_budget(
+        budget,
+        num_files,
+        decision.parallel,
+        pref,
+    )?;
+
+    // Sized to the *entire* budget, not the expected split: `workers` is an
+    // immutable maximum and a later grant above it would simply be refused,
+    // leaving the broker's accounting silently diverged from reality.
+    let decode_pool = if exec.parallel_gzip() {
+        Some(
+            rapidgzip_core::DecoderPool::builder()
+                .workers(exec.effective_budget)
+                .initial_worker_limit(exec.decode_slots)
+                .build()
+                .map_err(|e| anyhow::anyhow!("could not create decoder pool: {e}"))?,
+        )
+    } else {
+        None
+    };
+
+    let mut readers = Vec::with_capacity(num_files);
+    let mut handles = Vec::new();
+    for path in groups.iter().flatten() {
+        let opened = piscem_rs::io::fastx::open_input_pooled(
+            path,
+            decode_pool.as_ref(),
+            exec.effective_budget,
+        )
+        .with_context(|| format!("opening {}", path.display()))?;
+        handles.extend(opened.handle.clone());
+        readers.push(
+            piscem_rs::io::fastx::reader_with_batch_size(opened.reader)
+                .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?,
+        );
+    }
+
+    // Inputs that turned out not to be parallel-decodable (not gzip, or not
+    // seekable) produce no handle, so the plan is reconciled against what was
+    // really opened rather than what was hoped for.
+    exec.reconcile_parallel_decoders(handles.len());
+    if exec.parallel_gzip() {
+        if let Some(pool) = &decode_pool {
+            pool.set_worker_limit(exec.decode_slots)
+                .map_err(|e| anyhow::anyhow!("could not apply decoder execution plan: {e}"))?;
+        }
+    }
+
+    let arity = groups.first().map(|g| g.len()).unwrap_or(1);
+    let busy = Arc::new(BusyMeter::new());
+    let map_pool =
+        paraseq::parallel::ThreadPool::with_max(exec.map_threads, exec.effective_budget);
+    let consumer_floor = piscem_rs::io::fastx::collection_share_floor(
+        readers.len(),
+        arity,
+        exec.map_threads,
+    );
+
+    let broker = match (&decode_pool, exec.adaptive()) {
+        (Some(pool), true) => {
+            match piscem_rs::io::broker::DecodeProducer::new(pool.clone(), handles.clone()) {
+                Ok(producer) => {
+                    let built = thread_broker::ThreadBroker::builder_with(
+                        MappingConsumer::new(map_pool.clone(), Arc::clone(&busy)),
+                        producer,
+                        piscem_rs::io::fastx::broker_config_for_budget(exec.effective_budget),
+                    )
+                    .budget(exec.effective_budget)
+                    .initial_producer_slots(exec.decode_slots)
+                    .min_consumer_threads(consumer_floor)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("invalid thread broker configuration: {e}"))?;
+                    piscem_rs::io::broker::AdvisoryBroker::start(
+                        built,
+                        exec.map_threads,
+                        exec.decode_slots,
+                    )
+                }
+                Err(error) => piscem_rs::io::broker::AdvisoryBroker::failed(
+                    piscem_rs::io::broker::BrokerFailureStage::ProducerMeasurementStartup,
+                    error,
+                    exec.map_threads,
+                    exec.decode_slots,
+                ),
+            }
+        }
+        _ => piscem_rs::io::broker::AdvisoryBroker::disabled(),
+    };
+
+    tracing::info!(
+        requested_budget = exec.requested_budget,
+        effective_budget = exec.effective_budget,
+        mapping_threads = exec.map_threads,
+        decode_slots = exec.decode_slots,
+        parallel_decode = exec.parallel_gzip(),
+        reason = ?decision.reason,
+        "thread execution plan"
+    );
+
+    Ok(MappingPlan {
+        readers,
+        map_pool,
+        busy,
+        broker,
+        map_threads: exec.map_threads,
+        decode_slots: exec.decode_slots,
+        parallel: exec.parallel_gzip(),
+        _decode_pool: decode_pool,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,3 +309,4 @@ mod tests {
         assert!(!p.engages(1024, 0), "no gzip input: only ever costs threads");
     }
 }
+

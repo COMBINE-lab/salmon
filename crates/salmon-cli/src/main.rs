@@ -444,6 +444,17 @@ struct QuantArgs {
     /// value; on schedulers that enforce the limit, request one extra core.
     #[arg(short = 'p', long = "threads", default_value_t = 0)]
     threads: usize,
+    /// Which gzip decoder to use: `auto` (default), `serial`, `parallel`, or
+    /// `parallel=N` to pin N slots per decodable input.
+    ///
+    /// `-p` is one budget shared between inflating the input and mapping it, so
+    /// engaging the parallel decoder costs mapping threads. `auto` engages it
+    /// only when the budget is large enough for it to add decode concurrency
+    /// rather than merely move threads around -- a threshold that is higher in
+    /// selective-alignment mode than in sketch, because more work per fragment
+    /// means a smaller share of the budget should be decoding.
+    #[arg(long = "decoder", default_value = "auto")]
+    decoder: String,
     /// Use the alignment-free pseudoalignment path.
     #[arg(long = "sketch")]
     sketch: bool,
@@ -1661,6 +1672,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.unmated = args.unmated;
     opts.lib_type = args.lib_type;
     opts.num_threads = args.threads;
+    opts.decoder = piscem_rs::io::calibrate::DecoderPreference::parse(&args.decoder)
+        .map_err(|e| anyhow::anyhow!("--decoder {}: {e}", args.decoder))?;
     opts.sketch = args.sketch;
     opts.sketch_strict_orphan = args.sketch_strict_orphans;
     opts.em.use_vbem = use_vbem;

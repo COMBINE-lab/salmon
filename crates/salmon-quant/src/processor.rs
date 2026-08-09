@@ -65,6 +65,15 @@ use salmon_model::{
 /// re-deriving what this run needs.
 #[derive(Clone, Copy)]
 pub(crate) struct Shared<'a> {
+    /// Thread-time the mapping threads spend mapping, for the thread broker.
+    ///
+    /// Lives on `Shared` because it is the one thing already handed to every
+    /// processor clone, so metering needs no extra plumbing. Published every few
+    /// hundred fragments rather than once per batch: a batch takes far longer
+    /// than one sampling window, and a per-batch counter would leave windows
+    /// reading zero work -- reporting maximum starvation for a thread mapping
+    /// flat out. See `thread_broker::BusyMeter`.
+    pub busy: &'a thread_broker::BusyMeter,
     pub salmon: &'a SalmonIndex,
     pub eq: &'a EquivalenceClassBuilder,
     pub fld: &'a FragmentLengthDistribution,
@@ -1157,6 +1166,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // Destructure `self` into its fields up front: the loop below needs
         // several of them mutably at once, which the borrow checker only permits
         // on distinct fields, not through repeated `self.` accesses.
+        let mut busy = self.shared.busy.timer();
         let QuantProcessor {
             shared,
             counters,
@@ -1202,6 +1212,11 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // per-fragment result Vec isn't reallocated per read.
         let mut placements: Vec<ScoredMapping> = Vec::new();
         for (r1, r2) in pairs {
+            // Per fragment, not per batch: a batch runs far longer than one
+            // broker sampling window, so a per-batch counter would leave whole
+            // windows reading zero work and report a thread mapping flat out as
+            // fully starved. `BusyMeter` publishes on its own cadence.
+            busy.tick();
             let s1 = r1.seq();
             let s2 = r2.seq();
             if sh.sketch {
@@ -1336,6 +1351,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         records: impl Iterator<Item = RefRecord<'r>>,
     ) -> paraseq::Result<()> {
+        let mut busy = self.shared.busy.timer();
         let QuantProcessor {
             shared,
             counters,
@@ -1370,6 +1386,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // Reused across the batch's reads (the `*_into` calls clear it).
         let mut placements: Vec<ScoredMapping> = Vec::new();
         for rec in records {
+            busy.tick(); // see the paired-end loop
             let s = rec.seq();
             if sh.sketch {
                 map_single_read_sketch_into(

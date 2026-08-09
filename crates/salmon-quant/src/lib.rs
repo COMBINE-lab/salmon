@@ -43,9 +43,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use flate2::read::MultiGzDecoder;
 
-use piscem_rs::io::fastx::{reader_with_batch_size, Collection, CollectionType};
+use piscem_rs::io::fastx::{Collection, CollectionType};
 use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 
 use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
@@ -85,6 +84,9 @@ pub struct QuantOptions {
     pub lib_type: String,
     /// worker threads (`0` = all cores)
     pub num_threads: usize,
+    /// Which gzip decoder to use. `Auto` lets the engagement policy decide
+    /// whether the parallel decoder can pay for the mapping threads it costs.
+    pub decoder: piscem_rs::io::calibrate::DecoderPreference,
     /// use the alignment-free pseudoalignment path
     pub sketch: bool,
     /// sketch mode: restrict orphan emission to pairs whose other mate had no
@@ -214,6 +216,7 @@ impl QuantOptions {
             output_dir,
             lib_type: "A".to_string(),
             num_threads: 0,
+            decoder: piscem_rs::io::calibrate::DecoderPreference::Auto,
             sketch: false,
             sketch_strict_orphan: false,
             map_config: MapConfig::default(),
@@ -592,7 +595,27 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
     // ---- parallel mapping pass (borrows the accumulators) -------------------
     {
+        // Built before `Shared` because `Shared` borrows the plan's busy meter,
+        // and before the processor because opening the inputs is what decides
+        // the decode/map split the pool is sized to.
+        let groups: Vec<Vec<PathBuf>> = if opts.is_paired() {
+            opts.mates1
+                .iter()
+                .zip(opts.mates2.iter())
+                .map(|(a, b)| vec![a.clone(), b.clone()])
+                .collect()
+        } else {
+            opts.unmated.iter().map(|p| vec![p.clone()]).collect()
+        };
+        let mut plan = decode::plan(
+            &groups,
+            nthreads,
+            opts.decoder,
+            decode::default_engagement_policy(opts.sketch),
+        )?;
+
         let shared = Shared {
+            busy: &plan.busy,
             salmon: &salmon,
             eq: &eq_builder,
             fld: &fld,
@@ -652,10 +675,32 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 "selective-alignment"
             }
         );
-        if opts.is_paired() {
-            run_paired(&opts.mates1, &opts.mates2, &mut proc, nthreads)?;
+        let readers = std::mem::take(&mut plan.readers);
+        let kind = if opts.is_paired() {
+            CollectionType::Paired
         } else {
-            run_single(&opts.unmated, &mut proc, nthreads)?;
+            CollectionType::Single
+        };
+        let collection = Collection::new(readers, kind)
+            .map_err(|e| anyhow::anyhow!("building read collection: {e}"))?;
+        let mapped = if opts.is_paired() {
+            collection.process_parallel_paired_pool(&mut proc, &plan.map_pool, None)
+        } else {
+            collection.process_parallel_pool(&mut proc, &plan.map_pool, None)
+        };
+
+        // Settle the broker before propagating a mapping error, and never let a
+        // broker failure become the run's error. piscem shipped the opposite:
+        // a broker error surfaced after mapping completed, unwound past the
+        // output finalisation, and left a file that parsed cleanly but declared
+        // no content. Failures are recorded, not raised.
+        let diagnostics = plan.broker.finish();
+        mapped.map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
+        if let Some(err) = &diagnostics.failure {
+            tracing::warn!(
+                "thread broker stopped early ({err:?}); mapping completed with the \
+                 split it had last applied"
+            );
         }
     }
     // `--deterministic`: replace the (untrained) online FLD with one built ONCE,
@@ -1279,74 +1324,5 @@ fn dump_eq_classes(
         }
     }
     w.finish()?;
-    Ok(())
-}
-
-/// Open a (optionally gzipped) read file as a boxed reader.
-///
-/// Boxed as `dyn Read` so the plain and gzipped cases have one type and the
-/// parser below does not need to be generic over them; `Send` because paraseq
-/// moves the reader onto worker threads.
-fn open_reader(path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
-    let f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    if path.extension().and_then(|e| e.to_str()) == Some("gz") {
-        Ok(Box::new(MultiGzDecoder::new(f)))
-    } else {
-        Ok(Box::new(f))
-    }
-}
-
-/// Drive the mapping pass over single-end input.
-///
-/// paraseq owns the reading and the threading: it is handed every input file and
-/// the processor, and it calls back into [`processor`] with batches of records on
-/// each worker thread.
-fn run_single(paths: &[PathBuf], proc: &mut QuantProcessor, nthreads: usize) -> Result<()> {
-    let mut readers = Vec::with_capacity(paths.len());
-    for p in paths {
-        readers.push(
-            reader_with_batch_size(open_reader(p)?)
-                .map_err(|e| anyhow::anyhow!("opening {}: {e}", p.display()))?,
-        );
-    }
-    let collection = Collection::new(readers, CollectionType::Single)
-        .map_err(|e| anyhow::anyhow!("building read collection: {e}"))?;
-    collection
-        .process_parallel(proc, nthreads, None)
-        .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
-    Ok(())
-}
-
-/// Drive the mapping pass over paired-end input.
-///
-/// The two mate files are interleaved into the collection in pairs, so paraseq
-/// hands the processor matching records together — the mates of one fragment are
-/// always processed by the same worker at the same time.
-fn run_paired(
-    mates1: &[PathBuf],
-    mates2: &[PathBuf],
-    proc: &mut QuantProcessor,
-    nthreads: usize,
-) -> Result<()> {
-    anyhow::ensure!(
-        mates1.len() == mates2.len(),
-        "mates1 and mates2 must have the same number of files"
-    );
-    let mut readers = Vec::with_capacity(mates1.len() * 2);
-    for (a, b) in mates1.iter().zip(mates2.iter()) {
-        readers.push(
-            reader_with_batch_size(open_reader(a)?)
-                .map_err(|e| anyhow::anyhow!("opening {}: {e}", a.display()))?,
-        );
-        readers.push(
-            reader_with_batch_size(open_reader(b)?)
-                .map_err(|e| anyhow::anyhow!("opening {}: {e}", b.display()))?,
-        );
-    }
-    let collection = Collection::new(readers, CollectionType::Paired)
-        .map_err(|e| anyhow::anyhow!("building paired read collection: {e}"))?;
-    collection
-        .process_parallel_paired(proc, nthreads, None)
-        .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
     Ok(())
 }

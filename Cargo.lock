@@ -2813,6 +2813,7 @@ dependencies = [
  "noodles-sam",
  "paraseq-temp",
  "piscem-rs",
+ "rapidgzip-core",
  "rayon",
  "salmon-core",
  "salmon-eqclass",

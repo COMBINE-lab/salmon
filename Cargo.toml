@@ -84,6 +84,10 @@ piscem-rs = { version = "0.9.0", features = ["rapidgzip"] }
 # implement `Consumer` for its own mapping pool; must resolve to the same
 # version piscem-rs uses or the trait would not match across the boundary.
 thread-broker = "0.1.0"
+# Named directly only to hold the decoder pool for the run's lifetime; the
+# decoding itself is driven through piscem-rs. Must match the version piscem-rs
+# resolves, or the pool handed to `open_input_pooled` would be a different type.
+rapidgzip-core = "0.3"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
 libradicl = { version = "0.17", features = ["zstd"] }
