@@ -45,10 +45,16 @@
 # USAGE
 #   scripts/decode_crossover.sh -i <index> -1 R1.fq.gz -2 R2.fq.gz [-o outdir]
 #   THREADS="8 16 32 64" scripts/decode_crossover.sh ...
+#
+# The default sweep runs to 128 deliberately. With F=2 gzip inputs, a threshold
+# of 1 + C/P per stream puts the selective-alignment crossover near -p 58 on the
+# 4x-heavier-consumer prior -- which would sit at the very edge of a sweep that
+# stopped at 64, and a constant fitted to the edge of a sweep is exactly what
+# this harness warns about.
 set -uo pipefail
 
 SALMON=${SALMON:-target/release/salmon}
-THREADS=${THREADS:-"8 16 32 64"}
+THREADS=${THREADS:-"8 16 32 64 96 128"}
 MODES=${MODES:-"sketch sa"}
 MIN_SECONDS=${MIN_SECONDS:-60}
 OUT=${OUT:-crossover-out}
