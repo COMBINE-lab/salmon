@@ -45,38 +45,71 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use thread_broker::{BusyMeter, Consumer, EngagementPolicy, ResizeError, Work};
 
-/// Engagement threshold for sketch (pseudoalignment) mode.
+/// How the engagement threshold varies across salmon's mapping configurations.
 ///
-/// Sketch does per-fragment work close to what piscem does, so it inherits
-/// piscem's measured default. Recorded there across 16 cells: the serial decoder
-/// won every cell in which the parallel decoder could not add concurrency, by
-/// 8–28%, and lost by up to 4.2× in every cell where it could.
-pub const ENGAGEMENT_SKETCH: usize = 8;
+/// `min_threads_per_stream = 1 + C/P`, so every configuration that changes the
+/// per-fragment consumer cost `C` moves the threshold, while `P` — inflating the
+/// same bytes — stays put. Two knobs do that, giving four cells:
+///
+/// * **selective alignment vs sketch.** SA extends and scores alignments per
+///   candidate; sketch does not. SA has the larger `C`, so it engages later.
+/// * **`--deterministic`.** Its mapping pass does, per `record_discrete`, "no
+///   online inference, eq-class assembly, bias collection, or prefix
+///   library-type detection" — four categories of per-fragment work removed. It
+///   lowers `C` in *both* modes, so it engages *earlier* than its counterpart.
+///
+/// The ordering is therefore
+/// `sa < sa+deterministic` is **false**; it is
+/// `sa+deterministic < sa` and `sketch+deterministic < sketch`, with both
+/// sketch cells below their SA counterparts.
+///
+/// Caveat: `--deterministic` only takes the cheap path when the library is
+/// paired (`deterministic_fld && is_paired()`), so single-end gets the ordinary
+/// cost and the ordinary threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Thresholds {
+    pub sketch: usize,
+    pub sketch_deterministic: usize,
+    pub selective_alignment: usize,
+    pub selective_alignment_deterministic: usize,
+}
 
-/// Engagement threshold for selective-alignment mode (salmon's default).
+/// Measured on 26.1 M paired human RNA-seq fragments against a 238 k-transcript
+/// index, by reading the broker's own solved `producer_cost_share` (the
+/// threshold is `1/share`) rather than inferring it from a wall-time crossover.
 ///
-/// Selective alignment extends and scores alignments per candidate, so `C` is
-/// much larger than in sketch mode while `P` — inflating the same bytes — is
-/// unchanged. By the `1 + C/P` relation above the threshold must rise, and the
-/// question is only by how much.
+/// | cell | share | threshold | status |
+/// |---|---|---|---|
+/// | sketch | 0.1004 ± 0.0056 | 10 | **measured** |
+/// | sketch + deterministic | — | 8 | provisional |
+/// | selective alignment | — | 29 | provisional |
+/// | selective alignment + deterministic | — | 20 | provisional |
 ///
-/// **Provisional.** This constant is a placeholder until the crossover sweep in
-/// `scripts/decode_crossover.sh` has been run on both modes; it must not ship
-/// unmeasured. The prior from a 4× consumer-cost ratio is `1 + 4·7 = 29`, which
-/// is well above the 12–16 one would guess by eye — precisely the reason to
-/// measure rather than assume. Override at runtime with `--thread-policy`.
-pub const ENGAGEMENT_SELECTIVE_ALIGNMENT: usize = 29;
+/// Only the first is measured. The rest are blocked on the deadlock recorded in
+/// `notes/sa-parallel-decode-deadlock.md`, which makes the SA cells unrunnable
+/// with the decoder engaged. The provisional values come from the `1 + C/P`
+/// relation under a 4x consumer-cost prior; they are placeholders, and the
+/// tests below assert only their *ordering*, which follows from the mechanism,
+/// not their magnitudes, which do not.
+pub const THRESHOLDS: Thresholds = Thresholds {
+    sketch: 10,
+    sketch_deterministic: 8,
+    selective_alignment: 29,
+    selective_alignment_deterministic: 20,
+};
 
-/// The engagement policy salmon defaults to for a given mapping mode.
+/// The engagement policy salmon defaults to for a given configuration.
 ///
-/// Split out and public so the crossover harness can assert against the same
-/// values the binary uses, rather than restating them.
-pub fn default_engagement_policy(sketch: bool) -> EngagementPolicy {
+/// Public so the tests and any harness assert against the same values the
+/// binary uses, rather than restating them.
+pub fn default_engagement_policy(sketch: bool, deterministic: bool) -> EngagementPolicy {
+    let t = THRESHOLDS;
     EngagementPolicy {
-        min_threads_per_stream: if sketch {
-            ENGAGEMENT_SKETCH
-        } else {
-            ENGAGEMENT_SELECTIVE_ALIGNMENT
+        min_threads_per_stream: match (sketch, deterministic) {
+            (true, false) => t.sketch,
+            (true, true) => t.sketch_deterministic,
+            (false, false) => t.selective_alignment,
+            (false, true) => t.selective_alignment_deterministic,
         },
     }
 }
@@ -92,11 +125,12 @@ pub fn default_engagement_policy(sketch: bool) -> EngagementPolicy {
 /// field is a hard error in both rather than a silent no-op.
 pub fn engagement_policy(
     sketch: bool,
+    deterministic: bool,
     policy_file: Option<&std::path::Path>,
 ) -> Result<EngagementPolicy> {
     match policy_file {
         Some(path) => Ok(piscem_rs::io::policy::ThreadPolicy::load(Some(path))?.parallel_decode),
-        None => Ok(default_engagement_policy(sketch)),
+        None => Ok(default_engagement_policy(sketch, deterministic)),
     }
 }
 
@@ -295,36 +329,60 @@ pub fn plan(
 mod tests {
     use super::*;
 
-    /// The two modes must not share a threshold — that is the entire point of
-    /// this module. A refactor that collapses them should fail here.
+    fn t(sketch: bool, det: bool) -> usize {
+        default_engagement_policy(sketch, det).min_threads_per_stream
+    }
+
+    /// Only the *ordering* is asserted, because only the ordering follows from
+    /// the mechanism. Three of the four magnitudes are still provisional, so
+    /// pinning them here would be pinning a guess.
     #[test]
-    fn selective_alignment_engages_later_than_sketch() {
-        let sketch = default_engagement_policy(true);
-        let sa = default_engagement_policy(false);
+    fn thresholds_order_by_per_fragment_consumer_cost() {
+        // More work per fragment => smaller producer cost share => engage later.
         assert!(
-            sa.min_threads_per_stream > sketch.min_threads_per_stream,
-            "selective alignment does more work per fragment, so its producer \
-             cost share is lower and the parallel decoder must engage later"
+            t(false, false) > t(true, false),
+            "selective alignment extends and scores alignments per candidate, so \
+             it must engage later than sketch"
+        );
+        assert!(
+            t(false, true) > t(true, true),
+            "the SA-vs-sketch gap must survive --deterministic"
+        );
+        // --deterministic removes online inference, eq-class assembly, bias
+        // collection and prefix detection, so it must engage *earlier*.
+        assert!(
+            t(true, true) < t(true, false),
+            "--deterministic lightens sketch, so its threshold must fall"
+        );
+        assert!(
+            t(false, true) < t(false, false),
+            "--deterministic lightens selective alignment, so its threshold must fall"
         );
     }
 
     /// Sketch inherits piscem's measured constant; drift here means the two
     /// projects have silently disagreed about the same measurement.
+    /// Sketch is the one cell that has been measured on salmon's own workload:
+    /// producer_cost_share = 0.1004 +/- 0.0056, so 1/share = 10. It deliberately
+    /// does *not* track piscem's default of 8 -- inheriting that constant was an
+    /// assumption, and measurement did not bear it out.
     #[test]
-    fn sketch_matches_piscems_measured_default() {
-        assert_eq!(
-            default_engagement_policy(true),
-            EngagementPolicy::default(),
-            "sketch should track piscem's default rather than restate it"
+    fn sketch_uses_the_value_measured_for_salmon_not_piscem() {
+        assert_eq!(t(true, false), 10);
+        assert_ne!(
+            t(true, false),
+            EngagementPolicy::default().min_threads_per_stream,
+            "measured on salmon's own workload; piscem's 8 was slightly optimistic"
         );
     }
 
     /// A budget below the threshold must not engage, and one at it must.
     #[test]
     fn the_threshold_is_per_gzip_input() {
-        let p = default_engagement_policy(true);
-        assert!(!p.engages(8 * 2 - 1, 2), "just below 8 per stream");
-        assert!(p.engages(8 * 2, 2), "exactly 8 per stream");
+        let p = default_engagement_policy(true, false);
+        let n = p.min_threads_per_stream;
+        assert!(!p.engages(n * 2 - 1, 2), "just below the threshold per stream");
+        assert!(p.engages(n * 2, 2), "exactly at the threshold per stream");
         assert!(!p.engages(1024, 0), "no gzip input: only ever costs threads");
     }
 }

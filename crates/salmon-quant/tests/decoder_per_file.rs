@@ -127,15 +127,15 @@ fn a_policy_file_overrides_the_mode_default() {
     let dir = tempfile::tempdir().unwrap();
 
     // No file: the mode decides, and the two modes must differ.
-    let sa = decode::engagement_policy(false, None).unwrap();
-    let sketch = decode::engagement_policy(true, None).unwrap();
+    let sa = decode::engagement_policy(false, false, None).unwrap();
+    let sketch = decode::engagement_policy(true, false, None).unwrap();
     assert!(sa.min_threads_per_stream > sketch.min_threads_per_stream);
 
     // A file wins over the mode default, in both modes.
     let good = dir.path().join("policy.json");
     std::fs::write(&good, r#"{"parallel_decode": {"min_threads_per_stream": 3}}"#).unwrap();
     for sketch_mode in [true, false] {
-        let p = decode::engagement_policy(sketch_mode, Some(&good)).unwrap();
+        let p = decode::engagement_policy(sketch_mode, false, Some(&good)).unwrap();
         assert_eq!(
             p.min_threads_per_stream, 3,
             "an explicit policy must win over the per-mode default"
@@ -145,7 +145,7 @@ fn a_policy_file_overrides_the_mode_default() {
     let typo = dir.path().join("typo.json");
     std::fs::write(&typo, r#"{"parallel_decode": {"min_threads_per_input": 3}}"#).unwrap();
     assert!(
-        decode::engagement_policy(false, Some(&typo)).is_err(),
+        decode::engagement_policy(false, false, Some(&typo)).is_err(),
         "a misspelled field must refuse to load rather than silently doing nothing"
     );
 }

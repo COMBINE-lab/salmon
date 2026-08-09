@@ -614,7 +614,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             &groups,
             nthreads,
             opts.decoder,
-            decode::engagement_policy(opts.sketch, opts.thread_policy.as_deref())?,
+            decode::engagement_policy(
+                opts.sketch,
+                opts.deterministic_fld && opts.is_paired(),
+                opts.thread_policy.as_deref(),
+            )?,
         )?;
 
         let shared = Shared {
