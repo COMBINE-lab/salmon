@@ -179,8 +179,144 @@ pub(crate) struct Shared<'a> {
 /// plain run allocates none of them. The private buffers exist so the hot path
 /// touches no shared memory at all; they are merged or flushed at batch and
 /// thread boundaries.
+/// Per-worker tallies for the counters that are only ever *written* on the hot
+/// path, folded into the shared atomics once in `on_thread_complete`.
+///
+/// Each of these used to be a `fetch_add` on an `AtomicU64` that every worker
+/// shares. Relaxed ordering makes an individual increment cheap, but the cost
+/// was never the ordering — it was the cache line: every thread writing the same
+/// word serialises behind a coherence transfer, so the tax grows with `-p` and
+/// is invisible at low thread counts. Accumulating privately and merging once
+/// per thread is the same pattern the bias models already use.
+///
+/// `num_processed` is deliberately NOT here: it is also *read* on the hot path,
+/// to gate `use_aux`, so making it thread-local would change which fragments see
+/// the auxiliary model and therefore the output. That gate is its own question
+/// (see the `use_aux` issue); this change is output-preserving.
+#[derive(Default)]
+pub(crate) struct Counters {
+    pub orphan: u64,
+    pub decoy: u64,
+    pub dovetail: u64,
+    pub frags_filtered_vm: u64,
+    pub below_threshold_vm: u64,
+}
+
+impl Counters {
+    /// Add this worker's tallies to the shared atomics. One `fetch_add` per
+    /// counter per thread, instead of one per counter per fragment.
+    fn merge_into(&self, sh: &Shared) {
+        let add = |a: &AtomicU64, v: u64| {
+            if v != 0 {
+                a.fetch_add(v, Ordering::Relaxed);
+            }
+        };
+        add(sh.num_orphan, self.orphan);
+        add(sh.num_decoy, self.decoy);
+        add(sh.num_dovetail, self.dovetail);
+        add(sh.num_frags_filtered_vm, self.frags_filtered_vm);
+        add(sh.num_below_threshold_vm, self.below_threshold_vm);
+    }
+}
+
+/// Index into a fragment's `placements` slice.
+///
+/// The record path carries two different kinds of position: an index into
+/// `placements` (a fragment's candidate mappings) and a position within
+/// `compat` (the strand-compatible subset). They coincide only when nothing is
+/// filtered out — which is to say on unstranded libraries but not stranded ones
+/// — so confusing them mis-weights bias on stranded libraries specifically,
+/// with no panic and no test failure on unstranded data. Giving each its own
+/// type makes that mistake a compile error.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub(crate) struct MapIdx(usize);
+
+impl MapIdx {
+    /// The placement this refers to.
+    ///
+    /// A method rather than `placements[i]`, so a map index cannot silently be
+    /// used on a buffer that is aligned to `compat` instead.
+    #[inline]
+    fn get(self, placements: &[ScoredMapping]) -> &ScoredMapping {
+        &placements[self.0]
+    }
+}
+
+/// Position within `compat`, and so within every buffer aligned to it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub(crate) struct CompatIdx(usize);
+
+/// A per-fragment buffer holding exactly one entry per `compat` element.
+///
+/// Indexable only by [`CompatIdx`], so indexing it with a [`MapIdx`] does not
+/// compile. The alignment was previously enforced by comments alone.
+///
+/// `#[repr(transparent)]` with `#[inline]` accessors, so this compiles to the
+/// same code as indexing the `Vec` directly.
+#[derive(Default)]
+#[repr(transparent)]
+pub(crate) struct CompatAligned<T>(Vec<T>);
+
+impl<T> CompatAligned<T> {
+    #[inline]
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+    #[inline]
+    fn extend<I: IntoIterator<Item = T>>(&mut self, it: I) {
+        self.0.extend(it);
+    }
+    #[inline]
+    fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.0.iter()
+    }
+}
+
+impl<T> From<Vec<T>> for CompatAligned<T> {
+    #[inline]
+    fn from(v: Vec<T>) -> Self {
+        Self(v)
+    }
+}
+
+impl<T> std::ops::Index<CompatIdx> for CompatAligned<T> {
+    type Output = T;
+    #[inline]
+    fn index(&self, i: CompatIdx) -> &T {
+        &self.0[i.0]
+    }
+}
+
+/// Reusable per-fragment working buffers for [`record`].
+///
+/// `record` runs once per fragment and used to allocate five throwaway `Vec`s
+/// every time (the compatible-mapping list, the online-posterior inputs, the
+/// bias weights, the per-mapping fragment-length terms, and the tid/weight
+/// pairs). Only the two vectors that are *moved* into the equivalence-class
+/// builder genuinely have to be fresh; the rest are scratch and live here for
+/// the lifetime of the worker.
+#[derive(Default)]
+pub(crate) struct RecordScratch {
+    /// strand-compatible mappings and their (possibly penalised) weights
+    compat: Vec<(MapIdx, f64)>,
+    /// `(tid, log-weight)` inputs to the online posterior
+    online_in: Vec<(u32, f64)>,
+    /// abundance-aware (or score-only) per-mapping bias-collection weights
+    bias_w: CompatAligned<f64>,
+    /// per-mapping fragment-length log-probability
+    log_fps: CompatAligned<f64>,
+    /// `(tid, conditional probability)` before duplicate-tid merging
+    pairs: Vec<(u32, f64)>,
+}
+
 pub(crate) struct QuantProcessor<'a> {
     pub shared: Shared<'a>,
+    /// per-thread counter tallies, merged into the shared atomics at thread end
+    pub counters: Counters,
+    /// per-thread reusable buffers for the per-fragment `record` path
+    pub scratch: RecordScratch,
     pub hs: Option<HitSearcher<'a>>,
     /// per-thread reusable sketch caches (avoids per-read MappingCache allocs)
     pub sketch_scratch: Option<salmon_map::SketchScratch>,
@@ -223,6 +359,8 @@ impl<'a> QuantProcessor<'a> {
         });
         Self {
             shared,
+            counters: Counters::default(),
+            scratch: RecordScratch::default(),
             hs: None,
             sketch_scratch: None,
             seqbias,
@@ -393,12 +531,19 @@ fn collect_context(
 }
 
 /// Collect observed fragment-GC contexts for one fragment's compatible paired
-/// mappings, each weighted by `bias_w[i]` (the abundance-aware posterior under
+/// mappings, each weighted by `bias_w[k]` (the abundance-aware posterior under
 /// online inference, else the normalized aux weight). Mirrors salmon's
 /// per-alignment `observedGCMass.inc(gcDesc(start, stop), logProb)`.
-fn collect_gc(sh: &Shared, compat: &[(&ScoredMapping, f64)], bias_w: &[f64], gc: &mut GcFragModel) {
+fn collect_gc(
+    sh: &Shared,
+    placements: &[ScoredMapping],
+    compat: &[(MapIdx, f64)],
+    bias_w: &CompatAligned<f64>,
+    gc: &mut GcFragModel,
+) {
     let Some(store) = sh.gc_store else { return };
-    for (i, (m, _)) in compat.iter().enumerate() {
+    for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+        let m = i.get(placements);
         if m.status != MateStatus::PairedEndPaired || m.fragment_len <= 0 {
             continue;
         }
@@ -410,32 +555,37 @@ fn collect_gc(sh: &Shared, compat: &[(&ScoredMapping, f64)], bias_w: &[f64], gc:
             continue;
         }
         if let Some((ff, cf)) = gc_desc(&view, start, stop) {
-            gc.inc(ff, cf, bias_w[i]);
+            // `bias_w` is aligned to `compat`, so it is indexed by the position
+            // in `compat` (`k`), not by the mapping index (`i`).
+            gc.inc(ff, cf, bias_w[k]);
         }
     }
 }
 
 /// Collect observed positional-bias mass for one fragment's compatible mappings,
-/// each weighted by `bias_w[i]` (log space). Mirrors salmon's
+/// each weighted by `bias_w[k]` (log space). Mirrors salmon's
 /// `observedPosBias{Fwd,RC}[lengthClass].addMass(pos, refLen, logProb)`.
 fn collect_pos(
     sh: &Shared,
-    compat: &[(&ScoredMapping, f64)],
-    bias_w: &[f64],
+    placements: &[ScoredMapping],
+    compat: &[(MapIdx, f64)],
+    bias_w: &CompatAligned<f64>,
     pos: &mut (Vec<SimplePosBias>, Vec<SimplePosBias>),
 ) {
     let Some(length_class) = sh.length_class else {
         return;
     };
-    for (i, (m, _)) in compat.iter().enumerate() {
-        if bias_w[i] <= 0.0 {
+    for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+        let m = i.get(placements);
+        // `bias_w` is aligned to `compat`, indexed by `k`, not by `i`.
+        if bias_w[k] <= 0.0 {
             continue;
         }
         let lc = length_class[m.tid as usize];
         let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
         // add_mass now takes LINEAR mass (accumulated in fixed-point); pass the
         // posterior weight directly rather than its log.
-        let mass = bias_w[i];
+        let mass = bias_w[k];
         if m.fw_pos >= 0 {
             pos.0[lc].add_mass(m.fw_pos, ref_len, mass);
         }
@@ -451,11 +601,19 @@ fn collect_pos(
 /// inference, eq-class assembly, bias collection, or prefix library-type
 /// detection — the FLD and library format are derived deterministically from the
 /// accumulator at end of pass and baked into the RAD.
-fn record_discrete(sh: &Shared, maps: &[ScoredMapping], acc: &salmon_model::DiscreteFld) {
+fn record_discrete(
+    sh: &Shared,
+    placements: &[ScoredMapping],
+    acc: &salmon_model::DiscreteFld,
+    counters: &mut Counters,
+) {
     sh.num_processed.fetch_add(1, Ordering::Relaxed);
-    if maps.is_empty() {
+    if placements.is_empty() {
         return;
     }
+    // Stays shared, unlike the other tallies: `record` reads this running total
+    // to gate the auxiliary models (see `use_aux`), so a per-worker count merged
+    // at thread end would leave it at zero for the whole run.
     sh.num_mapped.fetch_add(1, Ordering::Relaxed);
     // Same orphan definition `record` uses: a fragment's surviving mappings share
     // one status, so the first is representative. Counting it here is what lets
@@ -463,17 +621,17 @@ fn record_discrete(sh: &Shared, maps: &[ScoredMapping], acc: &salmon_model::Disc
     // `lib_format_counts.json` instead of calling every mapped fragment
     // concordant.
     if matches!(
-        maps[0].status,
+        placements[0].status,
         MateStatus::PairedEndLeft | MateStatus::PairedEndRight
     ) {
-        sh.num_orphan.fetch_add(1, Ordering::Relaxed);
+        counters.orphan += 1;
     }
     // A uniquely-mapped proper pair unambiguously implies its fragment length and
     // orientation; its observed format also feeds order-independent `-l A`
     // detection. Uses the raw mapping (like the RAD records written this pass, and
     // like the reader's `derive_fld`), so a baked FLD matches a re-derived one.
-    if maps.len() == 1 {
-        let m = &maps[0];
+    if placements.len() == 1 {
+        let m = &placements[0];
         if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
             // Orientation from the mate strands (sketch mode leaves `m.format`
             // `None`), exactly as `build_rad_record` derives the RAD hit.
@@ -487,7 +645,7 @@ fn record_discrete(sh: &Shared, maps: &[ScoredMapping], acc: &salmon_model::Disc
     // leaves `m.format` `None`, so derive the observed paired format from the mate
     // strands (as `build_rad_record` / `DiscreteFld` do).
     if let Some(nb) = sh.naive_eq {
-        let sig: Vec<NaivePlacement> = maps
+        let sig: Vec<NaivePlacement> = placements
             .iter()
             .map(|m| {
                 let fmt_id = if m.status == MateStatus::PairedEndPaired {
@@ -535,25 +693,37 @@ fn record_discrete(sh: &Shared, maps: &[ScoredMapping], acc: &salmon_model::Disc
 #[allow(clippy::too_many_arguments)]
 fn record(
     sh: &Shared,
-    maps: &[ScoredMapping],
+    placements: &[ScoredMapping],
     log_fm: f64,
     fld_pmf: &[f64],
     fld_cmf: &[f64],
+    counters: &mut Counters,
+    scratch: &mut RecordScratch,
     seqbias: Option<&mut (SBModel, SBModel)>,
     gcbias: Option<&mut GcFragModel>,
     posbias: Option<&mut (Vec<SimplePosBias>, Vec<SimplePosBias>)>,
 ) {
+    // Still a shared atomic: unlike the other counters this one is *read* below,
+    // to gate `use_aux`. See `Counters`.
     sh.num_processed.fetch_add(1, Ordering::Relaxed);
-    if maps.is_empty() {
+    if placements.is_empty() {
         return;
     }
+    // Independent `&mut` borrows of the reusable buffers.
+    let RecordScratch {
+        compat,
+        online_in,
+        bias_w,
+        log_fps,
+        pairs,
+    } = scratch;
 
     // Sample the observed library format for auto-detection (auto mode only).
     // Sampled from the raw mappings, before the strand-compatibility filter
     // below, so detection sees the true observed orientation/strand.
     if let Some(det) = sh.detector {
         if det.is_active() {
-            if let Some(m) = maps
+            if let Some(m) = placements
                 .iter()
                 .filter(|m| m.format.is_some())
                 .max_by(|a, b| a.weight.total_cmp(&b.weight))
@@ -571,21 +741,26 @@ fn record(
     let expected = sh
         .expected_format
         .or_else(|| sh.detector.and_then(|d| d.resolved_format()));
-    let compat: Vec<(&ScoredMapping, f64)> = maps
-        .iter()
-        .filter_map(|m| match expected {
-            Some(exp) => {
-                if is_compatible(exp, m.format, m.is_fw, m.status) {
-                    Some((m, m.weight))
-                } else if sh.ignore_incompat {
-                    None
-                } else {
-                    Some((m, m.weight * sh.incompat_prior))
+    // Indices into `placements` rather than references, so the buffer can outlive the
+    // call and be reused by the next fragment.
+    compat.clear();
+    compat.extend(
+        placements
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| match expected {
+                Some(exp) => {
+                    if is_compatible(exp, m.format, m.is_fw, m.status) {
+                        Some((MapIdx(i), m.weight))
+                    } else if sh.ignore_incompat {
+                        None
+                    } else {
+                        Some((MapIdx(i), m.weight * sh.incompat_prior))
+                    }
                 }
-            }
-            None => Some((m, m.weight)),
-        })
-        .collect();
+                None => Some((MapIdx(i), m.weight)),
+            }),
+    );
     if compat.is_empty() {
         return; // no compatible mapping -> fragment is unassigned (not mapped)
     }
@@ -603,6 +778,10 @@ fn record(
     // own increment, and C++ evaluates `useAuxParams` before counting the current
     // read. Reading the post-increment value would gate this fragment on a total
     // that includes itself, differing from both by one.
+    //
+    // This one counter therefore stays shared while the rest became per-worker:
+    // it is *read* during the run, not merely accumulated, so a thread-local
+    // tally merged at thread end would gate every fragment on zero.
     let assigned_before_this = sh.num_mapped.fetch_add(1, Ordering::Relaxed);
     // Classify the fragment as orphan when only one mate of a pair was placed
     // (PairedEndLeft / PairedEndRight). Single-end libraries never count as
@@ -620,14 +799,16 @@ fn record(
     // score, so this must not be read as "the best mapping" — it is "the status
     // this fragment mapped with", which is well defined.
     debug_assert!(
-        compat.iter().all(|(m, _)| m.status == compat[0].0.status),
+        compat
+            .iter()
+            .all(|&(i, _)| i.get(placements).status == compat[0].0.get(placements).status),
         "a fragment's surviving mappings must share one status"
     );
     if matches!(
-        compat[0].0.status,
+        compat[0].0.get(placements).status,
         MateStatus::PairedEndLeft | MateStatus::PairedEndRight
     ) {
-        sh.num_orphan.fetch_add(1, Ordering::Relaxed);
+        counters.orphan += 1;
     }
 
     // `fld_pmf`/`fld_cmf` are ONE immutable FLD snapshot pair (PMF + CMF), taken
@@ -658,70 +839,71 @@ fn record(
     //   logFragProb  = the shared `frag_log_prob` term (proper-pair conditioned
     //                  PMF, or the orphan / single-end ambiguous-length weight).
     // Used for abundance-aware bias collection and abundance-aware FLD training.
-    let online_post: Option<Vec<f64>> =
-        sh.online
-            .filter(|o| sh.use_online && o.collecting())
-            .map(|online| {
-                let use_aux = online.num_assigned() >= sh.pre_burnin;
-                let mm: Vec<(u32, f64)> = compat
-                    .iter()
-                    .map(|(m, w)| {
-                        let ref_len = sh.salmon.ref_len(m.tid as usize);
-                        let rl = ref_len.max(1) as f64;
-                        let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
-                        let flen = m.fragment_len as f64;
-                        let start_pos_prob = if proper {
-                            if flen <= rl {
-                                -((rl - flen + 1.0).ln())
-                            } else {
-                                LOG_EPSILON
-                            }
+    let online_post: Option<CompatAligned<f64>> = sh
+        .online
+        .filter(|o| sh.use_online && o.collecting())
+        .map(|online| {
+            let use_aux = online.num_assigned() >= sh.pre_burnin;
+            online_in.clear();
+            online_in.extend(compat.iter().map(|&(i, w)| {
+                let m = i.get(placements);
+                {
+                    let ref_len = sh.salmon.ref_len(m.tid as usize);
+                    let rl = ref_len.max(1) as f64;
+                    let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
+                    let flen = m.fragment_len as f64;
+                    let start_pos_prob = if proper {
+                        if flen <= rl {
+                            -((rl - flen + 1.0).ln())
                         } else {
-                            -(rl.ln())
-                        };
-                        let log_frag_prob = frag_log_prob(
-                            m,
-                            ref_len as i32,
-                            use_aux,
-                            sh.model_single_frag_prob,
-                            sh.paired_lib,
-                            sh.no_frag_length_dist,
-                            fld_pmf,
-                            fld_cmf,
-                        );
-                        let log_cov = if *w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
-                        (m.tid, log_cov + start_pos_prob + log_frag_prob)
-                    })
-                    .collect();
-                online.assign_fragment(&mm, log_fm)
-            });
-    let bias_w: Vec<f64> = if collecting {
+                            LOG_EPSILON
+                        }
+                    } else {
+                        -(rl.ln())
+                    };
+                    let log_frag_prob = frag_log_prob(
+                        m,
+                        ref_len as i32,
+                        use_aux,
+                        sh.model_single_frag_prob,
+                        sh.paired_lib,
+                        sh.no_frag_length_dist,
+                        fld_pmf,
+                        fld_cmf,
+                    );
+                    let log_cov = if w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
+                    (m.tid, log_cov + start_pos_prob + log_frag_prob)
+                }
+            }));
+            CompatAligned::from(online.assign_fragment(online_in, log_fm))
+        });
+    bias_w.clear();
+    if collecting {
         if let Some(post) = &online_post {
-            post.clone()
+            bias_w.extend(post.iter().copied());
         } else {
-            let wsum: f64 = compat.iter().map(|(_, w)| *w).sum();
-            compat
-                .iter()
-                .map(|(_, w)| if wsum > 0.0 { *w / wsum } else { 0.0 })
-                .collect()
+            let wsum: f64 = compat.iter().map(|&(_, w)| w).sum();
+            bias_w.extend(
+                compat
+                    .iter()
+                    .map(|&(_, w)| if wsum > 0.0 { w / wsum } else { 0.0 }),
+            );
         }
-    } else {
-        Vec::new()
-    };
+    }
     // After burn-in salmon freezes model collection (still advances masses).
     let collect_now = collecting && sh.online.is_none_or(|o| o.collecting());
 
     if collect_now {
         if let Some(obs) = seqbias {
-            for (i, (m, _)) in compat.iter().enumerate() {
-                collect_context(sh.salmon, m, bias_w[i], obs);
+            for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+                collect_context(sh.salmon, i.get(placements), bias_w[k], obs);
             }
         }
         if let Some(gc) = gcbias {
-            collect_gc(sh, &compat, &bias_w, gc);
+            collect_gc(sh, placements, compat, bias_w, gc);
         }
         if let Some(pos) = posbias {
-            collect_pos(sh, &compat, &bias_w, pos);
+            collect_pos(sh, placements, compat, bias_w, pos);
         }
     }
 
@@ -738,11 +920,12 @@ fn record(
         // implied length, concentrating the FLD as salmon does (vs adding every
         // best pair at full weight, which overdisperses it). Frozen after the
         // training window (`online_post` is `None`).
-        for (i, (m, _)) in compat.iter().enumerate() {
+        for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+            let m = i.get(placements);
             let conc = m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
                 && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
-            if conc && fld_rng_u01() < post[i] {
+            if conc && fld_rng_u01() < post[k] {
                 sh.fld.add_val(m.fragment_len as usize, 0.0);
             }
         }
@@ -754,7 +937,7 @@ fn record(
         // is true but `online_post` is `None`, the training window has closed and
         // the FLD is intentionally frozen — so this branch is skipped.)
         if compat.len() == 1 {
-            let (m, _) = compat[0];
+            let m = &compat[0].0.get(placements);
             if m.status == MateStatus::PairedEndPaired
                 && m.fragment_len > 0
                 && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
@@ -799,22 +982,21 @@ fn record(
     // weight. `LOG_1` (= 0) before the auxiliary model is trained. The snapshot
     // is primed from the prior before the run starts and refreshed at every
     // mini-batch boundary, so it is never empty here.
-    let log_fps: Vec<f64> = compat
-        .iter()
-        .map(|(m, _)| {
-            let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
-            frag_log_prob(
-                m,
-                ref_len,
-                use_aux,
-                sh.model_single_frag_prob,
-                sh.paired_lib,
-                sh.no_frag_length_dist,
-                fld_pmf,
-                fld_cmf,
-            )
-        })
-        .collect();
+    log_fps.clear();
+    log_fps.extend(compat.iter().map(|&(i, _)| {
+        let m = i.get(placements);
+        let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
+        frag_log_prob(
+            m,
+            ref_len,
+            use_aux,
+            sh.model_single_frag_prob,
+            sh.paired_lib,
+            sh.no_frag_length_dist,
+            fld_pmf,
+            fld_cmf,
+        )
+    }));
     // Per-fragment conditional probabilities, normalized in *log* space — the
     // log weight of each mapping is `ln(score weight) + logFragProb`, and we
     // subtract the log-sum-exp over the fragment's mappings (C++'s
@@ -829,13 +1011,15 @@ fn record(
     // fragment yields well-defined relative weights, so no mass is lost.
     let log_denom = compat
         .iter()
-        .zip(&log_fps)
-        .fold(LOG_0, |acc, ((_, w), &lfp)| log_add(acc, w.ln() + lfp));
-    let mut pairs: Vec<(u32, f64)> = compat
-        .iter()
-        .zip(&log_fps)
-        .map(|((m, w), &lfp)| (m.tid, (w.ln() + lfp - log_denom).exp()))
-        .collect();
+        .zip(log_fps.iter())
+        .fold(LOG_0, |acc, (&(_, w), &lfp)| log_add(acc, w.ln() + lfp));
+    pairs.clear();
+    pairs.extend(
+        compat
+            .iter()
+            .zip(log_fps.iter())
+            .map(|(&(i, w), &lfp)| (i.get(placements).tid, (w.ln() + lfp - log_denom).exp())),
+    );
 
     // Build the equivalence class: sorted transcript ids + weights, combining
     // duplicate ids by SUMMING their conditional probabilities. A fragment that
@@ -873,20 +1057,19 @@ fn record(
 
 /// Fold the most recent fragment's selective-alignment [`MapStats`] into the
 /// shared meta counters. Call once per mapped/attempted fragment on the SA path.
-fn accumulate_vm_stats(sh: &Shared, maps_empty: bool) {
+fn accumulate_vm_stats(maps_empty: bool, counters: &mut Counters) {
     let s = salmon_map::take_last_map_stats();
     if maps_empty {
         if s.decoy_dominated {
-            sh.num_decoy.fetch_add(1, Ordering::Relaxed);
+            counters.decoy += 1;
         } else if s.had_candidates {
-            sh.num_frags_filtered_vm.fetch_add(1, Ordering::Relaxed);
+            counters.frags_filtered_vm += 1;
         }
     } else if s.alns_below_threshold > 0 {
-        sh.num_below_threshold_vm
-            .fetch_add(s.alns_below_threshold as u64, Ordering::Relaxed);
+        counters.below_threshold_vm += s.alns_below_threshold as u64;
     }
     if s.dovetail {
-        sh.num_dovetail.fetch_add(1, Ordering::Relaxed);
+        counters.dovetail += 1;
     }
 }
 
@@ -903,6 +1086,11 @@ fn read_name(id: &[u8]) -> String {
 }
 
 /// Merge this thread's collected unmapped-fragment names into the shared list.
+/// Fold this worker's private counter tallies into the shared atomics.
+fn merge_counters(proc: &QuantProcessor) {
+    proc.counters.merge_into(&proc.shared);
+}
+
 fn merge_unmapped(proc: &mut QuantProcessor) {
     if let Some(shared) = proc.shared.unmapped_names {
         if !proc.unmapped.is_empty() {
@@ -951,6 +1139,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // on distinct fields, not through repeated `self.` accesses.
         let QuantProcessor {
             shared,
+            counters,
+            scratch,
             hs,
             sketch_scratch,
             seqbias,
@@ -990,13 +1180,13 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it), so the
         // per-fragment result Vec isn't reallocated per read.
-        let mut maps: Vec<ScoredMapping> = Vec::new();
+        let mut placements: Vec<ScoredMapping> = Vec::new();
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();
             if sh.sketch {
                 map_read_pair_sketch_into(
-                    &mut maps,
+                    &mut placements,
                     idx,
                     hs,
                     sketch_scratch.as_mut().unwrap(),
@@ -1012,7 +1202,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 );
             } else {
                 map_read_pair_into(
-                    &mut maps,
+                    &mut placements,
                     idx,
                     hs,
                     sh.salmon,
@@ -1028,46 +1218,46 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             // fragments. SA mode already handled decoys inside finalize.
             if sh.sketch && sh.salmon.info().num_decoys > 0 {
                 let decoy_dominated =
-                    salmon_map::filter_sketch_decoys(&mut maps, sh.salmon, &sh.map_cfg.score);
+                    salmon_map::filter_sketch_decoys(&mut placements, sh.salmon, &sh.map_cfg.score);
                 if decoy_dominated {
-                    sh.num_decoy.fetch_add(1, Ordering::Relaxed);
+                    counters.decoy += 1;
                 }
             }
             // A fragment mapping to too many places is discarded (salmon's
             // tooManyHits / maxReadOccs): treat as unmapped everywhere below.
-            if maps.len() > sh.max_read_occ {
-                maps.clear();
+            if placements.len() > sh.max_read_occ {
+                placements.clear();
             }
-            if maps.is_empty() && sh.unmapped_names.is_some() {
+            if placements.is_empty() && sh.unmapped_names.is_some() {
                 unmapped.push(format!("{} u", read_name(r1.id())));
             }
             if !sh.sketch {
-                accumulate_vm_stats(&sh, maps.is_empty());
+                accumulate_vm_stats(placements.is_empty(), counters);
             }
-            if sh.sam.is_some() && !maps.is_empty() {
+            if sh.sam.is_some() && !placements.is_empty() {
                 crate::sam::write_fragment(
                     sam_buf,
                     sh.salmon,
                     r1.id(),
                     s1.as_ref(),
                     Some((r2.id(), s2.as_ref())),
-                    &maps,
+                    &placements,
                 );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
-                if !maps.is_empty() {
+                if !placements.is_empty() {
                     scratch.write_fragment(
                         sh.salmon,
                         r1.id(),
                         s1.as_ref(),
                         Some((r2.id(), s2.as_ref())),
-                        &maps,
+                        &placements,
                     )?;
                 }
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
-                if !maps.is_empty() {
-                    let rec = build_rad_record(&maps);
+                if !placements.is_empty() {
+                    let rec = build_rad_record(&placements);
                     buf.write(&rec, rad.context()).map_err(|e| {
                         paraseq::Error::from(std::io::Error::other(format!(
                             "serializing RAD record: {e:#}"
@@ -1076,14 +1266,16 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 }
             }
             if let Some(acc) = sh.discrete_fld {
-                record_discrete(&sh, &maps, acc);
+                record_discrete(&sh, &placements, acc, counters);
             } else {
                 record(
                     &sh,
-                    &maps,
+                    &placements,
                     log_fm,
                     &fld_pmf,
                     &fld_cmf,
+                    counters,
+                    scratch,
                     seqbias.as_mut(),
                     gcbias.as_mut(),
                     posbias.as_mut(),
@@ -1105,6 +1297,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
+        merge_counters(self);
         merge_bias(self);
         merge_unmapped(self);
         flush_sam(self)?;
@@ -1124,6 +1317,8 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     ) -> paraseq::Result<()> {
         let QuantProcessor {
             shared,
+            counters,
+            scratch,
             hs,
             sketch_scratch,
             seqbias,
@@ -1152,12 +1347,12 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         let fld_pmf = sh.fld.online_snapshot();
         let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it).
-        let mut maps: Vec<ScoredMapping> = Vec::new();
+        let mut placements: Vec<ScoredMapping> = Vec::new();
         for rec in records {
             let s = rec.seq();
             if sh.sketch {
                 map_single_read_sketch_into(
-                    &mut maps,
+                    &mut placements,
                     idx,
                     hs,
                     sketch_scratch.as_mut().unwrap(),
@@ -1167,37 +1362,44 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.max_read_occ,
                 );
             } else {
-                map_single_read_into(&mut maps, idx, hs, sh.salmon, s.as_ref(), sh.map_cfg);
+                map_single_read_into(&mut placements, idx, hs, sh.salmon, s.as_ref(), sh.map_cfg);
             }
             // Sketch decoy policy (see the paired-end branch): drop decoy tids /
             // decoy-dominated fragments that SA mode handles inside finalize.
             if sh.sketch && sh.salmon.info().num_decoys > 0 {
                 let decoy_dominated =
-                    salmon_map::filter_sketch_decoys(&mut maps, sh.salmon, &sh.map_cfg.score);
+                    salmon_map::filter_sketch_decoys(&mut placements, sh.salmon, &sh.map_cfg.score);
                 if decoy_dominated {
-                    sh.num_decoy.fetch_add(1, Ordering::Relaxed);
+                    counters.decoy += 1;
                 }
             }
-            if maps.len() > sh.max_read_occ {
-                maps.clear();
+            if placements.len() > sh.max_read_occ {
+                placements.clear();
             }
-            if maps.is_empty() && sh.unmapped_names.is_some() {
+            if placements.is_empty() && sh.unmapped_names.is_some() {
                 unmapped.push(format!("{} u", read_name(rec.id())));
             }
             if !sh.sketch {
-                accumulate_vm_stats(&sh, maps.is_empty());
+                accumulate_vm_stats(placements.is_empty(), counters);
             }
-            if sh.sam.is_some() && !maps.is_empty() {
-                crate::sam::write_fragment(sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps);
+            if sh.sam.is_some() && !placements.is_empty() {
+                crate::sam::write_fragment(
+                    sam_buf,
+                    sh.salmon,
+                    rec.id(),
+                    s.as_ref(),
+                    None,
+                    &placements,
+                );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
-                if !maps.is_empty() {
-                    scratch.write_fragment(sh.salmon, rec.id(), s.as_ref(), None, &maps)?;
+                if !placements.is_empty() {
+                    scratch.write_fragment(sh.salmon, rec.id(), s.as_ref(), None, &placements)?;
                 }
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
-                if !maps.is_empty() {
-                    let radrec = build_rad_record(&maps);
+                if !placements.is_empty() {
+                    let radrec = build_rad_record(&placements);
                     buf.write(&radrec, rad.context()).map_err(|e| {
                         paraseq::Error::from(std::io::Error::other(format!(
                             "serializing RAD record: {e:#}"
@@ -1206,14 +1408,16 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 }
             }
             if let Some(acc) = sh.discrete_fld {
-                record_discrete(&sh, &maps, acc);
+                record_discrete(&sh, &placements, acc, counters);
             } else {
                 record(
                     &sh,
-                    &maps,
+                    &placements,
                     log_fm,
                     &fld_pmf,
                     &fld_cmf,
+                    counters,
+                    scratch,
                     seqbias.as_mut(),
                     gcbias.as_mut(),
                     posbias.as_mut(),
@@ -1235,6 +1439,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
+        merge_counters(self);
         merge_bias(self);
         merge_unmapped(self);
         flush_sam(self)?;
@@ -1274,9 +1479,9 @@ fn flush_bam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
 /// fragment length and the mate strand for proper pairs, the unpaired sentinel
 /// otherwise. `score` is recorded for the selective-alignment profile and
 /// ignored when writing the sketch profile.
-fn build_rad_record(maps: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecord {
-    let frag_type = salmon_rad::frag_map_type::fragment_level(maps.iter().map(|m| m.status));
-    let hits = maps
+fn build_rad_record(placements: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecord {
+    let frag_type = salmon_rad::frag_map_type::fragment_level(placements.iter().map(|m| m.status));
+    let hits = placements
         .iter()
         .map(|m| {
             let paired = m.status == MateStatus::PairedEndPaired;
