@@ -455,6 +455,14 @@ struct QuantArgs {
     /// means a smaller share of the budget should be decoding.
     #[arg(long = "decoder", default_value = "auto")]
     decoder: String,
+    /// JSON file overriding thread and decoder policy.
+    ///
+    /// Every field is optional and an unknown field is an error rather than a
+    /// silent no-op, so a typo refuses to load instead of leaving the run
+    /// looking configured while behaving as if it were not. Example:
+    /// `{"parallel_decode": {"min_threads_per_stream": 16}}`.
+    #[arg(long = "threadPolicy", value_name = "FILE")]
+    thread_policy: Option<std::path::PathBuf>,
     /// Use the alignment-free pseudoalignment path.
     #[arg(long = "sketch")]
     sketch: bool,
@@ -1674,6 +1682,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.num_threads = args.threads;
     opts.decoder = piscem_rs::io::calibrate::DecoderPreference::parse(&args.decoder)
         .map_err(|e| anyhow::anyhow!("--decoder {}: {e}", args.decoder))?;
+    opts.thread_policy = args.thread_policy.clone();
     opts.sketch = args.sketch;
     opts.sketch_strict_orphan = args.sketch_strict_orphans;
     opts.em.use_vbem = use_vbem;

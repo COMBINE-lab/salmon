@@ -87,6 +87,8 @@ pub struct QuantOptions {
     /// Which gzip decoder to use. `Auto` lets the engagement policy decide
     /// whether the parallel decoder can pay for the mapping threads it costs.
     pub decoder: piscem_rs::io::calibrate::DecoderPreference,
+    /// Optional JSON overriding thread/decoder policy. Same format piscem uses.
+    pub thread_policy: Option<PathBuf>,
     /// use the alignment-free pseudoalignment path
     pub sketch: bool,
     /// sketch mode: restrict orphan emission to pairs whose other mate had no
@@ -217,6 +219,7 @@ impl QuantOptions {
             lib_type: "A".to_string(),
             num_threads: 0,
             decoder: piscem_rs::io::calibrate::DecoderPreference::Auto,
+            thread_policy: None,
             sketch: false,
             sketch_strict_orphan: false,
             map_config: MapConfig::default(),
@@ -611,7 +614,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             &groups,
             nthreads,
             opts.decoder,
-            decode::default_engagement_policy(opts.sketch),
+            decode::engagement_policy(opts.sketch, opts.thread_policy.as_deref())?,
         )?;
 
         let shared = Shared {

@@ -81,6 +81,25 @@ pub fn default_engagement_policy(sketch: bool) -> EngagementPolicy {
     }
 }
 
+/// Resolve the engagement policy for a run.
+///
+/// A policy file, when given, wins outright — including over the per-mode
+/// default, since the whole reason to write one is that the measured default
+/// does not suit your data. Absent a file, the mode picks the default.
+///
+/// Reuses piscem's `ThreadPolicy` rather than defining a parallel format, so a
+/// file written for one tool means the same thing to the other, and an unknown
+/// field is a hard error in both rather than a silent no-op.
+pub fn engagement_policy(
+    sketch: bool,
+    policy_file: Option<&std::path::Path>,
+) -> Result<EngagementPolicy> {
+    match policy_file {
+        Some(path) => Ok(piscem_rs::io::policy::ThreadPolicy::load(Some(path))?.parallel_decode),
+        None => Ok(default_engagement_policy(sketch)),
+    }
+}
+
 /// The mapping side of the broker: a resizable paraseq pool plus a busy meter.
 ///
 /// Deliberately not piscem's `MappingConsumer`. That one is tied to piscem's
