@@ -698,6 +698,25 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // output finalisation, and left a file that parsed cleanly but declared
         // no content. Failures are recorded, not raised.
         let diagnostics = plan.broker.finish();
+        // The engagement threshold is 1 + C/P, i.e. 1/producer_cost_share, so the
+        // broker's own solved share *is* the constant this mode should use. Log it
+        // rather than inferring the same number from a wall-time crossover sweep:
+        // it is the quantity the rule is derived from, it comes out of a single
+        // run, and it does not need runs long enough to beat timing noise.
+        if let Some(report) = &diagnostics.report {
+            if let Some(model) = &report.final_model {
+                let share = model.producer_cost_share;
+                if share > 0.0 {
+                    tracing::info!(
+                        producer_cost_share = share,
+                        producer_cost_share_uncertainty = model.producer_cost_share_uncertainty,
+                        implied_min_threads_per_stream = (1.0 / share).ceil() as usize,
+                        mode = if opts.sketch { "sketch" } else { "selective-alignment" },
+                        "thread broker cost model"
+                    );
+                }
+            }
+        }
         mapped.map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
         if let Some(err) = &diagnostics.failure {
             tracing::warn!(
