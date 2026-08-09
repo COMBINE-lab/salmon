@@ -36,6 +36,10 @@ Full input, 200 s timeout, `HUNG` = killed at the limit.
 | `-p 32 parallel` | Adaptive | yes | ok 75 s |
 | `-p 64 parallel` single-end | Adaptive | no | ok 39 s |
 | `--sketch -p 64 parallel` | Adaptive | yes | **HUNG** |
+| `--sketch -p 128 parallel` | Adaptive | yes | **HUNG** |
+| `-p 40 parallel` | Adaptive | yes | ok 64 s |
+| `-p 48 parallel` | Adaptive | yes | **HUNG** |
+| `-p 56 parallel` | Adaptive | yes | **HUNG** |
 
 **The split is not the variable.** `parallel=4` plans exactly the same 56 mapping
 / 8 decode split as plain `parallel` and completes; the difference is that
@@ -48,11 +52,14 @@ Three conditions are jointly required; removing any one makes it complete:
 1. **the broker actively resizing** (Adaptive, not Pinned),
 2. **paired input** — paraseq's paired `fill` takes R1 and R2 as *separate*
    locks; single-end has one and does not hang,
-3. **enough mapping threads to contend** — `-p 16` and `-p 32` survive, `-p 64`
-   does not.
+3. **enough mapping threads to contend** — `-p 16`, `-p 32` and `-p 40` survive;
+   `-p 48` and above do not. Nothing about the planned split is discontinuous
+   across that boundary (35/5 completes, 42/6 hangs), which is what a widening
+   race window looks like rather than a threshold being crossed.
 
-Mapping mode changes only the odds: selective alignment hung 2 of 2, sketch 1 of
-2. A slower consumer holds the reader lock longer, widening the window a resize
+Mapping mode changes only the odds: selective alignment hung 2 of 2 at `-p 64`,
+sketch 2 of 3 (the one survivor being the 36 s run that produced the cost-share
+measurement). A slower consumer holds the reader lock longer, widening the window a resize
 can land in. This is also why piscem drives the same decoder pool without
 hanging — its per-fragment work is far cheaper.
 
@@ -106,9 +113,21 @@ Still open:
 * Whether the fix belongs in paraseq (lock both mates as one unit, or refuse to
   retire inside `fill`), in the broker (do not resize while any worker is
   inside a producer call), or in how salmon sizes the shared pool.
-* Whether `-p 48` or similar also hangs — the boundary between 32 (ok) and 64
-  (hangs) has not been bisected.
+* ~~Where the 32/64 boundary lies.~~ Bisected: `-p 40` completes (64 s),
+  `-p 48` and `-p 56` hang. The opening splits either side are
+  35 map / 5 decode (ok) and 42 map / 6 decode (hangs), so nothing about the
+  split itself is discontinuous there — consistent with a race whose window
+  simply widens with thread count rather than a threshold effect.
 
 **Do not enable the parallel decoder by default in any mode until this is
 resolved.** Pinning slots (`--decoder parallel=N`) is a working escape hatch
 today precisely because it disables the broker, which is the feature.
+
+## Fastest route to a regression test
+
+The existing `tests/pool_resize_flush_safety.rs` already churns the pool between
+1 and 16 workers, but over a **single-end** collection — the one arrangement the
+bisect shows does *not* hang. Rebuilding that test against a
+`CollectionType::Paired` collection should reproduce this in seconds instead of
+a 200 s timeout, and would be the right thing to have in hand before attempting
+a fix, so the fix can be shown to work rather than assumed to.
