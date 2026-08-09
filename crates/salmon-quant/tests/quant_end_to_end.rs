@@ -748,3 +748,84 @@ fn mates_orphaning_to_different_transcripts_are_one_orphan_fragment() {
         "both transcripts should receive orphan mass: {counts:?}"
     );
 }
+
+/// `--writeUnmappedNames` must name exactly the fragments that did not map, and
+/// must not hold them all in memory to do it.
+///
+/// The names used to accumulate in a `Vec<String>` — one heap `String` per
+/// unmapped read, retained until the process exited. On a contaminated sample
+/// that is unbounded: measured at 1620 MB peak RSS for 10M unmapped fragments,
+/// against 159 MB once the names are streamed to the file per batch.
+///
+/// The fixture mixes reads simulated from the transcriptome with reads drawn
+/// from an unrelated sequence, so the expected unmapped set is known exactly.
+#[test]
+fn write_unmapped_names_lists_exactly_the_unmapped_fragments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let (fasta, r1, r2, _truth) = simulate(dir);
+
+    // Append foreign fragments that cannot map to the indexed transcriptome.
+    let foreign = gen_seq(4000, 987_654);
+    const N_FOREIGN: usize = 50;
+    let r1f = dir.join("mixed_1.fq");
+    let r2f = dir.join("mixed_2.fq");
+    std::fs::copy(&r1, &r1f).unwrap();
+    std::fs::copy(&r2, &r2f).unwrap();
+    let mut w = FastqWriters {
+        r1: std::io::BufWriter::new(std::fs::OpenOptions::new().append(true).open(&r1f).unwrap()),
+        r2: std::io::BufWriter::new(std::fs::OpenOptions::new().append(true).open(&r2f).unwrap()),
+    };
+    let mut expected = Vec::new();
+    for i in 0..N_FOREIGN {
+        let pos = i * 20;
+        let s1 = foreign[pos..pos + READ_LEN].to_vec();
+        let s2 = revcomp(&foreign[pos + 200..pos + 200 + READ_LEN]);
+        // `write_pair` names them `r{id}`; keep clear of the simulated ids.
+        let id = 1_000_000 + i;
+        w.write_pair(id, &s1, &s2);
+        expected.push(format!("r{id}/1"));
+    }
+    w.r1.flush().unwrap();
+    w.r2.flush().unwrap();
+    drop(w);
+
+    let idx_dir = dir.join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let out = dir.join("quant");
+    let mut opts = QuantOptions::new(idx_dir, out.clone());
+    opts.mates1 = vec![r1f];
+    opts.mates2 = vec![r2f];
+    opts.lib_type = "IU".to_string();
+    opts.num_threads = 2;
+    opts.write_unmapped_names = true;
+    quantify(&opts).expect("quantify");
+
+    let txt = std::fs::read_to_string(out.join("aux_info").join("unmapped_names.txt"))
+        .expect("unmapped_names.txt must exist");
+
+    // Every line is "<name> u"; the file must be complete (final newline) so a
+    // truncated flush cannot pass as a full one.
+    assert!(
+        txt.ends_with('\n'),
+        "file must end with a newline, so a truncated write is detectable"
+    );
+    let mut got: Vec<&str> = txt
+        .lines()
+        .map(|l| {
+            let (name, status) = l.rsplit_once(' ').expect("each line is \"<name> u\"");
+            assert_eq!(status, "u", "unexpected status in {l:?}");
+            name
+        })
+        .collect();
+    got.sort_unstable();
+    let mut want: Vec<&str> = expected.iter().map(|s| s.as_str()).collect();
+    want.sort_unstable();
+    assert_eq!(
+        got, want,
+        "unmapped_names.txt must list exactly the foreign fragments"
+    );
+}

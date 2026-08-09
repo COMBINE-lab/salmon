@@ -57,7 +57,7 @@ use salmon_model::dumps::{dump_bias_models_to_file, BiasDump};
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
 pub use salmon_rad::ChunkCodec;
 
-use processor::{QuantProcessor, Shared};
+use processor::{QuantProcessor, Shared, UnmappedWriter};
 
 pub use output::write_outputs;
 
@@ -401,10 +401,19 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let num_dovetail = AtomicU64::new(0);
     let num_frags_filtered_vm = AtomicU64::new(0);
     let num_below_threshold_vm = AtomicU64::new(0);
-    // collector for `--writeUnmappedNames` (names of unmapped fragments)
-    let unmapped_collector: Option<std::sync::Mutex<Vec<String>>> = opts
-        .write_unmapped_names
-        .then(|| std::sync::Mutex::new(Vec::new()));
+    // `--writeUnmappedNames`: open the file up front and let workers stream into
+    // it per batch. Opening here also surfaces an unwritable output directory
+    // before the mapping pass rather than after it.
+    let unmapped_collector: Option<std::sync::Mutex<UnmappedWriter>> = if opts.write_unmapped_names
+    {
+        std::fs::create_dir_all(opts.output_dir.join("aux_info")).context("creating aux_info")?;
+        Some(std::sync::Mutex::new(
+            UnmappedWriter::create(&opts.output_dir.join("aux_info").join("unmapped_names.txt"))
+                .context("creating unmapped_names.txt")?,
+        ))
+    } else {
+        None
+    };
     let nthreads = if opts.num_threads == 0 {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -693,18 +702,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // Write aux_info/unmapped_names.txt ("<name> <status>" per line; the port maps
     // unmapped fragments as "u" — orphan/decoy sub-codes await mapper-reason
     // reporting, tracked with the *_vm counters).
-    if let Some(collector) = &unmapped_collector {
-        use std::io::Write as _;
-        let names = collector.lock().unwrap();
-        std::fs::create_dir_all(opts.output_dir.join("aux_info")).context("creating aux_info")?;
-        let mut w = std::io::BufWriter::new(
-            std::fs::File::create(opts.output_dir.join("aux_info").join("unmapped_names.txt"))
-                .context("creating unmapped_names.txt")?,
-        );
-        for line in names.iter() {
-            writeln!(w, "{line}")?;
-        }
-        w.flush()?;
+    // Every worker has joined, so nothing more will be written: flush and close.
+    if let Some(collector) = unmapped_collector {
+        collector
+            .into_inner()
+            .unwrap()
+            .finish()
+            .context("writing unmapped_names.txt")?;
     }
 
     // Resolve the library type: the detected format (when auto), else the
