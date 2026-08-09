@@ -2197,7 +2197,12 @@ mod group_tests {
     /// `push_sorted` skips the comparison, so it is only correct when something
     /// upstream ordered the input. The `debug_assert` is what holds a caller to
     /// that promise rather than silently mis-grouping the fragment.
+    // `debug_assert!` compiles out under `--release`, which is how CI runs the
+    // suite, so this can only ever pass where debug assertions are live. Gating
+    // it is the point of the assert: it is a development-time guard, not a
+    // runtime check the release build pays for.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "out-of-order placement")]
     fn push_sorted_rejects_an_out_of_order_placement() {
         let mut o: TidOrdered<CorePlacement> = TidOrdered::default();

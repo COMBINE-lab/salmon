@@ -48,7 +48,9 @@ pub enum SeedMode {
     UniMem,
 }
 use crate::pair::{join_reads_and_filter, PairingConfig};
-use crate::score::{finalize_mappings_counted_into, RawMapping, ScoreConfig, ScoredMapping};
+use crate::score::{
+    finalize_mappings_counted_into, DedupScratch, RawMapping, ScoreConfig, ScoredMapping,
+};
 use salmon_core::RefProvider;
 
 /// Full mapper configuration.
@@ -143,7 +145,15 @@ pub fn map_single_read<'idx, R: RefProvider>(
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
     let mut out = Vec::new();
-    map_single_read_into(&mut out, index, hs, refs, read, cfg);
+    map_single_read_into(
+        &mut out,
+        index,
+        hs,
+        refs,
+        read,
+        cfg,
+        &mut DedupScratch::default(),
+    );
     out
 }
 
@@ -156,6 +166,7 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
     refs: &R,
     read: &[u8],
     cfg: &MapConfig,
+    scratch: &mut DedupScratch,
 ) {
     let cands = consensus_filter(
         best_per_target(collect_candidates(
@@ -216,7 +227,8 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
             below += 1;
         }
     }
-    let (decoy_dominated, below_final) = finalize_mappings_counted_into(out, raw, &cfg.score);
+    let (decoy_dominated, below_final) =
+        finalize_mappings_counted_into(out, raw, &cfg.score, scratch);
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,
@@ -235,7 +247,16 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
     let mut out = Vec::new();
-    map_read_pair_into(&mut out, index, hs, refs, r1, r2, cfg);
+    map_read_pair_into(
+        &mut out,
+        index,
+        hs,
+        refs,
+        r1,
+        r2,
+        cfg,
+        &mut DedupScratch::default(),
+    );
     out
 }
 
@@ -249,6 +270,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
     r1: &[u8],
     r2: &[u8],
     cfg: &MapConfig,
+    scratch: &mut DedupScratch,
 ) {
     let cf = cfg.collect.consensus_fraction;
     // NOTE: deliberately do NOT collapse to one chain per (tid, is_fw) before
@@ -405,7 +427,8 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
     {
         raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
     }
-    let (decoy_dominated, below_final) = finalize_mappings_counted_into(out, raw, &cfg.score);
+    let (decoy_dominated, below_final) =
+        finalize_mappings_counted_into(out, raw, &cfg.score, scratch);
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,
