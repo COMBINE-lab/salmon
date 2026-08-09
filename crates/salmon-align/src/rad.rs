@@ -774,21 +774,56 @@ struct RadTallies {
     orphans: AtomicU64,
 }
 
-impl RadTallies {
+/// One worker's private copy of [`RadTallies`], merged into the shared atomics
+/// once when the worker finishes.
+///
+/// Each of these used to be a `fetch_add` on an `AtomicU64` shared by every
+/// worker — up to three per record. Relaxed ordering makes an individual
+/// increment cheap, but the cost was never the ordering; it was the cache line.
+/// Every thread writing the same word serialises behind a coherence transfer, so
+/// the tax grows with `-p` and is invisible at low thread counts. This is the
+/// same pattern `BiasLocal` already uses in the fused pass, and the one the
+/// read-based path uses for its per-fragment counters.
+///
+/// Safe to localise here in a way the quant-side `num_processed`/`num_mapped`
+/// are not: nothing reads these while the run is in flight. They are consumed
+/// once, after every worker has joined, via `into_inner()`.
+#[derive(Default)]
+struct LocalTallies {
+    records: u64,
+    mapped: u64,
+    orphans: u64,
+}
+
+impl LocalTallies {
     /// Takes the decision rather than the placements: `process_rad_fragment`
     /// already walks them and already knows which survived, so working it out
     /// again here would be a second pass — and reading it off `placements[0]`
     /// only worked while the placements happened to arrive in a particular
     /// order, which the fused pass no longer guarantees.
-    fn tally(&self, outcome: FragmentOutcome) {
-        self.records.fetch_add(1, Ordering::Relaxed);
+    #[inline]
+    fn tally(&mut self, outcome: FragmentOutcome) {
+        self.records += 1;
         if outcome == FragmentOutcome::Unmapped {
             return;
         }
-        self.mapped.fetch_add(1, Ordering::Relaxed);
+        self.mapped += 1;
         if outcome == FragmentOutcome::MappedOrphan {
-            self.orphans.fetch_add(1, Ordering::Relaxed);
+            self.orphans += 1;
         }
+    }
+
+    /// Add this worker's tallies to the shared atomics: one `fetch_add` per
+    /// counter per thread, instead of one per counter per record.
+    fn merge_into(&self, shared: &RadTallies) {
+        let add = |a: &AtomicU64, v: u64| {
+            if v != 0 {
+                a.fetch_add(v, Ordering::Relaxed);
+            }
+        };
+        add(&shared.records, self.records);
+        add(&shared.mapped, self.mapped);
+        add(&shared.orphans, self.orphans);
     }
 }
 
@@ -984,6 +1019,7 @@ where
                 // allocation per fragment.
                 let mut pls: Vec<RadPlacement> = Vec::new();
                 let mut scratch = RadScratch::default();
+                let mut local = LocalTallies::default();
                 for mc in chunks {
                     for chunk in mc.iter() {
                         for rec in &chunk.reads {
@@ -995,10 +1031,11 @@ where
                                 cfg,
                                 &mut scratch,
                             );
-                            tallies.tally(outcome);
+                            local.tally(outcome);
                         }
                     }
                 }
+                local.merge_into(tallies);
             });
         }
         // Producer: fill the queue until the file is exhausted (blocks).
@@ -1474,6 +1511,7 @@ where
             let merged = &merged;
             s.spawn(move || {
                 let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+                let mut local_tallies = LocalTallies::default();
                 // Reused for every record this worker sees.
                 let mut pls: Vec<RadPlacement> = Vec::new();
                 let mut scratch = RadScratch::default();
@@ -1492,7 +1530,7 @@ where
                                 cfg,
                                 &mut scratch,
                             );
-                            tallies.tally(outcome);
+                            local_tallies.tally(outcome);
                             collect_bias_fragment(
                                 &pls,
                                 PlacementOrder::ByTid,
@@ -1503,6 +1541,7 @@ where
                         }
                     }
                 }
+                local_tallies.merge_into(tallies);
                 merged.lock().unwrap().merge(&local);
             });
         }
