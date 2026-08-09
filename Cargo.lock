@@ -2824,6 +2824,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thread-broker",
  "tracing",
 ]
 

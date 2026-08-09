@@ -80,6 +80,10 @@ cf1-rs = "0.5"
 # rather than split by a fixed guess. `rapidgzip` enables the parallel decoder
 # that budget is worth dividing in the first place.
 piscem-rs = { version = "0.9.0", features = ["rapidgzip"] }
+# The control law piscem-rs 0.9.0 is built on. Taken directly so salmon can
+# implement `Consumer` for its own mapping pool; must resolve to the same
+# version piscem-rs uses or the trait would not match across the boundary.
+thread-broker = "0.1.0"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
 libradicl = { version = "0.17", features = ["zstd"] }

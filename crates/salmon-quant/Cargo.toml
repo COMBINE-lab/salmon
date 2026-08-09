@@ -18,6 +18,7 @@ salmon-infer = { workspace = true }
 salmon-rad = { workspace = true }
 piscem-rs = { workspace = true }
 paraseq = { workspace = true }
+thread-broker = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

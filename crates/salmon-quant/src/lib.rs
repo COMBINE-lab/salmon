@@ -32,6 +32,7 @@
 //! running a rough EM first, using its output to weight the bias models,
 //! recomputing effective lengths, and then running the real EM.
 
+pub mod decode;
 mod bam;
 mod mapping_record;
 mod output;
