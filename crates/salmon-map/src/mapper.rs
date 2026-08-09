@@ -181,10 +181,14 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
     );
     let had_candidates = !cands.is_empty();
     let mut below = 0u32;
-    // Reused across fragments; `finalize_mappings_counted_into` consumes it by
-    // draining, so it comes back empty for the next one.
+    // Reused across fragments. Arrives empty: `finalize_mappings_counted_into`
+    // drains it on every return path, and nothing between here and that call can
+    // return early, so there is no second reset on this side.
     let raw = &mut scratch.raw;
-    raw.clear();
+    debug_assert!(
+        raw.is_empty(),
+        "scratch.raw was not drained by the last call"
+    );
     raw.reserve(cands.len());
     for c in cands {
         if let Some(aln) = align_chain(read, refs.ref_seq(c.tid), &c.chain, &cfg.align) {
@@ -305,8 +309,12 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
         .any(|j| matches!(j.status, MateStatus::PairedEndPaired));
     let dovetail = crate::pair::dovetail_rejected() && !has_concordant_pair;
     let mut below = 0u32;
+    // Arrives empty; see the note in `map_single_read_into`.
     let raw = &mut scratch.raw;
-    raw.clear();
+    debug_assert!(
+        raw.is_empty(),
+        "scratch.raw was not drained by the last call"
+    );
     for j in joints {
         match j.status {
             MateStatus::PairedEndPaired => {
