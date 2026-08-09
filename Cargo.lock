@@ -619,6 +619,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
+name = "cpu-time"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e393a7668fe1fad3075085b86c781883000b4ede868f43627b34a87c8b7ded"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1651,6 +1661,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libz-rs-sys"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03dcace986b149f29509af6ca70e6182bccce916b644424ecf484faa8ddc899a"
+dependencies = [
+ "zlib-rs",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2157,10 +2176,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "paraseq"
-version = "0.4.14"
+name = "paraseq-temp"
+version = "0.5.0-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7f0c7259499c750423489d3fe955dfc60183f998f203a87a6f2d4c56872a2f4"
+checksum = "632e453d770914dc2da8e7184cd6c7d01a031f17fa334145404acf4a6cebad3b"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2249,9 +2268,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.6.4"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d22949be8fb80f58c9507cca3eb628d83b4db83ff71864de02f0fa9c0046653"
+checksum = "c20e73778bc07814ffd1576873608f7a160c12b68e690c66a324a12567244cc5"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2260,17 +2279,22 @@ dependencies = [
  "dashmap",
  "epserde",
  "flate2",
+ "hashbrown 0.17.1",
  "indicatif",
+ "libc",
  "mem_dbg",
  "mimalloc",
  "niffler",
- "paraseq",
+ "paraseq-temp",
+ "rapidgzip-core",
  "seq_geom_parser",
  "serde",
  "serde_json",
  "smallvec",
  "sshash-lib",
  "sux",
+ "sysinfo",
+ "thread-broker",
  "tiny-dict",
  "tracing",
  "tracing-subscriber",
@@ -2465,6 +2489,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "rapidgzip-core"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73479522ef5ac15e4015ff42faab6c3f6372f88b95ffd5fa4577f93dd76e907e"
+dependencies = [
+ "bon",
+ "crossbeam-deque",
+ "libz-rs-sys",
 ]
 
 [[package]]
@@ -2776,7 +2811,7 @@ dependencies = [
  "noodles-bam",
  "noodles-bgzf",
  "noodles-sam",
- "paraseq",
+ "paraseq-temp",
  "piscem-rs",
  "rayon",
  "salmon-core",
@@ -3009,9 +3044,9 @@ checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
 name = "sshash-lib"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb8f526b725d9c9972d7184bd8ed45743396255d3f274f4c65e1f37b7a98ce49"
+checksum = "d3273efcc72e4789d134c7e545e809323237c13c8bc848126d8ad6628f29e3f0"
 dependencies = [
  "anyhow",
  "epserde",
@@ -3260,6 +3295,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread-broker"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e9cd700e3d20ade34b3d4c324084ff09cecbc27d61fae2b2dfeebbb2f44094d"
+dependencies = [
+ "cpu-time",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "thread-priority"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3304,9 +3350,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-dict"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "123aff4b050eb8cdc1ca954cdb548b77b201f15cbe9335152e84695251291e3d"
+checksum = "7562b61a97229165f2e8dab3f932fb7171d47a6179026d76c7589b55a73b4864"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.1",
@@ -3979,9 +4025,9 @@ dependencies = [
 
 [[package]]
 name = "zlib-rs"
-version = "0.6.6"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b142a20ec14a91d5bc708c1dc21b080c550113d8aa77afa29635673a65dd02c5"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
 
 [[package]]
 name = "zmij"

@@ -75,7 +75,11 @@ clap = { version = "4", features = ["derive"] }
 sha2 = "0.11"
 # COMBINE-lab dependencies, from crates.io.
 cf1-rs = "0.5"
-piscem-rs = "0.6.4"
+# 0.9.0 brings the adaptive thread broker: `-t` becomes a single execution-slot
+# budget shared between gzip decoding and mapping, solved from live measurement
+# rather than split by a fixed guess. `rapidgzip` enables the parallel decoder
+# that budget is worth dividing in the first place.
+piscem-rs = { version = "0.9.0", features = ["rapidgzip"] }
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
 libradicl = { version = "0.17", features = ["zstd"] }
@@ -83,8 +87,14 @@ libradicl = { version = "0.17", features = ["zstd"] }
 # dev / test helpers
 tempfile = "3"
 
-# io / parsing (wired in later phases)
-# paraseq, noodles-* added per-crate as phases land
+# io / parsing
+# TEMPORARY: a republication of paraseq's unreleased dev-0.5.0 branch plus the
+# resizable worker pool (noamteyssier/paraseq#75). `ThreadPool` is what lets the
+# mapping thread count change mid-run, which the broker requires. The library
+# target is still named `paraseq`, so `use paraseq::...` is unchanged. `paraseq`
+# is the official crate -- move back once 0.5.0 is released upstream. Must match
+# what piscem-rs resolves, or two paraseq copies end up either side of its API.
+paraseq = { package = "paraseq-temp", version = "0.5.0-pre.1" }
 
 # Workspace-wide lints. Member crates opt in with `[lints] workspace = true`.
 [workspace.lints.rust]
