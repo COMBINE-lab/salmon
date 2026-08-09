@@ -1062,4 +1062,90 @@ mod tests {
         );
         assert!(aln.score < perfect_score(read.len(), &cfg));
     }
+
+    /// All three DP kinds must stay distinct for the same bytes. Previously the
+    /// kind was smuggled into the key as a trailing marker byte on the query —
+    /// nothing for a gap, `0` or `1` for the two flank orientations — which
+    /// separated them only because no ACGT base equals `0x00` or `0x01`. That is
+    /// an unasserted assumption about read content standing between two
+    /// different DPs and a silently wrong score.
+    #[test]
+    fn every_dp_kind_is_distinct_for_the_same_bytes() {
+        use GapKind::*;
+        let kinds = [Gap, FlankLeftAnchored, FlankRightAnchored];
+        let (q, t) = (b"ACGTACGT".as_slice(), b"ACGTACGTAC".as_slice());
+
+        let mut c = GapCache::default();
+        for (i, &k) in kinds.iter().enumerate() {
+            c.insert(k, q, t, -(i as i32) - 1);
+        }
+        for (i, &k) in kinds.iter().enumerate() {
+            assert_eq!(
+                c.get(k, q, t),
+                Some(-(i as i32) - 1),
+                "kind {i} read back another kind's score for identical bytes"
+            );
+        }
+
+        // And a kind that was never inserted must miss rather than borrow one.
+        let mut c = GapCache::default();
+        c.insert(Gap, q, t, -3);
+        assert_eq!(c.get(FlankLeftAnchored, q, t), None);
+        assert_eq!(c.get(FlankRightAnchored, q, t), None);
+    }
+
+    /// The entry stores query and target concatenated, so the split point is
+    /// part of the key too: the same bytes divided differently are a different
+    /// DP. `eq` compares `qlen`, and this is what says so.
+    #[test]
+    fn the_query_target_split_is_part_of_the_key() {
+        let mut c = GapCache::default();
+        c.insert(GapKind::Gap, b"AC", b"GTA", -1);
+        assert_eq!(c.get(GapKind::Gap, b"AC", b"GTA"), Some(-1));
+        assert_eq!(
+            c.get(GapKind::Gap, b"ACG", b"TA"),
+            None,
+            "same concatenation, different split — must not alias"
+        );
+        assert_eq!(c.get(GapKind::Gap, b"A", b"CGTA"), None);
+    }
+
+    /// Entries must survive the table growing. The rehash closure has to derive
+    /// each entry's hash from *its own* bytes; deriving it from the key being
+    /// inserted would leave older entries stored under a hash no probe computes,
+    /// so they would never be found again — a cache that silently stops caching.
+    #[test]
+    fn entries_survive_rehashing_on_growth() {
+        let mut c = GapCache::default();
+        let n = 4_096usize;
+        for i in 0..n {
+            let q = format!("Q{i}");
+            let t = format!("T{i}");
+            c.insert(GapKind::Gap, q.as_bytes(), t.as_bytes(), i as i32);
+        }
+        for i in 0..n {
+            let q = format!("Q{i}");
+            let t = format!("T{i}");
+            assert_eq!(
+                c.get(GapKind::Gap, q.as_bytes(), t.as_bytes()),
+                Some(i as i32),
+                "entry {i} was lost across growth"
+            );
+        }
+    }
+
+    /// The cap bounds per-thread memory by clearing wholesale rather than
+    /// evicting, so the entry that trips it survives and the rest do not.
+    #[test]
+    fn reaching_the_cap_clears_the_table() {
+        let mut c = GapCache::default();
+        for i in 0..GAP_CACHE_CAP {
+            let q = format!("q{i}");
+            c.insert(GapKind::Gap, q.as_bytes(), b"t", i as i32);
+        }
+        assert_eq!(c.get(GapKind::Gap, b"q0", b"t"), Some(0));
+        c.insert(GapKind::Gap, b"trip", b"t", -7);
+        assert_eq!(c.get(GapKind::Gap, b"q0", b"t"), None, "cap should clear");
+        assert_eq!(c.get(GapKind::Gap, b"trip", b"t"), Some(-7));
+    }
 }
