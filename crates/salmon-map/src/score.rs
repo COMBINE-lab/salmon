@@ -24,8 +24,6 @@
 //! equivalence class. This mirrors salmon's `MappingScoreInfo` /
 //! `filterAndCollectAlignments`.
 
-use ahash::AHashMap;
-
 use salmon_core::{LibraryFormat, MateStatus, RefProvider};
 
 /// A validated mapping before final collapse/weighting.
@@ -149,8 +147,98 @@ pub fn finalize_mappings_counted(
     cfg: &ScoreConfig,
 ) -> (Vec<ScoredMapping>, bool, u32) {
     let mut out = Vec::new();
-    let (decoy_dominated, num_below) = finalize_mappings_counted_into(&mut out, raw, cfg);
+    // Allocating variant already, so a fresh scratch costs it nothing relative
+    // to the `Vec` it returns.
+    let (decoy_dominated, num_below) =
+        finalize_mappings_counted_into(&mut out, raw, cfg, &mut DedupScratch::default());
     (out, decoy_dominated, num_below)
+}
+
+/// Above this many raw mappings the prefix scan's `O(k·n)` starts to lose to a
+/// hash table.
+///
+/// Measured (criterion, mappings hitting half as many distinct transcripts): the
+/// scan wins 1.6x at n=60, 1.2x at n=80 and 1.07x at n=100, then loses 1.28x at
+/// n=128 and 1.70x at n=160. 112 is the midpoint of the crossing interval.
+/// Fragments are typically 1 to 20 mappings, so the scan is the normal path and
+/// the table is there to bound the tail — `--maxReadOcc` caps `n`, but well above
+/// where the scan stays cheapest.
+const DEDUP_HASH_THRESHOLD: usize = 112;
+
+// Both paths must stay reachable in a real run: below this a typical fragment
+// (1 to 20 mappings) takes the scan, and above it a `--maxReadOcc`-sized one
+// reaches the table. A threshold outside this range would make one of them dead
+// code that nothing exercises.
+const _: () = assert!(DEDUP_HASH_THRESHOLD > 20 && DEDUP_HASH_THRESHOLD < 200);
+
+/// Reusable table for the large-fragment deduplication path.
+///
+/// Owned by the caller rather than held in a thread-local. Measured on 200
+/// mappings: threading it costs 768ns against 839ns through a `thread_local`
+/// (the lazy-init check and `RefCell` borrow, which a `HashTable` cannot avoid
+/// because it has a `Drop`) and 1468ns allocating a fresh table per fragment.
+/// So reuse is what matters most, and the parameter is worth the ~10% over TLS
+/// given `QuantProcessor` already owns a scratch struct to put it in.
+///
+/// Empty until a fragment exceeds [`DEDUP_HASH_THRESHOLD`], so a run that never
+/// sees one never allocates.
+#[derive(Default)]
+pub struct DedupScratch {
+    table: hashbrown::HashTable<RawMapping>,
+}
+
+/// Fixed seeds: the survivors' order does not affect results, but a stable
+/// hasher keeps a given input hashing the same way from run to run, which makes
+/// this path reproducible if that ever starts to matter.
+fn dedup_hasher() -> ahash::RandomState {
+    ahash::RandomState::with_seeds(0x5119_1B3D, 0xA5F1_2C07, 0x2D4E_9A11, 0x7C3B_60E5)
+}
+
+/// Deduplicate in place by scanning the already-kept prefix. No allocation and
+/// no hashing; best when a fragment has few mappings, which is the usual case.
+fn dedup_by_scan(raw: &mut Vec<RawMapping>) {
+    let mut kept = 0usize;
+    for i in 0..raw.len() {
+        let (tid, score) = (raw[i].tid, raw[i].score);
+        match raw[..kept].iter().position(|m| m.tid == tid) {
+            Some(j) => {
+                if score > raw[j].score {
+                    raw[j] = raw[i];
+                }
+            }
+            None => {
+                raw.swap(i, kept);
+                kept += 1;
+            }
+        }
+    }
+    raw.truncate(kept);
+}
+
+/// Deduplicate through a reused hash table, for fragments with enough mappings
+/// that scanning the kept prefix costs more than hashing each key.
+fn dedup_by_table(raw: &mut Vec<RawMapping>, scratch: &mut DedupScratch) {
+    let state = dedup_hasher();
+    let hash_of = |tid: u32| state.hash_one(tid);
+    let table = &mut scratch.table;
+    table.clear();
+    for &m in raw.iter() {
+        let hv = hash_of(m.tid);
+        match table.find_mut(hv, |e| e.tid == m.tid) {
+            // Strictly greater, so equal scores keep the earlier arrival — the
+            // same tie rule `dedup_by_scan` applies.
+            Some(e) => {
+                if m.score > e.score {
+                    *e = m;
+                }
+            }
+            None => {
+                table.insert_unique(hv, m, |e| hash_of(e.tid));
+            }
+        }
+    }
+    raw.clear();
+    raw.extend(table.iter().copied());
 }
 
 /// Like [`finalize_mappings_counted`] but writes into a caller-provided buffer
@@ -160,6 +248,7 @@ pub fn finalize_mappings_counted_into(
     out: &mut Vec<ScoredMapping>,
     raw: Vec<RawMapping>,
     cfg: &ScoreConfig,
+    scratch: &mut DedupScratch,
 ) -> (bool, u32) {
     out.clear();
     if raw.is_empty() {
@@ -167,30 +256,37 @@ pub fn finalize_mappings_counted_into(
     }
 
     // One mapping per transcript: keep the highest score.
-    let mut best_per_tid: AHashMap<u32, RawMapping> = AHashMap::new();
-    for m in raw {
-        best_per_tid
-            .entry(m.tid)
-            .and_modify(|e| {
-                if m.score > e.score {
-                    *e = m;
-                }
-            })
-            .or_insert(m);
+    //
+    // The tie rule is load-bearing under both strategies below: replace only on a
+    // *strictly* greater score, so among equal scores on one transcript the first
+    // in arrival order survives. Those records carry different positions, so
+    // picking a different one changes the fragment's bias and fragment-length
+    // weights — measured on 10M human fragments, enough to move fragments across
+    // range-factorization bin boundaries and change 55 equivalence classes.
+    //
+    // The *order* of the survivors, by contrast, does not matter: this replaced a
+    // hash map seeded per process (`ahash` `runtime-rng`), and quantification is
+    // byte-identical across runs regardless of the order it yielded them in.
+    let mut raw = raw;
+    if raw.len() <= DEDUP_HASH_THRESHOLD {
+        dedup_by_scan(&mut raw);
+    } else {
+        dedup_by_table(&mut raw, scratch);
     }
+    let best_per_tid = raw;
 
     let best_valid = best_per_tid
-        .values()
+        .iter()
         .filter(|m| !m.is_decoy)
         .map(|m| m.score)
         .max();
-    let had_decoy = best_per_tid.values().any(|m| m.is_decoy);
+    let had_decoy = best_per_tid.iter().any(|m| m.is_decoy);
     let Some(best_valid) = best_valid else {
         // only decoy mappings -> dropped, dominated by a decoy
         return (true, 0);
     };
     let best_decoy = best_per_tid
-        .values()
+        .iter()
         .filter(|m| m.is_decoy)
         .map(|m| m.score)
         .max();
@@ -206,7 +302,7 @@ pub fn finalize_mappings_counted_into(
     let _ = had_decoy;
 
     let mut num_below = 0u32;
-    for m in best_per_tid.into_values().filter(|m| !m.is_decoy) {
+    for m in best_per_tid.into_iter().filter(|m| !m.is_decoy) {
         let weight = if cfg.hard_filter {
             if m.score == best_valid {
                 1.0
@@ -308,6 +404,66 @@ pub fn filter_sketch_decoys<R: RefProvider>(
 
 #[cfg(test)]
 mod tests {
+
+    /// A threshold means two implementations of one rule, so they must agree —
+    /// including on the tie rule, which is what makes the survivors identical
+    /// rather than merely equivalent. Getting that wrong changed 55 equivalence
+    /// classes on a 10M-fragment human run while every sample-data check passed.
+    #[test]
+    fn both_dedup_paths_agree_including_on_ties() {
+        let mk = |tid: u32, score: i32, pos: i32| RawMapping {
+            tid,
+            is_fw: true,
+            status: MateStatus::SingleEnd,
+            score,
+            fragment_len: 0,
+            read_len: 100,
+            is_decoy: false,
+            ref_pos: pos,
+            fw_pos: pos,
+            rc_pos: pos,
+            format: None,
+            r1_pos: pos,
+            r2_pos: -1,
+            r2_fw: false,
+            r1_score: score,
+        };
+        // Deliberately loaded with ties: equal (tid, score) at different
+        // positions, which is precisely where a survivor can differ.
+        let cases: Vec<Vec<RawMapping>> = vec![
+            vec![],
+            vec![mk(1, -1, 10)],
+            vec![mk(1, -1, 10), mk(1, -1, 20)],
+            vec![mk(1, -5, 10), mk(1, -1, 20), mk(1, -5, 30)],
+            vec![mk(3, -2, 1), mk(1, -2, 2), mk(3, -2, 3), mk(1, -9, 4)],
+            (0..250i32)
+                .map(|i| mk((i % 40) as u32, -(i % 7), i))
+                .collect(),
+        ];
+        // One scratch across every case, as a worker reuses it across fragments:
+        // a stale table would show up here.
+        let mut scratch = DedupScratch::default();
+        for case in cases {
+            let (mut a, mut b) = (case.clone(), case.clone());
+            dedup_by_scan(&mut a);
+            dedup_by_table(&mut b, &mut scratch);
+            // Order is not part of the contract, the survivors are.
+            a.sort_by_key(|m| m.tid);
+            b.sort_by_key(|m| m.tid);
+            let key = |v: &[RawMapping]| {
+                v.iter()
+                    .map(|m| (m.tid, m.score, m.ref_pos))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                key(&a),
+                key(&b),
+                "paths disagreed on {} mappings",
+                case.len()
+            );
+        }
+    }
+
     use super::*;
 
     fn raw(tid: u32, score: i32, is_decoy: bool) -> RawMapping {

@@ -32,7 +32,7 @@
 //! anchors increase colinearly with the reference coordinate. The resulting
 //! chains are stamped with `is_fw = false` so a later stage can map them back.
 
-use ahash::{AHashMap, AHashSet};
+use ahash::AHashMap;
 
 use piscem_rs::index::contig_table::EntryEncoding;
 use piscem_rs::index::reference_index::ReferenceIndex;
@@ -224,8 +224,23 @@ pub fn best_per_target(mut candidates: Vec<MappingCandidate>) -> Vec<MappingCand
             .covered_read_bases()
             .cmp(&a.chain.covered_read_bases())
     });
-    let mut seen = AHashSet::new();
-    candidates.retain(|c| seen.insert((c.tid, c.is_fw)));
+    // Keep the first candidate seen per `(tid, is_fw)`, scanning the already-kept
+    // prefix rather than building a hash set.
+    //
+    // The set was allocated and dropped on every call to deduplicate a handful of
+    // candidates; at this size a linear scan over what has been kept is cheaper
+    // than hashing each key, and needs no allocation and no scratch parameter.
+    // The kept elements stay in their original relative order, so the
+    // highest-coverage-first ordering established above survives.
+    let mut kept = 0usize;
+    for i in 0..candidates.len() {
+        let key = (candidates[i].tid, candidates[i].is_fw);
+        if candidates[..kept].iter().all(|c| (c.tid, c.is_fw) != key) {
+            candidates.swap(i, kept);
+            kept += 1;
+        }
+    }
+    candidates.truncate(kept);
     candidates
 }
 
