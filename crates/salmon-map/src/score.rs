@@ -149,8 +149,9 @@ pub fn finalize_mappings_counted(
     let mut out = Vec::new();
     // Allocating variant already, so a fresh scratch costs it nothing relative
     // to the `Vec` it returns.
+    let mut raw = raw;
     let (decoy_dominated, num_below) =
-        finalize_mappings_counted_into(&mut out, raw, cfg, &mut DedupScratch::default());
+        finalize_mappings_counted_into(&mut out, &mut raw, cfg, &mut DedupScratch::default());
     (out, decoy_dominated, num_below)
 }
 
@@ -170,6 +171,22 @@ const DEDUP_HASH_THRESHOLD: usize = 112;
 // reaches the table. A threshold outside this range would make one of them dead
 // code that nothing exercises.
 const _: () = assert!(DEDUP_HASH_THRESHOLD > 20 && DEDUP_HASH_THRESHOLD < 200);
+
+/// Reusable buffers for one worker's mapping of one fragment.
+///
+/// Everything here is cleared and refilled per fragment rather than allocated,
+/// so a worker allocates once and then maps for the rest of the run. Held in one
+/// struct so the mapping entry points take a single scratch parameter rather
+/// than one per buffer.
+#[derive(Default)]
+pub struct MapScratch {
+    /// validated mappings for this fragment, before scoring and collapse
+    pub(crate) raw: Vec<RawMapping>,
+    /// reverse complement of a mate during orphan recovery
+    pub(crate) revcomp: Vec<u8>,
+    /// dedup table for fragments with many mappings
+    pub(crate) dedup: DedupScratch,
+}
 
 /// Reusable table for the large-fragment deduplication path.
 ///
@@ -244,9 +261,12 @@ fn dedup_by_table(raw: &mut Vec<RawMapping>, scratch: &mut DedupScratch) {
 /// Like [`finalize_mappings_counted`] but writes into a caller-provided buffer
 /// (cleared first), so a per-thread `Vec` can be reused across reads instead of
 /// allocating a fresh result each time. Returns `(decoy_dominated, num_below)`.
+///
+/// `raw` is consumed in place and left empty on every return path, so the caller
+/// can refill the same buffer for the next fragment.
 pub fn finalize_mappings_counted_into(
     out: &mut Vec<ScoredMapping>,
-    raw: Vec<RawMapping>,
+    raw: &mut Vec<RawMapping>,
     cfg: &ScoreConfig,
     scratch: &mut DedupScratch,
 ) -> (bool, u32) {
@@ -267,13 +287,12 @@ pub fn finalize_mappings_counted_into(
     // The *order* of the survivors, by contrast, does not matter: this replaced a
     // hash map seeded per process (`ahash` `runtime-rng`), and quantification is
     // byte-identical across runs regardless of the order it yielded them in.
-    let mut raw = raw;
     if raw.len() <= DEDUP_HASH_THRESHOLD {
-        dedup_by_scan(&mut raw);
+        dedup_by_scan(raw);
     } else {
-        dedup_by_table(&mut raw, scratch);
+        dedup_by_table(raw, scratch);
     }
-    let best_per_tid = raw;
+    let best_per_tid = &mut *raw;
 
     let best_valid = best_per_tid
         .iter()
@@ -283,6 +302,7 @@ pub fn finalize_mappings_counted_into(
     let had_decoy = best_per_tid.iter().any(|m| m.is_decoy);
     let Some(best_valid) = best_valid else {
         // only decoy mappings -> dropped, dominated by a decoy
+        best_per_tid.clear();
         return (true, 0);
     };
     let best_decoy = best_per_tid
@@ -296,13 +316,14 @@ pub fn finalize_mappings_counted_into(
     // unless `--allowDecoyOrphans` asks us to keep the transcript placement(s).
     if let Some(bd) = best_decoy {
         if (best_valid as f64) < cfg.decoy_thresh * (bd as f64) && !cfg.allow_decoy_orphans {
+            best_per_tid.clear();
             return (true, 0);
         }
     }
     let _ = had_decoy;
 
     let mut num_below = 0u32;
-    for m in best_per_tid.into_iter().filter(|m| !m.is_decoy) {
+    for m in best_per_tid.drain(..).filter(|m| !m.is_decoy) {
         let weight = if cfg.hard_filter {
             if m.score == best_valid {
                 1.0
@@ -574,6 +595,42 @@ mod tests {
     fn only_decoy_is_unmapped() {
         let m = finalize_mappings(vec![raw(0, 100, true)], &ScoreConfig::default());
         assert!(m.is_empty());
+    }
+
+    #[test]
+    /// The caller reuses its `raw` buffer across fragments, so every return path
+    /// must leave it empty. A path that forgot to drain would leak the previous
+    /// fragment's placements into the next one — silently wrong, not a crash.
+    fn raw_buffer_is_emptied_on_every_path() {
+        let cfg = ScoreConfig::default();
+        let mut out = Vec::new();
+        let mut scratch = DedupScratch::default();
+        let mut buf: Vec<RawMapping> = Vec::new();
+
+        let mut run = |buf: &mut Vec<RawMapping>, what: &str| -> usize {
+            finalize_mappings_counted_into(&mut out, buf, &cfg, &mut scratch);
+            assert!(buf.is_empty(), "`raw` left non-empty by the {what} path");
+            out.len()
+        };
+
+        // empty input
+        run(&mut buf, "empty-input");
+
+        // decoy-only -> unmapped
+        buf.push(raw(0, 100, true));
+        run(&mut buf, "decoy-only");
+
+        // a decoy dominating a transcript below the threshold
+        buf.extend([raw(0, 50, false), raw(1, 100, true)]);
+        run(&mut buf, "decoy-dominated");
+
+        // the ordinary path
+        buf.extend([raw(0, 100, false), raw(1, 100, false)]);
+        assert_eq!(run(&mut buf, "normal"), 2);
+
+        // enough placements to take the hashed dedup path rather than the scan
+        buf.extend((0..DEDUP_HASH_THRESHOLD as u32 + 8).map(|t| raw(t, 100, false)));
+        run(&mut buf, "hashed-dedup");
     }
 
     // --- sketch-mode decoy filtering ---

@@ -26,7 +26,7 @@ use piscem_rs::index::reference_index::ReferenceIndex;
 use piscem_rs::mapping::hit_searcher::HitSearcher;
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
-use crate::align::{align_chain, align_in_window, revcomp, AlignConfig};
+use crate::align::{align_chain, align_in_window, AlignConfig};
 use crate::collect::{
     best_per_target, collect_read_mems, consensus_filter, MappingCandidate, MemCollectorConfig,
 };
@@ -49,7 +49,7 @@ pub enum SeedMode {
 }
 use crate::pair::{join_reads_and_filter, PairingConfig};
 use crate::score::{
-    finalize_mappings_counted_into, DedupScratch, RawMapping, ScoreConfig, ScoredMapping,
+    finalize_mappings_counted_into, MapScratch, RawMapping, ScoreConfig, ScoredMapping,
 };
 use salmon_core::RefProvider;
 
@@ -152,7 +152,7 @@ pub fn map_single_read<'idx, R: RefProvider>(
         refs,
         read,
         cfg,
-        &mut DedupScratch::default(),
+        &mut MapScratch::default(),
     );
     out
 }
@@ -166,7 +166,7 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
     refs: &R,
     read: &[u8],
     cfg: &MapConfig,
-    scratch: &mut DedupScratch,
+    scratch: &mut MapScratch,
 ) {
     let cands = consensus_filter(
         best_per_target(collect_candidates(
@@ -181,7 +181,15 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
     );
     let had_candidates = !cands.is_empty();
     let mut below = 0u32;
-    let mut raw = Vec::with_capacity(cands.len());
+    // Reused across fragments. Arrives empty: `finalize_mappings_counted_into`
+    // drains it on every return path, and nothing between here and that call can
+    // return early, so there is no second reset on this side.
+    let raw = &mut scratch.raw;
+    debug_assert!(
+        raw.is_empty(),
+        "scratch.raw was not drained by the last call"
+    );
+    raw.reserve(cands.len());
     for c in cands {
         if let Some(aln) = align_chain(read, refs.ref_seq(c.tid), &c.chain, &cfg.align) {
             if aln.valid {
@@ -228,7 +236,7 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
         }
     }
     let (decoy_dominated, below_final) =
-        finalize_mappings_counted_into(out, raw, &cfg.score, scratch);
+        finalize_mappings_counted_into(out, raw, &cfg.score, &mut scratch.dedup);
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,
@@ -255,7 +263,7 @@ pub fn map_read_pair<'idx, R: RefProvider>(
         r1,
         r2,
         cfg,
-        &mut DedupScratch::default(),
+        &mut MapScratch::default(),
     );
     out
 }
@@ -270,7 +278,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
     r1: &[u8],
     r2: &[u8],
     cfg: &MapConfig,
-    scratch: &mut DedupScratch,
+    scratch: &mut MapScratch,
 ) {
     let cf = cfg.collect.consensus_fraction;
     // NOTE: deliberately do NOT collapse to one chain per (tid, is_fw) before
@@ -301,7 +309,12 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
         .any(|j| matches!(j.status, MateStatus::PairedEndPaired));
     let dovetail = crate::pair::dovetail_rejected() && !has_concordant_pair;
     let mut below = 0u32;
-    let mut raw = Vec::new();
+    // Arrives empty; see the note in `map_single_read_into`.
+    let raw = &mut scratch.raw;
+    debug_assert!(
+        raw.is_empty(),
+        "scratch.raw was not drained by the last call"
+    );
     for j in joints {
         match j.status {
             MateStatus::PairedEndPaired => {
@@ -379,7 +392,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
             MateStatus::PairedEndLeft => {
                 let anchor = j.left.as_ref().unwrap();
                 push_orphan_or_recovered(
-                    &mut raw,
+                    raw,
                     index_seq(refs, j.tid),
                     r1,
                     r2,
@@ -388,12 +401,13 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                     refs,
                     cfg,
                     j.tid,
+                    &mut scratch.revcomp,
                 );
             }
             MateStatus::PairedEndRight => {
                 let anchor = j.right.as_ref().unwrap();
                 push_orphan_or_recovered(
-                    &mut raw,
+                    raw,
                     index_seq(refs, j.tid),
                     r2,
                     r1,
@@ -402,6 +416,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                     refs,
                     cfg,
                     j.tid,
+                    &mut scratch.revcomp,
                 );
             }
             MateStatus::SingleEnd => {}
@@ -428,7 +443,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
         raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
     }
     let (decoy_dominated, below_final) =
-        finalize_mappings_counted_into(out, raw, &cfg.score, scratch);
+        finalize_mappings_counted_into(out, raw, &cfg.score, &mut scratch.dedup);
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,
@@ -546,6 +561,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
     refs: &R,
     cfg: &MapConfig,
     tid: u32,
+    revcomp_buf: &mut Vec<u8>,
 ) {
     let Some(anchor_aln) = align_chain(anchor_read, refseq, &anchor.chain, &cfg.align) else {
         return;
@@ -556,7 +572,9 @@ fn push_orphan_or_recovered<R: RefProvider>(
     let is_decoy = refs.is_decoy(tid);
 
     if cfg.recover_orphans {
-        if let Some((partner_score, frag_len)) = recover_mate(partner_read, refseq, anchor, cfg) {
+        if let Some((partner_score, frag_len)) =
+            recover_mate(partner_read, refseq, anchor, cfg, revcomp_buf)
+        {
             raw.push(RawMapping {
                 tid,
                 is_fw: anchor.is_fw,
@@ -649,6 +667,7 @@ fn recover_mate(
     refseq: &[u8],
     anchor: &MappingCandidate,
     cfg: &MapConfig,
+    revcomp_buf: &mut Vec<u8>,
 ) -> Option<(i32, i32)> {
     let max_frag = cfg.pair.max_fragment_len;
     let reflen = refseq.len() as i32;
@@ -662,9 +681,9 @@ fn recover_mate(
         if win_end <= win_start {
             return None;
         }
-        let q = revcomp(partner_read);
+        crate::align::revcomp_into(partner_read, revcomp_buf);
         let aln = align_in_window(
-            &q,
+            revcomp_buf,
             &refseq[win_start as usize..win_end as usize],
             &cfg.align,
         )?;
