@@ -146,6 +146,15 @@ pub fn write_alignment_rad(
         RadProfile::SelectiveAlignment,
         opts.fld_max + 1,
         codec,
+        // Fragments came from an external aligner, and there is no salmon index
+        // behind them; a reader reads the absent index as "unknown".
+        &salmon_rad::WriterProvenance {
+            mapping_type: salmon_rad::MappingType::Alignment,
+            index: None,
+            // Carry the aligner's own account of how these alignments were made,
+            // so a requant reports the command line and not merely "a BAM".
+            source_programs: crate::source_program_lines(&header),
+        },
     )?;
 
     let fld = DiscreteFld::new(opts.fld_max);
@@ -208,6 +217,13 @@ pub fn write_alignment_rad(
         writer.set_initial_abundances(&em.alphas);
     }
 
+    // The BAM's own fragment total, which the records cannot show once unmapped
+    // ones are dropped. The `_vm` counters and the decoy count have no meaning
+    // for an aligner's output and stay zero.
+    writer.set_map_counters(salmon_rad::MapCounters {
+        num_processed: summary.num_processed,
+        ..Default::default()
+    });
     writer.finalize()?;
     Ok(summary)
 }

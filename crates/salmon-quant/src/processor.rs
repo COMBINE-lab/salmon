@@ -195,7 +195,6 @@ pub(crate) struct Shared<'a> {
 /// (see the `use_aux` issue); this change is output-preserving.
 #[derive(Default)]
 pub(crate) struct Counters {
-    pub mapped: u64,
     pub orphan: u64,
     pub decoy: u64,
     pub dovetail: u64,
@@ -212,7 +211,6 @@ impl Counters {
                 a.fetch_add(v, Ordering::Relaxed);
             }
         };
-        add(sh.num_mapped, self.mapped);
         add(sh.num_orphan, self.orphan);
         add(sh.num_decoy, self.decoy);
         add(sh.num_dovetail, self.dovetail);
@@ -613,7 +611,21 @@ fn record_discrete(
     if placements.is_empty() {
         return;
     }
-    counters.mapped += 1;
+    // Stays shared, unlike the other tallies: `record` reads this running total
+    // to gate the auxiliary models (see `use_aux`), so a per-worker count merged
+    // at thread end would leave it at zero for the whole run.
+    sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+    // Same orphan definition `record` uses: a fragment's surviving mappings share
+    // one status, so the first is representative. Counting it here is what lets
+    // `--deterministic` report the concordant/orphan split in
+    // `lib_format_counts.json` instead of calling every mapped fragment
+    // concordant.
+    if matches!(
+        placements[0].status,
+        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+    ) {
+        counters.orphan += 1;
+    }
     // A uniquely-mapped proper pair unambiguously implies its fragment length and
     // orientation; its observed format also feeds order-independent `-l A`
     // detection. Uses the raw mapping (like the RAD records written this pass, and
@@ -761,7 +773,16 @@ fn record(
     // quantifies as nothing — which also broke the invariant `Σ NumReads ==
     // num_mapped`. C++ salmon likewise counts a fragment as mapped only once it
     // has a compatible mapping.
-    counters.mapped += 1;
+    // `fetch_add` returns the count *before* this fragment, which is what the
+    // burn-in gate below needs: the online gate reads `num_assigned()` before its
+    // own increment, and C++ evaluates `useAuxParams` before counting the current
+    // read. Reading the post-increment value would gate this fragment on a total
+    // that includes itself, differing from both by one.
+    //
+    // This one counter therefore stays shared while the rest became per-worker:
+    // it is *read* during the run, not merely accumulated, so a thread-local
+    // tally merged at thread end would gate every fragment on zero.
+    let assigned_before_this = sh.num_mapped.fetch_add(1, Ordering::Relaxed);
     // Classify the fragment as orphan when only one mate of a pair was placed
     // (PairedEndLeft / PairedEndRight). Single-end libraries never count as
     // orphan here.
@@ -944,7 +965,15 @@ fn record(
     // differs and coarsening the range-factorized classes. The FLD term is only
     // applied once the auxiliary model is trained (after `pre_burnin` fragments),
     // matching salmon's `numPreAuxModelSamples` gating.
-    let use_aux = sh.num_processed.load(Ordering::Relaxed) >= sh.pre_burnin;
+    // Gate on *assigned* fragments, matching the online path above
+    // (`online.num_assigned()`) and C++'s `useAuxParams`, which tests
+    // `localNumAssignedFragments + numAssignedFragments` against
+    // `numPreBurninFrags`. This previously read `num_processed`, which counts
+    // every fragment reaching `record` — including ones with no mappings at all,
+    // and ones whose mappings were all library-incompatible — so the gate opened
+    // earlier than salmon intends, by a margin that grows as the mapping rate
+    // falls. See #1089.
+    let use_aux = assigned_before_this >= sh.pre_burnin;
     // Per-mapping FLD log-probability via the shared `frag_log_prob` term — the
     // same one the online posterior uses, reading the same per-fragment snapshot
     // pair captured above (so the two paths share one consistent FLD view, as
@@ -1229,7 +1258,11 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !placements.is_empty() {
                     let rec = build_rad_record(&placements);
-                    let _ = buf.write(&rec, rad.context());
+                    buf.write(&rec, rad.context()).map_err(|e| {
+                        paraseq::Error::from(std::io::Error::other(format!(
+                            "serializing RAD record: {e:#}"
+                        )))
+                    })?;
                 }
             }
             if let Some(acc) = sh.discrete_fld {
@@ -1259,7 +1292,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         self.shared.fld.refresh_online();
         flush_sam(self)?;
         flush_bam(self)?;
-        flush_rad(self);
+        flush_rad(self)?;
         Ok(())
     }
 
@@ -1269,7 +1302,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         merge_unmapped(self);
         flush_sam(self)?;
         flush_bam(self)?;
-        flush_rad(self);
+        flush_rad(self)?;
         Ok(())
     }
 }
@@ -1367,7 +1400,11 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !placements.is_empty() {
                     let radrec = build_rad_record(&placements);
-                    let _ = buf.write(&radrec, rad.context());
+                    buf.write(&radrec, rad.context()).map_err(|e| {
+                        paraseq::Error::from(std::io::Error::other(format!(
+                            "serializing RAD record: {e:#}"
+                        )))
+                    })?;
                 }
             }
             if let Some(acc) = sh.discrete_fld {
@@ -1397,7 +1434,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         self.shared.fld.refresh_online();
         flush_sam(self)?;
         flush_bam(self)?;
-        flush_rad(self);
+        flush_rad(self)?;
         Ok(())
     }
 
@@ -1407,7 +1444,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         merge_unmapped(self);
         flush_sam(self)?;
         flush_bam(self)?;
-        flush_rad(self);
+        flush_rad(self)?;
         Ok(())
     }
 }
@@ -1468,15 +1505,20 @@ fn build_rad_record(placements: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecor
 }
 
 /// Flush this thread's accumulated RAD records as one chunk to the shared writer.
-fn flush_rad(proc: &mut QuantProcessor) {
+///
+/// Errors here are fatal and must propagate: this is the only point at which a
+/// RAD write actually reaches the filesystem, so discarding the result means a
+/// full disk (`ENOSPC`) or an I/O error silently yields a truncated RAD that the
+/// run then reports as successful. See salmon#1105.
+fn flush_rad(proc: &mut QuantProcessor) -> paraseq::Result<()> {
     if let (Some(rad), Some(buf)) = (proc.shared.rad, proc.rad_buf.as_mut()) {
         if buf.nrec() > 0 {
-            match buf.take_bytes() {
-                Ok(bytes) => {
-                    let _ = rad.append_chunk_bytes(&bytes);
-                }
-                Err(e) => tracing::error!("failed to serialize RAD chunk: {e}"),
-            }
+            let bytes = buf
+                .take_bytes()
+                .map_err(|e| paraseq::Error::from(std::io::Error::other(e.to_string())))?;
+            rad.append_chunk_bytes(&bytes)
+                .map_err(|e| paraseq::Error::from(std::io::Error::other(format!("{e:#}"))))?;
         }
     }
+    Ok(())
 }

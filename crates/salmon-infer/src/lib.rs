@@ -38,7 +38,7 @@ mod packed;
 pub mod uncertainty;
 
 pub use online::OnlineInference;
-pub use packed::PackedEqClasses;
+pub use packed::{PackedEqClasses, PosteriorMethod};
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
 
 /// EM/VBEM acceleration scheme applied on top of the fixed-point map.

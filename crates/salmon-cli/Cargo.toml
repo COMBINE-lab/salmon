@@ -31,5 +31,8 @@ indicatif = "0.18"
 # Diagnostic: build with the system allocator instead of mimalloc.
 sysalloc = []
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

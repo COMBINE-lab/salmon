@@ -49,7 +49,14 @@ pub struct PackedEqClasses {
     ///
     /// The extra trailing entry is what lets class `i`'s span be written without
     /// a special case for the last class.
-    pub starts: Vec<u32>,
+    ///
+    /// `u64` rather than `u32` because these are cumulative *incidence* counts,
+    /// not transcript ids: they grow with the whole dataset, and past
+    /// `u32::MAX` a narrower offset wrapped silently and handed the optimizer
+    /// slices belonging to other classes. One entry per class, so the width
+    /// costs ~3.5% of the packed structure at any scale — a fixed and small
+    /// price for having no ceiling at all (#1097).
+    pub starts: Vec<u64>,
     /// flat `combined_weights` (`weight/effLen`), aligned to `labels`; used by EM
     pub combined: Vec<f64>,
     /// flat raw conditional weights, aligned to `labels`; used by Gibbs
@@ -62,11 +69,79 @@ pub struct PackedEqClasses {
     pub total_count: u64,
 }
 
+/// Which posterior-sampling method a run will use, if any.
+///
+/// Bootstrap and Gibbs are mutually exclusive — the CLI rejects both together —
+/// so this is the single place that fact is written down. Deriving it once and
+/// passing it around replaces a `bool` at each call site whose meaning ("does
+/// this run need the raw per-mapping weights?") was only recoverable by knowing
+/// which sampler reads which array.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PosteriorMethod {
+    /// Point estimate only; no posterior replicates.
+    #[default]
+    None,
+    /// Non-parametric bootstrap over the equivalence classes.
+    Bootstrap { replicates: u32 },
+    /// Collapsed Gibbs sampling.
+    Gibbs { samples: u32 },
+}
+
+impl PosteriorMethod {
+    /// Resolve from the raw option values.
+    ///
+    /// `skip_quant` suppresses both. Bootstrap wins if both counts are somehow
+    /// non-zero, matching the historical dispatch order — though the CLI now
+    /// rejects that combination, so it should be unreachable from a real run.
+    pub fn resolve(skip_quant: bool, num_bootstraps: u32, num_gibbs_samples: u32) -> Self {
+        if skip_quant {
+            Self::None
+        } else if num_bootstraps > 0 {
+            Self::Bootstrap {
+                replicates: num_bootstraps,
+            }
+        } else if num_gibbs_samples > 0 {
+            Self::Gibbs {
+                samples: num_gibbs_samples,
+            }
+        } else {
+            Self::None
+        }
+    }
+
+    /// Whether the run needs [`PackedEqClasses::weights`], the raw per-mapping
+    /// conditional weights.
+    ///
+    /// Only the Gibbs sampler reads them; the EM and the bootstrap use
+    /// `combined`. On a human-scale run that array is ~8 bytes per CSR
+    /// incidence, so skipping it saves on the order of 160 MB that would be
+    /// allocated, filled and never read.
+    pub fn needs_raw_weights(self) -> bool {
+        matches!(self, Self::Gibbs { .. })
+    }
+}
+
 impl PackedEqClasses {
     /// Build the packed layout from a finalized [`CollapsedEqClasses`] whose
     /// `combined_weights` are already populated
     /// ([`update_eff_lengths`](salmon_eqclass::CollapsedEqClasses::update_eff_lengths)).
     pub fn from_collapsed(eq: &CollapsedEqClasses, num_txps: usize) -> Self {
+        Self::from_collapsed_for(eq, num_txps, PosteriorMethod::Gibbs { samples: 1 })
+    }
+
+    /// As [`from_collapsed`](Self::from_collapsed), but skips the raw weights
+    /// leaves the raw `weights` array empty.
+    ///
+    /// `weights` is read only by the Gibbs sampler; the EM path uses `combined`.
+    /// On a run without `--numGibbsSamples` it is therefore 8 bytes per CSR
+    /// incidence that is allocated, filled and never read — on the order of
+    /// 160 MB for a human-scale run. Callers that know Gibbs will not run pass
+    /// `false`.
+    pub fn from_collapsed_for(
+        eq: &CollapsedEqClasses,
+        num_txps: usize,
+        method: PosteriorMethod,
+    ) -> Self {
         let n = eq.classes.len();
         // Size the flat arrays up front. Growing them from empty costs a
         // reallocation plus a full copy at every doubling, and leaves a transient
@@ -78,24 +153,15 @@ impl PackedEqClasses {
             .filter(|(g, _)| g.valid)
             .map(|(g, _)| g.txps.len())
             .sum();
-        // The CSR offsets below are `u32`. Past `u32::MAX` incidences the `as u32`
-        // cast would wrap silently and `class()` would hand the optimizer slices
-        // belonging to other classes — wrong abundances with no diagnostic. Fail
-        // loudly instead.
-        assert!(
-            total_labels <= u32::MAX as usize,
-            "equivalence-class CSR needs {total_labels} incidences, which exceeds \
-             the u32 offset limit ({}); please report this input",
-            u32::MAX
-        );
         let mut labels = Vec::with_capacity(total_labels);
         let mut starts = Vec::with_capacity(n + 1);
         let mut combined = Vec::with_capacity(total_labels);
-        let mut weights = Vec::with_capacity(total_labels);
+        let keep_weights = method.needs_raw_weights();
+        let mut weights = Vec::with_capacity(if keep_weights { total_labels } else { 0 });
         let mut counts = Vec::with_capacity(n);
         // The first class starts at offset 0; every later entry is appended after
         // that class's data has been copied in.
-        starts.push(0u32);
+        starts.push(0u64);
         let mut total = 0u64;
         for (group, value) in &eq.classes {
             // Classes the optimizer marked degenerate are simply not carried over.
@@ -104,10 +170,12 @@ impl PackedEqClasses {
             }
             labels.extend_from_slice(&group.txps);
             combined.extend_from_slice(&value.combined_weights);
-            weights.extend_from_slice(&value.weights);
+            if keep_weights {
+                weights.extend_from_slice(&value.weights);
+            }
             counts.push(value.count);
             total += value.count;
-            starts.push(labels.len() as u32);
+            starts.push(labels.len() as u64);
         }
         Self {
             labels,
@@ -120,6 +188,35 @@ impl PackedEqClasses {
         }
     }
 
+    /// Rewrite `combined` in place from `eq`'s current `combined_weights`,
+    /// leaving `labels`, `starts`, `counts` and `weights` untouched.
+    ///
+    /// Bias correction recomputes effective lengths and calls
+    /// [`CollapsedEqClasses::update_eff_lengths`], which changes *only* the
+    /// combined weights. Rebuilding the whole packed layout to pick that up
+    /// re-copies the labels and counts too — hundreds of MB on a human-scale run
+    /// — for arrays bit-identical to the ones already held.
+    ///
+    /// `eq` must be the class set the layout was built from. Classes are never
+    /// invalidated after construction (nothing clears `TranscriptGroup::valid`),
+    /// so the filter below matches the original build; the assertion pins that.
+    pub fn refresh_combined(&mut self, eq: &CollapsedEqClasses) {
+        let mut at = 0usize;
+        for (group, value) in &eq.classes {
+            if !group.valid {
+                continue;
+            }
+            let n = value.combined_weights.len();
+            self.combined[at..at + n].copy_from_slice(&value.combined_weights);
+            at += n;
+        }
+        assert_eq!(
+            at,
+            self.combined.len(),
+            "refresh_combined: class set changed since the packed layout was built"
+        );
+    }
+
     /// Number of (valid) classes.
     #[inline]
     pub fn num_classes(&self) -> usize {
@@ -130,6 +227,10 @@ impl PackedEqClasses {
     ///
     /// Returning borrowed slices means no allocation and no copying: this is
     /// called once per class per iteration, millions of times per run.
+    ///
+    /// The `as usize` narrowing cannot lose anything: an offset only exceeds
+    /// `usize` on a 32-bit target, where `labels` would have had to exceed a
+    /// 16 GB allocation to get there.
     #[inline]
     pub fn class(&self, i: usize) -> (&[u32], &[f64]) {
         let s = self.starts[i] as usize;

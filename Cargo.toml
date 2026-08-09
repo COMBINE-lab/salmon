@@ -49,6 +49,9 @@ scc = "3"
 dashmap = "6"
 # fast (non-DoS-resistant) hasher for hot per-read integer-keyed maps
 ahash = "0.8"
+# raw hash table, for caches that must probe with a borrowed key (no key
+# allocation on a lookup that hits)
+hashbrown = "0.15"
 # numerics
 statrs = "0.19"
 # rng (PCG, matching salmon's pcg usage)
@@ -75,7 +78,7 @@ cf1-rs = "0.5"
 piscem-rs = "0.6.4"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
-libradicl = { version = "0.16", features = ["zstd"] }
+libradicl = { version = "0.17", features = ["zstd"] }
 
 # dev / test helpers
 tempfile = "3"

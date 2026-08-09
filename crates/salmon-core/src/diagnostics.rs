@@ -137,3 +137,61 @@ pub fn peak_rss_kb() -> u64 {
         })
         .unwrap_or(0)
 }
+
+/// A `meta_info.json` field a complete description would carry, that this run
+/// could not fill, and the upstream that could not supply it.
+///
+/// Recorded rather than silently omitted: a consumer reading a result long after
+/// the run cannot otherwise tell "this run observed nothing" from "nobody could
+/// tell this run". The `source` says which upstream to fix, so the record is
+/// actionable and not merely an apology.
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct MissingMetaField {
+    /// the `meta_info.json` field that is absent or a placeholder
+    pub field: &'static str,
+    /// which upstream could not supply it
+    pub source: MetaFieldSource,
+    /// why it is unavailable, and where possible what would make it available
+    pub reason: &'static str,
+}
+
+/// The upstream a [`MissingMetaField`] would have come from.
+#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MetaFieldSource {
+    /// the salmon index the run was given
+    Index,
+    /// the RAD file the run quantified
+    Rad,
+    /// the BAM file the run quantified
+    Bam,
+}
+
+impl MissingMetaField {
+    /// Record a field the index could not supply.
+    pub fn index(field: &'static str, reason: &'static str) -> Self {
+        Self {
+            field,
+            source: MetaFieldSource::Index,
+            reason,
+        }
+    }
+
+    /// Record a field the input RAD could not supply.
+    pub fn rad(field: &'static str, reason: &'static str) -> Self {
+        Self {
+            field,
+            source: MetaFieldSource::Rad,
+            reason,
+        }
+    }
+
+    /// Record a field the input BAM could not supply.
+    pub fn bam(field: &'static str, reason: &'static str) -> Self {
+        Self {
+            field,
+            source: MetaFieldSource::Bam,
+            reason,
+        }
+    }
+}

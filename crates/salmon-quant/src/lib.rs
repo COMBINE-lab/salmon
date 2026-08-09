@@ -51,7 +51,7 @@ use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::SalmonIndex;
 pub use salmon_infer::EmAccel;
-use salmon_infer::{optimize, optimize_with_init, EmOptions};
+use salmon_infer::{optimize_packed_with_init, EmOptions};
 use salmon_map::MapConfig;
 use salmon_model::dumps::{dump_bias_models_to_file, BiasDump};
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
@@ -261,7 +261,7 @@ impl QuantOptions {
     }
 }
 
-pub use salmon_core::Diagnostic;
+pub use salmon_core::{Diagnostic, MissingMetaField};
 
 /// Quantification results (also written to disk by [`write_outputs`]).
 ///
@@ -295,7 +295,10 @@ pub struct QuantResult {
     /// [`Self::first_decoy_index`]); 0 when the index has no decoys
     pub num_decoys: usize,
     /// whether the index collapsed duplicate sequences (for meta_info)
-    pub keep_duplicates: bool,
+    /// whether the index was built with `--keepDuplicates`; `None` when the
+    /// index predates recording it, which is reported as a missing field rather
+    /// than guessed as `false`
+    pub keep_duplicates: Option<bool>,
     /// fragments dropped because their best alignment was to a decoy
     pub num_decoy_fragments: u64,
     /// fragments whose mates dovetail (overlap past each other)
@@ -449,6 +452,30 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     profile,
                     fld_len,
                     opts.rad_codec,
+                    // Identity of the index these mappings were made against, so a
+                    // requant reports the provenance of the run that produced the
+                    // records rather than of whatever index it was handed.
+                    &salmon_rad::WriterProvenance {
+                        mapping_type: if opts.sketch {
+                            salmon_rad::MappingType::Pseudo
+                        } else {
+                            salmon_rad::MappingType::Mapping
+                        },
+                        index: Some(salmon_rad::IndexProvenance {
+                            seq_hash: salmon.info().seq_hash.clone(),
+                            name_hash: salmon.info().name_hash.clone(),
+                            seq_hash512: salmon.info().seq_hash512.clone(),
+                            name_hash512: salmon.info().name_hash512.clone(),
+                            decoy_seq_hash: salmon.info().decoy_seq_hash.clone(),
+                            decoy_name_hash: salmon.info().decoy_name_hash.clone(),
+                            // `None` for an index built before this was
+                            // recorded; the RAD then omits the tag, so a
+                            // requant reports it unknown rather than `false`.
+                            keep_duplicates: salmon.info().keep_duplicates,
+                        }),
+                        // No BAM behind reads; nothing an aligner said to carry.
+                        source_programs: Vec::new(),
+                    },
                 )
                 .context("opening RAD output")?,
             )
@@ -748,6 +775,25 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             if opts.em.use_vbem { "VBEM" } else { "EM" }
         );
     }
+    // The packed CSR layout is built ONCE and reused by every consumer below: the
+    // burn-in EM, the warm-started EM after bias correction, and bootstrap /
+    // Gibbs. `optimize`/`optimize_with_init` each build their own internally, so
+    // going through them meant re-copying labels, counts and weights (hundreds of
+    // MB on a human-scale run) two to three times over data that is bit-identical
+    // apart from `combined`, which `refresh_combined` rewrites in place.
+    //
+    // `weights` (the raw conditional weights) is only read by Gibbs, so it is
+    // populated only when Gibbs will actually run.
+    // One resolution of which posterior method (if any) this run will use; the
+    // packed layout and the dispatch below both read it, so the precedence is
+    // stated once rather than restated at each site.
+    let posterior = salmon_infer::PosteriorMethod::resolve(
+        opts.skip_quant,
+        opts.num_bootstraps,
+        opts.num_gibbs_samples,
+    );
+    let mut packed =
+        salmon_infer::PackedEqClasses::from_collapsed_for(&collapsed, num_refs, posterior);
     let mut em = if opts.skip_quant && want_rough_abund {
         // `--deterministic` + bias map-only pass: run a SHORT EM on the NAIVE
         // eq-classes (uniform-weight, with library-incompatible placements dropped
@@ -782,9 +828,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // EM, and a zeroed alpha can never recover under the multiplicative
         // update (salmon keeps one continuous, untruncated vector).
         pre.min_alpha = 0.0;
-        optimize(&collapsed, num_refs, &pre, Some(&eff_lengths))
+        optimize_packed_with_init(&packed, &pre, true, None, Some(&eff_lengths))
     } else {
-        optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
+        optimize_packed_with_init(&packed, &opts.em, true, None, Some(&eff_lengths))
     };
 
     // ---- bias correction: re-estimate effective lengths --------------------
@@ -963,16 +1009,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .collect();
         eff_lengths = corrected;
         collapsed.update_eff_lengths(&eff_lengths);
+        // Only the combined weights changed, so patch them into the existing
+        // packed layout rather than rebuilding it.
+        packed.refresh_combined(&collapsed);
         // Warm-start the single full convergence from the burn-in alphas, as
         // salmon continues the same vector after its in-loop correction.
         let warm = std::mem::take(&mut em.alphas);
-        em = optimize_with_init(
-            &collapsed,
-            num_refs,
-            &opts.em,
-            Some(&warm),
-            Some(&eff_lengths),
-        );
+        em = optimize_packed_with_init(&packed, &opts.em, true, Some(&warm), Some(&eff_lengths));
     }
     // The min-alpha truncation is applied inside the EM as a mass-preserving
     // redistribution (see `redistribute_truncated`): the truncated mass flows to
@@ -1011,6 +1054,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         if let Some(f) = resolved_fmt {
             rw.set_library_format(f.format_id());
         }
+        // What the pass *saw*, which the records cannot show: a RAD holds only
+        // the fragments that mapped, so without these a requant would report a
+        // 100% mapping rate by construction.
+        rw.set_map_counters(salmon_rad::MapCounters {
+            num_processed: num_processed.load(Ordering::Relaxed),
+            num_dovetail: num_dovetail.load(Ordering::Relaxed),
+            num_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),
+            num_below_threshold_vm: num_below_threshold_vm.load(Ordering::Relaxed),
+            num_decoy_fragments: num_decoy.load(Ordering::Relaxed),
+        });
         rw.finalize().context("finalizing RAD output")?;
     }
 
@@ -1018,30 +1071,31 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
     // ---- posterior uncertainty (bootstrap / Gibbs) + ambiguity --------------
     // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
-    let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
     let ambig = salmon_infer::ambiguity_counts(&packed);
-    let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
-        Vec::new()
-    } else if opts.num_bootstraps > 0 {
-        salmon_infer::bootstrap(&packed, &opts.em, opts.num_bootstraps, 0x5A13_0000)
-    } else if opts.num_gibbs_samples > 0 {
-        // Gibbs prior follows the main optimizer (salmon): with VBEM and a
-        // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
-        // 1e-3 per transcript. The rust VBEM uses a constant per-transcript prior.
-        let prior = if opts.em.use_vbem {
-            opts.em.vb_prior.max(1.0)
-        } else {
-            1e-3
-        };
-        let gopts = salmon_infer::GibbsOptions {
-            num_samples: opts.num_gibbs_samples,
-            thinning: opts.thinning_factor,
-            prior,
-            per_transcript_prior: true,
-        };
-        salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
-    } else {
-        Vec::new()
+    // Same `posterior` the packed layout was built for, so the run cannot decide
+    // it needs Gibbs after the weights it reads were skipped.
+    let bootstraps: Vec<Vec<f64>> = match posterior {
+        salmon_infer::PosteriorMethod::None => Vec::new(),
+        salmon_infer::PosteriorMethod::Bootstrap { replicates } => {
+            salmon_infer::bootstrap(&packed, &opts.em, replicates, 0x5A13_0000)
+        }
+        salmon_infer::PosteriorMethod::Gibbs { samples } => {
+            // Gibbs prior follows the main optimizer (salmon): with VBEM and a
+            // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
+            // 1e-3 per transcript. The rust VBEM uses a constant per-transcript prior.
+            let prior = if opts.em.use_vbem {
+                opts.em.vb_prior.max(1.0)
+            } else {
+                1e-3
+            };
+            let gopts = salmon_infer::GibbsOptions {
+                num_samples: samples,
+                thinning: opts.thinning_factor,
+                prior,
+                per_transcript_prior: true,
+            };
+            salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
+        }
     };
     timer.mark("posterior");
 
@@ -1111,7 +1165,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,
         num_decoys: salmon.info().num_decoys,
-        keep_duplicates: false,
+        keep_duplicates: salmon.info().keep_duplicates,
         num_decoy_fragments: num_decoy.load(Ordering::Relaxed),
         num_dovetail_fragments: num_dovetail.load(Ordering::Relaxed),
         num_fragments_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),
