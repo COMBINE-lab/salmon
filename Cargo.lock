@@ -2268,9 +2268,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e9d61329e506636f779f403afda39d2f05b4a0f5d3d98aed6e7d357ad0c9ea"
+checksum = "47ce11e2c76b30cae05c1b6d0a4d72d042d820c5a66301c257b7ed91c827d951"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3250,7 +3250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys",
