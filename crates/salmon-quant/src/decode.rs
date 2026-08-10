@@ -75,28 +75,42 @@ pub struct Thresholds {
 }
 
 /// Measured on 26.1 M paired human RNA-seq fragments against a 238 k-transcript
-/// index, by reading the broker's own solved `producer_cost_share` (the
-/// threshold is `1/share`) rather than inferring it from a wall-time crossover.
+/// index at `-p 64`, by reading the broker's own solved `producer_cost_share`
+/// (the threshold is `1/share`) rather than inferring it from a wall-time
+/// crossover.
 ///
-/// | cell | share | threshold | status |
-/// |---|---|---|---|
-/// | sketch | 0.1004 ± 0.0056 | 10 | **measured** |
-/// | sketch + deterministic | — | 8 | provisional |
-/// | selective alignment | — | 29 | provisional |
-/// | selective alignment + deterministic | — | 20 | provisional |
+/// | cell | share | threshold |
+/// |---|---|---|
+/// | sketch | 0.094–0.100 across three runs | **10** |
+/// | sketch + `--deterministic` | 0.110 ± 0.012, twice | **9** |
+/// | selective alignment | ~0.02 (one windowed estimate) | **50** |
+/// | selective alignment + `--deterministic` | ~0.01, indistinguishable from SA | **50** |
 ///
-/// Only the first is measured so far. The other three were blocked on a pool
-/// deadlock (`notes/pool-lost-wakeup-deadlock.md`, resolved in rapidgzip-core
-/// 0.3.1) and can now be taken the same way: run each cell with `--decoder
-/// parallel` and read the `thread broker cost model` log line. The provisional
-/// values come from the `1 + C/P` relation under a 4x consumer-cost prior;
-/// they are placeholders, and the tests below assert only their *ordering*,
-/// which follows from the mechanism, not their magnitudes, which do not.
+/// Reading the numbers honestly:
+///
+/// * The sketch pair confirms the `--deterministic` prediction: a lighter
+///   consumer raises the producer's share and lowers the threshold. Thresholds
+///   round *down* from `1/share`, because the measured cost asymmetry runs the
+///   other way — failing to engage the parallel decoder cost up to 4.2× in
+///   piscem's grid, engaging it needlessly cost 8–28% — so ties break toward
+///   engaging earlier.
+/// * The SA figure is low-precision: one early-window estimate, and a CPU-ratio
+///   cross-check (sketch's ~96 s of decode CPU against SA's 2283 s total)
+///   suggests ~24 rather than 50. The practical content survives the error
+///   bar: with paired input (`F = 2`) even the *low* estimate engages only at
+///   `-p ≥ 48`, so serial decode is right for SA at nearly every real budget,
+///   and the broker corrects the split within a second when it does engage.
+/// * SA's `--deterministic` delta is not resolvable. Alignment scoring
+///   dominates SA's per-fragment cost; `record_discrete` strips bookkeeping
+///   (online inference, eq-classes, bias, prefix detection), which is a large
+///   fraction of *sketch*'s cost and a small one of SA's. The mechanism says
+///   `sa_det ≤ sa`, and the constants say exactly that — equal — rather than
+///   inventing a gap the measurement cannot support.
 pub const THRESHOLDS: Thresholds = Thresholds {
     sketch: 10,
-    sketch_deterministic: 8,
-    selective_alignment: 29,
-    selective_alignment_deterministic: 20,
+    sketch_deterministic: 9,
+    selective_alignment: 50,
+    selective_alignment_deterministic: 50,
 };
 
 /// The engagement policy salmon defaults to for a given configuration.
@@ -349,16 +363,20 @@ mod tests {
             t(false, true) > t(true, true),
             "the SA-vs-sketch gap must survive --deterministic"
         );
+        // Mechanism says <=; measurement could not resolve a strict gap, since
+        // alignment scoring dominates SA's cost and --deterministic strips only
+        // bookkeeping. Assert what is known, not what would be tidy.
+        assert!(
+            t(false, true) <= t(false, false),
+            "--deterministic must not make selective alignment engage later"
+        );
         // --deterministic removes online inference, eq-class assembly, bias
         // collection and prefix detection, so it must engage *earlier*.
         assert!(
             t(true, true) < t(true, false),
             "--deterministic lightens sketch, so its threshold must fall"
         );
-        assert!(
-            t(false, true) < t(false, false),
-            "--deterministic lightens selective alignment, so its threshold must fall"
-        );
+
     }
 
     /// Sketch inherits piscem's measured constant; drift here means the two
