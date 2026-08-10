@@ -9,7 +9,9 @@ input-handling fixes.
 is byte-identical to 2.4.1 at a fixed thread count. Across thread counts,
 results agree far beyond the reported precision (measured maximum deviation
 4.5×10⁻¹³ against a reporting step of 5×10⁻⁴; see "Determinism", below).
-**No index rebuild is required.**
+**No index rebuild is required** (though a rebuild is recommended to help 
+with propagating the provenance of the duplicate retention strategy used 
+during the index construction).
 
 ## Adaptive thread scheduling (#1119, #1093)
 
