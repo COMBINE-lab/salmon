@@ -158,8 +158,10 @@ pub(crate) struct Shared<'a> {
     pub num_dovetail: &'a AtomicU64,
     pub num_frags_filtered_vm: &'a AtomicU64,
     pub num_below_threshold_vm: &'a AtomicU64,
-    /// when set, collect the names of unmapped fragments (`--writeUnmappedNames`)
-    pub unmapped_names: Option<&'a Mutex<Vec<String>>>,
+    /// when set, the open `unmapped_names.txt` writer (`--writeUnmappedNames`).
+    /// Workers stream into it per batch rather than accumulating every name for
+    /// the whole run; see [`QuantProcessor::unmapped`].
+    pub unmapped_names: Option<&'a Mutex<UnmappedWriter>>,
     /// when set, write per-mapping SAM records (`--writeMappings`)
     pub sam: Option<&'a crate::sam::SamWriter>,
     /// when set, encode per-mapping BAM records into reusable worker chunks
@@ -339,8 +341,13 @@ pub(crate) struct QuantProcessor<'a> {
     pub gcbias: Option<GcFragModel>,
     /// per-thread observed (5', 3') positional-bias models, per length class
     pub posbias: Option<(Vec<SimplePosBias>, Vec<SimplePosBias>)>,
-    /// per-thread collected unmapped-fragment names (merged in on_thread_complete)
-    pub unmapped: Vec<String>,
+    /// per-thread unmapped-fragment name lines, flushed to the shared writer per
+    /// batch (like `sam_buf`) rather than held for the whole run. This used to be
+    /// a `Vec<String>` that grew until the process exited — one heap `String` per
+    /// unmapped read, retained to the end. On a heavily contaminated sample that
+    /// is tens of GB of small strings for output that could have been written
+    /// as it was produced.
+    pub unmapped: String,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
     /// per-thread raw BAM record chunk; allocated only for `--writeBam`. Holds
@@ -379,7 +386,7 @@ impl<'a> QuantProcessor<'a> {
             seqbias,
             gcbias,
             posbias,
-            unmapped: Vec::new(),
+            unmapped: String::new(),
             sam_buf: String::new(),
             bam_scratch: shared.bam.map(|output| output.scratch()),
             rad_buf: shared.rad.map(|rad| {
@@ -1104,28 +1111,69 @@ fn accumulate_vm_stats(maps_empty: bool, counters: &mut Counters) {
 
 /// Merge this thread's observed bias models (sequence and GC) into the shared
 /// accumulators.
-/// The read name written to unmapped_names.txt: the id up to the first
-/// whitespace (the conventional fragment name), lossily decoded.
-fn read_name(id: &[u8]) -> String {
+/// The open `unmapped_names.txt`, shared by every worker.
+///
+/// Workers buffer their own lines and hand over a block per batch, so the lock
+/// is taken once per batch rather than once per unmapped read, and no name is
+/// held in memory beyond the batch that produced it.
+pub struct UnmappedWriter {
+    w: std::io::BufWriter<std::fs::File>,
+}
+
+impl UnmappedWriter {
+    /// Create (or truncate) `unmapped_names.txt` at `path`.
+    pub fn create(path: &std::path::Path) -> std::io::Result<Self> {
+        Ok(Self {
+            // 1 MiB: this is a bulk sequential text stream, like the SAM writer.
+            w: std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?),
+        })
+    }
+
+    /// Append one worker's buffered lines.
+    fn write_block(&mut self, block: &str) -> std::io::Result<()> {
+        use std::io::Write as _;
+        self.w.write_all(block.as_bytes())
+    }
+
+    /// Flush buffered bytes to the file. Called once, after every worker has
+    /// finished, so a truncated file cannot be mistaken for a complete one.
+    pub fn finish(mut self) -> std::io::Result<()> {
+        use std::io::Write as _;
+        self.w.flush()
+    }
+}
+
+/// Append one `"<name> u"` line to this worker's buffer.
+///
+/// The name is the id up to the first whitespace (the conventional fragment
+/// name), lossily decoded. Written straight into the buffer, so an unmapped read
+/// costs no heap allocation of its own — the old path built a `String` per read
+/// and pushed it into a `Vec` that lived for the whole run.
+fn push_unmapped_name(buf: &mut String, id: &[u8]) {
     let end = id
         .iter()
         .position(|b| b.is_ascii_whitespace())
         .unwrap_or(id.len());
-    String::from_utf8_lossy(&id[..end]).into_owned()
+    buf.push_str(&String::from_utf8_lossy(&id[..end]));
+    buf.push_str(" u\n");
 }
 
-/// Merge this thread's collected unmapped-fragment names into the shared list.
+/// Write this worker's buffered unmapped names to the shared file and clear the
+/// buffer. Called per batch and again when the thread finishes, so the names
+/// leave memory as they are produced instead of accumulating for the whole run.
 /// Fold this worker's private counter tallies into the shared atomics.
 fn merge_counters(proc: &QuantProcessor) {
     proc.counters.merge_into(&proc.shared);
 }
 
-fn merge_unmapped(proc: &mut QuantProcessor) {
+fn flush_unmapped(proc: &mut QuantProcessor) -> std::io::Result<()> {
     if let Some(shared) = proc.shared.unmapped_names {
         if !proc.unmapped.is_empty() {
-            shared.lock().unwrap().append(&mut proc.unmapped);
+            shared.lock().unwrap().write_block(&proc.unmapped)?;
+            proc.unmapped.clear();
         }
     }
+    Ok(())
 }
 
 /// Merge this worker's private bias models into the shared ones.
@@ -1265,7 +1313,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 placements.clear();
             }
             if placements.is_empty() && sh.unmapped_names.is_some() {
-                unmapped.push(format!("{} u", read_name(r1.id())));
+                push_unmapped_name(unmapped, r1.id());
             }
             if !sh.sketch {
                 accumulate_vm_stats(placements.is_empty(), counters);
@@ -1326,6 +1374,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // next batch's per-fragment reads are stable (see `record`). No-op once the
         // final FLD cache is taken; amortized over the whole batch.
         self.shared.fld.refresh_online();
+        flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;
         flush_rad(self)?;
@@ -1335,7 +1384,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_counters(self);
         merge_bias(self);
-        merge_unmapped(self);
+        flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;
         flush_rad(self)?;
@@ -1423,7 +1472,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 placements.clear();
             }
             if placements.is_empty() && sh.unmapped_names.is_some() {
-                unmapped.push(format!("{} u", read_name(rec.id())));
+                push_unmapped_name(unmapped, rec.id());
             }
             if !sh.sketch {
                 accumulate_vm_stats(placements.is_empty(), counters);
@@ -1478,6 +1527,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // next batch's per-fragment reads are stable (see `record`). No-op once the
         // final FLD cache is taken; amortized over the whole batch.
         self.shared.fld.refresh_online();
+        flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;
         flush_rad(self)?;
@@ -1487,7 +1537,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_counters(self);
         merge_bias(self);
-        merge_unmapped(self);
+        flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;
         flush_rad(self)?;

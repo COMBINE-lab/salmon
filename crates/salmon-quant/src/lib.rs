@@ -57,7 +57,7 @@ use salmon_model::dumps::{dump_bias_models_to_file, BiasDump};
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
 pub use salmon_rad::ChunkCodec;
 
-use processor::{QuantProcessor, Shared};
+use processor::{QuantProcessor, Shared, UnmappedWriter};
 
 pub use output::write_outputs;
 
@@ -408,10 +408,19 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let num_dovetail = AtomicU64::new(0);
     let num_frags_filtered_vm = AtomicU64::new(0);
     let num_below_threshold_vm = AtomicU64::new(0);
-    // collector for `--writeUnmappedNames` (names of unmapped fragments)
-    let unmapped_collector: Option<std::sync::Mutex<Vec<String>>> = opts
-        .write_unmapped_names
-        .then(|| std::sync::Mutex::new(Vec::new()));
+    // `--writeUnmappedNames`: open the file up front and let workers stream into
+    // it per batch. Opening here also surfaces an unwritable output directory
+    // before the mapping pass rather than after it.
+    let unmapped_collector: Option<std::sync::Mutex<UnmappedWriter>> = if opts.write_unmapped_names
+    {
+        std::fs::create_dir_all(opts.output_dir.join("aux_info")).context("creating aux_info")?;
+        Some(std::sync::Mutex::new(
+            UnmappedWriter::create(&opts.output_dir.join("aux_info").join("unmapped_names.txt"))
+                .context("creating unmapped_names.txt")?,
+        ))
+    } else {
+        None
+    };
     let nthreads = if opts.num_threads == 0 {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -797,18 +806,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // Write aux_info/unmapped_names.txt ("<name> <status>" per line; the port maps
     // unmapped fragments as "u" — orphan/decoy sub-codes await mapper-reason
     // reporting, tracked with the *_vm counters).
-    if let Some(collector) = &unmapped_collector {
-        use std::io::Write as _;
-        let names = collector.lock().unwrap();
-        std::fs::create_dir_all(opts.output_dir.join("aux_info")).context("creating aux_info")?;
-        let mut w = std::io::BufWriter::new(
-            std::fs::File::create(opts.output_dir.join("aux_info").join("unmapped_names.txt"))
-                .context("creating unmapped_names.txt")?,
-        );
-        for line in names.iter() {
-            writeln!(w, "{line}")?;
-        }
-        w.flush()?;
+    // Every worker has joined, so nothing more will be written: flush and close.
+    if let Some(collector) = unmapped_collector {
+        collector
+            .into_inner()
+            .unwrap()
+            .finish()
+            .context("writing unmapped_names.txt")?;
     }
 
     // Resolve the library type: the detected format (when auto), else the
@@ -1058,9 +1062,24 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 .context("writing bias_models.txt")?;
         }
 
+        // Per-worker scratch for the positional-bias factors. Without it each
+        // transcript allocated six `Vec<f64>` of its own length — four for the
+        // projected obs/exp densities and two for the smoothed factors — inside
+        // a `par_iter` over the whole transcriptome. `map_init` hands each rayon
+        // worker one set to refill, so the allocation count goes from six per
+        // transcript to six per worker.
+        #[derive(Default)]
+        struct PosScratch {
+            o5: Vec<f64>,
+            e5: Vec<f64>,
+            o3: Vec<f64>,
+            e3: Vec<f64>,
+            pf: Vec<f64>,
+            pr: Vec<f64>,
+        }
         let corrected: Vec<f64> = (0..num_refs)
             .into_par_iter()
-            .map(|tid| {
+            .map_init(PosScratch::default, |scratch, tid| {
                 // Decoys (the contiguous tail at `first_decoy_index`) are never
                 // quantified or reported, so their bias-corrected effective length
                 // is unused. Skipping them here avoids a second, single-threaded
@@ -1076,28 +1095,36 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 let s = salmon.ref_seq(tid as u32);
                 let ref_len = s.len();
                 // Per-position 5'/3' positional-bias factors (obs/exp projected).
-                let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
-                    pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
-                        let lc = length_class.as_ref().unwrap()[tid];
-                        let (mut o5, mut e5) = (vec![0.0; ref_len], vec![0.0; ref_len]);
-                        let (mut o3, mut e3) = (vec![0.0; ref_len], vec![0.0; ref_len]);
-                        ofw[lc].project_weights(&mut o5);
-                        efw[lc].project_weights(&mut e5);
-                        orc[lc].project_weights(&mut o3);
-                        erc[lc].project_weights(&mut e3);
-                        // additively-smoothed obs/exp (no hard floor; neutral tails)
-                        let pf = salmon_model::positional_factor(&o5, &e5);
-                        let pr = salmon_model::positional_factor(&o3, &e3);
-                        (pf, pr)
-                    });
+                // `project_weights` derives its output length from the slice it is
+                // given, so each buffer is resized to this transcript before use.
+                if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
+                    let lc = length_class.as_ref().unwrap()[tid];
+                    for b in [
+                        &mut scratch.o5,
+                        &mut scratch.e5,
+                        &mut scratch.o3,
+                        &mut scratch.e3,
+                    ] {
+                        // Grows or shrinks to exactly `ref_len`; the fill value is
+                        // irrelevant since `project_weights` overwrites every slot.
+                        b.resize(ref_len, 0.0);
+                    }
+                    ofw[lc].project_weights(&mut scratch.o5);
+                    efw[lc].project_weights(&mut scratch.e5);
+                    orc[lc].project_weights(&mut scratch.o3);
+                    erc[lc].project_weights(&mut scratch.e3);
+                    // additively-smoothed obs/exp (no hard floor; neutral tails)
+                    salmon_model::positional_factor_into(&scratch.o5, &scratch.e5, &mut scratch.pf);
+                    salmon_model::positional_factor_into(&scratch.o3, &scratch.e3, &mut scratch.pr);
+                }
                 let bias = salmon_model::BiasInputs {
                     seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
                     gc: gc_ratio_model
                         .as_ref()
                         .map(|g| (g, store.unwrap().view(tid))),
-                    pos: pos_vecs
+                    pos: pos_models
                         .as_ref()
-                        .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
+                        .map(|_| (scratch.pf.as_slice(), scratch.pr.as_slice())),
                 };
                 salmon_model::corrected_effective_length_full(
                     s,
