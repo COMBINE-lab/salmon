@@ -138,18 +138,37 @@ fn run(churn: bool) -> (u64, Vec<u32>, u64) {
     let pool = ThreadPool::with_max(MAX_THREADS, MAX_THREADS);
     let done = Arc::new(AtomicBool::new(false));
 
-    // Drive the pool up and down throughout the run, so workers retire and
-    // respawn repeatedly while records are still being read.
+    // Drive the pool up and down throughout the run, so workers park and
+    // resume repeatedly while records are still being read. Each shrink is
+    // held until its effect is *observed* (live workers at or under the
+    // target), so the count returned is proof the pool reacted, not merely
+    // that set_threads was called.
+    let observed_shrinks = Arc::new(AtomicU64::new(0));
     let resizer = churn.then(|| {
         let pool = pool.clone();
         let done = Arc::clone(&done);
+        let observed = Arc::clone(&observed_shrinks);
         std::thread::spawn(move || {
             let sizes = [MAX_THREADS, 3, 11, 1, MAX_THREADS, 2, 7];
             let mut i = 0usize;
             while !done.load(Ordering::Acquire) {
-                pool.set_threads(sizes[i % sizes.len()]);
+                let t = sizes[i % sizes.len()];
+                pool.set_threads(t);
+                if t < MAX_THREADS {
+                    // Wait (bounded) for the pool to actually park down to the
+                    // target; batches are tiny here, so convergence is fast.
+                    for _ in 0..2_000 {
+                        if done.load(Ordering::Acquire) {
+                            break;
+                        }
+                        if pool.total_live() <= t {
+                            observed.fetch_add(1, Ordering::Relaxed);
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_micros(50));
+                    }
+                }
                 i += 1;
-                std::thread::sleep(std::time::Duration::from_micros(300));
             }
         })
     });
@@ -169,7 +188,15 @@ fn run(churn: bool) -> (u64, Vec<u32>, u64) {
     let counted = shared.counted.load(Ordering::Relaxed);
     let flushed = shared.flushed.lock().unwrap().clone();
     let completions = shared.completions.load(Ordering::Relaxed);
-    (counted, flushed, completions)
+    // Every spawned worker completes exactly once -- parked workers included,
+    // woken at end of input. More completions than the spawn set would mean
+    // respawning is back; fewer would mean a worker was lost (and with it,
+    // any state it had not flushed).
+    assert!(
+        completions <= MAX_THREADS as u64,
+        "{completions} thread completions for a {MAX_THREADS}-worker pool"
+    );
+    (counted, flushed, observed_shrinks.load(Ordering::Relaxed))
 }
 
 /// Control: with a fixed pool nothing retires early, so this is the baseline
@@ -184,21 +211,27 @@ fn fixed_pool_counts_and_flushes_everything() {
     assert_eq!(flushed.len(), RECORDS, "output buffer lost records");
 }
 
-/// The real check: workers retiring mid-run must commit both their counters and
-/// their pending output.
+/// The real check: state observable outside a worker must survive resizing.
+///
+/// Under the parked pool (paraseq-temp 0.5.0-pre.2) a shrunk-away worker
+/// parks with its thread and per-worker state intact, rather than exiting --
+/// so the hazard shifts from "a retiring worker must flush before dying" to
+/// "output must be committed at batch boundaries (a parked worker's buffer
+/// sleeps with it) and every spawned worker must complete exactly once at end
+/// of input, parked or not."
 #[test]
-fn retired_workers_commit_counters_and_output() {
-    let (counted, flushed, completions) = run(true);
+fn resized_workers_commit_counters_and_output() {
+    let (counted, flushed, observed_shrinks) = run(true);
 
     assert_eq!(
         counted, RECORDS as u64,
         "thread-local counters were lost or double-counted across a resize: a \
-         retiring worker either skipped on_thread_complete or committed twice"
+         worker either skipped on_thread_complete or committed twice"
     );
     assert_eq!(
         flushed.len(),
         RECORDS,
-        "a retiring worker dropped its pending output buffer: {} of {} records \
+        "a resized worker dropped its pending output buffer: {} of {} records \
          reached the shared sink",
         flushed.len(),
         RECORDS
@@ -210,20 +243,21 @@ fn retired_workers_commit_counters_and_output() {
     assert_eq!(
         unique.len(),
         RECORDS,
-        "records were duplicated across a retire/respawn cycle"
+        "records were duplicated across a park/resume cycle"
     );
     for id in 0..RECORDS as u32 {
         assert!(unique.contains(&id), "record {id} never reached the sink");
     }
 
-    // Guard against a vacuous pass. If the churn never actually retired anyone,
-    // the assertions above hold trivially and this test proves nothing -- the
-    // same shape of mistake that let a decoder verdict ship three times without
-    // ever changing behaviour.
+    // Guard against a vacuous pass. Under the parked design worker
+    // *incarnations* can no longer exceed the ceiling (that bound is the
+    // design), so churn is evidenced differently: each shrink was held until
+    // the pool was OBSERVED at or under its target. Zero observations would
+    // mean the pool ignored every resize and this test exercised nothing.
     assert!(
-        completions > MAX_THREADS as u64,
-        "only {completions} worker incarnations completed with a ceiling of \
-         {MAX_THREADS}: no worker retired mid-run, so this test exercised \
-         nothing and its green result is meaningless"
+        observed_shrinks >= 5,
+        "only {observed_shrinks} shrinks took observable effect: the pool is \
+         not reacting to set_threads, so this test exercised nothing and its \
+         green result is meaningless"
     );
 }
