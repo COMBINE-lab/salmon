@@ -455,14 +455,32 @@ fn thread_count_invariant() {
     let c8 = run(8);
     let c1b = run(1);
     assert_eq!(c1.len(), c8.len());
-    // Quantification is fully deterministic: the FLD is fixed before eq-class
-    // assembly (no online phase, no RNG), collapsed classes are order-independent,
-    // and EM runs from a uniform start — so the result is bit-identical regardless
-    // of thread count, and reproducible run-to-run.
-    assert_eq!(
-        c1, c8,
-        "result differs across thread counts (non-deterministic)"
+    // Across thread counts the result is deterministic *to far beyond the
+    // reported precision*, but not bit-identical: the EM merges per-worker
+    // shards (`reduce_shards`), and how many shards exist -- and which
+    // fragments each accumulated under work stealing -- changes the order f64
+    // additions associate in. Measured on a deliberately hard fixture (800
+    // transcripts, 60k fragments, 1-4-way ambiguity, 2-32 threads, 50 runs):
+    // max |delta| = 4.5e-13. quant.sf rounds NumReads to 5e-4 and TPM to 5e-7,
+    // so a 1e-9 gate is six orders stricter than anything a reader of the
+    // output could observe, while 2000x above the measured ulp noise -- a real
+    // determinism bug (order-dependent assignment, a lost fragment) lands well
+    // above it, associativity noise well below.
+    //
+    // Asserting bit-equality here instead makes the test flaky, and the "fix"
+    // for that (PR #1056) would have restructured the reduction for a property
+    // no consumer of quant.sf can see.
+    let max_delta = c1
+        .iter()
+        .zip(c8.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_delta < 1e-9,
+        "thread counts disagree by {max_delta:e}: beyond FP associativity          noise, this is a real determinism regression"
     );
+    // Repeated runs at a fixed thread count of 1 have no reduction-order
+    // freedom at all, so bit-identity is required, not approximated.
     assert_eq!(
         c1, c1b,
         "result differs across repeated single-threaded runs"
@@ -1084,5 +1102,73 @@ fn overlong_pg_chain_is_trimmed_to_what_a_rad_tag_holds() {
     assert_eq!(
         salmon_align::parse_source_programs(&lines).len(),
         lines.len()
+    );
+}
+
+/// Measurement probe behind `--ignored`: the magnitude of cross-thread FP
+/// deviation, against quant.sf's reported precision. This is where the 4.5e-13
+/// in `thread_count_invariant`'s comment comes from; rerun it if the reduction
+/// strategy changes.
+#[test]
+#[ignore = "measurement, not a gate"]
+fn measure_thread_count_fp_deviation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("maps.rad");
+    // Deliberately hard for the sharded reduction: many transcripts, heavy
+    // multi-mapping across distant ids, uneven true abundances -- so per-shard
+    // partial sums are dense, differently sized, and summed in an order that
+    // depends on how work was stolen.
+    const T: u32 = 800;
+    let names: Vec<String> = (0..T).map(|i| format!("t{i}")).collect();
+    let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let lens = vec![1000u32; T as usize];
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    let mut x: u64 = 0x9E3779B97F4A7C15;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    for _ in 0..60_000 {
+        let k = 1 + (next() % 4) as usize; // 1-4 way ambiguous
+        let mut row = Vec::with_capacity(k);
+        for _ in 0..k {
+            // Skewed toward low ids: uneven abundances.
+            let tid = ((next() % (T as u64)) * (next() % (T as u64)) / (T as u64)) as u32;
+            row.push((tid, Some(200), 0));
+        }
+        frags.push(row);
+    }
+    write_rad(&rad, &name_refs, &lens, RadProfile::Sketch, &frags, None);
+
+    let run = |threads: usize, rep: usize| -> Vec<f64> {
+        let out = tmp.path().join(format!("m{threads}_{rep}"));
+        std::fs::create_dir_all(&out).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| quantify_rad(&opts_for(&out), &rad).unwrap().counts)
+    };
+
+    let baseline = run(1, 0);
+    let mut max_abs: f64 = 0.0;
+    let mut runs = 0usize;
+    for rep in 0..10 {
+        for threads in [2usize, 4, 8, 16, 32] {
+            let c = run(threads, rep + 1);
+            for (a, b) in baseline.iter().zip(c.iter()) {
+                max_abs = max_abs.max((a - b).abs());
+            }
+            runs += 1;
+        }
+    }
+    // Repeated single-thread runs must stay bit-identical.
+    let again = run(1, 99);
+    assert_eq!(baseline, again, "p=1 must be exactly reproducible");
+    println!(
+        "max |delta| across {runs} multithreaded runs: {max_abs:e} \
+         (reported precision step: 5e-4 for NumReads, 5e-7 for TPM)"
     );
 }
