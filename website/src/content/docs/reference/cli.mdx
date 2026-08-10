@@ -68,9 +68,38 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | `-1/-2, --mates1/2 <FASTQ>…` | Paired-end read files. |
 | `-r, --unmatedReads <FASTQ>…` | Single-end read files. |
 | `-o, --output <DIR>` | Output directory. **Required.** |
-| `-p, --threads <N>` | Worker threads (`0` = all cores). |
+| `-p, --threads <N>` | Execution-slot budget (`0` = all cores), shared between mapping and gzip decompression. On compressed input a live controller divides the budget from measurement; see [threads and compressed input](#threads-and-compressed-input). |
+| `--decoder <MODE>` | Gzip decoder for the reads: `auto` (default), `serial`, `parallel`, or `parallel=N` to pin N slots per decodable input. Decided **per input file**; a plain, FIFO, or otherwise non-seekable input falls back to serial by itself without affecting the others. |
+| `--threadPolicy <FILE>` | JSON overriding when the parallel decoder engages (same format piscem uses). Unknown fields are an error, not a silent no-op. |
 | `-g, --geneMap <FILE>` | Transcript-to-gene map (GTF/GFF or 2-column TSV); also writes `quant.genes.sf`. Read and validated before quantification starts. [tximport is preferred](#prefer-tximport-for-gene-level-estimates); this option may be removed in a future release. |
 | `--ignoreTxVersion` | Compare transcript identifiers without their trailing `.N` version suffix when joining `--geneMap` to quantified transcripts. Off by default. See [Ensembl cDNA + GTF](#ensembl-cdna--gtf). |
+
+### Threads and compressed input
+
+`-p` names one budget of execution slots, not a mapping-thread count with
+decompression taken on top. When the reads are gzip and the parallel decoder is
+engaged, a live controller measures how much each side costs as the run
+proceeds and moves slots to whichever pays; totals in `quant.sf` and
+`meta_info.json` are unaffected by where the slots went.
+
+Whether the parallel decoder engages at all defaults per mapping mode, from
+measurement — selective alignment does far more work per fragment than sketch,
+so decoding is worth dedicated slots much later:
+
+| mode | engages when `-p` ≥ (per gzip input) |
+| --- | --- |
+| selective alignment (± `--deterministic`) | 50 |
+| sketch | 10 |
+| sketch `--deterministic` | 9 |
+
+Below the threshold the serial decoder inflates inline on the mapping threads,
+which measured faster at every budget tested under it. Override with
+`--decoder` or `--threadPolicy`.
+
+Input compression is detected from **content**, never file names, on every
+input path: gzip (including BGZF and multi-member), bzip2, xz and zstd all
+work for reads, targets, alignments and `--geneMap` — including a gzip file
+under a misleading name.
 
 ### Mapping
 

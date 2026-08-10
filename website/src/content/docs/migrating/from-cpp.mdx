@@ -93,9 +93,20 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
   `--orphanChainSubThresh 0.95 --postMergeChainSubThresh 0.9` to reproduce C++
   mapping counts exactly.
 
+## `-p` on compressed input
+
+`-p` is accepted unchanged, but from 2.5.0 it names one execution-slot budget
+shared between mapping and gzip decompression, rather than a mapping-thread
+count with decompression taken on top. C++ salmon (and 2.x before 2.5.0) could
+run more total threads than `-p` on compressed input; 2.5.0 stays within the
+budget and divides it from live measurement. Totals and results are unaffected;
+wall time on compressed input may differ from what the old accounting produced
+at the same `-p`. See
+[threads and compressed input](../../reference/cli/#threads-and-compressed-input).
+
 ## Unchanged
 
 Index/quant basics, `quant.sf`, `cmd_info.json`, `lib_format_counts.json`,
-`aux_info/meta_info.json`, `--libType/-l`, `--threads/-p`, `--seqBias`,
+`aux_info/meta_info.json`, `--libType/-l`, `--seqBias`,
 `--gcBias`, `--posBias`, `--numBootstraps`, `--numGibbsSamples`, `--useEM`,
 `--dumpEq`, decoys, and `salmon quantmerge`.
