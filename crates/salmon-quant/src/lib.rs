@@ -32,8 +32,8 @@
 //! running a rough EM first, using its output to weight the bias models,
 //! recomputing effective lengths, and then running the real EM.
 
-pub mod decode;
 mod bam;
+pub mod decode;
 mod mapping_record;
 mod output;
 mod processor;
@@ -715,7 +715,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                         producer_cost_share = share,
                         producer_cost_share_uncertainty = model.producer_cost_share_uncertainty,
                         implied_min_threads_per_stream = (1.0 / share).ceil() as usize,
-                        mode = if opts.sketch { "sketch" } else { "selective-alignment" },
+                        mode = if opts.sketch {
+                            "sketch"
+                        } else {
+                            "selective-alignment"
+                        },
                         "thread broker cost model"
                     );
                 }
@@ -739,7 +743,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                         consumer_busy_s = c / 1e9,
                         integrated_producer_cost_share = share,
                         implied_min_threads_per_stream = (1.0 / share).ceil() as usize,
-                        mode = if opts.sketch { "sketch" } else { "selective-alignment" },
+                        mode = if opts.sketch {
+                            "sketch"
+                        } else {
+                            "selective-alignment"
+                        },
                         "thread broker integrated cost ratio"
                     );
                 }

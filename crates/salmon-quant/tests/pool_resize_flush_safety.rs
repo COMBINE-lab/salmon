@@ -177,7 +177,10 @@ fn run(churn: bool) -> (u64, Vec<u32>, u64) {
 #[test]
 fn fixed_pool_counts_and_flushes_everything() {
     let (counted, flushed, _) = run(false);
-    assert_eq!(counted, RECORDS as u64, "counter lost or duplicated records");
+    assert_eq!(
+        counted, RECORDS as u64,
+        "counter lost or duplicated records"
+    );
     assert_eq!(flushed.len(), RECORDS, "output buffer lost records");
 }
 

@@ -189,7 +189,6 @@ impl Consumer for MappingConsumer {
     }
 }
 
-
 /// A reader over one opened input, whatever decoder it ended up with.
 pub type Input = paraseq::fastx::Reader<Box<dyn std::io::Read + Send>>;
 
@@ -230,12 +229,8 @@ pub fn plan(
 ) -> Result<MappingPlan> {
     let decision = piscem_rs::io::calibrate::choose_decoder(groups, budget, pref, policy);
     let num_files: usize = groups.iter().map(|g| g.len()).sum();
-    let mut exec = piscem_rs::io::fastx::plan_thread_budget(
-        budget,
-        num_files,
-        decision.parallel,
-        pref,
-    )?;
+    let mut exec =
+        piscem_rs::io::fastx::plan_thread_budget(budget, num_files, decision.parallel, pref)?;
 
     // Sized to the *entire* budget, not the expected split: `workers` is an
     // immutable maximum and a later grant above it would simply be refused,
@@ -281,13 +276,9 @@ pub fn plan(
 
     let arity = groups.first().map(|g| g.len()).unwrap_or(1);
     let busy = Arc::new(BusyMeter::new());
-    let map_pool =
-        paraseq::parallel::ThreadPool::with_max(exec.map_threads, exec.effective_budget);
-    let consumer_floor = piscem_rs::io::fastx::collection_share_floor(
-        readers.len(),
-        arity,
-        exec.map_threads,
-    );
+    let map_pool = paraseq::parallel::ThreadPool::with_max(exec.map_threads, exec.effective_budget);
+    let consumer_floor =
+        piscem_rs::io::fastx::collection_share_floor(readers.len(), arity, exec.map_threads);
 
     let broker = match (&decode_pool, exec.adaptive()) {
         (Some(pool), true) => {
@@ -378,7 +369,6 @@ mod tests {
             t(true, true) < t(true, false),
             "--deterministic lightens sketch, so its threshold must fall"
         );
-
     }
 
     /// Sketch inherits piscem's measured constant; drift here means the two
@@ -402,9 +392,14 @@ mod tests {
     fn the_threshold_is_per_gzip_input() {
         let p = default_engagement_policy(true, false);
         let n = p.min_threads_per_stream;
-        assert!(!p.engages(n * 2 - 1, 2), "just below the threshold per stream");
+        assert!(
+            !p.engages(n * 2 - 1, 2),
+            "just below the threshold per stream"
+        );
         assert!(p.engages(n * 2, 2), "exactly at the threshold per stream");
-        assert!(!p.engages(1024, 0), "no gzip input: only ever costs threads");
+        assert!(
+            !p.engages(1024, 0),
+            "no gzip input: only ever costs threads"
+        );
     }
 }
-

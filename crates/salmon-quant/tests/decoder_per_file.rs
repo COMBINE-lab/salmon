@@ -32,12 +32,16 @@ const BUDGET: usize = 64;
 fn write_reads(dir: &std::path::Path, name: &str, gzip: bool) -> PathBuf {
     let mut fastq = Vec::new();
     for i in 0..2_000 {
-        fastq.extend_from_slice(format!("@r{i}\nACGTACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIIIIIII\n").as_bytes());
+        fastq.extend_from_slice(
+            format!("@r{i}\nACGTACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIIIIIII\n").as_bytes(),
+        );
     }
     let path = dir.join(name);
     if gzip {
-        let mut enc =
-            flate2::write::GzEncoder::new(std::fs::File::create(&path).unwrap(), Default::default());
+        let mut enc = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            Default::default(),
+        );
         enc.write_all(&fastq).unwrap();
         enc.finish().unwrap();
     } else {
@@ -133,7 +137,11 @@ fn a_policy_file_overrides_the_mode_default() {
 
     // A file wins over the mode default, in both modes.
     let good = dir.path().join("policy.json");
-    std::fs::write(&good, r#"{"parallel_decode": {"min_threads_per_stream": 3}}"#).unwrap();
+    std::fs::write(
+        &good,
+        r#"{"parallel_decode": {"min_threads_per_stream": 3}}"#,
+    )
+    .unwrap();
     for sketch_mode in [true, false] {
         let p = decode::engagement_policy(sketch_mode, false, Some(&good)).unwrap();
         assert_eq!(
@@ -143,7 +151,11 @@ fn a_policy_file_overrides_the_mode_default() {
     }
 
     let typo = dir.path().join("typo.json");
-    std::fs::write(&typo, r#"{"parallel_decode": {"min_threads_per_input": 3}}"#).unwrap();
+    std::fs::write(
+        &typo,
+        r#"{"parallel_decode": {"min_threads_per_input": 3}}"#,
+    )
+    .unwrap();
     assert!(
         decode::engagement_policy(false, false, Some(&typo)).is_err(),
         "a misspelled field must refuse to load rather than silently doing nothing"
