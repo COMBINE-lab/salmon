@@ -60,7 +60,8 @@ pub mod spline;
 // Re-exports so callers can write `salmon_model::SBModel` rather than naming the
 // submodule; the modules above remain the real homes.
 pub use bias::{
-    build_expected_pos, corrected_effective_length_full, positional_factor, BiasInputs,
+    build_expected_pos, corrected_effective_length_full, positional_factor, positional_factor_into,
+    BiasInputs,
 };
 pub use fld::FragLengthSource;
 pub use fld::{
