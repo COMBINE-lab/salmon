@@ -2268,9 +2268,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c20e73778bc07814ffd1576873608f7a160c12b68e690c66a324a12567244cc5"
+checksum = "91e9d61329e506636f779f403afda39d2f05b4a0f5d3d98aed6e7d357ad0c9ea"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2493,9 +2493,9 @@ dependencies = [
 
 [[package]]
 name = "rapidgzip-core"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73479522ef5ac15e4015ff42faab6c3f6372f88b95ffd5fa4577f93dd76e907e"
+checksum = "da5be74bd353811db3efff881e87200a18150d72fb0b1d39ea04e7972a5b4ca1"
 dependencies = [
  "bon",
  "crossbeam-deque",

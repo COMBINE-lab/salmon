@@ -85,12 +85,13 @@ pub struct Thresholds {
 /// | selective alignment | — | 29 | provisional |
 /// | selective alignment + deterministic | — | 20 | provisional |
 ///
-/// Only the first is measured. The rest are blocked on the deadlock recorded in
-/// `notes/sa-parallel-decode-deadlock.md`, which makes the SA cells unrunnable
-/// with the decoder engaged. The provisional values come from the `1 + C/P`
-/// relation under a 4x consumer-cost prior; they are placeholders, and the
-/// tests below assert only their *ordering*, which follows from the mechanism,
-/// not their magnitudes, which do not.
+/// Only the first is measured so far. The other three were blocked on a pool
+/// deadlock (`notes/pool-lost-wakeup-deadlock.md`, resolved in rapidgzip-core
+/// 0.3.1) and can now be taken the same way: run each cell with `--decoder
+/// parallel` and read the `thread broker cost model` log line. The provisional
+/// values come from the `1 + C/P` relation under a 4x consumer-cost prior;
+/// they are placeholders, and the tests below assert only their *ordering*,
+/// which follows from the mechanism, not their magnitudes, which do not.
 pub const THRESHOLDS: Thresholds = Thresholds {
     sketch: 10,
     sketch_deterministic: 8,

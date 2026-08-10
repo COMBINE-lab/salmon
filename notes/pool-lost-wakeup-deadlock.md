@@ -1,7 +1,16 @@
 # Deadlock: broker-driven resizing + paired parallel decode
 
-**Status: open. Blocks enabling the parallel decoder by default in *either*
-mapping mode.** Found while measuring the engagement threshold.
+**Status: RESOLVED — rapidgzip-core 0.3.1 / piscem-rs 0.9.1.** Root cause was a
+lost wakeup in rapidgzip's `DecoderPool::release`, which notified waiters
+without holding the scheduler lock; the final release could land between a
+waiter's admission check and its park, leaving free permits, parked decoders,
+and no future notify. Fixed upstream (rapidgzip-rust `e513d6d`, with a
+regression test that deadlocks the unfixed pool in under two seconds), and
+verified here: all six previously-hanging configurations (SA -p 48/56/64 x2,
+sketch -p 64/128) complete in 37–62 s with mapped counts identical to their
+serial-decoder runs. Neither paraseq nor salmon needed changes; the paired
+R1/R2 locking merely raised the slow-path traffic that made the window
+reachable. The history below is kept as found.
 
 > **Correction.** This was first written up as selective-alignment-specific,
 > because sketch completed in 36 s with identical decoder settings. It is not.
@@ -119,9 +128,9 @@ Still open:
   split itself is discontinuous there — consistent with a race whose window
   simply widens with thread count rather than a threshold effect.
 
-**Do not enable the parallel decoder by default in any mode until this is
-resolved.** Pinning slots (`--decoder parallel=N`) is a working escape hatch
-today precisely because it disables the broker, which is the feature.
+~~Do not enable the parallel decoder by default in any mode until this is
+resolved.~~ Resolved as above; the default path is safe with
+rapidgzip-core >= 0.3.1.
 
 ## Fastest route to a regression test
 
