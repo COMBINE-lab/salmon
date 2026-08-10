@@ -720,6 +720,30 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     );
                 }
             }
+            // The windowed model above is the broker's live estimate, and on a
+            // run that never settles (a solved target clamped at the producer
+            // floor, for instance) it is not populated at all. The integrated
+            // ratio has neither problem: cumulative producer busy time over
+            // cumulative total busy time, whole run, no windowing. It is also
+            // the same busy-time definition the control law solves with, so
+            // this -- not a CPU-seconds ratio, which counts coordinator
+            // overhead the broker deliberately excludes -- is the number an
+            // engagement threshold should be derived from.
+            if let Some(pm) = &report.producer_measurement {
+                let p = pm.busy_nanos as f64;
+                let c = plan.busy.nanos() as f64;
+                if p > 0.0 && c > 0.0 {
+                    let share = p / (p + c);
+                    tracing::info!(
+                        producer_busy_s = p / 1e9,
+                        consumer_busy_s = c / 1e9,
+                        integrated_producer_cost_share = share,
+                        implied_min_threads_per_stream = (1.0 / share).ceil() as usize,
+                        mode = if opts.sketch { "sketch" } else { "selective-alignment" },
+                        "thread broker integrated cost ratio"
+                    );
+                }
+            }
         }
         mapped.map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
         if let Some(err) = &diagnostics.failure {

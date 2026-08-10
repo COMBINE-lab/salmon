@@ -75,37 +75,39 @@ pub struct Thresholds {
 }
 
 /// Measured on 26.1 M paired human RNA-seq fragments against a 238 k-transcript
-/// index at `-p 64`, by reading the broker's own solved `producer_cost_share`
-/// (the threshold is `1/share`) rather than inferring it from a wall-time
-/// crossover.
+/// index. Two kinds of evidence, which is one more than any of these numbers
+/// had before:
 ///
-/// | cell | share | threshold |
-/// |---|---|---|
-/// | sketch | 0.094–0.100 across three runs | **10** |
-/// | sketch + `--deterministic` | 0.110 ± 0.012, twice | **9** |
-/// | selective alignment | ~0.02 (one windowed estimate) | **50** |
-/// | selective alignment + `--deterministic` | ~0.01, indistinguishable from SA | **50** |
+/// **Cost shares** (broker's solved `producer_cost_share`; threshold ≈ `1/share`)
+/// give the scale, and **ground-truth wall clocks** (serial vs parallel per
+/// cell) bracket the crossover the threshold exists to predict:
 ///
-/// Reading the numbers honestly:
+/// | cell | threshold | ground truth at `-p 64` | at `-p 128` |
+/// |---|---|---|---|
+/// | sketch | **10** | tie | parallel wins 11 % |
+/// | sketch + det | **9** | tie | — |
+/// | selective alignment | **50** | serial wins 12 % | parallel wins 7 % |
+/// | SA + det | **50** | tie | — |
 ///
-/// * The sketch pair confirms the `--deterministic` prediction: a lighter
-///   consumer raises the producer's share and lowers the threshold. Thresholds
-///   round *down* from `1/share`, because the measured cost asymmetry runs the
-///   other way — failing to engage the parallel decoder cost up to 4.2× in
-///   piscem's grid, engaging it needlessly cost 8–28% — so ties break toward
-///   engaging earlier.
-/// * The SA figure is low-precision: one early-window estimate, and a CPU-ratio
-///   cross-check (sketch's ~96 s of decode CPU against SA's 2283 s total)
-///   suggests ~24 rather than 50. The practical content survives the error
-///   bar: with paired input (`F = 2`) even the *low* estimate engages only at
-///   `-p ≥ 48`, so serial decode is right for SA at nearly every real budget,
-///   and the broker corrects the split within a second when it does engage.
-/// * SA's `--deterministic` delta is not resolvable. Alignment scoring
-///   dominates SA's per-fragment cost; `record_discrete` strips bookkeeping
-///   (online inference, eq-classes, bias, prefix detection), which is a large
-///   fraction of *sketch*'s cost and a small one of SA's. The mechanism says
-///   `sa_det ≤ sa`, and the constants say exactly that — equal — rather than
-///   inventing a gap the measurement cannot support.
+/// * **SA's crossover is bracketed**: serial wins at 64, parallel at 128, so
+///   the true threshold is in (32, 64] per stream and 50 makes the correct
+///   decision at both measured budgets. Two triangulated alternatives (24 from
+///   a CPU ratio, 29 from an integrated-busy ratio anchored on sketch) would
+///   have engaged at `-p` 48–58 and taken the measured 12 % regression — the
+///   busy-ratio arithmetic underestimates this threshold because it omits
+///   costs that do not scale with slots, such as the serialized reader fill.
+///   Trust the bracket over the arithmetic.
+/// * **`--deterministic` was resolved by the integrated busy totals** (`P` is
+///   constant at ~26 s across every cell, so consumer busy is directly
+///   comparable): it removes ~58 % of sketch's per-fragment cost (558 s →
+///   236 s) and ~2 % of SA's (1870 s → 1838 s) — alignment dominates SA, so
+///   its constants stay equal rather than pretending to a gap two wall-clock
+///   ties cannot support.
+/// * Thresholds round down from `1/share` where measurement allows, because
+///   the measured asymmetry favours engaging: in piscem's grid, missing the
+///   parallel decoder cost up to 4.2×, engaging it needlessly 8–28 %. For
+///   sketch that choice is doubly safe: engaging early was a wall-clock *tie*
+///   here, not a cost.
 pub const THRESHOLDS: Thresholds = Thresholds {
     sketch: 10,
     sketch_deterministic: 9,
