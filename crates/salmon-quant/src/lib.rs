@@ -35,6 +35,7 @@
 mod bam;
 pub mod decode;
 pub mod mapping_record;
+pub mod splice;
 mod output;
 mod processor;
 mod sam;
