@@ -298,10 +298,16 @@ fn model_for(
     chromosome: usize,
 ) -> TranscriptModel {
     let forward = transcript.strand != '-';
+    // bramble stores a GTF exon as `[start_1, end_1 + 1)`: the length is right,
+    // but the interval is still anchored at the 1-based start, so every
+    // coordinate is one too high. Subtract the one here, once, rather than
+    // letting a systematic off-by-one into every projected position. Exon
+    // lengths are unaffected, which is why the introns between them come out
+    // correct either way and only the reported positions gave it away.
     let mut exons: Vec<(u32, u32)> = transcript
         .exons
         .iter()
-        .map(|e| (e.start, e.end.saturating_sub(e.start)))
+        .map(|e| (e.start.saturating_sub(1), e.end.saturating_sub(e.start)))
         .filter(|(_, len)| *len > 0)
         .collect();
     exons.sort_unstable();
@@ -590,6 +596,41 @@ mod tests {
         let mut ops = Vec::new();
         assert!(!projector.describes(0));
         assert_eq!(projector.project(0, 0, &matched(10), &mut ops), None);
+    }
+
+    /// bramble hands back GTF exons anchored at the 1-based start, so the
+    /// conversion to genomic coordinates has to subtract the one. Getting this
+    /// wrong shifts every projected record by a base while leaving intron
+    /// lengths correct, which is exactly the kind of error that survives a
+    /// casual look at the output.
+    #[test]
+    fn gtf_exons_become_zero_based_genomic_blocks() {
+        let transcript = bramble_rs::annotation::Transcript {
+            id: "t".into(),
+            seqname: "chr1".into(),
+            strand: '+',
+            exons: vec![
+                // GTF `101 300` and `801 1000`, as bramble reports them.
+                bramble_rs::annotation::Exon {
+                    start: 101,
+                    end: 301,
+                },
+                bramble_rs::annotation::Exon {
+                    start: 801,
+                    end: 1001,
+                },
+            ],
+        };
+        let model = model_for(&transcript, 0);
+        assert_eq!(model.exons[0].genome_start, 100);
+        assert_eq!(model.exons[0].len, 200);
+        assert_eq!(model.exons[1].genome_start, 800);
+        assert_eq!(model.exons[1].len, 200);
+        // Transcript coordinate 0 is the exon's first genomic base, and the base
+        // after the first exon is the second exon's first base.
+        assert_eq!(model.genome_position(0), 100);
+        assert_eq!(model.genome_position(199), 299);
+        assert_eq!(model.genome_position(200), 800);
     }
 
     /// A `.fai` is the cheap path to chromosome lengths, and only its first two
