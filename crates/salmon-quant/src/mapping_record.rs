@@ -282,6 +282,9 @@ pub struct EmitScratch {
     spoofed: [Vec<CigarOp>; 2],
     /// Genome-coordinate CIGARs, when the run projects records onto the genome.
     projected: [Vec<CigarOp>; 2],
+    /// `MD` re-expressed in genome orientation, for placements the projection
+    /// turned around.
+    projected_md: [String; 2],
 }
 
 /// The header text shared by both mapping-output formats: `@HD`, one `@SQ` per
@@ -582,6 +585,7 @@ fn project_placement(
         realized,
         spoofed,
         projected,
+        projected_md,
         ..
     } = scratch;
     let source: &[CigarOp] = if placed.realized {
@@ -592,6 +596,16 @@ fn project_placement(
     match projector.project(tid, placed.position, source, &mut projected[placed.slot]) {
         Some(projection) => {
             placed.position = projection.position;
+            // A flipped alignment reads the other way along the reference, so its
+            // MD has to be turned around with it or it describes bases that are
+            // no longer the ones under the CIGAR.
+            if projection.flipped && placed.realized {
+                let (md, out) = (
+                    realized[placed.slot].md.as_str(),
+                    &mut projected_md[placed.slot],
+                );
+                crate::splice::reverse_complement_md(md, out);
+            }
             placed.projection = Some(projection);
             true
         }
@@ -640,12 +654,17 @@ fn projected_template_length(
 
 /// The CIGAR and `MD` a [`Placed`] refers to, borrowed out of the scratch.
 fn borrow_cigar<'s>(scratch: &'s EmitScratch, placed: &Placed) -> (&'s [CigarOp], Option<&'s str>) {
-    if placed.projection.is_some() {
-        // MD and NM describe the read against the transcript's bases, which are
-        // the genome's bases inside an exon, so projection leaves both valid.
-        let md = placed
-            .realized
-            .then(|| scratch.realized[placed.slot].md.as_str());
+    if let Some(projection) = placed.projection {
+        // NM survives projection untouched: it counts edits, and an intron is not
+        // one. MD survives only while the orientation does, so a flipped
+        // alignment reads its rewritten copy.
+        let md = placed.realized.then(|| {
+            if projection.flipped {
+                scratch.projected_md[placed.slot].as_str()
+            } else {
+                scratch.realized[placed.slot].md.as_str()
+            }
+        });
         return (&scratch.projected[placed.slot], md);
     }
     if placed.realized {

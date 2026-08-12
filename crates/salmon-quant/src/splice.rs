@@ -279,6 +279,63 @@ impl GenomeProjector {
     }
 }
 
+/// Rewrite an `MD` string for an alignment that has been turned around.
+///
+/// `MD` describes the reference bases along the alignment, so when a reverse
+/// strand transcript's alignment is flipped into genome order the string has to
+/// be flipped with it: the tokens reverse, and every base in them is
+/// complemented. Leaving it alone produces an `MD` that disagrees with the very
+/// `SEQ` and CIGAR it sits beside, which is a mistake no reader can catch and
+/// `samtools calmd` catches immediately.
+///
+/// A deletion's bases reverse within the deletion as well, since they too are
+/// read along the reference.
+pub fn reverse_complement_md(md: &str, out: &mut String) {
+    out.clear();
+    // Split into tokens: match run lengths, single mismatched bases, and
+    // `^`-prefixed deleted stretches.
+    let mut tokens: Vec<String> = Vec::new();
+    let mut digits = String::new();
+    let mut chars = md.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            continue;
+        }
+        if !digits.is_empty() {
+            tokens.push(std::mem::take(&mut digits));
+        }
+        if c == '^' {
+            let mut deleted = String::from("^");
+            while chars.peek().is_some_and(|n| n.is_ascii_alphabetic()) {
+                deleted.push(complement(chars.next().unwrap() as u8) as char);
+            }
+            // The deleted bases were pushed in transcript order; reverse them.
+            let reversed: String = deleted[1..].chars().rev().collect();
+            tokens.push(format!("^{reversed}"));
+        } else {
+            tokens.push((complement(c as u8) as char).to_string());
+        }
+    }
+    if !digits.is_empty() {
+        tokens.push(digits);
+    }
+    for token in tokens.iter().rev() {
+        out.push_str(token);
+    }
+}
+
+/// Complement one base, for [`reverse_complement_md`].
+fn complement(base: u8) -> u8 {
+    match base {
+        b'A' | b'a' => b'T',
+        b'C' | b'c' => b'G',
+        b'G' | b'g' => b'C',
+        b'T' | b't' => b'A',
+        other => other,
+    }
+}
+
 /// The genomic gap between two consecutive exons, whichever way the transcript
 /// runs.
 fn intron_length(model: &TranscriptModel, exon: &ExonBlock, next: &ExonBlock) -> u32 {
@@ -631,6 +688,30 @@ mod tests {
         assert_eq!(model.genome_position(0), 100);
         assert_eq!(model.genome_position(199), 299);
         assert_eq!(model.genome_position(200), 800);
+    }
+
+    /// The reverse-strand `MD` bug that a mismatch-free fixture cannot show: with
+    /// no mismatches the string is just a run length, which is unchanged by
+    /// reversing it. Only a mismatch reveals that the whole string has to be
+    /// reverse-complemented alongside the CIGAR and the sequence.
+    #[test]
+    fn md_is_reverse_complemented_with_the_alignment() {
+        let mut out = String::new();
+        for (forward, reversed) in [
+            ("71T28", "28A71"),
+            ("50", "50"),
+            ("0C1T0", "0A1G0"),
+            ("10^ACGT5", "5^ACGT10"),
+            ("3A2^GG4C1", "1G4^CC2T3"),
+        ] {
+            reverse_complement_md(forward, &mut out);
+            assert_eq!(out, reversed, "reversing {forward}");
+            // Reversing twice returns the original, which is what makes it a
+            // faithful change of orientation rather than a rewrite.
+            let once = out.clone();
+            reverse_complement_md(&once, &mut out);
+            assert_eq!(out, forward, "round-tripping {forward}");
+        }
     }
 
     /// A `.fai` is the cheap path to chromosome lengths, and only its first two

@@ -263,6 +263,16 @@ fn ungapped_is_optimal(mismatches: i32, cfg: &AlignConfig) -> bool {
 /// rate usually leaves at least one of the two probes clean.
 const PROBE: usize = 20;
 
+/// How many probe hits are worth looking at.
+///
+/// A probe is useful because it is rare: one hit names the read's start. A probe
+/// that matches dozens of places inside a few hundred bases is sitting in a
+/// tandem repeat or a low-complexity stretch, where it says nothing about which
+/// of those places the read came from. Past this many hits the extra ones carry
+/// no information, and collecting them turns a linear scan into a quadratic one
+/// on exactly the sequence that produces the most of them.
+const MAX_CANDIDATES: usize = 32;
+
 /// Candidate starts for `query` near `approx_pos`, found by locating an exact
 /// probe from the read inside the surrounding window.
 ///
@@ -290,6 +300,9 @@ fn probe_candidates(query: &[u8], ref_seq: &[u8], approx_pos: i32, reach: i32, o
             continue;
         };
         for (index, candidate) in window.windows(PROBE).enumerate() {
+            if out.len() >= MAX_CANDIDATES {
+                return;
+            }
             if candidate == probe {
                 let start = low as i32 + index as i32 - offset as i32;
                 if start >= 0 && !out.contains(&start) {
@@ -1073,6 +1086,30 @@ mod tests {
         assert_eq!(cigar_string(&out), "100M");
         assert_eq!(out.ref_start, 200);
         assert_eq!(out.edit_distance, 0);
+    }
+
+    /// A probe sitting in a tandem repeat matches everywhere, and collecting every
+    /// hit is both useless and quadratic. Low-complexity stretches are ordinary
+    /// in real transcripts, so the bound has to hold rather than be argued away.
+    #[test]
+    fn a_repeat_does_not_produce_unbounded_candidates() {
+        let mut reference = vec![b'A'; 200];
+        reference.extend(std::iter::repeat_n(*b"AC", 200).flatten());
+        reference.extend(nonrepeating(200));
+        let read: Vec<u8> = std::iter::repeat_n(*b"AC", 50).flatten().collect();
+        let mut candidates = Vec::new();
+        probe_candidates(
+            &read,
+            &reference,
+            250,
+            read.len() as i32 + 32,
+            &mut candidates,
+        );
+        assert!(
+            candidates.len() <= MAX_CANDIDATES,
+            "a repeat produced {} candidates",
+            candidates.len()
+        );
     }
 
     /// When no anchor produces an alignment the mapper would have accepted, the
