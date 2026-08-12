@@ -27,6 +27,16 @@
 //! reverse-complemented once more). [`Projection::flipped`] reports that flip so
 //! the record writer can apply it to `SEQ`, `QUAL` and the `FLAG` bits together.
 //!
+//! # A known rough edge
+//!
+//! `MD` is derived while the alignment is still in transcript coordinates, and
+//! carried through projection. That is sound for every operation except a
+//! deletion the projection has to cut in two, where the canonical spelling gains
+//! an empty match between the halves: `^G0^G` rather than `^GG`. Both reconstruct
+//! the same reference bases and both carry the same `NM`, so the difference is
+//! one of form, but `samtools calmd` writes the canonical one. It shows up on
+//! about three records in a million.
+//!
 //! # What is deliberately not done here
 //!
 //! Two transcripts of the same gene often imply the *same* genomic alignment for
@@ -230,6 +240,7 @@ impl GenomeProjector {
         // at exon boundaries and filling the gap between consecutive exons with an
         // N. Operations that do not consume the reference pass straight through.
         let mut position = start;
+        let mut exon_index = model.exon_at(start);
         for op in ops {
             if !op.kind.consumes_reference() {
                 push_op(out, op.kind, op.len);
@@ -237,7 +248,19 @@ impl GenomeProjector {
             }
             let mut remaining = op.len;
             while remaining > 0 {
-                let exon_index = model.exon_at(position);
+                // A junction can fall between two operations just as easily as
+                // inside one: an operation ending exactly on an exon boundary
+                // leaves the next one starting in the following exon. Checking
+                // only mid-operation let those alignments cross an intron with no
+                // `N` at all, so the bases after the boundary silently claimed
+                // the wrong reference.
+                let current = model.exon_at(position);
+                while exon_index < current {
+                    let exon = &model.exons[exon_index];
+                    let next = model.exons.get(exon_index + 1)?;
+                    push_op(out, CigarOpKind::Skip, intron_length(model, exon, next));
+                    exon_index += 1;
+                }
                 let exon = &model.exons[exon_index];
                 let exon_end = exon.transcript_start + exon.len;
                 if position >= exon_end {
@@ -249,11 +272,6 @@ impl GenomeProjector {
                 push_op(out, op.kind, take);
                 position += take;
                 remaining -= take;
-                // Crossing into the next exon is where the intron appears.
-                if position == exon_end && remaining > 0 {
-                    let next = model.exons.get(exon_index + 1)?;
-                    push_op(out, CigarOpKind::Skip, intron_length(model, exon, next));
-                }
             }
         }
         if out.is_empty() {
@@ -558,6 +576,28 @@ mod tests {
         let projection = projector.project(0, 40, &matched(70), &mut ops).unwrap();
         assert_eq!(cigar(&ops), "10M150N50M150N10M");
         assert_eq!(projection.position, 140);
+    }
+
+    /// A junction falling exactly between two operations is still a junction. A
+    /// deletion ending on an exon boundary used to leave the following match
+    /// crossing the intron with no `N`, so it claimed reference bases from the
+    /// wrong side of it.
+    #[test]
+    fn a_junction_between_two_operations_still_gets_a_skip() {
+        let projector = projector(forward_model());
+        let mut ops = Vec::new();
+        // Exon 1 is transcript 0..50. Align 47 bases, delete 3 (ending exactly on
+        // the boundary), then match 10 more, which belong in the next exon.
+        let transcript_cigar = vec![
+            CigarOp::new(CigarOpKind::Match, 47),
+            CigarOp::new(CigarOpKind::Deletion, 3),
+            CigarOp::new(CigarOpKind::Match, 10),
+        ];
+        let projection = projector
+            .project(0, 0, &transcript_cigar, &mut ops)
+            .unwrap();
+        assert_eq!(cigar(&ops), "47M3D150N10M");
+        assert_eq!(projection.position, 100);
     }
 
     /// Soft clips and insertions do not consume the reference, so they must pass
