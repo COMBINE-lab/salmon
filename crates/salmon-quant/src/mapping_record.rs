@@ -188,6 +188,9 @@ pub struct RecordOptions<'a> {
     /// When set, placements are re-aligned to produce a real CIGAR plus `NM` and
     /// `MD`. `None` keeps the spoofed `<readLen>M` CIGAR and omits both tags.
     pub align_config: Option<&'a AlignConfig>,
+    /// When set, records are reported in genome coordinates with `N` operations
+    /// at exon junctions, and `@SQ` names chromosomes instead of transcripts.
+    pub projector: Option<&'a crate::splice::GenomeProjector>,
     /// `@SQ UR:`, where the reference sequences came from, so a reader can find
     /// them again.
     pub reference_uri: Option<&'a str>,
@@ -201,14 +204,23 @@ impl RecordOptions<'_> {
     /// The reference name for `reference_id`, from whichever table this run's
     /// records index into.
     pub fn reference_name<'s>(&'s self, salmon: &'s SalmonIndex, id: usize) -> &'s str {
-        salmon.ref_name(id)
+        match self.projector {
+            Some(projector) => projector
+                .chromosomes()
+                .get(id)
+                .map_or("*", |(name, _)| name.as_str()),
+            None => salmon.ref_name(id),
+        }
     }
 
     /// The `(name, length)` reference table to declare in the header.
     pub fn reference_table(&self, salmon: &SalmonIndex) -> Vec<(String, u64)> {
-        (0..salmon.num_refs())
-            .map(|tid| (salmon.ref_name(tid).to_string(), salmon.ref_len(tid)))
-            .collect()
+        match self.projector {
+            Some(projector) => projector.chromosomes().to_vec(),
+            None => (0..salmon.num_refs())
+                .map(|tid| (salmon.ref_name(tid).to_string(), salmon.ref_len(tid)))
+                .collect(),
+        }
     }
 }
 
@@ -268,6 +280,8 @@ pub struct EmitScratch {
     realized: [RealizedAlignment; 2],
     /// Spoofed CIGARs, used when realization is off or fails.
     spoofed: [Vec<CigarOp>; 2],
+    /// Genome-coordinate CIGARs, when the run projects records onto the genome.
+    projected: [Vec<CigarOp>; 2],
 }
 
 /// The header text shared by both mapping-output formats: `@HD`, one `@SQ` per
@@ -293,7 +307,11 @@ pub fn header_text(salmon: &SalmonIndex, command: &str, options: &RecordOptions<
     // enough to be noticeable at the start of a short run, and it is one
     // independent hash per reference. Run them in parallel so the header costs
     // wall-clock proportional to the largest transcript rather than to the sum.
-    let checksums: Vec<String> = {
+    // M5 needs the bases, which are only to hand for the transcriptome the index
+    // was built from. When records are projected onto the genome the references
+    // are chromosomes salmon never loaded, so the checksum is omitted rather
+    // than guessed at.
+    let checksums: Vec<String> = if options.projector.is_none() {
         use rayon::prelude::*;
         (0..references.len())
             .into_par_iter()
@@ -306,6 +324,8 @@ pub fn header_text(salmon: &SalmonIndex, command: &str, options: &RecordOptions<
                 }
             })
             .collect()
+    } else {
+        Vec::new()
     };
     for (index, (name, length)) in references.into_iter().enumerate() {
         let _ = write!(text, "@SQ\tSN:{name}\tLN:{length}");
@@ -477,6 +497,9 @@ struct Placed {
     slot: usize,
     /// Whether that CIGAR is in `realized` (`true`) or `spoofed` (`false`).
     realized: bool,
+    /// Set once the placement has been projected onto the genome, after which
+    /// its CIGAR lives in `projected` and its position is genomic.
+    projection: Option<crate::splice::Projection>,
 }
 
 /// Derive one mate's CIGAR and start position, realizing the alignment when the
@@ -521,6 +544,7 @@ fn place(
                     score: Some(realized[slot].score),
                     slot,
                     realized: true,
+                    projection: None,
                 };
             }
         }
@@ -537,11 +561,93 @@ fn place(
         score: None,
         slot,
         realized: false,
+        projection: None,
+    }
+}
+
+/// Re-express one placement in genome coordinates, cutting its CIGAR at exon
+/// boundaries and inserting the introns.
+///
+/// Returns `false` when the placement has no genomic form, which happens for a
+/// decoy or a transcript the annotation does not describe. The caller then drops
+/// the whole placement: half a projected pair is worse than none, because the
+/// surviving record would claim a mate that is not in the file.
+fn project_placement(
+    scratch: &mut EmitScratch,
+    placed: &mut Placed,
+    projector: &crate::splice::GenomeProjector,
+    tid: usize,
+) -> bool {
+    let EmitScratch {
+        realized,
+        spoofed,
+        projected,
+        ..
+    } = scratch;
+    let source: &[CigarOp] = if placed.realized {
+        &realized[placed.slot].ops
+    } else {
+        &spoofed[placed.slot]
+    };
+    match projector.project(tid, placed.position, source, &mut projected[placed.slot]) {
+        Some(projection) => {
+            placed.position = projection.position;
+            placed.projection = Some(projection);
+            true
+        }
+        None => false,
+    }
+}
+
+/// The reference a placement points at: a chromosome once projected, the
+/// transcript otherwise.
+fn placed_reference(placed: &Placed, tid: usize) -> usize {
+    placed.projection.map_or(tid, |p| p.chromosome)
+}
+
+/// Swap a record's own strand bit with its mate's when the projection turned the
+/// alignment around, so the pair stays mutually consistent.
+fn flip_strand_bits(flags: u16) -> u16 {
+    let mut flipped = flags & !(IS_RC | MATE_RC);
+    if flags & IS_RC == 0 {
+        flipped |= IS_RC;
+    }
+    if flags & MATE_RC == 0 {
+        flipped |= MATE_RC;
+    }
+    flipped
+}
+
+/// The signed `TLEN` for a projected pair: the genomic span the two mates cover
+/// together, positive on the leftmost mate.
+fn projected_template_length(
+    scratch: &EmitScratch,
+    first: &Placed,
+    second: &Placed,
+) -> (i32, i32) {
+    let span = |placed: &Placed| {
+        salmon_map::realize::reference_span(&scratch.projected[placed.slot])
+    };
+    let start = first.position.min(second.position);
+    let end = (first.position + span(first)).max(second.position + span(second));
+    let length = end - start;
+    if first.position <= second.position {
+        (length, -length)
+    } else {
+        (-length, length)
     }
 }
 
 /// The CIGAR and `MD` a [`Placed`] refers to, borrowed out of the scratch.
 fn borrow_cigar<'s>(scratch: &'s EmitScratch, placed: &Placed) -> (&'s [CigarOp], Option<&'s str>) {
+    if placed.projection.is_some() {
+        // MD and NM describe the read against the transcript's bases, which are
+        // the genome's bases inside an exon, so projection leaves both valid.
+        let md = placed
+            .realized
+            .then(|| scratch.realized[placed.slot].md.as_str());
+        return (&scratch.projected[placed.slot], md);
+    }
     if placed.realized {
         let realized = &scratch.realized[placed.slot];
         (&realized.ops, Some(realized.md.as_str()))
@@ -616,7 +722,7 @@ pub fn emit_fragment_records(
                     mapping.r1_pos,
                     txp_len,
                 );
-                let p2 = place(
+                let mut p2 = place(
                     scratch,
                     1,
                     options,
@@ -627,6 +733,14 @@ pub fn emit_fragment_records(
                     mapping.r2_pos,
                     txp_len,
                 );
+                let mut p1 = p1;
+                if let Some(projector) = options.projector {
+                    if !project_placement(scratch, &mut p1, projector, tid)
+                        || !project_placement(scratch, &mut p2, projector, tid)
+                    {
+                        continue;
+                    }
+                }
                 // TLEN is the observed template (fragment) length, truncated at
                 // the transcript end for the same reason positions are clamped.
                 let mut fragment_length = mapping.fragment_len;
@@ -653,21 +767,40 @@ pub fn emit_fragment_records(
                     f2 |= IS_RC;
                     f1 |= MATE_RC;
                 }
+                // A projected reverse-strand transcript turns the alignment
+                // around, so both records' strand bits swap and their stored
+                // bases are reverse-complemented once more. TLEN is recomputed
+                // over the genomic span, which introns make longer than the
+                // transcript one.
+                let flipped = p1.projection.is_some_and(|p| p.flipped);
+                let (mut f1, mut f2) = (f1, f2);
+                let (mut tlen1, mut tlen2) = (tlen1, -tlen1);
+                let (mut rc1, mut rc2) = (!mapping.is_fw, !mapping.r2_fw);
+                if flipped {
+                    f1 = flip_strand_bits(f1);
+                    f2 = flip_strand_bits(f2);
+                    rc1 = !rc1;
+                    rc2 = !rc2;
+                }
+                if p1.projection.is_some() {
+                    (tlen1, tlen2) = projected_template_length(scratch, &p1, &p2);
+                }
+                let reference = placed_reference(&p1, tid);
                 let (cigar1, md1) = borrow_cigar(scratch, &p1);
                 let (cigar2, md2) = borrow_cigar(scratch, &p2);
                 emit(&AlignmentRecord {
                     name: name1,
                     flags: f1,
-                    reference_id: Some(tid),
+                    reference_id: Some(reference),
                     position: p1.position,
                     mapping_quality: mapq,
                     cigar: cigar1,
-                    mate_reference_id: Some(tid),
+                    mate_reference_id: Some(reference),
                     mate_position: Some(p2.position),
                     template_length: tlen1,
                     sequence: r1_seq,
                     qualities: r1_qual,
-                    reverse_complement: !mapping.is_fw,
+                    reverse_complement: rc1,
                     nh,
                     hi,
                     xt,
@@ -682,16 +815,16 @@ pub fn emit_fragment_records(
                 emit(&AlignmentRecord {
                     name: name2,
                     flags: f2,
-                    reference_id: Some(tid),
+                    reference_id: Some(reference),
                     position: p2.position,
                     mapping_quality: mapq,
                     cigar: cigar2,
-                    mate_reference_id: Some(tid),
+                    mate_reference_id: Some(reference),
                     mate_position: Some(p1.position),
-                    template_length: -tlen1,
+                    template_length: tlen2,
                     sequence: r2_seq,
                     qualities: r2_qual,
-                    reverse_complement: !mapping.r2_fw,
+                    reverse_complement: rc2,
                     nh,
                     hi,
                     xt,
@@ -705,7 +838,7 @@ pub fn emit_fragment_records(
                 })?;
             }
             MateStatus::SingleEnd => {
-                let p = place(
+                let mut p = place(
                     scratch,
                     0,
                     options,
@@ -716,11 +849,19 @@ pub fn emit_fragment_records(
                     mapping.r1_pos,
                     txp_len,
                 );
+                if let Some(projector) = options.projector {
+                    if !project_placement(scratch, &mut p, projector, tid) {
+                        continue;
+                    }
+                }
+                let flipped = p.projection.is_some_and(|p| p.flipped);
+                let forward = mapping.is_fw != flipped;
+                let reference = placed_reference(&p, tid);
                 let (cigar, md) = borrow_cigar(scratch, &p);
                 emit(&AlignmentRecord {
                     name: name1,
-                    flags: secondary | if mapping.is_fw { 0 } else { IS_RC },
-                    reference_id: Some(tid),
+                    flags: secondary | if forward { 0 } else { IS_RC },
+                    reference_id: Some(reference),
                     position: p.position,
                     mapping_quality: mapq,
                     cigar,
@@ -729,7 +870,7 @@ pub fn emit_fragment_records(
                     template_length: 0,
                     sequence: r1_seq,
                     qualities: r1_qual,
-                    reverse_complement: !mapping.is_fw,
+                    reverse_complement: !forward,
                     nh,
                     hi,
                     xt,
@@ -768,10 +909,16 @@ pub fn emit_fragment_records(
                         READ2,
                     )
                 };
-                let p = place(
+                let mut p = place(
                     scratch, 0, options, salmon, tid, sequence, forward, position, txp_len,
                 );
-                let reference = tid;
+                if let Some(projector) = options.projector {
+                    if !project_placement(scratch, &mut p, projector, tid) {
+                        continue;
+                    }
+                }
+                let forward = forward != p.projection.is_some_and(|p| p.flipped);
+                let reference = placed_reference(&p, tid);
                 if index == 0 {
                     orphan_mate = Some((reference, p.position, !forward));
                 }
@@ -783,7 +930,7 @@ pub fn emit_fragment_records(
                         | read_flag
                         | secondary
                         | if forward { 0 } else { IS_RC },
-                    reference_id: Some(tid),
+                    reference_id: Some(reference),
                     position: p.position,
                     mapping_quality: mapq,
                     cigar,

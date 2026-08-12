@@ -921,6 +921,12 @@ struct QuantArgs {
     /// carries them, with or without this flag.
     #[arg(long = "writeQualities")]
     write_qualities: bool,
+    /// Report mapping output in genome coordinates instead of transcript ones,
+    /// with N operations at exon junctions the way a spliced genome aligner
+    /// writes them. Needs --annotation for the exon structures and --genome for
+    /// the chromosome lengths the header must declare.
+    #[arg(long = "spliced")]
+    spliced: bool,
     /// Read group to declare in the mapping output's header, as tab-separated
     /// KEY:value fields with a mandatory ID (for example
     /// `ID:sample1\tSM:sample1\tPL:ILLUMINA`). A literal \t is accepted in place
@@ -2716,6 +2722,25 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
          For single-end reads use -r."
     );
 
+    // --spliced rewrites the whole reference table, so its inputs are checked
+    // before mapping starts rather than when the first record is written.
+    if args.spliced {
+        anyhow::ensure!(
+            args.write_mappings.is_some() || args.write_bam.is_some(),
+            "--spliced has no effect without --writeMappings/--writeSam or --writeBam: it changes \
+             how mapping output is written, and there is none"
+        );
+        anyhow::ensure!(
+            args.annotation.is_some(),
+            "--spliced needs --annotation: exon junctions come from the annotation, and a \
+             transcriptome index does not record them"
+        );
+        anyhow::ensure!(
+            args.genome.is_some(),
+            "--spliced needs --genome: the header has to declare each chromosome's length, which \
+             an annotation does not state"
+        );
+    }
     // Parse the read group up front: a malformed --rgLine should fail before any
     // mapping work, not after it, and the header is written the moment the
     // output file is opened.
@@ -2884,6 +2909,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.dump_eq_weights = args.dump_eq_weights;
     opts.write_unmapped_names = args.write_unmapped_names;
     opts.write_unaligned = args.sample_unaligned;
+    opts.spliced_output = args.spliced;
+    opts.annotation = args.annotation.clone();
+    opts.genome_fasta = args.genome.clone();
     opts.read_group = read_group;
     opts.write_mappings = args.write_mappings;
     opts.write_bam = args.write_bam;

@@ -108,7 +108,12 @@ fn write_qualities(buf: &mut String, record: &AlignmentRecord<'_>) {
 
 /// Serialize one record as a SAM line: the eleven mandatory tab-separated fields
 /// followed by salmon's optional tags.
-fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord<'_>) {
+fn write_record(
+    buf: &mut String,
+    salmon: &SalmonIndex,
+    options: &RecordOptions<'_>,
+    record: &AlignmentRecord<'_>,
+) {
     let name = String::from_utf8_lossy(record.name);
     // QNAME, FLAG, RNAME, POS, MAPQ. SAM positions are 1-based, ours are 0-based,
     // and an unmapped record has neither a reference nor a position.
@@ -118,7 +123,7 @@ fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord
             let _ = write!(
                 buf,
                 "{}\t{}\t{}",
-                salmon.ref_name(tid),
+                options.reference_name(salmon, tid),
                 record.position + 1,
                 record.mapping_quality
             );
@@ -141,7 +146,7 @@ fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord
         let mate_reference = if Some(mate_id) == record.reference_id {
             "="
         } else {
-            salmon.ref_name(mate_id)
+            options.reference_name(salmon, mate_id)
         };
         let _ = write!(
             buf,
@@ -221,7 +226,7 @@ pub fn write_fragment(
         options,
         scratch,
         |record| {
-            write_record(buf, salmon, record);
+            write_record(buf, salmon, options, record);
             Ok(())
         },
     )
@@ -239,7 +244,7 @@ pub fn write_unmapped_fragment(
     options: &RecordOptions<'_>,
 ) {
     mapping_record::emit_unmapped_fragment(r1_id, r1_seq, r1_qual, r2, options, |record| {
-        write_record(buf, salmon, record);
+        write_record(buf, salmon, options, record);
         Ok(())
     })
     .expect("writing to String is infallible");

@@ -128,6 +128,14 @@ pub struct QuantOptions {
     /// that did not map, so the mapping output covers the whole library rather
     /// than only the part that mapped.
     pub write_unaligned: bool,
+    /// `--spliced`: report mapping output in genome coordinates, with `N`
+    /// operations at exon junctions, using `--annotation` for the exon
+    /// structures and `--genome` for the chromosome lengths `@SQ` must declare.
+    pub spliced_output: bool,
+    /// GTF/GFF annotation (`--annotation`), required by `spliced_output`.
+    pub annotation: Option<PathBuf>,
+    /// genome FASTA (`--genome`), required by `spliced_output`.
+    pub genome_fasta: Option<PathBuf>,
     /// write per-fragment mappings to this RAD file (`--writeRad`); sketch or
     /// selective-alignment profile is chosen from `sketch`. Quantification still
     /// runs; combine with `skip_quant` to map only.
@@ -249,6 +257,9 @@ impl QuantOptions {
             write_unmapped_names: false,
             read_group: None,
             write_unaligned: false,
+            spliced_output: false,
+            annotation: None,
+            genome_fasta: None,
             write_mappings: None,
             write_bam: None,
             bam_compress_threads: None,
@@ -480,6 +491,23 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // the two cannot disagree. Realizing a base-level CIGAR costs two banded DPs
     // per emitted record, so it is only switched on when records are being
     // written at all.
+    // Genome projection, when asked for. Built before the output file is opened
+    // because it supplies the reference table the header declares.
+    let projector = if opts.spliced_output && (opts.write_mappings.is_some() || opts.write_bam.is_some())
+    {
+        let annotation = opts
+            .annotation
+            .as_deref()
+            .context("--spliced needs --annotation to know where the exons are")?;
+        let genome = opts
+            .genome_fasta
+            .as_deref()
+            .context("--spliced needs --genome for the chromosome lengths @SQ must declare")?;
+        let names: Vec<&str> = (0..num_refs).map(|t| salmon.ref_name(t)).collect();
+        Some(splice::GenomeProjector::build(&names, annotation, genome)?)
+    } else {
+        None
+    };
     // UR is a URI, not a path: samtools writes `file://` + an absolute path, and
     // anything resolving the reference expects the same shape.
     let index_uri = format!(
@@ -492,6 +520,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         read_group: opts.read_group.as_ref(),
         align_config: (opts.write_mappings.is_some() || opts.write_bam.is_some())
             .then_some(&opts.map_config.align),
+        projector: projector.as_ref(),
         // The index directory is the honest answer to "where did these bases
         // come from": it is what the run was pointed at, and what someone
         // reproducing it needs.

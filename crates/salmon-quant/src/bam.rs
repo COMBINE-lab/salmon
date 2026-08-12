@@ -404,16 +404,18 @@ fn encode_header(
     buf.extend_from_slice(b"BAM\x01");
     push_i32(&mut buf, i32::try_from(text.len())?);
     buf.extend_from_slice(text.as_bytes());
-    push_i32(&mut buf, i32::try_from(salmon.num_refs())?);
-    for tid in 0..salmon.num_refs() {
-        let name = salmon.ref_name(tid).as_bytes();
+    // The same reference table the header text declares: transcripts normally,
+    // chromosomes when records are projected onto the genome.
+    let references = options.reference_table(salmon);
+    push_i32(&mut buf, i32::try_from(references.len())?);
+    for (name, length) in &references {
         push_i32(&mut buf, i32::try_from(name.len() + 1)?);
-        buf.extend_from_slice(name);
+        buf.extend_from_slice(name.as_bytes());
         buf.push(0);
         push_i32(
             &mut buf,
-            i32::try_from(salmon.ref_len(tid))
-                .map_err(|_| anyhow::anyhow!("reference {} exceeds BAM length limit", tid))?,
+            i32::try_from(*length)
+                .map_err(|_| anyhow::anyhow!("reference {name} exceeds BAM length limit"))?,
         );
     }
     Ok(buf)
