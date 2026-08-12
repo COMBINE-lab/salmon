@@ -2852,6 +2852,7 @@ name = "salmon-quant"
 version = "2.6.0"
 dependencies = [
  "anyhow",
+ "bramble-rs",
  "crossbeam-channel",
  "flate2",
  "jiff",
