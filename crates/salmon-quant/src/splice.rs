@@ -27,15 +27,15 @@
 //! reverse-complemented once more). [`Projection::flipped`] reports that flip so
 //! the record writer can apply it to `SEQ`, `QUAL` and the `FLAG` bits together.
 //!
-//! # A known rough edge
+//! # `MD` after projection
 //!
-//! `MD` is derived while the alignment is still in transcript coordinates, and
-//! carried through projection. That is sound for every operation except a
-//! deletion the projection has to cut in two, where the canonical spelling gains
-//! an empty match between the halves: `^G0^G` rather than `^GG`. Both reconstruct
-//! the same reference bases and both carry the same `NM`, so the difference is
-//! one of form, but `samtools calmd` writes the canonical one. It shows up on
-//! about three records in a million.
+//! `MD` describes the reference bases along the alignment, so it has to follow
+//! the alignment through projection rather than be carried across it. Two things
+//! change: a reverse-strand transcript's string is reverse-complemented with
+//! everything else, and a deletion the projection cuts in two becomes two
+//! deletions, which `MD` spells with an empty match between them. Both are done
+//! by re-deriving the string from the projected operations, which gets the
+//! grouping right by construction.
 //!
 //! # What is deliberately not done here
 //!
@@ -219,11 +219,13 @@ impl GenomeProjector {
     /// Returns `None` when the reference has no exon structure (a decoy, or a
     /// transcript the annotation does not mention), in which case the caller has
     /// nothing genomic to write for this placement.
+    #[allow(clippy::too_many_arguments)]
     pub fn project(
         &self,
         tid: usize,
         transcript_position: i32,
         ops: &[CigarOp],
+        md: Option<(&str, &mut Vec<MdBase>, &mut String)>,
         out: &mut Vec<CigarOp>,
     ) -> Option<Projection> {
         out.clear();
@@ -286,6 +288,15 @@ impl GenomeProjector {
         } else {
             model.genome_position(last)
         } as i32;
+        // MD is re-derived here, while the operations are still in transcript
+        // order and line up with the transcript's reference bases one for one.
+        if let Some((transcript_md, scratch, md_out)) = md {
+            reproject_md(transcript_md, out, scratch, md_out);
+            if !model.forward {
+                let forward_md = std::mem::take(md_out);
+                reverse_complement_md(&forward_md, md_out);
+            }
+        }
         if !model.forward {
             out.reverse();
         }
@@ -295,6 +306,97 @@ impl GenomeProjector {
             flipped: !model.forward,
         })
     }
+}
+
+/// One reference base, as `MD` describes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MdBase {
+    /// The read agrees with the reference here.
+    Match,
+    /// The read differs; the reference base is carried.
+    Mismatch(u8),
+    /// The reference base is absent from the read.
+    Deleted(u8),
+}
+
+/// Expand an `MD` string into one entry per reference base.
+///
+/// `MD` is written as runs, which is compact but positional: nothing in it says
+/// which CIGAR operation a given base belongs to. Expanding it makes the bases
+/// addressable, so they can be re-emitted against a different operation list.
+fn expand_md(md: &str, out: &mut Vec<MdBase>) {
+    out.clear();
+    let mut digits = 0usize;
+    let mut chars = md.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(digit) = c.to_digit(10) {
+            digits = digits * 10 + digit as usize;
+            continue;
+        }
+        out.extend(std::iter::repeat_n(MdBase::Match, digits));
+        digits = 0;
+        if c == '^' {
+            while chars.peek().is_some_and(|n| n.is_ascii_alphabetic()) {
+                out.push(MdBase::Deleted(chars.next().unwrap() as u8));
+            }
+        } else {
+            out.push(MdBase::Mismatch(c as u8));
+        }
+    }
+    out.extend(std::iter::repeat_n(MdBase::Match, digits));
+}
+
+/// Re-emit `MD` against the projected operations.
+///
+/// The reference bases are unchanged by projection, but their grouping is not: a
+/// deletion the projection cuts in two is two deletions, and `MD` spells those
+/// `^G0^G`, not `^GG`. Deriving the string from the transcript's operations and
+/// carrying it across produced the merged form, which no longer matches the CIGAR
+/// beside it. Walking the projected operations instead gets the grouping right by
+/// construction, and the empty match between the halves falls out of the normal
+/// rule that a run length separates every pair of tokens.
+///
+/// `ops` must be in transcript order, before any reversal for strand.
+fn reproject_md(transcript_md: &str, ops: &[CigarOp], scratch: &mut Vec<MdBase>, out: &mut String) {
+    use std::fmt::Write as _;
+    expand_md(transcript_md, scratch);
+    out.clear();
+    let mut next = 0usize;
+    let mut run = 0u32;
+    for op in ops {
+        match op.kind {
+            CigarOpKind::Match => {
+                for _ in 0..op.len {
+                    match scratch.get(next) {
+                        Some(MdBase::Mismatch(base)) => {
+                            let _ = write!(out, "{run}");
+                            out.push(*base as char);
+                            run = 0;
+                        }
+                        _ => run += 1,
+                    }
+                    next += 1;
+                }
+            }
+            CigarOpKind::Deletion => {
+                let _ = write!(out, "{run}");
+                run = 0;
+                out.push('^');
+                for _ in 0..op.len {
+                    if let Some(MdBase::Deleted(base)) = scratch.get(next) {
+                        out.push(*base as char);
+                    }
+                    next += 1;
+                }
+            }
+            // An intron consumes genome but no transcript, so it takes no
+            // reference bases from the stream. It still ends the current token,
+            // which is what a following deletion needs to start a fresh one.
+            CigarOpKind::Skip => {}
+            CigarOpKind::Insertion | CigarOpKind::SoftClip => {}
+        }
+    }
+    let _ = write!(out, "{run}");
 }
 
 /// Rewrite an `MD` string for an alignment that has been turned around.
@@ -547,7 +649,9 @@ mod tests {
     fn a_read_inside_one_exon_gets_no_skip() {
         let projector = projector(forward_model());
         let mut ops = Vec::new();
-        let projection = projector.project(0, 10, &matched(20), &mut ops).unwrap();
+        let projection = projector
+            .project(0, 10, &matched(20), None, &mut ops)
+            .unwrap();
         assert_eq!(cigar(&ops), "20M");
         assert_eq!(projection.position, 110);
         assert!(!projection.flipped);
@@ -561,7 +665,9 @@ mod tests {
         let projector = projector(forward_model());
         let mut ops = Vec::new();
         // Transcript 30..70 spans the first junction 20 bases in.
-        let projection = projector.project(0, 30, &matched(40), &mut ops).unwrap();
+        let projection = projector
+            .project(0, 30, &matched(40), None, &mut ops)
+            .unwrap();
         // 20 bases to the end of exon 1, an intron of 300 - 150 = 150, then 20 more.
         assert_eq!(cigar(&ops), "20M150N20M");
         assert_eq!(projection.position, 130);
@@ -573,7 +679,9 @@ mod tests {
     fn a_read_over_two_junctions_gains_two_skips() {
         let projector = projector(forward_model());
         let mut ops = Vec::new();
-        let projection = projector.project(0, 40, &matched(70), &mut ops).unwrap();
+        let projection = projector
+            .project(0, 40, &matched(70), None, &mut ops)
+            .unwrap();
         assert_eq!(cigar(&ops), "10M150N50M150N10M");
         assert_eq!(projection.position, 140);
     }
@@ -594,7 +702,7 @@ mod tests {
             CigarOp::new(CigarOpKind::Match, 10),
         ];
         let projection = projector
-            .project(0, 0, &transcript_cigar, &mut ops)
+            .project(0, 0, &transcript_cigar, None, &mut ops)
             .unwrap();
         assert_eq!(cigar(&ops), "47M3D150N10M");
         assert_eq!(projection.position, 100);
@@ -613,7 +721,7 @@ mod tests {
             CigarOp::new(CigarOpKind::Match, 15),
         ];
         let projection = projector
-            .project(0, 40, &transcript_cigar, &mut ops)
+            .project(0, 40, &transcript_cigar, None, &mut ops)
             .unwrap();
         assert_eq!(cigar(&ops), "5S10M150N5M3I15M");
         assert_eq!(projection.position, 140);
@@ -628,7 +736,9 @@ mod tests {
         let mut ops = Vec::new();
         // Transcript 90..130 crosses the junction between the 500..600 exon and
         // the 300..350 one.
-        let projection = projector.project(0, 90, &matched(40), &mut ops).unwrap();
+        let projection = projector
+            .project(0, 90, &matched(40), None, &mut ops)
+            .unwrap();
         assert!(projection.flipped);
         // 10 bases at the bottom of the 500..600 exon, the 150-base intron, then
         // 30 in the 300..350 exon, read left to right in genome order.
@@ -667,7 +777,8 @@ mod tests {
                         CigarOp::new(CigarOpKind::SoftClip, 4),
                         CigarOp::new(CigarOpKind::Match, len),
                     ];
-                    let Some(_) = projector.project(0, start as i32, &transcript_cigar, &mut ops)
+                    let Some(_) =
+                        projector.project(0, start as i32, &transcript_cigar, None, &mut ops)
                     else {
                         continue;
                     };
@@ -692,7 +803,7 @@ mod tests {
         };
         let mut ops = Vec::new();
         assert!(!projector.describes(0));
-        assert_eq!(projector.project(0, 0, &matched(10), &mut ops), None);
+        assert_eq!(projector.project(0, 0, &matched(10), None, &mut ops), None);
     }
 
     /// bramble hands back GTF exons anchored at the 1-based start, so the
@@ -752,6 +863,61 @@ mod tests {
             reverse_complement_md(&once, &mut out);
             assert_eq!(out, forward, "round-tripping {forward}");
         }
+    }
+
+    /// A deletion the projection has to cut in two is two deletions, and `MD`
+    /// says so with an empty match between them. Carrying the transcript's
+    /// string across produced the merged spelling, which disagrees with the
+    /// CIGAR beside it.
+    #[test]
+    fn a_deletion_split_by_an_intron_is_two_md_deletions() {
+        let projector = projector(forward_model());
+        let mut ops = Vec::new();
+        let mut scratch = Vec::new();
+        let mut md = String::new();
+        // Exon 1 is transcript 0..50: match 48, delete 4 across the boundary,
+        // then match 10.
+        let transcript_cigar = vec![
+            CigarOp::new(CigarOpKind::Match, 48),
+            CigarOp::new(CigarOpKind::Deletion, 4),
+            CigarOp::new(CigarOpKind::Match, 10),
+        ];
+        projector
+            .project(
+                0,
+                0,
+                &transcript_cigar,
+                Some(("48^ACGT10", &mut scratch, &mut md)),
+                &mut ops,
+            )
+            .unwrap();
+        assert_eq!(cigar(&ops), "48M2D150N2D10M");
+        assert_eq!(md, "48^AC0^GT10");
+    }
+
+    /// Re-emitting must leave an unsplit alignment's `MD` exactly as it was.
+    #[test]
+    fn reprojecting_an_intact_alignment_changes_nothing() {
+        let projector = projector(forward_model());
+        let mut ops = Vec::new();
+        let mut scratch = Vec::new();
+        let mut md = String::new();
+        let transcript_cigar = vec![
+            CigarOp::new(CigarOpKind::Match, 20),
+            CigarOp::new(CigarOpKind::Deletion, 2),
+            CigarOp::new(CigarOpKind::Match, 15),
+        ];
+        projector
+            .project(
+                0,
+                5,
+                &transcript_cigar,
+                Some(("12A7^GG15", &mut scratch, &mut md)),
+                &mut ops,
+            )
+            .unwrap();
+        assert_eq!(cigar(&ops), "20M2D15M");
+        assert_eq!(md, "12A7^GG15");
     }
 
     /// A `.fai` is the cheap path to chromosome lengths, and only its first two

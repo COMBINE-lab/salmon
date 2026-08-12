@@ -282,9 +282,11 @@ pub struct EmitScratch {
     spoofed: [Vec<CigarOp>; 2],
     /// Genome-coordinate CIGARs, when the run projects records onto the genome.
     projected: [Vec<CigarOp>; 2],
-    /// `MD` re-expressed in genome orientation, for placements the projection
-    /// turned around.
+    /// `MD` re-derived against the projected operations.
     projected_md: [String; 2],
+    /// Per-reference-base expansion of a transcript `MD`, reused while
+    /// re-deriving the projected one.
+    md_bases: Vec<crate::splice::MdBase>,
 }
 
 /// The header text shared by both mapping-output formats: `@HD`, one `@SQ` per
@@ -586,6 +588,7 @@ fn project_placement(
         spoofed,
         projected,
         projected_md,
+        md_bases,
         ..
     } = scratch;
     let source: &[CigarOp] = if placed.realized {
@@ -593,19 +596,25 @@ fn project_placement(
     } else {
         &spoofed[placed.slot]
     };
-    match projector.project(tid, placed.position, source, &mut projected[placed.slot]) {
+    // MD is re-derived from the projected operations rather than carried over
+    // from the transcript's: projection can cut a deletion in two, and two
+    // deletions are spelled differently from one.
+    let md = placed.realized.then(|| {
+        (
+            realized[placed.slot].md.as_str(),
+            &mut *md_bases,
+            &mut projected_md[placed.slot],
+        )
+    });
+    match projector.project(
+        tid,
+        placed.position,
+        source,
+        md,
+        &mut projected[placed.slot],
+    ) {
         Some(projection) => {
             placed.position = projection.position;
-            // A flipped alignment reads the other way along the reference, so its
-            // MD has to be turned around with it or it describes bases that are
-            // no longer the ones under the CIGAR.
-            if projection.flipped && placed.realized {
-                let (md, out) = (
-                    realized[placed.slot].md.as_str(),
-                    &mut projected_md[placed.slot],
-                );
-                crate::splice::reverse_complement_md(md, out);
-            }
             placed.projection = Some(projection);
             true
         }
@@ -658,13 +667,12 @@ fn borrow_cigar<'s>(scratch: &'s EmitScratch, placed: &Placed) -> (&'s [CigarOp]
         // NM survives projection untouched: it counts edits, and an intron is not
         // one. MD survives only while the orientation does, so a flipped
         // alignment reads its rewritten copy.
-        let md = placed.realized.then(|| {
-            if projection.flipped {
-                scratch.projected_md[placed.slot].as_str()
-            } else {
-                scratch.realized[placed.slot].md.as_str()
-            }
-        });
+        let _ = projection;
+        // NM survives projection untouched: it counts edits, and an intron is
+        // not one. MD is the re-derived one.
+        let md = placed
+            .realized
+            .then(|| scratch.projected_md[placed.slot].as_str());
         return (&scratch.projected[placed.slot], md);
     }
     if placed.realized {
