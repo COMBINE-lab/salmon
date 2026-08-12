@@ -455,14 +455,14 @@ pub(crate) fn em_step_par(
 fn fill_exp_theta(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f64]) {
     let alpha_sum: f64 = alpha_in.iter().zip(prior_alphas).map(|(a, p)| a + p).sum();
     let log_norm = digamma(alpha_sum);
-    for i in 0..alpha_in.len() {
+    exp_theta.par_iter_mut().enumerate().for_each(|(i, et)| {
         let ap = alpha_in[i] + prior_alphas[i];
-        exp_theta[i] = if ap > DIGAMMA_MIN {
+        *et = if ap > DIGAMMA_MIN {
             (digamma(ap) - log_norm).exp()
         } else {
             0.0
         };
-    }
+    });
 }
 
 /// One sequential VBEM M-step (uses `exp_theta` in place of `alpha`).
