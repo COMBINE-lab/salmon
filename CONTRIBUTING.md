@@ -1,8 +1,8 @@
 ## Contributing code
 
-Any code that you contribute will be licensed under the GPLv3-license adopted by `salmon`. However, by contributing
-code to this project, you also extend permission for your contribution to be re-licensed under the BSD 3-clause 
-license (under which we anticipate Salmon will be released once existing GPL code can be removed).
+Salmon is licensed under the [BSD 3-clause license](LICENSE). By contributing code to this project, you agree
+that your contribution is licensed under the same terms (inbound = outbound), and you certify that you have the
+right to submit it under that license.
 
 Code contributions should be made via pull requests.  Please make all PRs to the _develop_ branch 
 of the repository.  PRs made to the _master_ branch may be rejected if they cannot be cleanly rebased 
