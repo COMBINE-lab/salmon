@@ -311,7 +311,7 @@ struct GapEntry {
 /// score is not a trade worth making here.)
 struct GapCache {
     table: hashbrown::HashTable<GapEntry>,
-    hasher: ahash::RandomState,
+    hasher: foldhash::fast::FixedState,
 }
 
 impl Default for GapCache {
@@ -321,12 +321,7 @@ impl Default for GapCache {
             // Fixed seeds: the lookup is byte-exact so the seed cannot affect
             // results, but pinning it keeps bucket layout (and therefore
             // profiling runs) reproducible.
-            hasher: ahash::RandomState::with_seeds(
-                0x51_7c_c1_b7,
-                0x27_22_0a_95,
-                0x9e_37_79_b9,
-                0x85_eb_ca_6b,
-            ),
+            hasher: foldhash::fast::FixedState::with_seed(0x517c_c1b7_2722_0a95),
         }
     }
 }
@@ -336,7 +331,7 @@ impl Default for GapCache {
 /// A free function rather than a method so the rehash-on-growth closure can call
 /// it while the table itself is mutably borrowed.
 #[inline]
-fn gap_hash(hasher: &ahash::RandomState, kind: GapKind, q: &[u8], t: &[u8]) -> u64 {
+fn gap_hash(hasher: &foldhash::fast::FixedState, kind: GapKind, q: &[u8], t: &[u8]) -> u64 {
     use std::hash::{BuildHasher, Hash, Hasher};
     let mut h = hasher.build_hasher();
     (kind as u8).hash(&mut h);

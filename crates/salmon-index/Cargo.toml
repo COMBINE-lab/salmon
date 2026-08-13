@@ -18,7 +18,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 needletail = "0.7"
 sha2 = { workspace = true }
-ahash = { workspace = true }
+foldhash = { workspace = true }
 # cf1-rs -> simd-minimizers -> packed-seq -> ensure_simd guards against building
 # its `wide`/portable-simd minimizer code without an AVX2 (x86) / NEON target,
 # which would otherwise force a compile-time `target-feature=+avx2` on the whole

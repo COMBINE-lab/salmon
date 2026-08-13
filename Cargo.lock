@@ -2744,10 +2744,10 @@ dependencies = [
 name = "salmon-index"
 version = "2.5.1"
 dependencies = [
- "ahash",
  "anyhow",
  "cf1-rs",
  "ensure_simd",
+ "foldhash 0.2.0",
  "needletail",
  "piscem-rs",
  "salmon-core",
@@ -2776,7 +2776,7 @@ dependencies = [
 name = "salmon-map"
 version = "2.5.1"
 dependencies = [
- "ahash",
+ "foldhash 0.2.0",
  "hashbrown 0.15.5",
  "ksw2rs",
  "piscem-rs",

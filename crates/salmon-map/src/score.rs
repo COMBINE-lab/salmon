@@ -207,8 +207,8 @@ pub struct DedupScratch {
 /// Fixed seeds: the survivors' order does not affect results, but a stable
 /// hasher keeps a given input hashing the same way from run to run, which makes
 /// this path reproducible if that ever starts to matter.
-fn dedup_hasher() -> ahash::RandomState {
-    ahash::RandomState::with_seeds(0x5119_1B3D, 0xA5F1_2C07, 0x2D4E_9A11, 0x7C3B_60E5)
+fn dedup_hasher() -> foldhash::fast::FixedState {
+    foldhash::fast::FixedState::with_seed(0x5119_1b3d_a5f1_2c07)
 }
 
 /// Deduplicate in place by scanning the already-kept prefix. No allocation and
@@ -235,6 +235,7 @@ fn dedup_by_scan(raw: &mut Vec<RawMapping>) {
 /// Deduplicate through a reused hash table, for fragments with enough mappings
 /// that scanning the kept prefix costs more than hashing each key.
 fn dedup_by_table(raw: &mut Vec<RawMapping>, scratch: &mut DedupScratch) {
+    use std::hash::BuildHasher;
     let state = dedup_hasher();
     let hash_of = |tid: u32| state.hash_one(tid);
     let table = &mut scratch.table;

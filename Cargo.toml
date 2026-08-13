@@ -47,8 +47,12 @@ crossbeam-channel = "0.5"
 # concurrent map for equivalence classes
 scc = "3"
 dashmap = "6"
-# fast (non-DoS-resistant) hasher for hot per-read integer-keyed maps
-ahash = "0.8"
+# fast (non-DoS-resistant) hasher for hot per-read integer-keyed maps.
+# foldhash's fixed-size integer path is a few multiply/rotate steps with no
+# per-byte loop, which is the shape of the (u32, bool) and u32 keys the mapper
+# builds per read. `gxhash` is faster still but needs AES-NI, which the portable
+# `target-cpu` floor in .cargo/config.toml rules out.
+foldhash = "0.2"
 # raw hash table, for caches that must probe with a borrowed key (no key
 # allocation on a lookup that hits)
 hashbrown = "0.15"

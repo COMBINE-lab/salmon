@@ -300,7 +300,7 @@ pub struct IndexInfo {
 /// supplied, independently of how salmon later transforms it.
 fn compute_ref_hashes(
     transcripts: &[PathBuf],
-    decoy_names: &ahash::AHashSet<Vec<u8>>,
+    decoy_names: &foldhash::HashSet<Vec<u8>>,
     gencode: bool,
 ) -> Result<RefHashes> {
     use sha2::{Digest, Sha256, Sha512};
@@ -451,7 +451,7 @@ fn preprocess_fasta(
     inputs: &[PathBuf],
     out_path: &Path,
     keep_duplicates: bool,
-    decoy_names: &ahash::AHashSet<Vec<u8>>,
+    decoy_names: &foldhash::HashSet<Vec<u8>>,
     gencode: bool,
     clip_polya: bool,
     k: usize,
@@ -481,7 +481,7 @@ fn preprocess_fasta(
     // sequences (keyed on the exact original bytes, matching salmon's pre-process
     // XXH64 over the unmodified sequence). Populated in both modes so duplicates
     // are detected for `duplicate_clusters.tsv` even under --keepDuplicates.
-    let mut seen: ahash::AHashMap<Vec<u8>, Vec<u8>> = ahash::AHashMap::new();
+    let mut seen: foldhash::HashMap<Vec<u8>, Vec<u8>> = foldhash::HashMap::default();
     for path in inputs {
         let mut reader = needletail::parse_fastx_file(path)
             .with_context(|| format!("opening {}", path.display()))?;
@@ -621,10 +621,10 @@ fn preprocess_fasta(
 ///
 /// A set (rather than a list) because membership is tested once per FASTA record
 /// and the decoy list can hold thousands of contig names.
-fn read_decoy_names(path: &Path) -> Result<ahash::AHashSet<Vec<u8>>> {
+fn read_decoy_names(path: &Path) -> Result<foldhash::HashSet<Vec<u8>>> {
     let bytes =
         std::fs::read(path).with_context(|| format!("reading decoys file {}", path.display()))?;
-    let mut set = ahash::AHashSet::new();
+    let mut set = foldhash::HashSet::default();
     for line in bytes.split(|&b| b == b'\n') {
         // trim trailing CR and surrounding whitespace
         //
@@ -722,7 +722,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // Decoy names (genome/contamination sequences indexed but never quantified).
     let decoy_names = match &opts.decoys {
         Some(p) => read_decoy_names(p)?,
-        None => ahash::AHashSet::new(),
+        None => foldhash::HashSet::default(),
     };
 
     // Preprocess the references into the cleaned FASTA that feeds both the cDBG

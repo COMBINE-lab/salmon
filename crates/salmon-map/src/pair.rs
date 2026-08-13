@@ -22,7 +22,7 @@
 //! References that yield no concordant pair fall back to orphan mappings when
 //! orphans are allowed. Mirrors pufferfish/salmon's `joinReadsAndFilter`.
 
-use ahash::AHashSet;
+use foldhash::HashSet;
 
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
@@ -171,9 +171,9 @@ thread_local! {
     /// Reused per-thread `paired` set for [`join_reads_and_filter`] (the tids that
     /// formed a concordant pair). Cleared per call; reused so pairing allocates no
     /// per-read hash set. Grouping uses an in-place sort (no map), so the two
-    /// per-read `AHashMap<u32, Vec<usize>>` of the old `group_by_tid` are gone.
-    static PAIRED_TIDS: std::cell::RefCell<AHashSet<u32>> =
-        std::cell::RefCell::new(AHashSet::new());
+    /// per-read `HashMap<u32, Vec<usize>>` of the old `group_by_tid` are gone.
+    static PAIRED_TIDS: std::cell::RefCell<HashSet<u32>> =
+        std::cell::RefCell::new(HashSet::default());
 
     /// Set by [`join_reads_and_filter`] when it rejects an otherwise-valid
     /// (opposite-strand, in-range fragment length) concordant pair *solely*
@@ -409,7 +409,7 @@ pub fn join_reads_and_filter(
 /// has several chains to one reference (repeat copies). `cands` is tid-sorted.
 fn emit_best_orphans(
     cands: &[MappingCandidate],
-    paired: &AHashSet<u32>,
+    paired: &HashSet<u32>,
     cutoff: i32,
     status: MateStatus,
     joints: &mut Vec<JointMapping>,

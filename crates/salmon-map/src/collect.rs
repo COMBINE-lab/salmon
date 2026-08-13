@@ -32,7 +32,7 @@
 //! anchors increase colinearly with the reference coordinate. The resulting
 //! chains are stamped with `is_fw = false` so a later stage can map them back.
 
-use ahash::AHashMap;
+use foldhash::HashMap;
 
 use piscem_rs::index::contig_table::EntryEncoding;
 use piscem_rs::index::reference_index::ReferenceIndex;
@@ -96,8 +96,8 @@ pub fn project_raw_hits(
     read_len: i32,
     k: i32,
     max_hit_occ: usize,
-) -> AHashMap<(u32, bool), Vec<Mem>> {
-    let mut groups: AHashMap<(u32, bool), Vec<Mem>> = AHashMap::new();
+) -> HashMap<(u32, bool), Vec<Mem>> {
+    let mut groups: HashMap<(u32, bool), Vec<Mem>> = HashMap::default();
     for (read_pos, phit) in raw_hits {
         if phit.num_hits() > max_hit_occ {
             continue;
