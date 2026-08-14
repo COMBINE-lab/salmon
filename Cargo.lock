@@ -2656,12 +2656,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
-name = "saa"
-version = "5.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f5acb362a0e75c2a963532fa7fabf13dff81626dc494df16488d30befcbea0"
-
-[[package]]
 name = "safe_arch"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2736,7 +2730,6 @@ version = "2.5.1"
 dependencies = [
  "dashmap",
  "salmon-core",
- "scc",
  "xxhash-rust",
 ]
 
@@ -2850,16 +2843,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scc"
-version = "3.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8af0b99483d1c3e59471d4f0cb58b244169436a8979c889a91a3f697075ea01"
-dependencies = [
- "saa",
- "sdd",
-]
-
-[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2870,15 +2853,6 @@ name = "scroll"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1257cd4248b4132760d6524d6dda4e053bc648c9070b960929bf50cfb1e7add"
-
-[[package]]
-name = "sdd"
-version = "4.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1836bad8bdc9c6d665b63202da3d9c6d60ed1e597cae63620e21ebf89a3595a9"
-dependencies = [
- "saa",
-]
 
 [[package]]
 name = "sealed"

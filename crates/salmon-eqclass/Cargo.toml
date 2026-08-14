@@ -10,7 +10,6 @@ description = "Equivalence-class data structures and concurrent builder for the 
 
 [dependencies]
 salmon-core = { workspace = true }
-scc = { workspace = true }
 dashmap = { workspace = true }
 xxhash-rust = { workspace = true }
 
