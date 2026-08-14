@@ -60,6 +60,9 @@ rand_pcg = "0.10"
 rand_distr = "0.6"
 # hashing
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
+# memory-mapped reads of the index's reference-base blob; already in the tree
+# via sshash-lib, which maps the sshash index the same way.
+memmap2 = "0.9"
 # compression
 flate2 = "1"
 zstd = "0.13"

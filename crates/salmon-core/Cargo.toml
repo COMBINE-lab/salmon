@@ -9,6 +9,7 @@ authors.workspace = true
 description = "Shared core types for the Rust port of salmon (transcripts, library formats, log-space math)."
 
 [dependencies]
+memmap2 = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 # the unmatched-transcript list under aux_info/ is JSON, like the other

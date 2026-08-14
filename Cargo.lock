@@ -2721,6 +2721,7 @@ name = "salmon-core"
 version = "2.5.1"
 dependencies = [
  "flate2",
+ "memmap2",
  "niffler",
  "serde",
  "serde_json",

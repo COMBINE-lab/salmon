@@ -62,6 +62,87 @@ pub use libtype::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 pub use mate::MateStatus;
 pub use transcript::Transcript;
 
+/// A read-only byte blob that is either owned on the heap or mapped from a file.
+///
+/// The reference bases are the largest thing salmon loads: a human
+/// transcriptome is a few hundred MB, and an index with a genome decoy is
+/// several GB. Reading that into a `Vec` costs the whole file in resident
+/// memory and a full read before the first fragment is processed, even though
+/// the bases are only ever read, never written, and bias correction touches a
+/// small fraction of them. Mapping the file instead makes the load a syscall,
+/// leaves paging to the kernel, and lets several salmon processes on one
+/// machine share the pages.
+///
+/// `Owned` remains for everything built in memory (test fixtures, references
+/// reconstructed from an annotation), so nothing that does not read an index
+/// file has to care.
+#[derive(Debug, Clone)]
+pub enum Bases {
+    /// Bases held in the heap.
+    Owned(Vec<u8>),
+    /// Bases mapped from a file. `Arc` so cloning a [`RefSeqs`] does not
+    /// re-map; the mapping is read-only and freely shared between threads.
+    Mapped(std::sync::Arc<memmap2::Mmap>),
+}
+
+impl Default for Bases {
+    fn default() -> Self {
+        Bases::Owned(Vec::new())
+    }
+}
+
+impl std::ops::Deref for Bases {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            Bases::Owned(v) => v,
+            Bases::Mapped(m) => m,
+        }
+    }
+}
+
+impl AsRef<[u8]> for Bases {
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
+
+impl PartialEq for Bases {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl Eq for Bases {}
+
+impl From<Vec<u8>> for Bases {
+    fn from(v: Vec<u8>) -> Self {
+        Bases::Owned(v)
+    }
+}
+
+/// Map a file read-only for the lifetime of the returned handle.
+///
+/// # Correctness
+///
+/// A memory mapping aliases the file: if the bytes change underneath us the
+/// mapped slice changes too, which Rust's aliasing rules do not allow. The
+/// invariant this relies on is that an index directory is immutable while a run
+/// reads it, which salmon already depends on elsewhere -- `sshash-lib` maps the
+/// sshash index itself the same way. Rebuilding an index into a directory that
+/// a running salmon has open was never supported.
+#[allow(unsafe_code)]
+pub fn map_file(path: &std::path::Path) -> Result<std::sync::Arc<memmap2::Mmap>> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| SalmonError::Other(format!("opening {}: {e}", path.display())))?;
+    // SAFETY: see the note above -- the index directory is immutable for the
+    // duration of the run.
+    let map = unsafe { memmap2::Mmap::map(&file) }
+        .map_err(|e| SalmonError::Other(format!("mapping {}: {e}", path.display())))?;
+    Ok(std::sync::Arc::new(map))
+}
+
 /// A set of reference sequences held as one contiguous buffer plus endpoint
 /// offsets, handing out `&[u8]` views.
 ///
@@ -76,10 +157,10 @@ pub use transcript::Transcript;
 /// scattered, and — where the source is already concatenated — avoids copying
 /// the bases at all. On a human transcriptome (~250k references) the header
 /// overhead alone is ~6 MB before a single base is stored.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct RefSeqs {
     /// Every reference's bases, back to back.
-    seqs: Vec<u8>,
+    seqs: Bases,
     /// `n + 1` endpoints delimiting each reference inside `seqs`; reference `i`
     /// occupies `offsets[i]..offsets[i + 1]`.
     offsets: Vec<u64>,
@@ -97,6 +178,24 @@ impl RefSeqs {
     /// past the end of `seqs` — any of which would otherwise surface later as a
     /// panicking slice or, worse, as a silently wrong reference.
     pub fn from_concatenated(seqs: Vec<u8>, offsets: Vec<u64>) -> Result<Self> {
+        Self::from_bases(Bases::Owned(seqs), offsets)
+    }
+
+    /// Wrap a mapped index file and its offset table.
+    ///
+    /// The zero-copy path for `refseq.bin`: nothing is read up front and the
+    /// bases never occupy anonymous memory. See [`map_file`] for the invariant
+    /// this depends on.
+    ///
+    /// # Errors
+    ///
+    /// The same offset-table validation as [`Self::from_concatenated`].
+    pub fn from_mapped(seqs: std::sync::Arc<memmap2::Mmap>, offsets: Vec<u64>) -> Result<Self> {
+        Self::from_bases(Bases::Mapped(seqs), offsets)
+    }
+
+    /// Shared validation for both constructors above.
+    fn from_bases(seqs: Bases, offsets: Vec<u64>) -> Result<Self> {
         let bad = |m: String| SalmonError::Other(m);
         if offsets.is_empty() {
             return Err(bad(
@@ -141,7 +240,10 @@ impl RefSeqs {
             buf.extend_from_slice(s.as_ref());
             offsets.push(buf.len() as u64);
         }
-        Self { seqs: buf, offsets }
+        Self {
+            seqs: Bases::Owned(buf),
+            offsets,
+        }
     }
 
     /// Number of references.
@@ -180,6 +282,14 @@ impl RefSeqs {
         &self.offsets
     }
 }
+
+impl PartialEq for RefSeqs {
+    fn eq(&self, other: &Self) -> bool {
+        self.offsets == other.offsets && self.seqs == other.seqs
+    }
+}
+
+impl Eq for RefSeqs {}
 
 impl std::ops::Index<usize> for RefSeqs {
     type Output = [u8];

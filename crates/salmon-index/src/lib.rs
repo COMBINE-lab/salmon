@@ -1088,7 +1088,7 @@ pub struct SalmonIndex {
     /// without sequence-dependent bias correction): the raw nucleotides are only
     /// needed for selective-alignment extension and seq/GC bias, so skipping the
     /// read avoids holding a multi-GB decoy genome resident.
-    refseq: Vec<u8>,
+    refseq: salmon_core::Bases,
     /// offsets into `refseq` (`num_refs + 1` entries); empty iff `!refseq_loaded`
     ref_offsets: Vec<u64>,
     /// whether the reference sequence bytes were loaded
@@ -1102,8 +1102,8 @@ pub struct SalmonIndex {
 /// the index already stores, so the user need not re-supply a transcript FASTA.
 pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<RefSeqs> {
     let dir = dir.as_ref();
-    let refseq =
-        std::fs::read(dir.join(REFSEQ_FILE)).with_context(|| format!("reading {REFSEQ_FILE}"))?;
+    let refseq = salmon_core::map_file(&dir.join(REFSEQ_FILE))
+        .with_context(|| format!("mapping {REFSEQ_FILE}"))?;
     let offsets: Vec<u64> = serde_json::from_slice(
         &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
             .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
@@ -1113,7 +1113,7 @@ pub fn load_ref_seqs(dir: impl AsRef<Path>) -> Result<RefSeqs> {
     // no copy of the bases, and no per-transcript allocation. `from_concatenated`
     // validates the table against the blob, turning a corrupt index into an error
     // here rather than a panicking slice at the first bias lookup.
-    RefSeqs::from_concatenated(refseq, offsets)
+    RefSeqs::from_mapped(refseq, offsets)
         .with_context(|| format!("reference sequences in {}", dir.display()))
 }
 
@@ -1177,15 +1177,17 @@ impl SalmonIndex {
         let inner = ReferenceIndex::load(&index_prefix, info.has_ec_table, false)
             .with_context(|| format!("loading piscem index at {}", index_prefix.display()))?;
         let (refseq, ref_offsets) = if load_refseq {
-            let refseq = std::fs::read(dir.join(REFSEQ_FILE))
-                .with_context(|| format!("reading {REFSEQ_FILE}"))?;
+            let refseq = salmon_core::Bases::Mapped(
+                salmon_core::map_file(&dir.join(REFSEQ_FILE))
+                    .with_context(|| format!("mapping {REFSEQ_FILE}"))?,
+            );
             let ref_offsets: Vec<u64> = serde_json::from_slice(
                 &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
                     .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
             )?;
             (refseq, ref_offsets)
         } else {
-            (Vec::new(), Vec::new())
+            (salmon_core::Bases::default(), Vec::new())
         };
         Ok(Self {
             inner,
