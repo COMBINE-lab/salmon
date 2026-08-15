@@ -15,6 +15,10 @@ path = "src/main.rs"
 [dependencies]
 salmon-core = { workspace = true }
 mimalloc = "0.1"
+# Pinned to 0.5 to match the tikv-jemalloc-sys that piscem-rs -> sux -> rdst
+# already links; two versions of the `jemalloc` native library cannot coexist.
+tikv-jemallocator = { version = "0.5", optional = true }
+snmalloc-rs = { version = "0.7", optional = true }
 rayon = { workspace = true }
 salmon-index = { workspace = true }
 salmon-quant = { workspace = true }
@@ -28,8 +32,13 @@ tracing-subscriber = { workspace = true }
 indicatif = "0.18"
 
 [features]
-# Diagnostic: build with the system allocator instead of mimalloc.
+# Diagnostic: swap the global allocator away from the default (mimalloc) to
+# re-measure that choice. Mutually exclusive in effect, not in Cargo terms:
+# src/global_alloc.rs resolves any combination to exactly one allocator.
+# docs/allocator-choice.md records what each one measured.
 sysalloc = []
+jemalloc = ["dep:tikv-jemallocator"]
+snmalloc = ["dep:snmalloc-rs"]
 
 [lints]
 workspace = true
