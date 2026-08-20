@@ -31,7 +31,10 @@ use piscem_rs::mapping::hits::MappingType;
 use piscem_rs::mapping::merge_pairs::merge_se_mappings;
 use piscem_rs::mapping::sketch_hit_simple::SketchHitInfoSimple;
 use piscem_rs::mapping::streaming_query::PiscemStreamingQuery;
-use salmon_core::{MateStatus, RefProvider};
+use salmon_core::{
+    observed_paired_format, LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType,
+    RefProvider,
+};
 use sshash_lib::dispatch_on_k;
 
 use crate::score::ScoredMapping;
@@ -133,7 +136,19 @@ pub fn map_single_read_sketch_into<'idx>(
                 ref_pos: if h.is_fw { h.pos.max(0) } else { h.pos.max(0) + rl },
                 fw_pos: if h.is_fw { h.pos.max(0) } else { -1 },
                 rc_pos: if h.is_fw { -1 } else { h.pos.max(0) },
-                format: None,
+                // Single-end observed strandedness (sense if forward), exactly
+                // as selective alignment's SE case fills it. Filtering is
+                // status-based for single-end reads either way, but `-l A`
+                // detection samples only formatted placements (#1136).
+                format: Some(LibraryFormat::new(
+                    ReadType::SingleEnd,
+                    ReadOrientation::None,
+                    if h.is_fw {
+                        ReadStrandedness::S
+                    } else {
+                        ReadStrandedness::A
+                    },
+                )),
                 r1_pos: h.pos.max(0),
                 r2_pos: -1,
                 r2_fw: false,
@@ -337,7 +352,21 @@ pub fn map_read_pair_sketch_into<'idx, R: RefProvider>(
                         ref_pos,
                         fw_pos,
                         rc_pos,
-                        format: None,
+                        // Observed format from the mate strands, exactly as the
+                        // RAD writer and `DiscreteFld` derive it from these same
+                        // fields. Leaving this `None` exempted every sketch
+                        // proper pair from the strand-compatibility filter
+                        // (`is_compatible` accepts an unrecorded orientation
+                        // rather than guessing) and starved `-l A` detection,
+                        // which samples only formatted placements (#1136).
+                        // Orphans stay `None`, as in selective alignment: they
+                        // are judged by status + strand, not sampled for
+                        // detection.
+                        format: if status == MateStatus::PairedEndPaired {
+                            Some(observed_paired_format(h.is_fw, h.mate_is_fw))
+                        } else {
+                            None
+                        },
                         r1_pos,
                         r2_pos,
                         r2_fw,
