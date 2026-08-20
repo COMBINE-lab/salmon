@@ -45,7 +45,6 @@ rayon = "1"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 # concurrent map for equivalence classes
-scc = "3"
 dashmap = "6"
 # fast (non-DoS-resistant) hasher for hot per-read integer-keyed maps
 ahash = "0.8"
