@@ -18,6 +18,7 @@ mimalloc = "0.1"
 rayon = { workspace = true }
 salmon-index = { workspace = true }
 salmon-quant = { workspace = true }
+salmon-degnorm = { workspace = true }
 salmon-align = { workspace = true }
 salmon-map = { workspace = true }
 piscem-rs = { workspace = true }
