@@ -11,6 +11,7 @@ members = [
     "crates/salmon-cli",
     "crates/salmon-align",
     "crates/salmon-rad",
+    "crates/salmon-degnorm",
 ]
 
 [workspace.package]
@@ -34,6 +35,7 @@ salmon-map = { path = "crates/salmon-map", version = "2.6.0" }
 salmon-align = { path = "crates/salmon-align", version = "2.6.0" }
 salmon-quant = { path = "crates/salmon-quant", version = "2.6.0" }
 salmon-rad = { path = "crates/salmon-rad", version = "2.6.0" }
+salmon-degnorm = { path = "crates/salmon-degnorm", version = "2.6.0" }
 # error handling
 thiserror = "2"
 anyhow = "1"

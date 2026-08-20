@@ -2767,6 +2767,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "salmon-degnorm"
+version = "2.6.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "salmon-eqclass"
 version = "2.6.0"
 dependencies = [
