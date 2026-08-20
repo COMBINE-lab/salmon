@@ -350,6 +350,93 @@ fn stranded_lib_format_counts_report_incompatible_fragments() {
     );
 }
 
+/// Sketch mode must report the wrong-strand count too — without changing what
+/// it quantifies.
+///
+/// A sketch-mode paired mapping carries no observed `LibraryFormat`: the two
+/// mates' orientations are known, but nothing assembles them into one, so the
+/// strand filter accepts every pair and the ratio would sit at 1.0 however
+/// stranded the library is. Teaching the *filter* to derive the orientation
+/// would change which fragments a sketch run assigns, so the derivation lives
+/// in the tally only (`is_compatible_for_counting`).
+///
+/// This test pins both halves of that: the count becomes real, and `num_mapped`
+/// does not move.
+#[test]
+fn sketch_mode_counts_wrong_strand_fragments_without_changing_assignment() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, truth) = simulate(tmp.path());
+    let total_truth: u64 = truth.values().sum();
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let quant = |lib_type: &str, out: PathBuf| {
+        let mut opts = QuantOptions::new(idx_dir.clone(), out);
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = lib_type.to_string();
+        opts.sketch = true;
+        opts.num_threads = 1;
+        quantify(&opts).unwrap_or_else(|e| panic!("sketch quantify {lib_type}: {e}"))
+    };
+    let lib_counts = |dir: &Path| -> serde_json::Value {
+        let s = std::fs::read_to_string(dir.join("lib_format_counts.json")).unwrap();
+        serde_json::from_str(&s).unwrap()
+    };
+
+    // The reads are inward FR, i.e. observed `ISF`.
+    let out_isf = tmp.path().join("sketch_isf");
+    let res_isf = quant("ISF", out_isf.clone());
+    let isf = lib_counts(&out_isf);
+    assert_eq!(
+        isf["num_incompatible_fragments"].as_u64().unwrap(),
+        0,
+        "sketch ISF: {isf}"
+    );
+
+    // Opposite strandedness: every pair is on the wrong strand and must now be
+    // counted as such.
+    let out_isr = tmp.path().join("sketch_isr");
+    let res_isr = quant("ISR", out_isr.clone());
+    let isr = lib_counts(&out_isr);
+    let incompat = isr["num_incompatible_fragments"].as_u64().unwrap();
+    assert!(
+        incompat as f64 >= 0.9 * total_truth as f64,
+        "sketch ISR: only {incompat} of {total_truth} counted as wrong-strand: {isr}"
+    );
+    assert!(
+        isr["compatible_fragment_ratio"].as_f64().unwrap() <= 0.1,
+        "sketch ISR: {isr}"
+    );
+
+    // …and the run itself is untouched: sketch pairs still pass the filter, so
+    // the same fragments are assigned as under the matching library type. This
+    // is the assertion that keeps the accounting from turning into a behaviour
+    // change.
+    assert_eq!(
+        res_isr.num_mapped, res_isf.num_mapped,
+        "sketch assignment must not depend on strandedness"
+    );
+    assert_eq!(
+        isr["num_assigned_fragments"].as_u64().unwrap(),
+        res_isr.num_mapped,
+        "sketch ISR: {isr}"
+    );
+    // The wrong-strand fragments were assigned all the same, so unlike the
+    // selective-alignment path the two counts do not describe disjoint sets.
+    // Reporting them anyway is the point: the ratio is what says the declared
+    // library type does not match the data.
+    let mass: f64 = res_isr.counts.iter().sum();
+    assert!(
+        (mass - res_isr.num_mapped as f64).abs() < 1.0,
+        "sketch ISR mass {mass} vs num_mapped {}",
+        res_isr.num_mapped
+    );
+}
+
 /// The `--deterministic` mapping pass must report the same wrong-strand count.
 ///
 /// In the full `--deterministic` flow this file is later *rewritten* by the

@@ -378,9 +378,109 @@ pub fn is_compatible(
     }
 }
 
+/// [`is_compatible`], but for *accounting only*: a proper pair with no recorded
+/// `observed` format is judged on its two mates' strands instead of being
+/// accepted.
+///
+/// # Why this is a separate function
+///
+/// Sketch mode does not fill in a paired mapping's `observed` format — the two
+/// mates' orientations are known, but nothing assembles them into a
+/// [`LibraryFormat`]. [`is_compatible`] therefore accepts every sketch pair,
+/// which is deliberate: making the *quantification* filter judge them would
+/// change which fragments are assigned and what a sketch run reports as
+/// abundance, not merely how it is described.
+///
+/// Counting is a different question. "How many fragments landed on the wrong
+/// strand" is answerable from `is_forward`/`mate_forward` alone, and answering
+/// it changes nothing about the run — so `lib_format_counts.json` can report a
+/// real number in sketch mode while the filter keeps its behaviour. Using this
+/// function anywhere that decides what is quantified would silently make that
+/// change; use [`is_compatible`] there.
+///
+/// The derivation is [`observed_paired_format`], the same one the
+/// deterministic pass already uses to infer a sketch run's library type.
+pub fn is_compatible_for_counting(
+    expected: LibraryFormat,
+    observed: Option<LibraryFormat>,
+    is_forward: bool,
+    mate_forward: bool,
+    status: MateStatus,
+) -> bool {
+    if status == MateStatus::PairedEndPaired {
+        let o = observed.unwrap_or_else(|| observed_paired_format(is_forward, mate_forward));
+        compatible_paired(expected, o)
+    } else {
+        compatible_single(expected, is_forward, status)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The counting variant must judge a pair that carries no observed format —
+    /// which is every paired mapping in sketch mode — instead of accepting it.
+    #[test]
+    fn counting_judges_a_pair_with_no_recorded_format() {
+        let isf = LibraryFormat::parse("ISF").unwrap();
+        let isr = LibraryFormat::parse("ISR").unwrap();
+        // Inward, read 1 forward: an `ISF` fragment.
+        let (is_fw, mate_fw) = (true, false);
+        let st = MateStatus::PairedEndPaired;
+
+        // The quantification filter accepts it under either expectation, which
+        // is the behaviour sketch mode relies on and must keep.
+        assert!(is_compatible(isf, None, is_fw, st));
+        assert!(is_compatible(isr, None, is_fw, st));
+
+        // The counting variant derives the orientation and tells them apart.
+        assert!(is_compatible_for_counting(isf, None, is_fw, mate_fw, st));
+        assert!(!is_compatible_for_counting(isr, None, is_fw, mate_fw, st));
+        // The mirrored fragment flips both verdicts.
+        assert!(!is_compatible_for_counting(isf, None, false, true, st));
+        assert!(is_compatible_for_counting(isr, None, false, true, st));
+    }
+
+    /// With a recorded format, or on anything that is not a proper pair, the two
+    /// must agree — the counting variant only ever fills in a missing format.
+    #[test]
+    fn counting_matches_the_filter_wherever_the_format_is_known() {
+        let formats: Vec<LibraryFormat> = ["IU", "ISF", "ISR", "OSF", "MSR", "U", "SF", "SR"]
+            .iter()
+            .map(|s| LibraryFormat::parse(s).unwrap())
+            .collect();
+        for &exp in &formats {
+            for &obs in &formats {
+                for is_fw in [true, false] {
+                    for mate_fw in [true, false] {
+                        for st in [
+                            MateStatus::PairedEndPaired,
+                            MateStatus::PairedEndLeft,
+                            MateStatus::PairedEndRight,
+                            MateStatus::SingleEnd,
+                        ] {
+                            assert_eq!(
+                                is_compatible(exp, Some(obs), is_fw, st),
+                                is_compatible_for_counting(exp, Some(obs), is_fw, mate_fw, st),
+                                "diverged for expected={} observed={} is_fw={is_fw} status={st:?}",
+                                exp.canonical(),
+                                obs.canonical()
+                            );
+                            if st != MateStatus::PairedEndPaired {
+                                assert_eq!(
+                                    is_compatible(exp, None, is_fw, st),
+                                    is_compatible_for_counting(exp, None, is_fw, mate_fw, st),
+                                    "diverged on a non-pair for expected={}",
+                                    exp.canonical()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// `parse` and `canonical` must be exact inverses for all 12 formats,
     /// otherwise a format could change identity on a round trip through text.
