@@ -55,8 +55,9 @@ docker run --rm combinelab/salmon:latest salmon --version
 ## Quick start
 
 ```sh
-# 0) Unpack the sample data
+# 0) Unpack the sample data and go to it
 tar xzf sample_data.tgz
+cd sample_data
 
 # 1) build a reusable index from a transcriptome
 salmon index -t transcripts.fasta -i salmon_index -p 16
