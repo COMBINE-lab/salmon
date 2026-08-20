@@ -55,12 +55,15 @@ docker run --rm combinelab/salmon:latest salmon --version
 ## Quick start
 
 ```sh
+# 0) Unpack the sample data
+tar xzf sample_data.tgz
+
 # 1) build a reusable index from a transcriptome
-salmon index -t transcripts.fa -i salmon_index -p 16
+salmon index -t transcripts.fasta -i salmon_index -p 16
 
 # 2) quantify (-l A auto-detects the library type)
 salmon quant -i salmon_index -l A \
-  -1 reads_1.fastq.gz -2 reads_2.fastq.gz -p 16 -o sample_quant
+  -1 reads_1.fastq -2 reads_2.fastq -p 4 -o sample_quant
 ```
 
 Results land in `sample_quant/quant.sf` (drop-in for tximport / tximeta /
