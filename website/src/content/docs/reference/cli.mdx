@@ -14,6 +14,7 @@ Commands:
   index       Build a salmon index from a transcriptome FASTA
   quant       Quantify transcript abundances from FASTQ reads (or a BAM)
   quantmerge  Merge a column across samples' quant files into a matrix
+  degnorm     Correct read counts for transcript degradation across samples
   debug-map   Diagnostic: per-read best-mapping detail
   alevin      Single-cell (removed; redirects to alevin-fry)
 ```
@@ -128,6 +129,8 @@ under a misleading name.
 | `--seqBias` | Sequence-specific bias correction. |
 | `--gcBias` | Fragment-GC bias correction. |
 | `--posBias` | Positional bias correction. |
+| `--degCoverage` | Accumulate per-transcript coverage curves and write `aux_info/coverage.gz`, the input to [`salmon degnorm`](#salmon-degnorm). Reads mode only. |
+| `--degCovBins` | Position bins per transcript for `--degCoverage` (default 100). Costs `(bins + 1) x transcripts x 8` bytes during mapping. |
 | `--noLengthCorrection` | Use raw reference length (no effective-length correction). |
 
 ### RAD I/O & determinism
@@ -228,6 +231,37 @@ next mismatch as effectively as this one was hidden.
 
 Merge a chosen column (e.g. `NumReads` or `TPM`) across multiple samples'
 `quant.sf` files into a single matrix.
+
+## `salmon degnorm`
+
+Correct read counts for transcript degradation, using the coverage curves
+`salmon quant --degCoverage` recorded. Degradation is only identifiable by
+comparison, so this takes a cohort — at least two samples quantified against the
+same index — and writes a degradation index per transcript per sample plus
+degradation-adjusted counts.
+
+```sh
+salmon degnorm --quants quants/s1 quants/s2 quants/s3 -o degnorm
+```
+
+| Option | Description |
+| --- | --- |
+| `--quants` | Quantification directories, one per sample (each needs `aux_info/coverage.gz` and, unless `--noCounts`, `quant.sf`). |
+| `--names` | Sample names for the output columns (default: the directory basenames). |
+| `-o/--output` | Output directory for `degradation_index.tsv`, `counts_raw.tsv`, `counts_adjusted.tsv`, and `degnorm_summary.json`. |
+| `--minLength` | Skip transcripts shorter than this (default 200). |
+| `--minCoverage` | Skip transcripts whose mean cohort coverage depth is below this (default 0.1). |
+| `--maxAdjustDI` | Ceiling on the index used to inflate counts; the reported index is untouched (default 0.9). |
+| `--maskFrac` | Hold entries below this fraction of the fitted envelope out of the envelope fit, as damaged (default 0.5; `0` fits every entry). |
+| `--maxIter`, `--tol` | Per-transcript fit iteration cap and convergence tolerance. |
+| `--noCounts` | Report degradation only; do not read `quant.sf` or adjust counts. |
+| `-p/--threads` | Worker threads (0 = all cores). |
+
+The index is a comparative measure with a coverage-dependent positive floor, and
+it differs from [DegNorm](https://nustatbioinfo.github.io/DegNorm/)'s numbers by
+construction (transcripts rather than genes, posterior-weighted coverage rather
+than primary alignments). Both points, and the model itself, are covered in
+`docs/degnorm.md`.
 
 :::note
 Coming from C++ salmon? See [what changed in 2.0](../../migrating/from-cpp/) for
