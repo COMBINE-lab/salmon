@@ -141,6 +141,14 @@ pub struct QuantOptions {
     /// collection (`--biasSeedEMIters`, hidden); default 11. Rough on purpose —
     /// fully-converged uncorrected estimates over-fit the bias models.
     pub bias_seed_em_iters: u32,
+    /// accumulate per-transcript coverage curves during the mapping pass and
+    /// write them to `aux_info/coverage.gz` (`--degCoverage`), for
+    /// `salmon degnorm` to fit across a cohort. `Some(bins)` sets the number of
+    /// position bins per transcript.
+    ///
+    /// Costs `(bins + 1) × transcripts × 8` bytes of shared accumulator, so it
+    /// is off unless asked for.
+    pub coverage_bins: Option<usize>,
     /// dump observed+expected seq/GC/positional bias models to `bias_models.txt`
     /// in the output dir (`--dumpBiasModels`, hidden; debugging/parity).
     pub dump_bias_models: bool,
@@ -248,6 +256,7 @@ impl QuantOptions {
             gc_bias: false,
             pos_bias: false,
             bias_seed_em_iters: 11,
+            coverage_bins: None,
             dump_bias_models: false,
             rad_codec: ChunkCodec::None,
             num_bootstraps: 0,
@@ -631,6 +640,29 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .map(|t| salmon_model::length_class_index(q, salmon.ref_len(t) as u32))
             .collect()
     });
+    // `--degCoverage`: one shared accumulator for the whole run. Built here,
+    // next to the other observed models, so an oversized request fails before
+    // the mapping pass rather than after it.
+    let coverage = match opts.coverage_bins {
+        Some(bins) => {
+            anyhow::ensure!(bins > 0, "--degCovBins must be at least 1");
+            anyhow::ensure!(
+                !opts.deterministic_fld,
+                "--degCoverage is not available under --deterministic: that pass records only \
+                 the fragment-length distribution and writes a RAD, without the per-fragment \
+                 posteriors coverage is weighted by"
+            );
+            let bytes = salmon_degnorm::CoverageAccumulator::footprint_bytes(num_refs, bins);
+            tracing::info!(
+                "collecting per-transcript coverage into {bins} bins ({:.1} MiB accumulator)",
+                bytes as f64 / (1024.0 * 1024.0)
+            );
+            let lens: Vec<u32> = (0..num_refs).map(|t| salmon.ref_len(t) as u32).collect();
+            Some(salmon_degnorm::CoverageAccumulator::new(lens, bins))
+        }
+        None => None,
+    };
+
     let posbias_obs = (opts.pos_bias && observe_bias).then(|| {
         let mk = || {
             (0..salmon_model::NUM_LENGTH_CLASSES)
@@ -710,6 +742,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             collect_posbias: opts.pos_bias,
             length_class: length_class.as_deref(),
             posbias_obs: posbias_obs.as_ref(),
+            coverage: coverage.as_ref(),
             online: online.as_ref(),
             paired_lib: opts.is_paired(),
             model_single_frag_prob: opts.model_single_frag_prob,
@@ -866,6 +899,21 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     } else {
         None
     };
+    // `--degCoverage`: collapse the difference array and write the dump. Done
+    // right after mapping, before quantification, so the file exists even if a
+    // later stage fails — and so the accumulator's memory is the first thing
+    // released.
+    if let Some(acc) = &coverage {
+        let names: Vec<String> = (0..num_refs)
+            .map(|t| salmon.ref_name(t).to_string())
+            .collect();
+        let profiles = acc.finish(names, num_mapped.load(Ordering::Relaxed));
+        std::fs::create_dir_all(opts.output_dir.join("aux_info")).context("creating aux_info")?;
+        let path = opts.output_dir.join("aux_info").join("coverage.gz");
+        profiles.write(&path)?;
+        tracing::info!("wrote per-transcript coverage to {}", path.display());
+    }
+    drop(coverage);
     {
         let p = num_processed.load(Ordering::Relaxed);
         let m = num_mapped.load(Ordering::Relaxed);
