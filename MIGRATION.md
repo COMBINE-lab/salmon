@@ -75,7 +75,8 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
   [DegNorm](https://nustatbioinfo.github.io/DegNorm/). `quant --degCoverage`
   records each transcript's coverage curve while the reads are streaming;
   `salmon degnorm` fits them across a cohort and writes a degradation index per
-  transcript per sample plus degradation-adjusted counts. Reads mode only. See
+  transcript per sample, plus one corrected `quant.sf` per sample that tximport
+  and DESeq2 read unchanged. Reads mode only. See
   [`docs/degnorm.md`](docs/degnorm.md).
 
 ## Behavior differences to be aware of

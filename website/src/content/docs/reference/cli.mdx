@@ -248,14 +248,23 @@ salmon degnorm --quants quants/s1 quants/s2 quants/s3 -o degnorm
 | --- | --- |
 | `--quants` | Quantification directories, one per sample (each needs `aux_info/coverage.gz` and, unless `--noCounts`, `quant.sf`). |
 | `--names` | Sample names for the output columns (default: the directory basenames). |
-| `-o/--output` | Output directory for `degradation_index.tsv`, `counts_raw.tsv`, `counts_adjusted.tsv`, and `degnorm_summary.json`. |
+| `-o/--output` | Output directory: `quants/<sample>/quant.sf` (corrected, one per sample), plus `degradation_index.tsv`, `counts_raw.tsv`, `counts_adjusted.tsv` and `degnorm_summary.json`. |
 | `--minLength` | Skip transcripts shorter than this (default 200). |
 | `--minCoverage` | Skip transcripts whose mean cohort coverage depth is below this (default 0.1). |
 | `--maxAdjustDI` | Ceiling on the index used to inflate counts; the reported index is untouched (default 0.9). |
 | `--maskFrac` | Hold entries below this fraction of the fitted envelope out of the envelope fit, as damaged (default 0.5; `0` fits every entry). |
 | `--maxIter`, `--tol` | Per-transcript fit iteration cap and convergence tolerance. |
 | `--noCounts` | Report degradation only; do not read `quant.sf` or adjust counts. |
+| `--noQuantSf` | Write the matrices but not the per-sample corrected `quant.sf` files. |
 | `-p/--threads` | Worker threads (0 = all cores). |
+
+The corrected `quant.sf` files are drop-in replacements for the originals, so an
+existing tximport/DESeq2 pipeline only needs its path changed:
+
+```r
+files <- file.path("degnorm", "quants", samples, "quant.sf")
+txi   <- tximport(files, type = "salmon", tx2gene = tx2gene)
+```
 
 The index is a comparative measure with a coverage-dependent positive floor, and
 it differs from [DegNorm](https://nustatbioinfo.github.io/DegNorm/)'s numbers by

@@ -32,12 +32,39 @@ writes, into its output directory:
 
 | File | Contents |
 |------|----------|
+| `quants/<sample>/quant.sf` | one corrected `quant.sf` per sample, in salmon's own format |
 | `degradation_index.tsv` | `Name` × sample matrix of degradation indices; `NA` for transcripts that were filtered out rather than fitted |
 | `counts_raw.tsv` | the `NumReads` column of each sample's `quant.sf`, as a matrix |
 | `counts_adjusted.tsv` | `raw / (1 − DI)`, the degradation-corrected counts |
 | `degnorm_summary.json` | parameters, per-sample mapped-fragment counts and depth factors, mean index per sample, how many transcripts were fitted |
 
-`--noCounts` reports the indices only, without reading `quant.sf`.
+`--noCounts` reports the indices only, without reading `quant.sf`;
+`--noQuantSf` writes the matrices but not the per-sample files.
+
+## Feeding it to tximport / DESeq2
+
+`quants/<sample>/quant.sf` is a drop-in replacement for the sample's original
+one, so degradation normalization slots in ahead of an existing analysis rather
+than replacing it — only the path changes:
+
+```r
+files <- file.path("degnorm", "quants", samples, "quant.sf")
+txi   <- tximport(files, type = "salmon", tx2gene = tx2gene)
+dds   <- DESeqDataSetFromTximport(txi, coldata, ~ condition)
+```
+
+Each row keeps its `Name`, `Length` and `EffectiveLength` verbatim from the
+original file, in the original order. `NumReads` becomes the adjusted count and
+`TPM` is recomputed from it (`NumReads / EffectiveLength`, renormalised to a
+million) — a TPM column left at its old values would contradict the counts
+beside it. Transcripts the model skipped keep their original count: no index was
+estimated for them, and dropping their rows would break the target set tximport
+expects.
+
+Only `quant.sf` is written, not a full salmon output directory, so
+`tximport(type = "salmon")` works but `tximeta` — which reads `aux_info/` for
+provenance — will not recognise these as complete runs. Point tximeta at the
+original quantification directories if you need it.
 
 ## Why two stages
 

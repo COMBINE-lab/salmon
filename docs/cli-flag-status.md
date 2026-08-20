@@ -139,7 +139,8 @@ Rust-port subcommand with no C++ analog: degradation normalization across a
 cohort, in the spirit of [DegNorm](https://nustatbioinfo.github.io/DegNorm/).
 All flags 🆕 — `--quants`, `--names`, `-o/--output`, `--minLength`,
 `--minCoverage`, `--maxAdjustDI`, `--maskFrac`, `--maxIter`, `--tol`,
-`--noCounts`, `-p/--threads`. See [`degnorm.md`](degnorm.md).
+`--noCounts`, `--noQuantSf`, `-p/--threads`. Writes one corrected `quant.sf`
+per sample (salmon's own format, for tximport/DESeq2) alongside the matrices. See [`degnorm.md`](degnorm.md).
 
 ## Hidden / testing flags (C++ `getHiddenOptions` / `getTestingOptions`)
 

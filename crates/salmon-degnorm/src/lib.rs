@@ -28,7 +28,10 @@
 //!   again.
 //! * **Across the cohort** ([`cohort`], [`nmf`]) — `salmon degnorm` reads those
 //!   dumps, fits the rank-one over-approximation per transcript, and writes the
-//!   degradation indices and adjusted counts.
+//!   degradation indices and adjusted counts. The corrected counts are emitted
+//!   both as matrices and as one `quant.sf` per sample, so an existing
+//!   tximport/DESeq2 pipeline reads them without changing anything but the path
+//!   it points at.
 //!
 //! # Differences from DegNorm
 //!
@@ -43,6 +46,6 @@ pub mod cohort;
 pub mod coverage;
 pub mod nmf;
 
-pub use cohort::{run, write_tables, CohortOptions, CohortResult, Sample};
+pub use cohort::{run, write_adjusted_quants, write_tables, CohortOptions, CohortResult, Sample};
 pub use coverage::{CoverageAccumulator, CoverageProfiles, DEFAULT_NUM_BINS};
 pub use nmf::{fit, Fit, FitOptions};

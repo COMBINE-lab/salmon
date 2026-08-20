@@ -194,6 +194,29 @@ fn a_degraded_library_is_flagged_and_its_counts_are_restored() {
         "intact libraries drifted too high: {mean:?}"
     );
 
+    // The corrected `quant.sf` files are the artefact a tximport/DESeq2
+    // pipeline actually consumes, so check they are there, complete, and carry
+    // the adjusted counts rather than the raw ones.
+    let out = tmp.path().join("degnorm");
+    cohort::write_tables(&out, &res, &opts).expect("write tables");
+    cohort::write_adjusted_quants(&out, &res, &samples).expect("write quant.sf");
+    for (i, s) in samples.iter().enumerate() {
+        let sf = out.join("quants").join(&s.name).join("quant.sf");
+        let text = std::fs::read_to_string(&sf).unwrap_or_else(|e| panic!("{}: {e}", sf.display()));
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "Name\tLength\tEffectiveLength\tTPM\tNumReads");
+        assert_eq!(lines.len(), 1 + TRANSCRIPTS.len());
+        let tpm: f64 = lines[1..]
+            .iter()
+            .map(|l| l.split('\t').nth(3).unwrap().parse::<f64>().unwrap())
+            .sum();
+        assert!((tpm - 1e6).abs() < 1.0, "{}: TPM sums to {tpm}", s.name);
+        let first: Vec<&str> = lines[1].split('\t').collect();
+        let want = res.adjusted_counts[i];
+        let got: f64 = first[4].parse().unwrap();
+        assert!((got - want).abs() < 0.01, "{}: {got} vs {want}", s.name);
+    }
+
     // Per transcript, the adjustment should close most of the count gap the
     // degradation opened between the degraded library and the intact ones.
     let m = res.num_samples();

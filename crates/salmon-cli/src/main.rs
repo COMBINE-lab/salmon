@@ -308,6 +308,9 @@ struct DegnormArgs {
     /// Report degradation only; do not read `quant.sf` or adjust counts.
     #[arg(long = "noCounts")]
     no_counts: bool,
+    /// Skip the per-sample adjusted `quant.sf` files (write only the matrices).
+    #[arg(long = "noQuantSf")]
+    no_quant_sf: bool,
     /// Worker threads (0 = all cores).
     #[arg(short = 'p', long = "threads", default_value_t = 0)]
     threads: usize,
@@ -3310,6 +3313,9 @@ fn run_degnorm(args: DegnormArgs) -> Result<()> {
 
     let res = cohort::run(&samples, &opts)?;
     cohort::write_tables(&args.output, &res, &opts)?;
+    if !args.no_quant_sf {
+        cohort::write_adjusted_quants(&args.output, &res, &samples)?;
+    }
     let fitted = res.fitted.iter().filter(|&&f| f).count();
     tracing::info!(
         "fitted {fitted} / {} transcripts across {} samples",
