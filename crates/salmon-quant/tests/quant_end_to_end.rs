@@ -266,6 +266,136 @@ fn stranded_num_mapped_matches_quantified_mass() {
     mass_conserved(&res_isr);
 }
 
+/// `lib_format_counts.json` must report the wrong-strand fragment count.
+///
+/// On a stranded protocol, fragments that map but land on the strand the library
+/// type does not expect are the direct signal of double-stranded input (genomic
+/// DNA carry-over), because half of such a fragment population lands on the
+/// expected strand by chance and is then indistinguishable from RNA. Salmon
+/// already discards the wrong-strand half, but used to report
+/// `compatible_fragment_ratio: 1.0` / `num_compatible_fragments == num_mapped`
+/// unconditionally, so the evidence never reached the user (#1130).
+///
+/// The simulated reads are inward FR (observed `ISF`): under `ISF` every fragment
+/// is compatible, under the opposite `ISR` every fragment is incompatible. The
+/// two runs therefore pin both ends of the new field.
+#[test]
+fn stranded_lib_format_counts_report_incompatible_fragments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, truth) = simulate(tmp.path());
+    let total_truth: u64 = truth.values().sum();
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let lib_counts = |dir: &Path| -> serde_json::Value {
+        let s = std::fs::read_to_string(dir.join("lib_format_counts.json")).unwrap();
+        serde_json::from_str(&s).unwrap()
+    };
+    let u64_field = |v: &serde_json::Value, k: &str| v[k].as_u64().unwrap();
+
+    let quant = |lib_type: &str, out: PathBuf| {
+        let mut opts = QuantOptions::new(idx_dir.clone(), out);
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2.clone()];
+        opts.lib_type = lib_type.to_string();
+        opts.num_threads = 1;
+        quantify(&opts).unwrap_or_else(|e| panic!("quantify {lib_type}: {e}"))
+    };
+
+    // Matching stranded type: essentially every mapped fragment is compatible.
+    let out_isf = tmp.path().join("quant_isf");
+    let res_isf = quant("ISF", out_isf.clone());
+    let isf = lib_counts(&out_isf);
+    assert_eq!(
+        u64_field(&isf, "num_compatible_fragments"),
+        res_isf.num_mapped,
+        "ISF: {isf}"
+    );
+    assert_eq!(
+        u64_field(&isf, "num_incompatible_fragments"),
+        0,
+        "ISF: {isf}"
+    );
+    assert_eq!(isf["compatible_fragment_ratio"].as_f64().unwrap(), 1.0);
+
+    // Opposite stranded type: every fragment that mapped is on the wrong strand,
+    // so the count that used to be invisible now equals (near enough) the whole
+    // library, and the ratio collapses to ~0.
+    let out_isr = tmp.path().join("quant_isr");
+    let res_isr = quant("ISR", out_isr.clone());
+    let isr = lib_counts(&out_isr);
+    let incompat = u64_field(&isr, "num_incompatible_fragments");
+    assert!(
+        incompat as f64 >= 0.9 * total_truth as f64,
+        "ISR: only {incompat} of {total_truth} fragments reported incompatible: {isr}"
+    );
+    assert!(
+        u64_field(&isr, "num_compatible_fragments") as f64 <= 0.1 * total_truth as f64,
+        "ISR: {isr}"
+    );
+    assert!(
+        isr["compatible_fragment_ratio"].as_f64().unwrap() <= 0.1,
+        "ISR: {isr}"
+    );
+    // The incompatible fragments were dropped (default `--incompatPrior` 0), so
+    // they are not in the assigned total: the two counts answer different
+    // questions and must not be conflated.
+    assert_eq!(
+        u64_field(&isr, "num_assigned_fragments"),
+        res_isr.num_mapped,
+        "ISR: {isr}"
+    );
+}
+
+/// The `--deterministic` mapping pass must report the same wrong-strand count.
+///
+/// That pass writes `lib_format_counts.json` and then hands off to the RAD
+/// requant, which does not rewrite the file, so if the strand tally were only
+/// kept on the regular per-fragment path, every `--deterministic` run would
+/// silently report zero incompatible fragments. The pass does no strand
+/// filtering of its own (incompatible placements are dropped later, in the
+/// requant), but with an explicit `-l` it can still count them.
+#[test]
+fn deterministic_mapping_pass_reports_incompatible_fragments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, truth) = simulate(tmp.path());
+    let total_truth: u64 = truth.values().sum();
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    // Phase 1 of `--deterministic`, as the CLI configures it: map, write the RAD,
+    // skip quantification. Reads are inward FR, so `ISR` is the wrong strand.
+    let out = tmp.path().join("quant_det");
+    let mut opts = QuantOptions::new(idx_dir, out.clone());
+    opts.mates1 = vec![r1];
+    opts.mates2 = vec![r2];
+    opts.lib_type = "ISR".to_string();
+    opts.num_threads = 1;
+    opts.write_rad = Some(out.join("intermediate_mappings.rad"));
+    opts.skip_quant = true;
+    opts.deterministic_fld = true;
+    std::fs::create_dir_all(&out).unwrap();
+    quantify(&opts).expect("deterministic mapping pass");
+
+    let s = std::fs::read_to_string(out.join("lib_format_counts.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+    let incompat = v["num_incompatible_fragments"].as_u64().unwrap();
+    assert!(
+        incompat as f64 >= 0.9 * total_truth as f64,
+        "deterministic pass: only {incompat} of {total_truth} reported incompatible: {v}"
+    );
+    assert!(
+        v["compatible_fragment_ratio"].as_f64().unwrap() <= 0.1,
+        "deterministic pass: {v}"
+    );
+}
+
 /// Read back a salmon RAD file: detected profile, ref names, and all records.
 fn read_rad(
     path: &Path,
