@@ -296,6 +296,15 @@ pub struct AlignQuantResult {
     /// RAD too, independently of whether the file carries salmon's provenance.
     /// `None` for a BAM input, which this path does not tally.
     pub num_orphan: Option<u64>,
+    /// fragments judged against a known expected library format that had at
+    /// least one strand-compatible placement / had none (#1130). An unstranded
+    /// format is judged like any other and simply finds every fragment
+    /// compatible. Both zero only when no placement was ever compared to an
+    /// expected format, where the writer falls back to the historical
+    /// `num_mapped` / ratio-1.0 form. Feed `lib_format_counts.json`, mirroring
+    /// the reads-mode fields in `salmon-quant`'s `QuantResult`.
+    pub num_compatible_fragments: u64,
+    pub num_incompatible_fragments: u64,
     /// what the RAD says about the mapping pass that produced it; empty for a
     /// BAM input, which has no RAD provenance to read
     pub provenance: crate::rad::RadProvenance,
@@ -882,6 +891,10 @@ struct PassAccum {
     num_mapped: u64,
     /// mapped fragments where every surviving placement placed only one mate
     num_orphan: u64,
+    /// fragments judged against a known expected format with ≥1 strand-compatible
+    /// placement / with none (#1130); see [`AlignQuantResult`]'s fields
+    num_frags_compat: u64,
+    num_frags_incompat: u64,
 }
 
 /// The online pass over an alignment record stream, structured as a persistent
@@ -974,7 +987,7 @@ where
         let mut workers = Vec::with_capacity(cfg.nthreads);
         for _ in 0..cfg.nthreads {
             let rx = rx.clone();
-            workers.push(scope.spawn(move || -> (Local, u64, u64, u64) {
+            workers.push(scope.spawn(move || -> (Local, u64, u64, u64, u64, u64) {
                 let mut local = Local::new(
                     cfg.use_error_model,
                     cfg.error_bins,
@@ -987,6 +1000,8 @@ where
                 let mut count = 0u64;
                 let mut mapped = 0u64;
                 let mut orphan = 0u64;
+                let mut compat = 0u64;
+                let mut incompat = 0u64;
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
                     let ctx = FragCtx {
@@ -1012,6 +1027,8 @@ where
                     // Plain locals, summed once per worker at the end: the
                     // per-fragment cost is an increment, with no atomic traffic.
                     let mut batch_orphan = 0u64;
+                    let mut batch_compat = 0u64;
+                    let mut batch_incompat = 0u64;
                     for raw_group in &raw_batch {
                         frags.clear();
                         for r in raw_group {
@@ -1019,7 +1036,13 @@ where
                                 frags.push(f);
                             }
                         }
-                        match process_fragment(&frags, &ctx, &mut local) {
+                        let (outcome, strand_judged) = process_fragment(&frags, &ctx, &mut local);
+                        match strand_judged {
+                            Some(true) => batch_compat += 1,
+                            Some(false) => batch_incompat += 1,
+                            None => {}
+                        }
+                        match outcome {
                             FragmentOutcome::Unmapped => {}
                             FragmentOutcome::Mapped => batch_mapped += 1,
                             FragmentOutcome::MappedOrphan => {
@@ -1051,6 +1074,8 @@ where
                     count += raw_batch.len() as u64;
                     mapped += batch_mapped;
                     orphan += batch_orphan;
+                    compat += batch_compat;
+                    incompat += batch_incompat;
                     // Live progress: every fragment in the BAM is "processed";
                     // only fragments with a surviving strand-compatible placement
                     // are "mapped" (so percent_mapped is correct on stranded data).
@@ -1063,7 +1088,7 @@ where
                             .fetch_add(batch_mapped, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-                (local, count, mapped, orphan)
+                (local, count, mapped, orphan, compat, incompat)
             }));
         }
         drop(rx); // workers hold their own clones; lets the queue disconnect
@@ -1085,14 +1110,18 @@ where
         let mut total = 0u64;
         let mut total_mapped = 0u64;
         let mut total_orphan = 0u64;
+        let mut total_compat = 0u64;
+        let mut total_incompat = 0u64;
         for w in workers {
-            let (local, count, mapped, orphan) = w
+            let (local, count, mapped, orphan, compat, incompat) = w
                 .join()
                 .map_err(|_| anyhow::anyhow!("alignment worker thread panicked"))?;
             merged = merged.merge(local);
             total += count;
             total_mapped += mapped;
             total_orphan += orphan;
+            total_compat += compat;
+            total_incompat += incompat;
         }
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
@@ -1103,6 +1132,8 @@ where
         acc.num_processed = total;
         acc.num_mapped = total_mapped;
         acc.num_orphan = total_orphan;
+        acc.num_frags_compat = total_compat;
+        acc.num_frags_incompat = total_incompat;
         Ok(())
     })
 }
@@ -1249,7 +1280,11 @@ enum FragmentOutcome {
     MappedOrphan,
 }
 
-fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> FragmentOutcome {
+fn process_fragment(
+    recs: &[FragRecord],
+    ctx: &FragCtx,
+    local: &mut Local,
+) -> (FragmentOutcome, Option<bool>) {
     use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
     // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
     const LOG_EPSILON: f64 = -23.998_158_637_57;
@@ -1282,6 +1317,13 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> Fr
     // — the same signal #1057 turned on.
     let mut any_both_mates = false;
     let mut any_orphan = false;
+    // Strand judgment for `lib_format_counts.json` (#1130): `None` until a
+    // placement is actually compared against an expected format (a
+    // `--discardOrphans`-dropped placement never is), then whether any placement
+    // was compatible. Judged over all compared placements — including ones
+    // `ignore_incompat` then drops — because a fragment whose every reported
+    // alignment is wrong-strand is exactly what the count exists to report.
+    let mut strand_judged: Option<bool> = None;
     for (pi, pl) in placements.iter().enumerate() {
         let tid = pl.tid;
         let idxs = &pl.idxs;
@@ -1332,7 +1374,9 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> Fr
         let mut aux = basis + log_frag_prob;
         if let Some(exp) = ctx.expected_format {
             let (obs, is_fw, status) = frag_format(recs, idxs);
-            if !is_compatible(exp, obs, is_fw, status) {
+            let compat = is_compatible(exp, obs, is_fw, status);
+            strand_judged = Some(strand_judged.unwrap_or(false) || compat);
+            if !compat {
                 if ctx.ignore_incompat {
                     continue; // this placement contributes nothing
                 }
@@ -1353,9 +1397,11 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> Fr
         sp_pl.push(pi);
     }
     // a fragment whose every reported alignment was incompatible is a
-    // zero-probability fragment: it is not assigned and joins no eq-class.
+    // zero-probability fragment: it is not assigned and joins no eq-class —
+    // but the strand judgment stands, and is the very thing
+    // `num_incompatible_fragments` exists to count.
     if sp_tid.is_empty() {
-        return FragmentOutcome::Unmapped;
+        return (FragmentOutcome::Unmapped, strand_judged);
     }
     // The fragment counts as an orphan only when nothing paired both mates, so a
     // fragment that is a proper pair on one transcript and an orphan on another
@@ -1503,7 +1549,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) -> Fr
         TranscriptGroup::from_sorted(tids)
     };
     ctx.eq_builder.add_group(group, weights, 1);
-    outcome
+    (outcome, strand_judged)
 }
 
 /// Is the input coordinate-sorted and *not* grouped by read name?
@@ -1981,7 +2027,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // is trained there too but not needed afterward. Scope `cfg`/`acc` so their
     // borrows (fld, eq_builder, online, ...) are released before the post-pass
     // effective-length / EM work below.
-    let (seq_obs, gc_obs, pos_obs, num_processed, num_mapped, num_orphan) = {
+    let (seq_obs, gc_obs, pos_obs, num_processed, num_mapped, num_orphan, num_compat, num_incompat) = {
         let cfg = PassCfg {
             online: online.as_ref(),
             fld: &fld,
@@ -2016,6 +2062,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             num_processed: 0,
             num_mapped: 0,
             num_orphan: 0,
+            num_frags_compat: 0,
+            num_frags_incompat: 0,
         };
         stream_online_pass(&opts.bam, &cfg, &mut acc)?;
         (
@@ -2025,6 +2073,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             acc.num_processed,
             acc.num_mapped,
             acc.num_orphan,
+            acc.num_frags_compat,
+            acc.num_frags_incompat,
         )
     };
 
@@ -2220,6 +2270,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         // Tallied while streaming the BAM, so `-a` reports the same
         // concordant/orphan split the reads path does.
         num_orphan: Some(num_orphan),
+        num_compatible_fragments: num_compat,
+        num_incompatible_fragments: num_incompat,
         provenance: crate::rad::RadProvenance::default(),
         // Straight from the BAM being quantified, no RAD in between.
         source_programs: source_program_lines(&header),
@@ -2491,11 +2543,24 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
             expected_format: String,
             compatible_fragment_ratio: f64,
             num_compatible_fragments: u64,
+            num_incompatible_fragments: u64,
             num_assigned_fragments: u64,
             num_frags_with_concordant_consistent_mappings: u64,
             num_frags_with_inconsistent_or_orphan_mappings: u64,
             strand_mapping_bias: f64,
         }
+        // Same semantics as reads mode's `write_lib_counts` (#1130): the ratio is
+        // over the fragments the strand filter actually judged, with the
+        // historical `num_mapped` / 1.0 fallback when nothing ever was. For
+        // phase 2 of `--deterministic` this rewrite is what puts *measured*
+        // values in the final output directory — the mapping pass's file is
+        // overwritten here, so these fields must be real, not placeholders.
+        let judged = res.num_compatible_fragments + res.num_incompatible_fragments;
+        let ratio = if judged > 0 {
+            res.num_compatible_fragments as f64 / judged as f64
+        } else {
+            1.0
+        };
         let counts = LibCounts {
             // The RAD is the input; the reads that produced it are not known here.
             read_files: vec![],
@@ -2503,8 +2568,13 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
                 .detected_library_type
                 .clone()
                 .unwrap_or_else(|| opts.lib_type.clone()),
-            compatible_fragment_ratio: 1.0,
-            num_compatible_fragments: res.num_mapped,
+            compatible_fragment_ratio: ratio,
+            num_compatible_fragments: if judged > 0 {
+                res.num_compatible_fragments
+            } else {
+                res.num_mapped
+            },
+            num_incompatible_fragments: res.num_incompatible_fragments,
             num_assigned_fragments: res.num_mapped,
             num_frags_with_concordant_consistent_mappings: res.num_mapped - num_orphan,
             num_frags_with_inconsistent_or_orphan_mappings: num_orphan,

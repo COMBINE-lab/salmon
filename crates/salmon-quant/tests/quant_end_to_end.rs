@@ -352,12 +352,14 @@ fn stranded_lib_format_counts_report_incompatible_fragments() {
 
 /// The `--deterministic` mapping pass must report the same wrong-strand count.
 ///
-/// That pass writes `lib_format_counts.json` and then hands off to the RAD
-/// requant, which does not rewrite the file, so if the strand tally were only
-/// kept on the regular per-fragment path, every `--deterministic` run would
-/// silently report zero incompatible fragments. The pass does no strand
-/// filtering of its own (incompatible placements are dropped later, in the
-/// requant), but with an explicit `-l` it can still count them.
+/// In the full `--deterministic` flow this file is later *rewritten* by the
+/// phase-2 RAD requant, which measures the same tallies from the RAD's stored
+/// orientations (covered by `salmon-align`'s `rad_lib_format_counts` test) —
+/// so end to end the counts survive. This test pins the mapping pass's own
+/// file, which is what a standalone `--writeRad --skipQuant` run ships. The
+/// pass does no strand filtering of its own (incompatible placements are
+/// dropped later, in the requant), but with an explicit `-l` it can still
+/// count them.
 #[test]
 fn deterministic_mapping_pass_reports_incompatible_fragments() {
     let tmp = tempfile::tempdir().unwrap();

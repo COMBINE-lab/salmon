@@ -228,6 +228,18 @@ Both counts cover only fragments compared against a known expected format. Under
 tally, so their sum can be lower than the mapped total; under an unstranded type
 every fragment is compatible and the ratio is 1.
 
+The fields are measured in every mode that writes this file: read-based
+quantification, alignment-based quantification (`-a`), RAD-input quantification,
+and `--deterministic` (whose phase-2 requant rewrites the file with tallies
+measured from the RAD's stored orientations). One caveat: in a one-pass
+**sketch mode** run, a paired-end mapping does not carry an observed library
+format at the point the filter runs, so the strand filter — and therefore this
+tally — accepts every proper pair, and only orphan placements are strand-judged;
+such a run reports a ratio near 1 regardless of strandedness. (The RAD itself
+does store both mates' orientations, which is why the requant-based flows can
+measure it.) For the wrong-strand contamination signal, use the default
+selective-alignment mode.
+
 ## Documented Rust-format files (diagnostic)
 
 These are bias-model and FLD diagnostic dumps, not read by standard downstream

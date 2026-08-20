@@ -484,15 +484,21 @@ fn process_rad_fragment(
     order: PlacementOrder,
     cfg: &FragCfg,
     scratch: &mut RadScratch,
-) -> FragmentOutcome {
+) -> (FragmentOutcome, Option<bool>) {
     if placements.is_empty() {
-        return FragmentOutcome::Unmapped;
+        return (FragmentOutcome::Unmapped, None);
     }
     // Orphan bookkeeping, folded into the loop below so the tally does not have
     // to walk these placements a second time. Counted over the *surviving* set,
     // which is what "assigned" means and what the alignment path counts.
     let mut any_pair = false;
     let mut any_orphan = false;
+    // Strand judgment for `lib_format_counts.json` (#1130): `None` until a
+    // placement is actually compared against an expected format, then whether
+    // any placement was compatible. Judged over *all* placements — including
+    // ones `ignore_incompat` then drops — because a fragment whose every
+    // placement is wrong-strand is exactly what the count exists to report.
+    let mut strand_judged: Option<bool> = None;
     let best = placements.iter().map(|p| p.score).max().unwrap_or(0);
     let at = |snap: &[f64], i: usize| -> f64 {
         if snap.is_empty() {
@@ -539,7 +545,9 @@ fn process_rad_fragment(
         let mut aux = basis + log_frag_prob;
         if let Some(exp) = cfg.expected_format {
             let (obs, is_fw, status) = rad_frag_format(p);
-            if !is_compatible(exp, obs, is_fw, status) {
+            let compat = is_compatible(exp, obs, is_fw, status);
+            strand_judged = Some(strand_judged.unwrap_or(false) || compat);
+            if !compat {
                 if cfg.ignore_incompat {
                     continue;
                 }
@@ -560,7 +568,10 @@ fn process_rad_fragment(
         );
     }
     if scratch.core.is_empty() {
-        return FragmentOutcome::Unmapped;
+        // Every placement was dropped by the strand filter: unmapped for
+        // assignment, but the judgment still stands — this is the wrong-strand
+        // fragment the tally exists to count.
+        return (FragmentOutcome::Unmapped, strand_judged);
     }
 
     // Aggregate by distinct transcript id (ascending), softmax over the
@@ -593,11 +604,12 @@ fn process_rad_fragment(
     cfg.eq_builder.add_group(group, weights, 1);
     // Orphan only when nothing paired both mates: the most complete status
     // across a fragment's hits wins, as in the RAD fragment-level type.
-    if any_orphan && !any_pair {
+    let outcome = if any_orphan && !any_pair {
         FragmentOutcome::MappedOrphan
     } else {
         FragmentOutcome::Mapped
-    }
+    };
+    (outcome, strand_judged)
 }
 
 // ---------------------------------------------------------------------------
@@ -772,6 +784,13 @@ struct RadTallies {
     mapped: AtomicU64,
     /// mapped records placed as orphans (only one mate mapped)
     orphans: AtomicU64,
+    /// records judged against a known expected format with at least one
+    /// strand-compatible placement / with none (#1130). Feed
+    /// `lib_format_counts.json`, so a requant — including phase 2 of
+    /// `--deterministic`, which rewrites that file into the final output
+    /// directory — reports measured values rather than a hardcoded 1.0.
+    frags_compat: AtomicU64,
+    frags_incompat: AtomicU64,
 }
 
 /// One worker's private copy of [`RadTallies`], merged into the shared atomics
@@ -793,6 +812,8 @@ struct LocalTallies {
     records: u64,
     mapped: u64,
     orphans: u64,
+    frags_compat: u64,
+    frags_incompat: u64,
 }
 
 impl LocalTallies {
@@ -801,9 +822,19 @@ impl LocalTallies {
     /// again here would be a second pass — and reading it off `placements[0]`
     /// only worked while the placements happened to arrive in a particular
     /// order, which the fused pass no longer guarantees.
+    ///
+    /// `strand_judged` is tallied before the `Unmapped` early-return: a fragment
+    /// whose every placement the strand filter dropped is `Unmapped` *and*
+    /// incompatible, and the second fact is the one `num_incompatible_fragments`
+    /// exists to record (#1130).
     #[inline]
-    fn tally(&mut self, outcome: FragmentOutcome) {
+    fn tally(&mut self, outcome: FragmentOutcome, strand_judged: Option<bool>) {
         self.records += 1;
+        match strand_judged {
+            Some(true) => self.frags_compat += 1,
+            Some(false) => self.frags_incompat += 1,
+            None => {}
+        }
         if outcome == FragmentOutcome::Unmapped {
             return;
         }
@@ -824,6 +855,8 @@ impl LocalTallies {
         add(&shared.records, self.records);
         add(&shared.mapped, self.mapped);
         add(&shared.orphans, self.orphans);
+        add(&shared.frags_compat, self.frags_compat);
+        add(&shared.frags_incompat, self.frags_incompat);
     }
 }
 
@@ -1025,13 +1058,13 @@ where
                         for rec in &chunk.reads {
                             pls.clear();
                             rec.placements_into(&mut pls);
-                            let outcome = process_rad_fragment(
+                            let (outcome, strand_judged) = process_rad_fragment(
                                 &pls,
                                 PlacementOrder::Arrival,
                                 cfg,
                                 &mut scratch,
                             );
-                            local.tally(outcome);
+                            local.tally(outcome, strand_judged);
                         }
                     }
                 }
@@ -1524,13 +1557,13 @@ where
                             // once here and tell both. Neither then re-derives
                             // what this sort already established.
                             sort_placements_by_tid(&mut pls);
-                            let outcome = process_rad_fragment(
+                            let (outcome, strand_judged) = process_rad_fragment(
                                 &pls,
                                 PlacementOrder::ByTid,
                                 cfg,
                                 &mut scratch,
                             );
-                            local_tallies.tally(outcome);
+                            local_tallies.tally(outcome, strand_judged);
                             collect_bias_fragment(
                                 &pls,
                                 PlacementOrder::ByTid,
@@ -1892,6 +1925,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let num_records = tallies.records.into_inner();
     let num_mapped = tallies.mapped.into_inner();
     let num_orphan = tallies.orphans.into_inner();
+    let num_frags_compat = tallies.frags_compat.into_inner();
+    let num_frags_incompat = tallies.frags_incompat.into_inner();
     // How many fragments the *mapper* saw, which only the header can say; falling
     // back to the record count is what yields a 100% rate, so it is reported as
     // such (see `warn_incomplete_provenance`).
@@ -2138,6 +2173,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         num_processed,
         num_mapped,
         num_orphan: Some(num_orphan),
+        num_compatible_fragments: num_frags_compat,
+        num_incompatible_fragments: num_frags_incompat,
         source_programs: provenance.source_programs.clone(),
         source: crate::FragmentSource::Rad,
         provenance,
