@@ -35,10 +35,10 @@
 mod bam;
 pub mod decode;
 pub mod mapping_record;
-pub mod splice;
 mod output;
 mod processor;
 mod sam;
+pub mod splice;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -493,21 +493,21 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // written at all.
     // Genome projection, when asked for. Built before the output file is opened
     // because it supplies the reference table the header declares.
-    let projector = if opts.spliced_output && (opts.write_mappings.is_some() || opts.write_bam.is_some())
-    {
-        let annotation = opts
-            .annotation
-            .as_deref()
-            .context("--spliced needs --annotation to know where the exons are")?;
-        let genome = opts
-            .genome_fasta
-            .as_deref()
-            .context("--spliced needs --genome for the chromosome lengths @SQ must declare")?;
-        let names: Vec<&str> = (0..num_refs).map(|t| salmon.ref_name(t)).collect();
-        Some(splice::GenomeProjector::build(&names, annotation, genome)?)
-    } else {
-        None
-    };
+    let projector =
+        if opts.spliced_output && (opts.write_mappings.is_some() || opts.write_bam.is_some()) {
+            let annotation = opts
+                .annotation
+                .as_deref()
+                .context("--spliced needs --annotation to know where the exons are")?;
+            let genome = opts
+                .genome_fasta
+                .as_deref()
+                .context("--spliced needs --genome for the chromosome lengths @SQ must declare")?;
+            let names: Vec<&str> = (0..num_refs).map(|t| salmon.ref_name(t)).collect();
+            Some(splice::GenomeProjector::build(&names, annotation, genome)?)
+        } else {
+            None
+        };
     // UR is a URI, not a path: samtools writes `file://` + an absolute path, and
     // anything resolving the reference expects the same shape.
     let index_uri = format!(
@@ -961,6 +961,19 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // requant + exact FLD parity). The mapping pass scope above has closed, so all
     // worker references to `rad_writer` are already dropped; it sits idle until
     // then.
+
+    if let Some(projector) = &projector {
+        let dropped = projector.dropped();
+        if dropped > 0 {
+            tracing::warn!(
+                placements = dropped,
+                "--spliced dropped placements whose transcript the annotation does not describe; \
+                 those fragments are absent from the mapping output (or written as unaligned with \
+                 --sampleUnaligned). Check that the annotation covers the reference the index was \
+                 built from."
+            );
+        }
+    }
 
     // Write aux_info/unmapped_names.txt ("<name> <status>" per line; the port maps
     // unmapped fragments as "u" — orphan/decoy sub-codes await mapper-reason

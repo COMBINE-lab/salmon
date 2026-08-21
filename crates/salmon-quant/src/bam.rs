@@ -623,6 +623,10 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
                 push_aux_cigar(buf, *b"MC", mate_cigar);
             }
         }
+        if let Some(strand) = record.transcript_strand {
+            buf.extend_from_slice(b"XSA");
+            buf.push(strand);
+        }
     }
     if let Some(read_group) = record.read_group {
         push_aux_str(buf, *b"RG", read_group);

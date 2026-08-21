@@ -490,6 +490,33 @@ that did not map, with its bases and qualities intact and no reference,
 position, CIGAR or placement tags. The output then covers the whole library, and
 `samtools fastq` can round-trip the input back out of it.
 
+### Spliced genome output
+
+A transcript has no introns, so by default a read spanning an exon junction is
+contiguous and its CIGAR never contains an `N`. `--spliced` re-expresses the
+records in genome coordinates instead: each alignment is cut at the exon
+boundaries the annotation declares and the gaps reappear as `N` operations, the
+way a spliced genome aligner writes them.
+
+It needs `--annotation <gtf|gff>` for the exon structures and `--genome <fasta>`
+for the chromosome lengths `@SQ` has to declare, which an annotation never
+states. A FASTA index (`.fai`) is used when one is present, so the usual case
+costs one small file read.
+
+`@SQ` then names chromosomes rather than transcripts, and records gain `XS:A`,
+the transcript's genomic strand, which StringTie and Cufflinks need to read an
+intron the right way round. A transcript on the minus strand runs against the
+genomic axis, so its alignments are turned around: the CIGAR reverses, the
+position becomes the alignment's leftmost genomic base, and the strand bits and
+stored bases flip to match. `M5` is omitted, because the references are then
+chromosomes salmon never loaded and a guessed checksum is worse than none.
+
+Placements on a reference the annotation does not describe (a decoy, or a
+transcript absent from the GTF) are dropped rather than half-projected. Two
+transcripts of one gene often imply the same genomic alignment; those duplicates
+are kept, tagged secondary as they already were, because deciding between them
+is a quantification question and `quant.sf` is salmon's answer to it.
+
 ### `MAPQ`
 
 SAM's `MAPQ` is a phred-scaled probability that a placement is wrong, and salmon

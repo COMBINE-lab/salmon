@@ -197,6 +197,9 @@ fn write_tags(buf: &mut String, record: &AlignmentRecord<'_>) {
                 }
             }
         }
+        if let Some(strand) = record.transcript_strand {
+            let _ = write!(buf, "\tXS:A:{}", strand as char);
+        }
     }
     if let Some(read_group) = record.read_group {
         let _ = write!(buf, "\tRG:Z:{read_group}");

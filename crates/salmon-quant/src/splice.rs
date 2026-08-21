@@ -124,6 +124,10 @@ pub struct Projection {
 /// Transcript exon structures for every reference in the salmon index, plus the
 /// chromosome table the projected records refer to.
 pub struct GenomeProjector {
+    /// Placements dropped because their reference has no exon structure. Counted
+    /// so the run can say how much of the mapping output the annotation cost,
+    /// instead of quietly producing a file that disagrees with `quant.sf`.
+    dropped: std::sync::atomic::AtomicU64,
     /// `(name, length)` per chromosome, in the order they appear in `@SQ`.
     chromosomes: Vec<(String, u64)>,
     /// One entry per salmon reference id; `None` for a reference the annotation
@@ -198,14 +202,27 @@ impl GenomeProjector {
             "genome projection ready"
         );
         Ok(Self {
+            dropped: std::sync::atomic::AtomicU64::new(0),
             chromosomes,
             models,
         })
     }
 
+    /// How many placements were dropped for want of an exon structure.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// The `(name, length)` table projected records index into.
     pub fn chromosomes(&self) -> &[(String, u64)] {
         &self.chromosomes
+    }
+
+    /// Whether the transcript at `tid` runs along the genome's forward strand,
+    /// or `None` if the annotation does not describe it. This is what `XS`
+    /// reports for a spliced alignment.
+    pub fn strand(&self, tid: usize) -> Option<bool> {
+        Some(self.models.get(tid)?.as_ref()?.forward)
     }
 
     /// Whether reference `tid` can be projected at all.
@@ -229,14 +246,17 @@ impl GenomeProjector {
         out: &mut Vec<CigarOp>,
     ) -> Option<Projection> {
         out.clear();
-        let model = self.models.get(tid)?.as_ref()?;
-        if model.exons.is_empty() {
+        let Some(Some(model)) = self.models.get(tid) else {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        };
+        if model.exons.is_empty() || transcript_position.max(0) as u32 >= model.length() {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return None;
         }
         let start = transcript_position.max(0) as u32;
-        if start >= model.length() {
-            return None;
-        }
 
         // Walk the transcript CIGAR, cutting every reference-consuming operation
         // at exon boundaries and filling the gap between consecutive exons with an
@@ -628,6 +648,7 @@ mod tests {
 
     fn projector(model: TranscriptModel) -> GenomeProjector {
         GenomeProjector {
+            dropped: std::sync::atomic::AtomicU64::new(0),
             chromosomes: vec![("chr1".into(), 1_000_000)],
             models: vec![Some(model)],
         }
@@ -798,6 +819,7 @@ mod tests {
     #[test]
     fn an_undescribed_reference_does_not_project() {
         let projector = GenomeProjector {
+            dropped: std::sync::atomic::AtomicU64::new(0),
             chromosomes: vec![("chr1".into(), 1000)],
             models: vec![None],
         };
