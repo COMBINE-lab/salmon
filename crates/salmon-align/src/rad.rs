@@ -484,9 +484,9 @@ fn process_rad_fragment(
     order: PlacementOrder,
     cfg: &FragCfg,
     scratch: &mut RadScratch,
-) -> (FragmentOutcome, Option<bool>) {
+) -> (FragmentOutcome, Option<bool>, u16) {
     if placements.is_empty() {
-        return (FragmentOutcome::Unmapped, None);
+        return (FragmentOutcome::Unmapped, None, 0);
     }
     // Orphan bookkeeping, folded into the loop below so the tally does not have
     // to walk these placements a second time. Counted over the *surviving* set,
@@ -499,6 +499,11 @@ fn process_rad_fragment(
     // ones `ignore_incompat` then drops — because a fragment whose every
     // placement is wrong-strand is exactly what the count exists to report.
     let mut strand_judged: Option<bool> = None;
+    // Observed-format set across this fragment's placements (bit per format id),
+    // for the per-format histogram — recorded from the raw placements, before
+    // any filtering, since it reports what was observed rather than what was
+    // kept.
+    let mut fmt_mask: u16 = 0;
     let best = placements.iter().map(|p| p.score).max().unwrap_or(0);
     let at = |snap: &[f64], i: usize| -> f64 {
         if snap.is_empty() {
@@ -543,8 +548,12 @@ fn process_rad_fragment(
             0.0
         };
         let mut aux = basis + log_frag_prob;
+        let (obs, is_fw, status) = rad_frag_format(p);
+        fmt_mask |= 1
+            << obs
+                .unwrap_or_else(|| salmon_core::observed_single_format(is_fw))
+                .format_id();
         if let Some(exp) = cfg.expected_format {
-            let (obs, is_fw, status) = rad_frag_format(p);
             let compat = is_compatible(exp, obs, is_fw, status);
             strand_judged = Some(strand_judged.unwrap_or(false) || compat);
             if !compat {
@@ -571,7 +580,7 @@ fn process_rad_fragment(
         // Every placement was dropped by the strand filter: unmapped for
         // assignment, but the judgment still stands — this is the wrong-strand
         // fragment the tally exists to count.
-        return (FragmentOutcome::Unmapped, strand_judged);
+        return (FragmentOutcome::Unmapped, strand_judged, fmt_mask);
     }
 
     // Aggregate by distinct transcript id (ascending), softmax over the
@@ -609,7 +618,7 @@ fn process_rad_fragment(
     } else {
         FragmentOutcome::Mapped
     };
-    (outcome, strand_judged)
+    (outcome, strand_judged, fmt_mask)
 }
 
 // ---------------------------------------------------------------------------
@@ -791,6 +800,12 @@ struct RadTallies {
     /// directory — reports measured values rather than a hardcoded 1.0.
     frags_compat: AtomicU64,
     frags_incompat: AtomicU64,
+    /// per-observed-format fragment counts (`counts[format_id]`): one count per
+    /// distinct observed format among a fragment's placements, tallied for
+    /// every fragment with placements whatever the expected format. The raw
+    /// histogram behind `lib_format_counts.json`'s per-format keys and its
+    /// concordant/inconsistent/strand-bias derivations.
+    lib_fmt: [AtomicU64; salmon_core::NUM_LIB_FORMATS],
 }
 
 /// One worker's private copy of [`RadTallies`], merged into the shared atomics
@@ -814,6 +829,7 @@ struct LocalTallies {
     orphans: u64,
     frags_compat: u64,
     frags_incompat: u64,
+    lib_fmt: salmon_core::LibFormatCountsArray,
 }
 
 impl LocalTallies {
@@ -828,12 +844,22 @@ impl LocalTallies {
     /// incompatible, and the second fact is the one `num_incompatible_fragments`
     /// exists to record (#1130).
     #[inline]
-    fn tally(&mut self, outcome: FragmentOutcome, strand_judged: Option<bool>) {
+    fn tally(&mut self, outcome: FragmentOutcome, strand_judged: Option<bool>, fmt_mask: u16) {
         self.records += 1;
         match strand_judged {
             Some(true) => self.frags_compat += 1,
             Some(false) => self.frags_incompat += 1,
             None => {}
+        }
+        // Observed-format histogram: like `strand_judged`, applied before the
+        // `Unmapped` early-return — a fragment whose every placement the filter
+        // dropped still *observed* those formats, and that observation is what
+        // the histogram reports.
+        let mut bits = fmt_mask;
+        while bits != 0 {
+            let i = bits.trailing_zeros() as usize;
+            self.lib_fmt[i] += 1;
+            bits &= bits - 1;
         }
         if outcome == FragmentOutcome::Unmapped {
             return;
@@ -857,6 +883,9 @@ impl LocalTallies {
         add(&shared.orphans, self.orphans);
         add(&shared.frags_compat, self.frags_compat);
         add(&shared.frags_incompat, self.frags_incompat);
+        for (a, &v) in shared.lib_fmt.iter().zip(self.lib_fmt.iter()) {
+            add(a, v);
+        }
     }
 }
 
@@ -1058,13 +1087,13 @@ where
                         for rec in &chunk.reads {
                             pls.clear();
                             rec.placements_into(&mut pls);
-                            let (outcome, strand_judged) = process_rad_fragment(
+                            let (outcome, strand_judged, fmt_mask) = process_rad_fragment(
                                 &pls,
                                 PlacementOrder::Arrival,
                                 cfg,
                                 &mut scratch,
                             );
-                            local.tally(outcome, strand_judged);
+                            local.tally(outcome, strand_judged, fmt_mask);
                         }
                     }
                 }
@@ -1557,13 +1586,13 @@ where
                             // once here and tell both. Neither then re-derives
                             // what this sort already established.
                             sort_placements_by_tid(&mut pls);
-                            let (outcome, strand_judged) = process_rad_fragment(
+                            let (outcome, strand_judged, fmt_mask) = process_rad_fragment(
                                 &pls,
                                 PlacementOrder::ByTid,
                                 cfg,
                                 &mut scratch,
                             );
-                            local_tallies.tally(outcome, strand_judged);
+                            local_tallies.tally(outcome, strand_judged, fmt_mask);
                             collect_bias_fragment(
                                 &pls,
                                 PlacementOrder::ByTid,
@@ -1927,6 +1956,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let num_orphan = tallies.orphans.into_inner();
     let num_frags_compat = tallies.frags_compat.into_inner();
     let num_frags_incompat = tallies.frags_incompat.into_inner();
+    let lib_format_counts: salmon_core::LibFormatCountsArray =
+        tallies.lib_fmt.map(|a| a.into_inner());
     // How many fragments the *mapper* saw, which only the header can say; falling
     // back to the record count is what yields a 100% rate, so it is reported as
     // such (see `warn_incomplete_provenance`).
@@ -2142,10 +2173,19 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // Run diagnostics from end-of-run aggregates (no per-fragment cost): the
     // observed (baked/auto-detected) library format powers the strandedness
     // sanity check, gated on `-l A` so an explicit `-l` is never contradicted.
-    let detected_library_type = detected_fmt
-        .or(baked_libfmt)
-        .map(|f| f.canonical().to_string());
+    //
+    // Under `-l A` the reported type must be the one the filter actually used —
+    // `expected_format`, which resolves baked-first (the producing run's own
+    // answer is authoritative over a re-derivation). Under an explicit `-l` no
+    // detection was *applied*, so report the measured estimate, which is what
+    // the mismatch diagnostic compares against the request.
     let auto_detect = LibraryFormat::is_auto(&opts.lib_type);
+    let detected_library_type = if auto_detect {
+        expected_format
+    } else {
+        detected_fmt.or(baked_libfmt)
+    }
+    .map(|f| f.canonical().to_string());
     let requested_lib = LibraryFormat::parse(&opts.lib_type)
         .map(|f| f.canonical().to_string())
         .unwrap_or_else(|_| opts.lib_type.clone());
@@ -2175,6 +2215,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         num_orphan: Some(num_orphan),
         num_compatible_fragments: num_frags_compat,
         num_incompatible_fragments: num_frags_incompat,
+        lib_format_counts,
         source_programs: provenance.source_programs.clone(),
         source: crate::FragmentSource::Rad,
         provenance,

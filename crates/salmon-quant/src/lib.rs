@@ -305,6 +305,12 @@ pub struct QuantResult {
     /// are in neither, and `num_compatible_fragments + num_incompatible_fragments`
     /// can fall short of the mapped total.
     pub num_incompatible_fragments: u64,
+    /// per-observed-format fragment counts (`counts[format_id]`, one count per
+    /// distinct format among a mapped fragment's placements), tallied for every
+    /// mapped fragment whatever the expected format. The raw histogram behind
+    /// `lib_format_counts.json`'s per-format keys and its
+    /// concordant/inconsistent/strand-bias derivations.
+    pub lib_format_counts: salmon_core::LibFormatCountsArray,
     /// fragment mass (sum of equivalence-class counts) that could not be assigned
     /// to any transcript in the final min-alpha redistribution because every
     /// member of the class was truncated; reported, not rescaled. Normally 0.
@@ -423,6 +429,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let num_orphan = AtomicU64::new(0);
     let num_frags_compat = AtomicU64::new(0);
     let num_frags_incompat = AtomicU64::new(0);
+    let lib_format_counts: [AtomicU64; salmon_core::NUM_LIB_FORMATS] =
+        std::array::from_fn(|_| AtomicU64::new(0));
     let num_decoy = AtomicU64::new(0);
     let num_dovetail = AtomicU64::new(0);
     let num_frags_filtered_vm = AtomicU64::new(0);
@@ -692,6 +700,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             num_orphan: &num_orphan,
             num_frags_compat: &num_frags_compat,
             num_frags_incompat: &num_frags_incompat,
+            lib_format_counts: &lib_format_counts,
             num_decoy: &num_decoy,
             num_dovetail: &num_dovetail,
             num_frags_filtered_vm: &num_frags_filtered_vm,
@@ -839,18 +848,24 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // Resolve the library type: the detected format (when auto), else the
     // user-specified string. Fall back to a sensible default if detection saw
     // no usable samples.
-    let library_type = if let Some(f) = det_fmt {
-        f.canonical().to_string()
-    } else if auto_detect {
-        // Auto mode only: adopt the prefix detector's format. Under an explicit
-        // `-l` the (now always-on) detector is used purely for the mismatch
-        // diagnostic and must NOT override the user's choice.
-        match &detector {
-            Some(det) => det.final_format().canonical().to_string(),
-            None => opts.lib_type.clone(),
+    // Auto mode only: adopt the resolved format — the deterministic
+    // accumulator's answer when it ran, else the prefix detector's. Under an
+    // explicit `-l` both are computed purely for the mismatch diagnostic and
+    // must NOT override the user's choice (the strand filter used the explicit
+    // type, and this string labels `lib_format_counts.json`'s
+    // `expected_format`).
+    let library_type = if auto_detect {
+        match det_fmt {
+            Some(f) => f.canonical().to_string(),
+            None => match &detector {
+                Some(det) => det.final_format().canonical().to_string(),
+                None => opts.lib_type.clone(),
+            },
         }
     } else {
-        opts.lib_type.clone()
+        LibraryFormat::parse(&opts.lib_type)
+            .map(|f| f.canonical().to_string())
+            .unwrap_or_else(|_| opts.lib_type.clone())
     };
 
     // ---- effective lengths from the (now frozen) FLD ------------------------
@@ -1315,6 +1330,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_orphan: num_orphan.load(Ordering::Relaxed),
         num_compatible_fragments: num_frags_compat.load(Ordering::Relaxed),
         num_incompatible_fragments: num_frags_incompat.load(Ordering::Relaxed),
+        lib_format_counts: std::array::from_fn(|i| lib_format_counts[i].load(Ordering::Relaxed)),
         inference_truncated_mass,
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,

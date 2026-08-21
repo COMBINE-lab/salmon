@@ -378,6 +378,270 @@ pub fn is_compatible(
     }
 }
 
+/// Number of distinct library formats ([`LibraryFormat::format_id`] is dense in
+/// `0..NUM_LIB_FORMATS`). Sizes the observed-format histogram every quant path
+/// tallies for `lib_format_counts.json`.
+pub const NUM_LIB_FORMATS: usize = LibraryFormat::MAX_FORMAT_ID as usize + 1;
+
+/// Per-fragment observed-format counts: `counts[f.format_id()]` is the number of
+/// mapped fragments with at least one placement observed as format `f`. A
+/// fragment with placements of several formats counts once under each (ports
+/// salmon's per-fragment `libTypeCountsPerFrag[i] > 0` accumulation), so the
+/// histogram can sum to more than the mapped total.
+pub type LibFormatCountsArray = [u64; NUM_LIB_FORMATS];
+
+/// The observed library format of a single-end mapping or an orphaned mate, for
+/// the observed-format tally: a single-end observation on its strand. The pair
+/// counterpart is [`observed_paired_format`].
+pub fn observed_single_format(is_forward: bool) -> LibraryFormat {
+    LibraryFormat::new(
+        ReadType::SingleEnd,
+        ReadOrientation::None,
+        if is_forward {
+            ReadStrandedness::S
+        } else {
+            ReadStrandedness::A
+        },
+    )
+}
+
+/// `lib_format_counts.json` fields derived from the observed-format histogram.
+/// See [`summarize_lib_format_counts`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LibFormatSummary {
+    /// Fragments whose observed format agrees with the expected one — exactly
+    /// the expected format for a stranded expectation, either strandedness of
+    /// the expected orientation for an unstranded one.
+    pub num_concordant_consistent: u64,
+    /// Fragments observed only in formats that disagree (wrong orientation,
+    /// wrong strand under a stranded expectation, or orphaned mates).
+    pub num_inconsistent_or_orphan: u64,
+    /// Of the two strandedness variants of the expected orientation, the
+    /// fraction observed as the *sense* variant. Near 0.5 for a genuinely
+    /// unstranded library; near 0 or 1 for a stranded one.
+    pub strand_mapping_bias: f64,
+}
+
+/// Derive the histogram-summary fields of `lib_format_counts.json` from the
+/// observed-format counts and the (resolved) expected format. Ports the
+/// derivation in salmon's `ReadExperiment::summarizeLibraryTypeCounts`, so the
+/// fields keep their C++ meaning: *concordant and consistent* is agreement of
+/// observed format with expected — not merely "both mates placed" — and
+/// `strand_mapping_bias` is measured, which is what makes the classic
+/// "potential strand bias in an unstranded protocol" check possible.
+pub fn summarize_lib_format_counts(
+    expected: LibraryFormat,
+    counts: &LibFormatCountsArray,
+) -> LibFormatSummary {
+    // The two strandedness variants of the expected orientation: sense-first
+    // and antisense-first (e.g. ISF/ISR for an inward expectation, SF/SR for
+    // single-end or matching).
+    let (s1, s2) = match expected.orientation {
+        ReadOrientation::Same | ReadOrientation::None => (ReadStrandedness::S, ReadStrandedness::A),
+        ReadOrientation::Away | ReadOrientation::Toward => {
+            (ReadStrandedness::SA, ReadStrandedness::AS)
+        }
+    };
+    let fmt1 = LibraryFormat::new(expected.read_type, expected.orientation, s1);
+    let fmt2 = LibraryFormat::new(expected.read_type, expected.orientation, s2);
+    let n1 = counts[fmt1.format_id() as usize];
+    let n2 = counts[fmt2.format_id() as usize];
+
+    let (agree, disagree) = if expected.strandedness == ReadStrandedness::U {
+        // Unstranded: both strandedness variants of the orientation agree.
+        let agree = n1 + n2;
+        let disagree: u64 = counts
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != fmt1.format_id() as usize && i != fmt2.format_id() as usize)
+            .map(|(_, &c)| c)
+            .sum();
+        (agree, disagree)
+    } else {
+        // Stranded: only the expected format itself agrees.
+        let eid = expected.format_id() as usize;
+        let agree = counts[eid];
+        let disagree: u64 = counts
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != eid)
+            .map(|(_, &c)| c)
+            .sum();
+        (agree, disagree)
+    };
+    let strand_mapping_bias = if agree > 0 && n1 + n2 > 0 {
+        n1 as f64 / (n1 + n2) as f64
+    } else {
+        0.0
+    };
+    LibFormatSummary {
+        num_concordant_consistent: agree,
+        num_inconsistent_or_orphan: disagree,
+        strand_mapping_bias,
+    }
+}
+
+impl LibFormatSummary {
+    /// The classic end-of-run library-format warnings (ported from
+    /// `summarizeLibraryTypeCounts`), emitted by every writer of
+    /// `lib_format_counts.json` so the checks behave identically across modes:
+    /// no concordant-consistent mappings at all; a strand bias beyond 1% under
+    /// an unstranded expectation; and more than 5% of judged fragments
+    /// incompatible with the expected format.
+    pub fn log_warnings(&self, expected: LibraryFormat, compatible_fragment_ratio: f64) {
+        if expected.strandedness == ReadStrandedness::U {
+            if self.num_concordant_consistent == 0 {
+                tracing::warn!(
+                    "found no concordant and consistent mappings; if this is a \
+                     paired-end library, are you sure the reads are properly \
+                     paired? See lib_format_counts.json for details"
+                );
+            } else if (self.strand_mapping_bias - 0.5).abs() > 0.01 {
+                tracing::warn!(
+                    "detected a *potential* strand bias > 1% in an unstranded \
+                     protocol (strand_mapping_bias = {:.4}); see \
+                     lib_format_counts.json for details",
+                    self.strand_mapping_bias
+                );
+            }
+        }
+        if 1.0 - compatible_fragment_ratio > 0.05 {
+            tracing::warn!(
+                "greater than 5% of the fragments disagreed with the expected \
+                 library type ({}); see lib_format_counts.json for details",
+                expected.canonical()
+            );
+        }
+    }
+}
+
+/// The full contents of `lib_format_counts.json`, shared by every writer (reads
+/// mode, alignment mode, RAD requant) so the file cannot drift between paths.
+/// Field names and meanings match C++ salmon's `summarizeLibraryTypeCounts`,
+/// with `num_incompatible_fragments` as the one (documented) extension (#1130);
+/// the trailing 12 keys are the raw observed-format histogram C++ appends.
+#[derive(Debug, Serialize)]
+pub struct LibFormatCountsFile {
+    pub read_files: Vec<String>,
+    pub expected_format: String,
+    pub compatible_fragment_ratio: f64,
+    pub num_compatible_fragments: u64,
+    pub num_incompatible_fragments: u64,
+    pub num_assigned_fragments: u64,
+    pub num_frags_with_concordant_consistent_mappings: u64,
+    pub num_frags_with_inconsistent_or_orphan_mappings: u64,
+    pub strand_mapping_bias: f64,
+    #[serde(rename = "IU")]
+    pub iu: u64,
+    #[serde(rename = "ISF")]
+    pub isf: u64,
+    #[serde(rename = "ISR")]
+    pub isr: u64,
+    #[serde(rename = "OU")]
+    pub ou: u64,
+    #[serde(rename = "OSF")]
+    pub osf: u64,
+    #[serde(rename = "OSR")]
+    pub osr: u64,
+    #[serde(rename = "MU")]
+    pub mu: u64,
+    #[serde(rename = "MSF")]
+    pub msf: u64,
+    #[serde(rename = "MSR")]
+    pub msr: u64,
+    #[serde(rename = "U")]
+    pub u: u64,
+    #[serde(rename = "SF")]
+    pub sf: u64,
+    #[serde(rename = "SR")]
+    pub sr: u64,
+}
+
+impl LibFormatCountsFile {
+    /// Assemble the file from a run's end-of-pass aggregates.
+    ///
+    /// `expected_format` is the *resolved* library-type string (the detected
+    /// type under `-l A` when detection resolved, else the user's). The ratio is
+    /// over the fragments the strand filter actually judged
+    /// (`num_compatible + num_incompatible`), with the historical
+    /// `num_mapped` / ratio-1.0 fallback when nothing ever was — under `-l A`
+    /// the fragments consumed before detection resolves are in neither tally,
+    /// and an unstranded type judges every fragment compatible. The
+    /// histogram-derived fields need a concrete expected format; when the
+    /// string does not name one (an unresolved `-l A` on an empty run) they are
+    /// zero.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        read_files: Vec<String>,
+        expected_format: String,
+        num_mapped: u64,
+        num_compatible: u64,
+        num_incompatible: u64,
+        counts: &LibFormatCountsArray,
+    ) -> Self {
+        let judged = num_compatible + num_incompatible;
+        let ratio = if judged > 0 {
+            num_compatible as f64 / judged as f64
+        } else {
+            1.0
+        };
+        let summary = LibraryFormat::parse(&expected_format)
+            .ok()
+            .map(|exp| summarize_lib_format_counts(exp, counts))
+            .unwrap_or(LibFormatSummary {
+                num_concordant_consistent: 0,
+                num_inconsistent_or_orphan: 0,
+                strand_mapping_bias: 0.0,
+            });
+        let c = |s: &str| counts[LibraryFormat::parse(s).unwrap().format_id() as usize];
+        Self {
+            read_files,
+            expected_format,
+            compatible_fragment_ratio: ratio,
+            num_compatible_fragments: if judged > 0 {
+                num_compatible
+            } else {
+                num_mapped
+            },
+            num_incompatible_fragments: num_incompatible,
+            num_assigned_fragments: num_mapped,
+            num_frags_with_concordant_consistent_mappings: summary.num_concordant_consistent,
+            num_frags_with_inconsistent_or_orphan_mappings: summary.num_inconsistent_or_orphan,
+            strand_mapping_bias: summary.strand_mapping_bias,
+            iu: c("IU"),
+            isf: c("ISF"),
+            isr: c("ISR"),
+            ou: c("OU"),
+            osf: c("OSF"),
+            osr: c("OSR"),
+            mu: c("MU"),
+            msf: c("MSF"),
+            msr: c("MSR"),
+            u: c("U"),
+            sf: c("SF"),
+            sr: c("SR"),
+        }
+    }
+
+    /// Emit the classic end-of-run warnings for this file's contents (see
+    /// [`LibFormatSummary::log_warnings`]). A no-op when the expected format
+    /// never resolved or nothing mapped — an empty run has nothing to warn
+    /// about.
+    pub fn log_warnings(&self) {
+        if self.num_assigned_fragments == 0 {
+            return;
+        }
+        if let Ok(exp) = LibraryFormat::parse(&self.expected_format) {
+            let summary = LibFormatSummary {
+                num_concordant_consistent: self.num_frags_with_concordant_consistent_mappings,
+                num_inconsistent_or_orphan: self.num_frags_with_inconsistent_or_orphan_mappings,
+                strand_mapping_bias: self.strand_mapping_bias,
+            };
+            summary.log_warnings(exp, self.compatible_fragment_ratio);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +694,60 @@ mod tests {
             .collect();
         ids.sort_unstable();
         assert_eq!(ids, (0..12).collect::<Vec<_>>());
+    }
+
+    /// The histogram summary must keep the C++ field meanings: agreement is of
+    /// observed format vs expected, and the bias is the sense fraction within
+    /// the expected orientation's two variants.
+    #[test]
+    fn lib_format_summary_matches_cpp_derivation() {
+        let mut counts: LibFormatCountsArray = [0; NUM_LIB_FORMATS];
+        let isf = LibraryFormat::parse("ISF").unwrap();
+        let isr = LibraryFormat::parse("ISR").unwrap();
+        let sf = LibraryFormat::parse("SF").unwrap();
+        counts[isf.format_id() as usize] = 30;
+        counts[isr.format_id() as usize] = 20;
+        counts[sf.format_id() as usize] = 5; // orphans, observed single-end
+
+        // Unstranded inward expectation: both inward variants agree; the
+        // orphan observations disagree; bias is the sense share.
+        let iu = LibraryFormat::parse("IU").unwrap();
+        let s = summarize_lib_format_counts(iu, &counts);
+        assert_eq!(s.num_concordant_consistent, 50);
+        assert_eq!(s.num_inconsistent_or_orphan, 5);
+        assert!((s.strand_mapping_bias - 0.6).abs() < 1e-12);
+
+        // Stranded expectation: only the exact format agrees; everything else
+        // (wrong strand and orphans) disagrees. Bias is unchanged — it is a
+        // property of the orientation's two variants, not of the expectation.
+        let s = summarize_lib_format_counts(isf, &counts);
+        assert_eq!(s.num_concordant_consistent, 30);
+        assert_eq!(s.num_inconsistent_or_orphan, 25);
+        assert!((s.strand_mapping_bias - 0.6).abs() < 1e-12);
+
+        // Single-end expectation uses the S/A variants.
+        let mut se: LibFormatCountsArray = [0; NUM_LIB_FORMATS];
+        se[sf.format_id() as usize] = 8;
+        se[LibraryFormat::parse("SR").unwrap().format_id() as usize] = 2;
+        let u = LibraryFormat::parse("U").unwrap();
+        let s = summarize_lib_format_counts(u, &se);
+        assert_eq!(s.num_concordant_consistent, 10);
+        assert_eq!(s.num_inconsistent_or_orphan, 0);
+        assert!((s.strand_mapping_bias - 0.8).abs() < 1e-12);
+
+        // Nothing observed at all: everything zero, bias 0 by convention.
+        let empty: LibFormatCountsArray = [0; NUM_LIB_FORMATS];
+        let s = summarize_lib_format_counts(iu, &empty);
+        assert_eq!(s.num_concordant_consistent, 0);
+        assert_eq!(s.num_inconsistent_or_orphan, 0);
+        assert_eq!(s.strand_mapping_bias, 0.0);
+    }
+
+    /// Orphan/single-end observations are a strand on a single end.
+    #[test]
+    fn observed_single_format_is_se_strand() {
+        assert_eq!(observed_single_format(true).canonical(), "SF");
+        assert_eq!(observed_single_format(false).canonical(), "SR");
     }
 
     /// Pin the defaults, since they decide what an unspecified run assumes.
