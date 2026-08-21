@@ -16,11 +16,13 @@
 use std::path::Path;
 
 use salmon_index::{build, IndexBuildOptions};
+use salmon_quant::mapping_record::ReadGroup;
 use salmon_quant::{quantify, QuantOptions};
 
 /// Options for one fixture run, beyond the mapping output itself.
 #[derive(Default)]
 struct Run {
+    read_group: Option<&'static str>,
     /// Quantify the first mates on their own, exercising the single-end path.
     single_end: bool,
 }
@@ -54,6 +56,7 @@ fn run_with_mapping_output(dir: &Path, run: Run) -> String {
     options.lib_type = "IU".to_string();
     options.num_threads = 1;
     options.write_mappings = Some(sam.clone());
+    options.read_group = run.read_group.map(|spec| ReadGroup::parse(spec).unwrap());
     quantify(&options).expect("quantifying");
 
     std::fs::read_to_string(&sam).expect("reading the SAM output")
@@ -180,12 +183,14 @@ fn the_header_describes_the_file() {
     let mut lines = sam.lines();
 
     let hd = lines.next().expect("a header");
-    assert_eq!(hd, "@HD\tVN:1.0\tSO:unknown");
+    assert_eq!(hd, "@HD\tVN:1.6\tSO:unsorted\tGO:query");
 
     let sq: Vec<&str> = sam.lines().filter(|l| l.starts_with("@SQ")).collect();
     assert_eq!(sq.len(), 2, "one @SQ per transcript");
     for line in &sq {
         assert!(line.contains("\tLN:"), "@SQ needs a length: {line}");
+        assert!(line.contains("\tM5:"), "@SQ needs a checksum: {line}");
+        assert!(line.contains("\tUR:file://"), "@SQ needs a URI: {line}");
     }
     // The reference name stops at the first space: the rest of a FASTA header is
     // a description, not part of the name.
@@ -197,6 +202,10 @@ fn the_header_describes_the_file() {
     assert!(
         sam.lines().any(|l| l.starts_with("@PG\tID:salmon")),
         "the header must record what wrote the file"
+    );
+    assert!(
+        sam.lines().any(|l| l.starts_with("@CO")),
+        "the ordering contract should be stated in the file"
     );
 }
 
@@ -215,6 +224,7 @@ fn every_record_is_internally_consistent() {
         let flags: u16 = record[1].parse().expect("FLAG is a number");
         let cigar = record[5];
         let sequence = record[9];
+        let quality = record[10];
 
         assert!(
             !name.ends_with("/1") && !name.ends_with("/2"),
@@ -225,6 +235,15 @@ fn every_record_is_internally_consistent() {
             sequence.len(),
             "CIGAR and SEQ disagree for {name}: {cigar} vs {} bases",
             sequence.len()
+        );
+        assert_eq!(
+            quality.len(),
+            sequence.len(),
+            "QUAL and SEQ disagree for {name}"
+        );
+        assert!(
+            quality.bytes().all(|q| (33..=126).contains(&q)),
+            "QUAL must be printable for {name}: {quality}"
         );
         // Every mate here is part of a pair, so the pairing bits have to be set
         // and the mate reference named.
@@ -250,12 +269,19 @@ fn records_carry_the_tags_readers_expect() {
         if record[1].parse::<u16>().unwrap() & 0x4 != 0 {
             continue;
         }
-        for name in ["NH:i:", "HI:i:", "AS:i:", "NM:i:", "MD:Z:"] {
+        for name in ["NH:i:", "HI:i:", "AS:i:", "ZW:f:", "NM:i:", "MD:Z:"] {
             assert!(
                 tag(record, name).is_some(),
                 "{} is missing {name}: {record:?}",
                 record[0]
             );
+        }
+        // A paired record knows its mate's shape without anyone sorting the
+        // file, when there is a mate with a shape to know: an orphan's mate has
+        // no CIGAR and no mapping quality to report.
+        if record[1].parse::<u16>().unwrap() & 0x8 == 0 {
+            assert!(tag(record, "MC:Z:").is_some(), "{} lacks MC", record[0]);
+            assert!(tag(record, "MQ:i:").is_some(), "{} lacks MQ", record[0]);
         }
     }
 
@@ -292,7 +318,13 @@ fn records_carry_the_tags_readers_expect() {
 #[test]
 fn single_end_records_claim_no_mate() {
     let dir = tempfile::tempdir().unwrap();
-    let sam = run_with_mapping_output(dir.path(), Run { single_end: true });
+    let sam = run_with_mapping_output(
+        dir.path(),
+        Run {
+            single_end: true,
+            ..Run::default()
+        },
+    );
     let records = records(&sam);
     assert!(
         !records.is_empty(),
@@ -359,5 +391,31 @@ fn the_score_describes_the_alignment_in_its_own_record() {
                 record[0]
             );
         }
+    }
+}
+
+/// A read group has to appear both in the header and on every record, or the
+/// two disagree and a merged file loses track of where its reads came from.
+#[test]
+fn the_read_group_reaches_the_header_and_every_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = run_with_mapping_output(
+        dir.path(),
+        Run {
+            read_group: Some(r"ID:s1\tSM:sample1\tPL:ILLUMINA"),
+            ..Run::default()
+        },
+    );
+    assert!(
+        sam.lines()
+            .any(|l| l == "@RG\tID:s1\tSM:sample1\tPL:ILLUMINA"),
+        "the @RG line should be in the header"
+    );
+    for record in records(&sam) {
+        assert_eq!(
+            tag(&record, "RG:Z:"),
+            Some("RG:Z:s1"),
+            "every record should point at the read group: {record:?}"
+        );
     }
 }

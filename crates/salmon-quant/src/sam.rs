@@ -22,7 +22,12 @@ pub struct SamWriter {
 }
 
 impl SamWriter {
-    pub fn create(path: &std::path::Path, salmon: &SalmonIndex, cmd: &str) -> anyhow::Result<Self> {
+    pub fn create(
+        path: &std::path::Path,
+        salmon: &SalmonIndex,
+        cmd: &str,
+        options: &RecordOptions<'_>,
+    ) -> anyhow::Result<Self> {
         use anyhow::Context as _;
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -35,7 +40,7 @@ impl SamWriter {
         let mut writer: Box<dyn Write + Send> =
             Box::new(std::io::BufWriter::with_capacity(1 << 20, file));
         // Same header text BAM embeds, so the two formats cannot drift.
-        writer.write_all(mapping_record::header_text(salmon, cmd).as_bytes())?;
+        writer.write_all(mapping_record::header_text(salmon, cmd, options).as_bytes())?;
         Ok(Self {
             inner: Mutex::new(writer),
         })
@@ -74,6 +79,30 @@ fn write_sequence(buf: &mut String, record: &AlignmentRecord<'_>) {
         for &base in record.sequence {
             buf.push(base as char);
         }
+    }
+}
+
+/// Write `QUAL`: the Phred+33 characters as the FASTQ carried them, reversed to
+/// match a reverse-strand `SEQ` so that base *i* of one still describes base *i*
+/// of the other. `*` when the input had no qualities (a FASTA), which is SAM's
+/// spelling for "not available".
+///
+/// A quality string of the wrong length is dropped rather than written: readers
+/// reject a record whose `QUAL` and `SEQ` disagree, so a truncated FASTQ record
+/// must not be able to produce an unreadable file.
+fn write_qualities(buf: &mut String, record: &AlignmentRecord<'_>) {
+    match mapping_record::usable_qualities(record) {
+        Some(qualities) if record.reverse_complement => {
+            for &q in qualities.iter().rev() {
+                buf.push(q as char);
+            }
+        }
+        Some(qualities) => {
+            for &q in qualities {
+                buf.push(q as char);
+            }
+        }
+        None => buf.push('*'),
     }
 }
 
@@ -125,27 +154,47 @@ fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord
     }
     buf.push('\t');
     write_sequence(buf, record);
-    // QUAL: salmon does not retain base qualities, and `*` is SAM's spelling for
-    // "not available".
-    buf.push_str("\t*");
+    buf.push('\t');
+    write_qualities(buf, record);
     write_tags(buf, record);
     buf.push('\n');
 }
 
-/// Append the optional tags: `NH` = number of placements for this fragment,
-/// `HI` = which one this is, `XT` = transcript/decoy, `AS` = the score of the
-/// alignment in this very record, and `NM`/`MD` describing that alignment.
+/// Append the optional tags.
+///
+/// An unmapped record carries none of the placement tags: `NH`/`HI` describe a
+/// set of placements it does not have, and `AS`/`XT` describe an alignment that
+/// was never made. Only the read group, which is a property of the read rather
+/// than of any placement, survives.
 fn write_tags(buf: &mut String, record: &AlignmentRecord<'_>) {
-    let _ = write!(
-        buf,
-        "\tNH:i:{}\tHI:i:{}\tXT:A:{}\tAS:i:{}",
-        record.nh, record.hi, record.xt as char, record.alignment_score
-    );
-    if let Some(edit_distance) = record.edit_distance {
-        let _ = write!(buf, "\tNM:i:{edit_distance}");
+    {
+        // NH = number of placements for this fragment, HI = which one this is,
+        // XT = transcript/decoy, AS = score, ZW = the mapping's EM weight.
+        let _ = write!(
+            buf,
+            "\tNH:i:{}\tHI:i:{}\tXT:A:{}\tAS:i:{}\tZW:f:{}",
+            record.nh, record.hi, record.xt as char, record.alignment_score, record.weight
+        );
+        if let Some(edit_distance) = record.edit_distance {
+            let _ = write!(buf, "\tNM:i:{edit_distance}");
+        }
+        if let Some(md) = record.md {
+            let _ = write!(buf, "\tMD:Z:{md}");
+        }
+        if let Some(mate_mapping_quality) = record.mate_mapping_quality {
+            let _ = write!(buf, "\tMQ:i:{mate_mapping_quality}");
+        }
+        if let Some(mate_cigar) = record.mate_cigar {
+            if !mate_cigar.is_empty() {
+                buf.push_str("\tMC:Z:");
+                for op in mate_cigar {
+                    let _ = write!(buf, "{}{}", op.len, op.kind.letter());
+                }
+            }
+        }
     }
-    if let Some(md) = record.md {
-        let _ = write!(buf, "\tMD:Z:{md}");
+    if let Some(read_group) = record.read_group {
+        let _ = write!(buf, "\tRG:Z:{read_group}");
     }
 }
 
@@ -156,7 +205,8 @@ pub fn write_fragment(
     salmon: &SalmonIndex,
     r1_id: &[u8],
     r1_seq: &[u8],
-    r2: Option<(&[u8], &[u8])>,
+    r1_qual: Option<&[u8]>,
+    r2: Option<(&[u8], &[u8], Option<&[u8]>)>,
     maps: &[ScoredMapping],
     options: &RecordOptions<'_>,
     scratch: &mut EmitScratch,
@@ -165,6 +215,7 @@ pub fn write_fragment(
         salmon,
         r1_id,
         r1_seq,
+        r1_qual,
         r2,
         maps,
         options,

@@ -459,8 +459,10 @@ RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
 
 ### What a record contains
 
-The header is unchanged: `@HD`, one `@SQ` per reference with its length, and
-`@PG`.
+The header declares `@HD VN:1.6 SO:unsorted GO:query`, one `@SQ` per reference
+with its length, an `M5` checksum of its bases and a `UR` pointing at the index,
+then `@PG` and a `@CO` restating the ordering guarantee below. `--rgLine` adds an
+`@RG` line, and every record then carries `RG:Z`.
 
 Each record carries:
 
@@ -468,14 +470,13 @@ Each record carries:
 |-------|-------|
 | `MAPQ` | Derived from the number of placements, on STAR's scale: 255 for a uniquely placed fragment, 3 for two placements, 1 for three or four, 0 beyond. `-q 255` therefore means "uniquely placed", as it does for STAR output. |
 | `CIGAR` | A base-level alignment with real `I` and `D` operations, and `S` where a read overhangs a transcript end. The placement is re-aligned with traceback when the record is written, which is work a run without mapping output never does. |
-| `NM` / `MD` | Edit distance and the reference bases at each mismatch, matching what `samtools calmd` recomputes from the input FASTA. Indexing has to replace non-ACGT bases with ACGT, since the k-mer structure cannot hold them, but the build records where it did so and the record reports the `N` that was there rather than the substitute. |
+| `SEQ` / `QUAL` | The read's bases and its Phred+33 qualities, reverse-complemented together on the reverse strand. Qualities are not optional and there is no flag to enable them; `QUAL` is `*` only when the input carried none, as for a FASTA. |
+| `NM` / `MD` | Edit distance and the reference bases at each mismatch, matching what `samtools calmd` recomputes from the input FASTA. Indexing has to replace non-ACGT bases with ACGT, since the k-mer structure cannot hold them, but the build records where it did so and the record reports the `N` that was there rather than the substitute. `@SQ M5` is computed the same way, so the header names the reference the user supplied. |
 | `NH` / `HI` | How many placements this fragment has, and which one this record is. |
-| `AS` | The score of the alignment in this same record. |
+| `AS` | The selective-alignment score. |
 | `XT` | `T` for a transcript placement, `D` for a decoy. In practice always `T`: a fragment whose best placement is a decoy is dropped by scoring before any record is written, so a decoy-aware index changes which fragments appear, not what `XT` says about them. |
-
-`QUAL` is still `*`: salmon does not carry base qualities into the record
-builder. That is an omission the format allows, unlike a CIGAR that does not
-describe the alignment it sits beside.
+| `ZW` | The placement's equivalence-class weight. |
+| `MC` / `MQ` | The mate's CIGAR and mapping quality, so a mate-aware tool does not have to sort the file to find them. |
 
 In sketch mode (`--sketch`) there is no per-placement alignment score:
 pseudoalignment maps by k-mer/equivalence-class compatibility without computing
@@ -502,6 +503,10 @@ is what STAR reports, so `MAPQ` follows STAR's mapping:
 Matching STAR matters because the tools downstream of a salmon BAM are tuned to
 it: `samtools view -q 255` means "uniquely placed" to all of them. Before this,
 every record carried a constant `1`, so that filter discarded the entire file.
+
+The header says `SO:unsorted GO:query` because that is exactly what salmon
+produces, and tools that only need records grouped by read name can therefore
+read the output directly, without a `samtools collate` first.
 
 ### Compression threads
 

@@ -532,8 +532,8 @@ struct QuantArgs {
     /// Write the names of unmapped fragments to aux_info/unmapped_names.txt.
     #[arg(long = "writeUnmappedNames")]
     write_unmapped_names: bool,
-    /// Write per-mapping SAM records to this file. Records carry a base-level
-    /// CIGAR with NM and MD, describing the alignment the record reports.
+    /// Write per-mapping SAM records to this file. Records carry base qualities,
+    /// a base-level CIGAR with NM and MD, and the mate and placement tags.
     /// `--writeSam` is an accepted alias, naming the format explicitly to pair
     /// with `--writeBam`.
     #[arg(
@@ -915,10 +915,17 @@ struct QuantArgs {
     /// sampled BAM (requires --sampleOut).
     #[arg(short = 'u', long = "sampleUnaligned")]
     sample_unaligned: bool,
-    /// [accepted; not yet implemented] write qualities into the sampled BAM
-    /// (only meaningful with --sampleOut / --writeMappings).
+    /// [accepted for salmon compatibility; has no effect] base qualities are not
+    /// optional output. They are written into every record whenever the input
+    /// carries them, with or without this flag.
     #[arg(long = "writeQualities")]
     write_qualities: bool,
+    /// Read group to declare in the mapping output's header, as tab-separated
+    /// KEY:value fields with a mandatory ID (for example
+    /// `ID:sample1\tSM:sample1\tPL:ILLUMINA`). A literal \t is accepted in place
+    /// of a tab. Every record is then tagged RG:Z:<ID>.
+    #[arg(long = "rgLine", value_name = "LINE")]
+    rg_line: Option<String>,
     /// [accepted; not yet implemented] hit-filtering policy (BEFORE/AFTER/BOTH/
     /// NONE) for selective alignment; the Rust port filters after chaining.
     #[arg(long = "hitFilterPolicy")]
@@ -2105,8 +2112,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.eqclasses.is_some() {
         tracing::warn!("--eqclasses (quantify from a precomputed equivalence-class file) is not yet implemented and is ignored; mapping/alignment input is used instead.");
     }
-    if args.sample_out || args.sample_unaligned || args.write_qualities {
-        tracing::warn!("--sampleOut/--sampleUnaligned/--writeQualities (posterior-sampled BAM output) are accepted but not yet implemented and have no effect.");
+    if args.sample_out || args.sample_unaligned {
+        tracing::warn!("--sampleOut/--sampleUnaligned (posterior-sampled BAM output) are accepted but not yet implemented and have no effect.");
     }
     if args.hit_filter_policy.is_some() {
         tracing::warn!("--hitFilterPolicy is accepted but not yet implemented and has no effect: the Rust port filters hits after chaining (salmon's AFTER default).");
@@ -2704,6 +2711,16 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         "-2 given without -1: mates must be supplied as a pair (-1 <mates_1> -2 <mates_2>). \
          For single-end reads use -r."
     );
+
+    // Parse the read group up front: a malformed --rgLine should fail before any
+    // mapping work, not after it, and the header is written the moment the
+    // output file is opened.
+    let read_group = args
+        .rg_line
+        .as_deref()
+        .map(salmon_quant::mapping_record::ReadGroup::parse)
+        .transpose()
+        .context("parsing --rgLine")?;
     anyhow::ensure!(
         !args.mates1.is_empty() || !args.unmated.is_empty(),
         "no reads provided: pass -1/-2 (paired), -r (single-end), -a (BAM), or --rad (RAD)"
@@ -2862,6 +2879,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.dump_eq = args.dump_eq;
     opts.dump_eq_weights = args.dump_eq_weights;
     opts.write_unmapped_names = args.write_unmapped_names;
+    opts.read_group = read_group;
     opts.write_mappings = args.write_mappings;
     opts.write_bam = args.write_bam;
     opts.bam_compress_threads = args.bam_compress_threads;
@@ -3547,6 +3565,15 @@ mod tests {
         assert_eq!(q.dump_eq_weights, defaults.dump_eq_weights);
         assert_eq!(q.no_length_correction, defaults.no_length_correction);
         assert_eq!(q.no_frag_length_dist, defaults.no_frag_length_dist);
+    }
+
+    /// `--rgLine` reaches the parser as a plain string, so the shell-friendly
+    /// escaped-tab spelling has to survive to where it is parsed rather than
+    /// being mangled by clap.
+    #[test]
+    fn rg_line_is_taken_verbatim() {
+        let args = quant_args(&["--rgLine", "ID:s1\\tSM:sample"]).unwrap();
+        assert_eq!(args.rg_line.as_deref(), Some("ID:s1\\tSM:sample"));
     }
 
     /// `--sampleUnaligned` keeps its salmon short form, since it is the flag
