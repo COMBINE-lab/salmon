@@ -108,6 +108,11 @@ pub struct AlignmentRecord<'a> {
     pub mate_cigar: Option<&'a [CigarOp]>,
     /// `MQ`, the mate's mapping quality, for the same reason.
     pub mate_mapping_quality: Option<u8>,
+    /// `XS`, the strand of the transcript this alignment came from, as `+` or
+    /// `-`. Only meaningful for a spliced alignment, where it says which way the
+    /// introns should be read; StringTie and Cufflinks require it and silently
+    /// mis-assemble without it.
+    pub transcript_strand: Option<u8>,
 }
 
 impl AlignmentRecord<'_> {
@@ -308,14 +313,15 @@ pub fn header_text(salmon: &SalmonIndex, command: &str, options: &RecordOptions<
     let mut text = String::with_capacity(salmon.num_refs() * 48 + command.len() + 128);
     let _ = writeln!(text, "@HD\tVN:{SAM_VERSION}\tSO:unsorted\tGO:query");
     let references = options.reference_table(salmon);
-    // Hashing a whole transcriptome is a few hundred megabytes of MD5, which is
-    // enough to be noticeable at the start of a short run, and it is one
-    // independent hash per reference. Run them in parallel so the header costs
-    // wall-clock proportional to the largest transcript rather than to the sum.
     // M5 needs the bases, which are only to hand for the transcriptome the index
     // was built from. When records are projected onto the genome the references
     // are chromosomes salmon never loaded, so the checksum is omitted rather
     // than guessed at.
+    //
+    // Hashing a whole transcriptome is a few hundred megabytes of MD5, which is
+    // enough to be noticeable at the start of a short run, and it is one
+    // independent hash per reference. Run them in parallel so the header costs
+    // wall-clock proportional to the largest transcript rather than to the sum.
     let checksums: Vec<String> = if options.projector.is_none() {
         use rayon::prelude::*;
         (0..references.len())
@@ -644,14 +650,9 @@ fn flip_strand_bits(flags: u16) -> u16 {
 
 /// The signed `TLEN` for a projected pair: the genomic span the two mates cover
 /// together, positive on the leftmost mate.
-fn projected_template_length(
-    scratch: &EmitScratch,
-    first: &Placed,
-    second: &Placed,
-) -> (i32, i32) {
-    let span = |placed: &Placed| {
-        salmon_map::realize::reference_span(&scratch.projected[placed.slot])
-    };
+fn projected_template_length(scratch: &EmitScratch, first: &Placed, second: &Placed) -> (i32, i32) {
+    let span =
+        |placed: &Placed| salmon_map::realize::reference_span(&scratch.projected[placed.slot]);
     let start = first.position.min(second.position);
     let end = (first.position + span(first)).max(second.position + span(second));
     let length = end - start;
@@ -701,7 +702,7 @@ pub fn emit_fragment_records(
     maps: &[ScoredMapping],
     options: &RecordOptions<'_>,
     scratch: &mut EmitScratch,
-    emit_record: impl FnMut(&AlignmentRecord<'_>) -> io::Result<()>,
+    mut emit_record: impl FnMut(&AlignmentRecord<'_>) -> io::Result<()>,
 ) -> io::Result<()> {
     let name1 = read_name(r1_id);
     let (name2, r2_seq, r2_qual) = r2.map_or((name1, &[][..], None), |(id, seq, qual)| {
@@ -714,7 +715,15 @@ pub fn emit_fragment_records(
     // primary placement. Recorded while emitting so the mate can be written once
     // afterwards rather than once per placement.
     let mut orphan_mate: Option<(usize, i32, bool)> = None;
-    let mut emit = emit_record;
+    // Placements can all be refused by the genome projector when the annotation
+    // does not describe their transcript. A fragment that mapped but produced no
+    // record would vanish from the output with the run still reporting it as
+    // mapped, so track whether anything was written for it.
+    let mut emitted = 0usize;
+    let mut emit = |record: &AlignmentRecord<'_>| {
+        emitted += 1;
+        emit_record(record)
+    };
 
     for (index, mapping) in maps.iter().enumerate() {
         // The first placement is primary; the rest are marked secondary so a
@@ -737,6 +746,13 @@ pub fn emit_fragment_records(
             b'T'
         };
         let weight = mapping.weight as f32;
+        // XS is about the transcript's orientation on the genome, so it only
+        // exists once records are in genome coordinates.
+        let transcript_strand = options
+            .projector
+            .and_then(|projector| projector.strand(tid))
+            .map(|forward| if forward { b'+' } else { b'-' });
+
         match mapping.status {
             MateStatus::PairedEndPaired => {
                 let p1 = place(
@@ -839,6 +855,7 @@ pub fn emit_fragment_records(
                     read_group,
                     mate_cigar: Some(cigar2),
                     mate_mapping_quality: Some(mapq),
+                    transcript_strand,
                 })?;
                 emit(&AlignmentRecord {
                     name: name2,
@@ -863,6 +880,7 @@ pub fn emit_fragment_records(
                     read_group,
                     mate_cigar: Some(cigar1),
                     mate_mapping_quality: Some(mapq),
+                    transcript_strand,
                 })?;
             }
             MateStatus::SingleEnd => {
@@ -909,6 +927,7 @@ pub fn emit_fragment_records(
                     read_group,
                     mate_cigar: None,
                     mate_mapping_quality: None,
+                    transcript_strand,
                 })?;
             }
             // Orphan: one mate placed, the other not. One record is emitted, for
@@ -983,6 +1002,7 @@ pub fn emit_fragment_records(
                     read_group,
                     mate_cigar: None,
                     mate_mapping_quality: None,
+                    transcript_strand,
                 })?;
             }
         }
@@ -1017,6 +1037,12 @@ pub fn emit_fragment_records(
             record.mate_position = Some(position);
             emit(&record)?;
         }
+    }
+    // Nothing survived projection, so the fragment mapped and yet has no record.
+    // Write it as unaligned rather than dropping it: the read existed, and a file
+    // that silently omits it disagrees with everything else the run reports.
+    if emitted == 0 && options.write_unaligned {
+        emit_unmapped_fragment(r1_id, r1_seq, r1_qual, r2, options, emit_record)?;
     }
     Ok(())
 }
@@ -1056,6 +1082,7 @@ fn unmapped_record<'a>(
         read_group,
         mate_cigar: None,
         mate_mapping_quality: None,
+        transcript_strand: None,
     }
 }
 
