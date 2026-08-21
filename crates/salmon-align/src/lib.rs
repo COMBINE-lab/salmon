@@ -2133,6 +2133,20 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         None
     };
     let detector = auto_detect.then(|| {
+        // Detection can only see what the aligner chose to report. In reads
+        // mode salmon maps everything itself, so the sampled orientations are
+        // the library's; here they are whatever survived the aligner's own
+        // settings, and an upstream orientation/strand filter skews the sample
+        // in a way detection cannot recover from.
+        tracing::warn!(
+            "`-l A` with alignment input infers the library type from the alignments \
+             the aligner reported, treating them as an unfiltered sample. If the \
+             aligner was configured to report only one orientation or strand, \
+             detection will mirror that filter rather than the library — e.g. it \
+             cannot conclude `IU` when wrong-strand alignments were already excluded \
+             upstream. If the input BAM/SAM is filtered this way, pass the library \
+             type explicitly instead."
+        );
         salmon_model::LibraryTypeDetector::new(if peeked_paired.unwrap_or(true) {
             salmon_core::ReadType::PairedEnd
         } else {

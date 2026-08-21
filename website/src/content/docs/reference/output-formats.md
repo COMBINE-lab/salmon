@@ -261,6 +261,15 @@ modes and online alignment mode sample a prefix with the library-type detector
 RAD-input quantification detect from the whole run's records and filter the
 quantification pass. `expected_format` always reports the resolved type.
 
+One caveat for alignment input (`-a`): detection treats the reported
+alignments as an unfiltered sample of the library, but they are whatever the
+aligner chose to report. If the aligner was itself configured to keep only one
+orientation or strand, detection mirrors that upstream filter rather than the
+library — it cannot conclude `IU` when wrong-strand alignments were already
+excluded before salmon ever saw them. For a BAM/SAM filtered this way, pass
+the library type explicitly; salmon logs a warning to this effect whenever
+`-l A` is used with alignment input.
+
 ## Documented Rust-format files (diagnostic)
 
 These are bias-model and FLD diagnostic dumps, not read by standard downstream
