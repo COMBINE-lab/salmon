@@ -197,6 +197,9 @@ pub(crate) struct Shared<'a> {
     /// run-wide mapping-output settings: the read group to tag records with, and
     /// whether to realize a base-level CIGAR for each placement
     pub record_options: &'a crate::mapping_record::RecordOptions<'a>,
+    /// also emit a `FLAG 0x4` record for every fragment that did not map
+    /// (`--sampleUnaligned`), so the mapping output covers the whole library
+    pub write_unaligned: bool,
     /// `--deterministic` mode: collect an order-independent fragment-length
     /// distribution (+ library-format tally) from uniquely-mapped proper pairs
     /// during the mapping pass, instead of training the online (log-space) FLD or
@@ -1434,18 +1437,30 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             // qualities on every fragment.
             let mate = (sh.sam.is_some() || bam_scratch.is_some())
                 .then(|| (r2.id(), s2.as_ref(), r2.qual()));
-            if sh.sam.is_some() && !placements.is_empty() {
-                crate::sam::write_fragment(
-                    sam_buf,
-                    sh.salmon,
-                    r1.id(),
-                    s1.as_ref(),
-                    r1.qual(),
-                    mate,
-                    &placements,
-                    sh.record_options,
-                    emit_scratch,
-                );
+            if sh.sam.is_some() {
+                if !placements.is_empty() {
+                    crate::sam::write_fragment(
+                        sam_buf,
+                        sh.salmon,
+                        r1.id(),
+                        s1.as_ref(),
+                        r1.qual(),
+                        mate,
+                        &placements,
+                        sh.record_options,
+                        emit_scratch,
+                    );
+                } else if sh.write_unaligned {
+                    crate::sam::write_unmapped_fragment(
+                        sam_buf,
+                        sh.salmon,
+                        r1.id(),
+                        s1.as_ref(),
+                        r1.qual(),
+                        mate,
+                        sh.record_options,
+                    );
+                }
             }
             if let Some(scratch) = bam_scratch.as_mut() {
                 if !placements.is_empty() {
@@ -1458,6 +1473,14 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         &placements,
                         sh.record_options,
                         emit_scratch,
+                    )?;
+                } else if sh.write_unaligned {
+                    scratch.write_unmapped_fragment(
+                        r1.id(),
+                        s1.as_ref(),
+                        r1.qual(),
+                        mate,
+                        sh.record_options,
                     )?;
                 }
             }
@@ -1612,6 +1635,16 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.record_options,
                     emit_scratch,
                 );
+            } else if sh.sam.is_some() && sh.write_unaligned {
+                crate::sam::write_unmapped_fragment(
+                    sam_buf,
+                    sh.salmon,
+                    rec.id(),
+                    s.as_ref(),
+                    rec.qual(),
+                    None,
+                    sh.record_options,
+                );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
                 if !placements.is_empty() {
@@ -1624,6 +1657,14 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         &placements,
                         sh.record_options,
                         emit_scratch,
+                    )?;
+                } else if sh.write_unaligned {
+                    scratch.write_unmapped_fragment(
+                        rec.id(),
+                        s.as_ref(),
+                        rec.qual(),
+                        None,
+                        sh.record_options,
                     )?;
                 }
             }

@@ -167,7 +167,7 @@ fn write_record(buf: &mut String, salmon: &SalmonIndex, record: &AlignmentRecord
 /// was never made. Only the read group, which is a property of the read rather
 /// than of any placement, survives.
 fn write_tags(buf: &mut String, record: &AlignmentRecord<'_>) {
-    {
+    if !record.is_unmapped() {
         // NH = number of placements for this fragment, HI = which one this is,
         // XT = transcript/decoy, AS = score, ZW = the mapping's EM weight.
         let _ = write!(
@@ -225,5 +225,22 @@ pub fn write_fragment(
             Ok(())
         },
     )
+    .expect("writing to String is infallible");
+}
+
+/// Append the SAM records for a fragment that did not map.
+pub fn write_unmapped_fragment(
+    buf: &mut String,
+    salmon: &SalmonIndex,
+    r1_id: &[u8],
+    r1_seq: &[u8],
+    r1_qual: Option<&[u8]>,
+    r2: Option<(&[u8], &[u8], Option<&[u8]>)>,
+    options: &RecordOptions<'_>,
+) {
+    mapping_record::emit_unmapped_fragment(r1_id, r1_seq, r1_qual, r2, options, |record| {
+        write_record(buf, salmon, record);
+        Ok(())
+    })
     .expect("writing to String is infallible");
 }

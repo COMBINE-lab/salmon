@@ -349,6 +349,27 @@ impl BamScratch<'_> {
         Ok(())
     }
 
+    /// Encode the records for a fragment that did not map. Same chunking
+    /// contract as [`Self::write_fragment`]: both of a pair's records land in one
+    /// chunk, so an unmapped pair is never split across chunk boundaries.
+    pub fn write_unmapped_fragment(
+        &mut self,
+        r1_id: &[u8],
+        r1_seq: &[u8],
+        r1_qual: Option<&[u8]>,
+        r2: Option<(&[u8], &[u8], Option<&[u8]>)>,
+        options: &RecordOptions<'_>,
+    ) -> io::Result<()> {
+        let buffer = &mut self.buffer;
+        mapping_record::emit_unmapped_fragment(r1_id, r1_seq, r1_qual, r2, options, |record| {
+            encode_record(buffer, record)
+        })?;
+        if self.buffer.len() >= CHUNK_TARGET {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
     /// Hand the accumulated chunk to the writer thread. Only the `Vec`
     /// descriptor moves; the backing allocation is not copied.
     pub fn flush(&mut self) -> io::Result<()> {
@@ -579,7 +600,7 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
     // An unmapped record carries no placement tags: NH/HI describe a set of
     // placements it does not have, AS/XT an alignment never made. The read group
     // is a property of the read, so it stays.
-    {
+    if !record.is_unmapped() {
         push_aux_i64(buf, *b"NH", record.nh as i64);
         push_aux_i64(buf, *b"HI", record.hi as i64);
         buf.extend_from_slice(b"XTA");

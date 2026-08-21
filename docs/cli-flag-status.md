@@ -121,8 +121,9 @@ misbehaves.
 | `--hardFilter`, `--scoreExp` | ✅ | Also honoured on `-a`/`--rad`, not just in reads mode: the requant applies them to the RAD's `AS`-derived scores exactly as it does to selective-alignment ones. |
 | `--ont` | ✅ | Redirect (long-read mode is out of scope, as upstream). |
 | `--mappingCacheMemoryLimit` | ⚠️ | Rust streams with bounded buffers; no mass-banking cache. |
+| `--sampleUnaligned`/`-u` | ✅ | Adds a `FLAG 0x4` record per unmapped fragment to `--writeMappings`/`--writeBam`, sequence and qualities intact, so the output covers the whole library. No longer requires `--sampleOut`. |
 | `--writeQualities` | 🔁 | Base qualities are not optional output: every record carries them whenever the input does, so the flag is accepted and has nothing to switch on. |
-| `--sampleOut`/`-s`, `--sampleUnaligned`/`-u` | ⚠️ | Posterior-sampled BAM output; accepted, not yet implemented. |
+| `--sampleOut`/`-s` | ⚠️ | A BAM of posterior-sampled alignments; accepted, not yet implemented. |
 | `--auxTargetFile`, `--writeOrphanLinks` | ⛔ | |
 
 ## `salmon quantmerge`

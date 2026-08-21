@@ -911,8 +911,9 @@ struct QuantArgs {
     /// alignments (alignment mode).
     #[arg(short = 's', long = "sampleOut")]
     sample_out: bool,
-    /// [accepted; not yet implemented] also include unaligned reads in the
-    /// sampled BAM (requires --sampleOut).
+    /// Also write a record for every fragment that did not map, flagged 0x4, so
+    /// the mapping output covers the whole library rather than only the part
+    /// that mapped. Applies to --writeMappings/--writeSam and --writeBam.
     #[arg(short = 'u', long = "sampleUnaligned")]
     sample_unaligned: bool,
     /// [accepted for salmon compatibility; has no effect] base qualities are not
@@ -2112,8 +2113,11 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.eqclasses.is_some() {
         tracing::warn!("--eqclasses (quantify from a precomputed equivalence-class file) is not yet implemented and is ignored; mapping/alignment input is used instead.");
     }
-    if args.sample_out || args.sample_unaligned {
-        tracing::warn!("--sampleOut/--sampleUnaligned (posterior-sampled BAM output) are accepted but not yet implemented and have no effect.");
+    if args.sample_out {
+        tracing::warn!("--sampleOut (a BAM of posterior-sampled alignments) is accepted but not yet implemented and has no effect. --sampleUnaligned now works on its own, against --writeMappings/--writeBam.");
+    }
+    if args.sample_unaligned && args.write_mappings.is_none() && args.write_bam.is_none() {
+        tracing::warn!("--sampleUnaligned has no effect without --writeMappings/--writeSam or --writeBam: there is no mapping output to add the unaligned records to.");
     }
     if args.hit_filter_policy.is_some() {
         tracing::warn!("--hitFilterPolicy is accepted but not yet implemented and has no effect: the Rust port filters hits after chaining (salmon's AFTER default).");
@@ -2879,6 +2883,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.dump_eq = args.dump_eq;
     opts.dump_eq_weights = args.dump_eq_weights;
     opts.write_unmapped_names = args.write_unmapped_names;
+    opts.write_unaligned = args.sample_unaligned;
     opts.read_group = read_group;
     opts.write_mappings = args.write_mappings;
     opts.write_bam = args.write_bam;

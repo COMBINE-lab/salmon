@@ -123,6 +123,10 @@ pub struct QuantOptions {
     /// `--rgLine`: the `@RG` line to declare in the mapping output's header, and
     /// the `ID` every record's `RG` tag then refers to.
     pub read_group: Option<mapping_record::ReadGroup>,
+    /// `--sampleUnaligned`: also write a `FLAG 0x4` record for every fragment
+    /// that did not map, so the mapping output covers the whole library rather
+    /// than only the part that mapped.
+    pub write_unaligned: bool,
     /// write per-fragment mappings to this RAD file (`--writeRad`); sketch or
     /// selective-alignment profile is chosen from `sketch`. Quantification still
     /// runs; combine with `skip_quant` to map only.
@@ -243,6 +247,7 @@ impl QuantOptions {
             dump_eq_weights: false,
             write_unmapped_names: false,
             read_group: None,
+            write_unaligned: false,
             write_mappings: None,
             write_bam: None,
             bam_compress_threads: None,
@@ -490,6 +495,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // come from": it is what the run was pointed at, and what someone
         // reproducing it needs.
         reference_uri: Some(&index_uri),
+        write_unaligned: opts.write_unaligned,
     };
     // SAM sink for `--writeMappings` (header written here).
     let sam_writer: Option<sam::SamWriter> = match &opts.write_mappings {
@@ -721,6 +727,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
         let shared = Shared {
             record_options: &record_options,
+            write_unaligned: opts.write_unaligned,
             busy: &plan.busy,
             salmon: &salmon,
             eq: &eq_builder,

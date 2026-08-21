@@ -485,6 +485,11 @@ mapping for the read as assessed by the algorithm. A meaningful `AS` appears
 only under selective alignment (the default), which computes a banded alignment
 score per candidate.
 
+`--sampleUnaligned` additionally writes a `FLAG 0x4` record for every fragment
+that did not map, with its bases and qualities intact and no reference,
+position, CIGAR or placement tags. The output then covers the whole library, and
+`samtools fastq` can round-trip the input back out of it.
+
 ### `MAPQ`
 
 SAM's `MAPQ` is a phred-scaled probability that a placement is wrong, and salmon

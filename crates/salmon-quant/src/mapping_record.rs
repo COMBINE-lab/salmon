@@ -110,6 +110,13 @@ pub struct AlignmentRecord<'a> {
     pub mate_mapping_quality: Option<u8>,
 }
 
+impl AlignmentRecord<'_> {
+    /// Whether this record describes a read that did not map.
+    pub fn is_unmapped(&self) -> bool {
+        self.flags & UNMAPPED != 0
+    }
+}
+
 /// SAM version reported in `@HD VN:`. 1.6 is the version that defines the
 /// `GO:query` grouping this output actually has.
 const SAM_VERSION: &str = "1.6";
@@ -184,6 +191,10 @@ pub struct RecordOptions<'a> {
     /// `@SQ UR:`, where the reference sequences came from, so a reader can find
     /// them again.
     pub reference_uri: Option<&'a str>,
+    /// Whether reads that did not align are written too (`--sampleUnaligned`).
+    /// This also governs the unmapped mate of an orphan, which is a read that did
+    /// not align just as much as one whose whole fragment failed.
+    pub write_unaligned: bool,
 }
 
 impl RecordOptions<'_> {
@@ -565,6 +576,10 @@ pub fn emit_fragment_records(
     let nh = maps.len();
     let mapq = mapping_quality(nh);
     let read_group = options.read_group.map(|rg| rg.id.as_str());
+    // Where the unmapped mate of an orphan should be filed, taken from the
+    // primary placement. Recorded while emitting so the mate can be written once
+    // afterwards rather than once per placement.
+    let mut orphan_mate: Option<(usize, i32, bool)> = None;
     let mut emit = emit_record;
 
     for (index, mapping) in maps.iter().enumerate() {
@@ -756,6 +771,10 @@ pub fn emit_fragment_records(
                 let p = place(
                     scratch, 0, options, salmon, tid, sequence, forward, position, txp_len,
                 );
+                let reference = tid;
+                if index == 0 {
+                    orphan_mate = Some((reference, p.position, !forward));
+                }
                 let (cigar, md) = borrow_cigar(scratch, &p);
                 emit(&AlignmentRecord {
                     name,
@@ -768,10 +787,11 @@ pub fn emit_fragment_records(
                     position: p.position,
                     mapping_quality: mapq,
                     cigar,
-                    // The mate did not map and no record is written for it, so
+                    // The unmapped mate is filed here too when it is written at
+                    // all, so point at it; with no such record to point at,
                     // naming a mate position would be a dangling reference.
-                    mate_reference_id: None,
-                    mate_position: None,
+                    mate_reference_id: options.write_unaligned.then_some(reference),
+                    mate_position: options.write_unaligned.then_some(p.position),
                     template_length: 0,
                     sequence,
                     qualities,
@@ -791,6 +811,120 @@ pub fn emit_fragment_records(
         }
     }
 
+    // An orphan's other mate did not align, and a record flagged `MATE_UNMAPPED`
+    // beside no such record is a file that describes a read it does not contain:
+    // `samtools fastq` cannot round-trip it, and anything following the flag
+    // finds nothing. Write it, filed at the mapped mate's position so the two sit
+    // together in a sorted file, which is where readers expect to find it.
+    if let (true, Some((reference, position, mate_reverse))) =
+        (options.write_unaligned, orphan_mate)
+    {
+        let left = maps[0].status == MateStatus::PairedEndLeft;
+        // The mate that did *not* map is the opposite of the one that did.
+        let (name, sequence, qualities, read_flag) = if left {
+            (name2, r2_seq, r2_qual, READ2)
+        } else {
+            (name1, r1_seq, r1_qual, READ1)
+        };
+        if !sequence.is_empty() {
+            let mut record = unmapped_record(
+                name,
+                PAIRED | UNMAPPED | read_flag | if mate_reverse { MATE_RC } else { 0 },
+                sequence,
+                qualities,
+                read_group,
+            );
+            record.reference_id = Some(reference);
+            record.position = position;
+            record.mate_reference_id = Some(reference);
+            record.mate_position = Some(position);
+            emit(&record)?;
+        }
+    }
+    Ok(())
+}
+
+/// One unmapped read's record: no reference, no position, no CIGAR, MAPQ 0. The
+/// sequence and qualities are still stored, which is what makes the record
+/// useful.
+fn unmapped_record<'a>(
+    name: &'a [u8],
+    flags: u16,
+    sequence: &'a [u8],
+    qualities: Option<&'a [u8]>,
+    read_group: Option<&'a str>,
+) -> AlignmentRecord<'a> {
+    AlignmentRecord {
+        name,
+        flags,
+        reference_id: None,
+        position: -1,
+        mapping_quality: 0,
+        cigar: &[],
+        mate_reference_id: None,
+        mate_position: None,
+        template_length: 0,
+        sequence,
+        qualities,
+        // An unmapped read has no strand, so its bases are stored exactly as
+        // sequenced rather than reverse-complemented.
+        reverse_complement: false,
+        nh: 0,
+        hi: 0,
+        xt: b'U',
+        alignment_score: 0,
+        weight: 0.0,
+        edit_distance: None,
+        md: None,
+        read_group,
+        mate_cigar: None,
+        mate_mapping_quality: None,
+    }
+}
+
+/// Emit the records for a fragment that did not map anywhere.
+///
+/// # Why an unmapped read gets a record at all
+///
+/// A BAM containing only the reads that mapped is not a record of the experiment
+/// it is a record of one filtering decision, and the reads it dropped are
+/// exactly the ones anybody debugging a low mapping rate wants to look at. The
+/// format has always had a place for them: `FLAG 0x4`, no reference, no position,
+/// sequence and qualities intact. Writing them makes the output a complete,
+/// reversible view of the input rather than a lossy one, and it is what lets
+/// `samtools fastq` round-trip the library back out of the BAM.
+pub fn emit_unmapped_fragment(
+    r1_id: &[u8],
+    r1_seq: &[u8],
+    r1_qual: Option<&[u8]>,
+    r2: Option<(&[u8], &[u8], Option<&[u8]>)>,
+    options: &RecordOptions<'_>,
+    mut emit: impl FnMut(&AlignmentRecord<'_>) -> io::Result<()>,
+) -> io::Result<()> {
+    let name1 = read_name(r1_id);
+    let read_group = options.read_group.map(|rg| rg.id.as_str());
+    match r2 {
+        Some((r2_id, r2_seq, r2_qual)) => {
+            let name2 = read_name(r2_id);
+            emit(&unmapped_record(
+                name1,
+                PAIRED | UNMAPPED | MATE_UNMAPPED | READ1,
+                r1_seq,
+                r1_qual,
+                read_group,
+            ))?;
+            emit(&unmapped_record(
+                name2,
+                PAIRED | UNMAPPED | MATE_UNMAPPED | READ2,
+                r2_seq,
+                r2_qual,
+                read_group,
+            ))?;
+        }
+        None => emit(&unmapped_record(
+            name1, UNMAPPED, r1_seq, r1_qual, read_group,
+        ))?,
+    }
     Ok(())
 }
 
@@ -863,5 +997,39 @@ mod tests {
             assert_eq!(covered as i32, read_len, "pos={pos}");
             assert!(reported >= 0, "pos={pos} reported a negative position");
         }
+    }
+
+    /// An unmapped pair must carry the flag combination readers key on: both
+    /// mates unmapped, both marked as such for each other, and neither claiming a
+    /// strand or a position.
+    #[test]
+    fn unmapped_pair_records_are_flagged_consistently() {
+        let options = RecordOptions::default();
+        let mut seen = Vec::new();
+        emit_unmapped_fragment(
+            b"frag",
+            b"ACGT",
+            Some(b"IIII"),
+            Some((b"frag", b"TTTT", Some(b"####"))),
+            &options,
+            |record| {
+                assert!(record.is_unmapped());
+                assert_eq!(record.reference_id, None);
+                assert_eq!(record.position, -1);
+                assert_eq!(record.mapping_quality, 0);
+                assert!(record.cigar.is_empty());
+                assert!(!record.reverse_complement);
+                seen.push(record.flags);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            seen,
+            vec![
+                PAIRED | UNMAPPED | MATE_UNMAPPED | READ1,
+                PAIRED | UNMAPPED | MATE_UNMAPPED | READ2,
+            ]
+        );
     }
 }
