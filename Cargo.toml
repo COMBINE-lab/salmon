@@ -93,6 +93,9 @@ libradicl = { version = "0.17", features = ["zstd"] }
 
 # dev / test helpers
 tempfile = "3"
+# benchmark harness: runs each case to a time budget and reports the
+# distribution, rather than one wall-clock average per run.
+divan = "0.1"
 
 # io / parsing
 # TEMPORARY: a republication of paraseq's released 0.5.0 plus the resizable
