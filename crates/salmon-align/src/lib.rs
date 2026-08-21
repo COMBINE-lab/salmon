@@ -305,6 +305,12 @@ pub struct AlignQuantResult {
     /// the reads-mode fields in `salmon-quant`'s `QuantResult`.
     pub num_compatible_fragments: u64,
     pub num_incompatible_fragments: u64,
+    /// per-observed-format fragment counts (`counts[format_id]`, one count per
+    /// distinct format among a fragment's placements), tallied for every
+    /// fragment with placements whatever the expected format. The raw histogram
+    /// behind `lib_format_counts.json`'s per-format keys and its
+    /// concordant/inconsistent/strand-bias derivations.
+    pub lib_format_counts: salmon_core::LibFormatCountsArray,
     /// what the RAD says about the mapping pass that produced it; empty for a
     /// BAM input, which has no RAD provenance to read
     pub provenance: crate::rad::RadProvenance,
@@ -851,6 +857,9 @@ struct PassCfg<'a> {
     gc_store: salmon_model::GcStore<'a>,
     length_class: Option<&'a [usize]>,
     expected_format: Option<LibraryFormat>,
+    /// shared library-type detector under `-l A` (all-atomic, fed by every
+    /// worker); `None` with an explicit library type
+    detector: Option<&'a salmon_model::LibraryTypeDetector>,
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
@@ -895,6 +904,8 @@ struct PassAccum {
     /// placement / with none (#1130); see [`AlignQuantResult`]'s fields
     num_frags_compat: u64,
     num_frags_incompat: u64,
+    /// per-observed-format fragment counts; see [`AlignQuantResult`]'s field
+    lib_format_counts: salmon_core::LibFormatCountsArray,
 }
 
 /// The online pass over an alignment record stream, structured as a persistent
@@ -987,7 +998,16 @@ where
         let mut workers = Vec::with_capacity(cfg.nthreads);
         for _ in 0..cfg.nthreads {
             let rx = rx.clone();
-            workers.push(scope.spawn(move || -> (Local, u64, u64, u64, u64, u64) {
+            workers.push(scope.spawn(
+                move || -> (
+                    Local,
+                    u64,
+                    u64,
+                    u64,
+                    u64,
+                    u64,
+                    salmon_core::LibFormatCountsArray,
+                ) {
                 let mut local = Local::new(
                     cfg.use_error_model,
                     cfg.error_bins,
@@ -1002,6 +1022,8 @@ where
                 let mut orphan = 0u64;
                 let mut compat = 0u64;
                 let mut incompat = 0u64;
+                let mut lib_fmt: salmon_core::LibFormatCountsArray =
+                    [0; salmon_core::NUM_LIB_FORMATS];
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
                     let ctx = FragCtx {
@@ -1014,6 +1036,7 @@ where
                         gc_store: cfg.gc_store,
                         length_class: cfg.length_class,
                         expected_format: cfg.expected_format,
+                        detector: cfg.detector,
                         ignore_incompat: cfg.ignore_incompat,
                         incompat_prior: cfg.incompat_prior,
                         paired_lib: cfg.paired_lib,
@@ -1036,11 +1059,20 @@ where
                                 frags.push(f);
                             }
                         }
-                        let (outcome, strand_judged) = process_fragment(&frags, &ctx, &mut local);
+                        let (outcome, strand_judged, fmt_mask) =
+                            process_fragment(&frags, &ctx, &mut local);
                         match strand_judged {
                             Some(true) => batch_compat += 1,
                             Some(false) => batch_incompat += 1,
                             None => {}
+                        }
+                        // Observed-format histogram (one count per distinct
+                        // format among the fragment's placements).
+                        let mut bits = fmt_mask;
+                        while bits != 0 {
+                            let i = bits.trailing_zeros() as usize;
+                            lib_fmt[i] += 1;
+                            bits &= bits - 1;
                         }
                         match outcome {
                             FragmentOutcome::Unmapped => {}
@@ -1088,7 +1120,7 @@ where
                             .fetch_add(batch_mapped, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-                (local, count, mapped, orphan, compat, incompat)
+                (local, count, mapped, orphan, compat, incompat, lib_fmt)
             }));
         }
         drop(rx); // workers hold their own clones; lets the queue disconnect
@@ -1112,8 +1144,10 @@ where
         let mut total_orphan = 0u64;
         let mut total_compat = 0u64;
         let mut total_incompat = 0u64;
+        let mut total_lib_fmt: salmon_core::LibFormatCountsArray =
+            [0; salmon_core::NUM_LIB_FORMATS];
         for w in workers {
-            let (local, count, mapped, orphan, compat, incompat) = w
+            let (local, count, mapped, orphan, compat, incompat, lib_fmt) = w
                 .join()
                 .map_err(|_| anyhow::anyhow!("alignment worker thread panicked"))?;
             merged = merged.merge(local);
@@ -1122,6 +1156,9 @@ where
             total_orphan += orphan;
             total_compat += compat;
             total_incompat += incompat;
+            for (t, v) in total_lib_fmt.iter_mut().zip(lib_fmt.iter()) {
+                *t += v;
+            }
         }
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
@@ -1134,6 +1171,7 @@ where
         acc.num_orphan = total_orphan;
         acc.num_frags_compat = total_compat;
         acc.num_frags_incompat = total_incompat;
+        acc.lib_format_counts = total_lib_fmt;
         Ok(())
     })
 }
@@ -1141,6 +1179,37 @@ where
 /// Dispatch the online pass over a SAM/BAM file (chosen by extension). BAM is
 /// decoded on a small BGZF worker pool (the framing/parse stays serial on the
 /// reader thread, but the decompression overlaps it).
+/// Whether the file's first record belongs to a paired-end template (C++
+/// salmon's `peekBAMIsPaired`): under `-l A` the user has not said, and the
+/// library-type detector needs to know which formats are candidates. `None`
+/// for a file with no records.
+fn peek_alignment_is_paired(path: &Path) -> Result<Option<bool>> {
+    fn first_flag<R: sam::alignment::Record, E>(
+        records: impl Iterator<Item = std::result::Result<R, E>>,
+    ) -> Option<bool>
+    where
+        E: std::fmt::Debug,
+    {
+        for rec in records.flatten() {
+            if let Ok(flags) = rec.flags() {
+                return Some(flags.is_segmented());
+            }
+        }
+        None
+    }
+    if is_sam_path(path) {
+        let mut reader = open_sam_reader(path)?;
+        let _header = reader.read_header().context("reading SAM header")?;
+        Ok(first_flag(reader.records()))
+    } else {
+        let file =
+            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        let mut reader = bam::io::Reader::new(file);
+        let _header = reader.read_header().context("reading BAM header")?;
+        Ok(first_flag(reader.records()))
+    }
+}
+
 fn stream_online_pass(bam_path: &Path, cfg: &PassCfg, acc: &mut PassAccum) -> Result<()> {
     if is_sam_path(bam_path) {
         let mut reader = open_sam_reader(bam_path)?;
@@ -1178,6 +1247,8 @@ struct FragCtx<'a> {
     gc_store: salmon_model::GcStore<'a>,
     length_class: Option<&'a [usize]>,
     expected_format: Option<LibraryFormat>,
+    /// see [`PassCfg::detector`]
+    detector: Option<&'a salmon_model::LibraryTypeDetector>,
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
@@ -1284,7 +1355,7 @@ fn process_fragment(
     recs: &[FragRecord],
     ctx: &FragCtx,
     local: &mut Local,
-) -> (FragmentOutcome, Option<bool>) {
+) -> (FragmentOutcome, Option<bool>, u16) {
     use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
     // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
     const LOG_EPSILON: f64 = -23.998_158_637_57;
@@ -1296,6 +1367,35 @@ fn process_fragment(
     if frag_len > 0 {
         ctx.fld.add_val(frag_len as usize, 0.0);
     }
+
+    // `-l A`: sample this fragment's observed format for the shared detector
+    // while it is still collecting (preferring a proper pair's format — orphan
+    // observations are single-end, which the detector ignores for a paired
+    // library), then filter against the explicit type or, once the detector
+    // locks in, the detected one — the same prefix-detect-then-apply the
+    // reads-mode one-pass uses.
+    if let Some(det) = ctx.detector {
+        if det.is_active() {
+            let mut sample: Option<LibraryFormat> = None;
+            for pl in &placements {
+                let (obs, is_fw, status) = frag_format(recs, &pl.idxs);
+                let f = obs.unwrap_or_else(|| salmon_core::observed_single_format(is_fw));
+                if status == MateStatus::PairedEndPaired {
+                    sample = Some(f);
+                    break;
+                }
+                if sample.is_none() {
+                    sample = Some(f);
+                }
+            }
+            if let Some(f) = sample {
+                det.add_sample(f);
+            }
+        }
+    }
+    let expected = ctx
+        .expected_format
+        .or_else(|| ctx.detector.and_then(|d| d.resolved_format()));
     let use_aux = ctx
         .online
         .is_none_or(|o| o.num_assigned() >= ctx.pre_burnin);
@@ -1324,6 +1424,11 @@ fn process_fragment(
     // `ignore_incompat` then drops — because a fragment whose every reported
     // alignment is wrong-strand is exactly what the count exists to report.
     let mut strand_judged: Option<bool> = None;
+    // Observed-format set across this fragment's placements (bit per format
+    // id), for the per-format histogram — recorded from every placement that
+    // reaches consideration, before the strand filter, since it reports what
+    // was observed rather than what was kept.
+    let mut fmt_mask: u16 = 0;
     for (pi, pl) in placements.iter().enumerate() {
         let tid = pl.tid;
         let idxs = &pl.idxs;
@@ -1372,8 +1477,12 @@ fn process_fragment(
             0.0
         };
         let mut aux = basis + log_frag_prob;
-        if let Some(exp) = ctx.expected_format {
-            let (obs, is_fw, status) = frag_format(recs, idxs);
+        let (obs, is_fw, status) = frag_format(recs, idxs);
+        fmt_mask |= 1
+            << obs
+                .unwrap_or_else(|| salmon_core::observed_single_format(is_fw))
+                .format_id();
+        if let Some(exp) = expected {
             let compat = is_compatible(exp, obs, is_fw, status);
             strand_judged = Some(strand_judged.unwrap_or(false) || compat);
             if !compat {
@@ -1401,7 +1510,7 @@ fn process_fragment(
     // but the strand judgment stands, and is the very thing
     // `num_incompatible_fragments` exists to count.
     if sp_tid.is_empty() {
-        return (FragmentOutcome::Unmapped, strand_judged);
+        return (FragmentOutcome::Unmapped, strand_judged, fmt_mask);
     }
     // The fragment counts as an orphan only when nothing paired both mates, so a
     // fragment that is a proper pair on one transcript and an orphan on another
@@ -1549,7 +1658,7 @@ fn process_fragment(
         TranscriptGroup::from_sorted(tids)
     };
     ctx.eq_builder.add_group(group, weights, 1);
-    (outcome, strand_judged)
+    (outcome, strand_judged, fmt_mask)
 }
 
 /// Is the input coordinate-sorted and *not* grouped by read name?
@@ -2009,16 +2118,55 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // in parallel. Per-thread error-model/bias deltas merge into the globals
     // between minibatches (salmon's minibatch staleness).
     const MINIBATCH: usize = 1000;
+    // `-l A`: infer the library type from the alignments themselves, with the
+    // same prefix-sampling detector the reads-mode one-pass uses — sample
+    // observed formats until the budget is spent, lock in, and filter the rest
+    // of the run against the detected type. (C++ salmon's alignment mode never
+    // detected strandedness — it peeked pairedness and fell back to IU/U — but
+    // the rewrite's deterministic `-a` path detects via its RAD pass, and the
+    // online path should agree with it.) Read type comes from the first
+    // record's flags, C++'s `peekBAMIsPaired`.
+    let auto_detect = LibraryFormat::is_auto(&opts.lib_type);
+    let peeked_paired = if auto_detect {
+        peek_alignment_is_paired(&opts.bam)?
+    } else {
+        None
+    };
+    let detector = auto_detect.then(|| {
+        // Detection can only see what the aligner chose to report. In reads
+        // mode salmon maps everything itself, so the sampled orientations are
+        // the library's; here they are whatever survived the aligner's own
+        // settings, and an upstream orientation/strand filter skews the sample
+        // in a way detection cannot recover from.
+        tracing::warn!(
+            "`-l A` with alignment input infers the library type from the alignments \
+             the aligner reported, treating them as an unfiltered sample. If the \
+             aligner was configured to report only one orientation or strand, \
+             detection will mirror that filter rather than the library — e.g. it \
+             cannot conclude `IU` when wrong-strand alignments were already excluded \
+             upstream. If the input BAM/SAM is filtered this way, pass the library \
+             type explicitly instead."
+        );
+        salmon_model::LibraryTypeDetector::new(if peeked_paired.unwrap_or(true) {
+            salmon_core::ReadType::PairedEnd
+        } else {
+            salmon_core::ReadType::SingleEnd
+        })
+    });
     // A paired library expects two mates; a single mate to a transcript is then
     // an "unexpected orphan" and is fragment-length-penalized. (Single-end libs
-    // aren't.)
-    let paired_lib = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
+    // aren't.) Under `-l A`, pairedness comes from the peek above.
+    let paired_lib = match peeked_paired {
+        Some(p) => p,
+        None => !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S"),
+    };
     // Orientation-compatibility filtering (salmon): drop alignments whose
-    // orientation is incompatible with the expected library type. Skipped under
-    // auto (`A`) library type.
-    let expected_format = match opts.lib_type.as_str() {
-        "A" => None,
-        s => LibraryFormat::parse(s).ok(),
+    // orientation is incompatible with the expected library type. `None` under
+    // auto (`A`), where the detector above supplies the format mid-run.
+    let expected_format = if auto_detect {
+        None
+    } else {
+        LibraryFormat::parse(&opts.lib_type).ok()
     };
     let ignore_incompat = opts.incompat_prior <= 0.0;
     let nthreads = rayon::current_num_threads().max(1);
@@ -2027,7 +2175,17 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // is trained there too but not needed afterward. Scope `cfg`/`acc` so their
     // borrows (fld, eq_builder, online, ...) are released before the post-pass
     // effective-length / EM work below.
-    let (seq_obs, gc_obs, pos_obs, num_processed, num_mapped, num_orphan, num_compat, num_incompat) = {
+    let (
+        seq_obs,
+        gc_obs,
+        pos_obs,
+        num_processed,
+        num_mapped,
+        num_orphan,
+        num_compat,
+        num_incompat,
+        lib_format_counts,
+    ) = {
         let cfg = PassCfg {
             online: online.as_ref(),
             fld: &fld,
@@ -2037,6 +2195,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             gc_store,
             length_class: length_class.as_deref(),
             expected_format,
+            detector: detector.as_ref(),
             ignore_incompat,
             incompat_prior: opts.incompat_prior,
             paired_lib,
@@ -2064,6 +2223,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             num_orphan: 0,
             num_frags_compat: 0,
             num_frags_incompat: 0,
+            lib_format_counts: [0; salmon_core::NUM_LIB_FORMATS],
         };
         stream_online_pass(&opts.bam, &cfg, &mut acc)?;
         (
@@ -2075,8 +2235,23 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             acc.num_orphan,
             acc.num_frags_compat,
             acc.num_frags_incompat,
+            acc.lib_format_counts,
         )
     };
+
+    // `-l A`: the end-of-run resolved type — the locked-in format when the
+    // sample budget was reached mid-run (in which case it also filtered the
+    // rest of the run), else the best guess from whatever samples a smaller
+    // run collected. Reported, and used as `lib_format_counts.json`'s
+    // expected format.
+    let detected_library_type = detector.as_ref().map(|d| {
+        let f = d.final_format();
+        tracing::info!(
+            "library format under `-l A`: {} (detected from alignments)",
+            f.canonical()
+        );
+        f.canonical().to_string()
+    });
 
     // ---- base effective lengths --------------------------------------------
     fld.cache();
@@ -2219,16 +2394,34 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let length_classes =
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES);
 
-    // Run diagnostics from end-of-run aggregates. The transcriptomic-BAM online
-    // path has no aggregate observed-format estimate (per-fragment only), so the
-    // library-type mismatch check is `--rad`-only; the mapping-rate / empty-input
-    // checks still apply here.
+    // Run diagnostics from end-of-run aggregates. The aggregate observed-format
+    // estimate is the detector's answer under `-l A`, else inferred from the
+    // end-of-run observed-format histogram with the same decision rule — which
+    // is what lets the library-type mismatch warning fire here, as it does in
+    // the `--rad` path, when an explicit `-l` disagrees with the data.
+    let observed_estimate = detected_library_type.clone().or_else(|| {
+        (num_mapped > 0).then(|| {
+            salmon_model::infer_format_from_counts(
+                &lib_format_counts,
+                if paired_lib {
+                    salmon_core::ReadType::PairedEnd
+                } else {
+                    salmon_core::ReadType::SingleEnd
+                },
+            )
+            .canonical()
+            .to_string()
+        })
+    });
+    let requested_lib = LibraryFormat::parse(&opts.lib_type)
+        .map(|f| f.canonical().to_string())
+        .unwrap_or_else(|_| opts.lib_type.clone());
     let diagnostics = salmon_core::input_diagnostics(
         num_processed,
         num_mapped,
         LibraryFormat::is_auto(&opts.lib_type),
-        &opts.lib_type,
-        None,
+        &requested_lib,
+        observed_estimate.as_deref(),
     );
     for d in &diagnostics {
         if d.severity == "error" {
@@ -2272,6 +2465,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         num_orphan: Some(num_orphan),
         num_compatible_fragments: num_compat,
         num_incompatible_fragments: num_incompat,
+        lib_format_counts,
         provenance: crate::rad::RadProvenance::default(),
         // Straight from the BAM being quantified, no RAD in between.
         source_programs: source_program_lines(&header),
@@ -2296,7 +2490,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         bootstraps,
         em_iters,
         em_converged,
-        detected_library_type: None,
+        detected_library_type,
         total_seconds: run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
         diagnostics,
@@ -2532,54 +2726,40 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         serde_json::to_string_pretty(&meta)?,
     )?;
 
-    // lib_format_counts.json — reads mode writes one, so a RAD requant should
-    // too, or a pipeline that reads it breaks on the requant of its own output.
-    // The concordant/orphan split comes from the records' fragment types, which
-    // is why it is available here at all.
-    if let Some(num_orphan) = res.num_orphan {
-        #[derive(Serialize)]
-        struct LibCounts {
-            read_files: Vec<String>,
-            expected_format: String,
-            compatible_fragment_ratio: f64,
-            num_compatible_fragments: u64,
-            num_incompatible_fragments: u64,
-            num_assigned_fragments: u64,
-            num_frags_with_concordant_consistent_mappings: u64,
-            num_frags_with_inconsistent_or_orphan_mappings: u64,
-            strand_mapping_bias: f64,
-        }
-        // Same semantics as reads mode's `write_lib_counts` (#1130): the ratio is
-        // over the fragments the strand filter actually judged, with the
-        // historical `num_mapped` / 1.0 fallback when nothing ever was. For
-        // phase 2 of `--deterministic` this rewrite is what puts *measured*
-        // values in the final output directory — the mapping pass's file is
-        // overwritten here, so these fields must be real, not placeholders.
-        let judged = res.num_compatible_fragments + res.num_incompatible_fragments;
-        let ratio = if judged > 0 {
-            res.num_compatible_fragments as f64 / judged as f64
-        } else {
-            1.0
-        };
-        let counts = LibCounts {
-            // The RAD is the input; the reads that produced it are not known here.
-            read_files: vec![],
-            expected_format: res
-                .detected_library_type
+    // lib_format_counts.json — reads mode writes one, so alignment mode and a
+    // RAD requant should too, or a pipeline that reads it breaks on the requant
+    // of its own output. The struct and its C++-matching field semantics live
+    // in `salmon_core::LibFormatCountsFile`, shared with reads mode; the
+    // per-format histogram and the judged compat/incompat tallies are measured
+    // in both input paths here. For phase 2 of `--deterministic` this rewrite
+    // is what puts *measured* values in the final output directory — the
+    // mapping pass's file is overwritten here, so these fields must be real,
+    // not placeholders.
+    {
+        // The expected format is the one the strand filter actually used: the
+        // detected type only under `-l A` — the RAD derive pass also detects
+        // under an explicit `-l` (for the mismatch diagnostic), and reporting
+        // that instead would mislabel the file.
+        let expected = if LibraryFormat::is_auto(&opts.lib_type) {
+            res.detected_library_type
                 .clone()
-                .unwrap_or_else(|| opts.lib_type.clone()),
-            compatible_fragment_ratio: ratio,
-            num_compatible_fragments: if judged > 0 {
-                res.num_compatible_fragments
-            } else {
-                res.num_mapped
-            },
-            num_incompatible_fragments: res.num_incompatible_fragments,
-            num_assigned_fragments: res.num_mapped,
-            num_frags_with_concordant_consistent_mappings: res.num_mapped - num_orphan,
-            num_frags_with_inconsistent_or_orphan_mappings: num_orphan,
-            strand_mapping_bias: 0.0,
+                .unwrap_or_else(|| opts.lib_type.clone())
+        } else {
+            LibraryFormat::parse(&opts.lib_type)
+                .map(|f| f.canonical().to_string())
+                .unwrap_or_else(|_| opts.lib_type.clone())
         };
+        let counts = salmon_core::LibFormatCountsFile::new(
+            // The BAM / RAD is the input; the reads that produced it are not
+            // known here.
+            vec![],
+            expected,
+            res.num_mapped,
+            res.num_compatible_fragments,
+            res.num_incompatible_fragments,
+            &res.lib_format_counts,
+        );
+        counts.log_warnings();
         std::fs::write(
             dir.join("lib_format_counts.json"),
             serde_json::to_string_pretty(&counts)?,

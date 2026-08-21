@@ -52,7 +52,11 @@ pub use atomic::AtomicF64;
 pub use diagnostics::{
     input_diagnostics, peak_rss_kb, Diagnostic, MetaFieldSource, MissingMetaField,
 };
-pub use libtype::{compatible_paired, compatible_single, is_compatible, observed_paired_format};
+pub use libtype::{
+    compatible_paired, compatible_single, is_compatible, observed_paired_format,
+    observed_single_format, summarize_lib_format_counts, LibFormatCountsArray, LibFormatCountsFile,
+    LibFormatSummary, NUM_LIB_FORMATS,
+};
 pub use progress::ProgressCounters;
 pub use refprovider::RefProvider;
 pub use timing::PhaseTimer;

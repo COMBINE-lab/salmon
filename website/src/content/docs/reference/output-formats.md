@@ -200,7 +200,9 @@ salmon's `GZipWriter::writeBootstrap<double>`.
 `expected_format`, `compatible_fragment_ratio`, `num_compatible_fragments`,
 `num_incompatible_fragments`, `num_assigned_fragments`,
 `num_frags_with_concordant_consistent_mappings`,
-`num_frags_with_inconsistent_or_orphan_mappings`, `strand_mapping_bias`.
+`num_frags_with_inconsistent_or_orphan_mappings`, `strand_mapping_bias`, and
+the raw per-format observed counts (`IU`, `ISF`, `ISR`, `OU`, `OSF`, `OSR`,
+`MU`, `MSF`, `MSR`, `U`, `SF`, `SR`).
 
 `num_incompatible_fragments` is an addition to the C++ field set (every other
 field keeps its C++ name and meaning). It counts fragments that mapped but had
@@ -214,6 +216,22 @@ field keeps its C++ name and meaning). It counts fragments that mapped but had
   at reduced weight and are included.
 - `compatible_fragment_ratio`: `num_compatible_fragments` over the sum of the
   two, i.e. over the fragments the strand filter actually judged.
+- Per-format keys (`ISF`, `ISR`, …): how many mapped fragments had at least one
+  placement *observed* as that format, tallied from the raw placements before
+  any filtering (a fragment with placements of several formats counts under
+  each). `expected_format` is the resolved type the strand filter used — the
+  detected type under `-l A`, else the declared one.
+- `num_frags_with_concordant_consistent_mappings` /
+  `num_frags_with_inconsistent_or_orphan_mappings`: derived from that
+  histogram, with the C++ meaning — fragments whose observed format agrees
+  with the expected one (exactly the expected format for a stranded type,
+  either strandedness of the expected orientation for an unstranded one)
+  versus everything else, orphaned mates included.
+- `strand_mapping_bias`: of the two strandedness variants of the expected
+  orientation (e.g. `ISF`/`ISR` for an inward type), the fraction observed as
+  the sense variant. Near 0.5 for a genuinely unstranded library; salmon warns
+  when an unstranded run strays more than 1% from it, the classic
+  double-stranded-contamination / mis-declared-strandedness check.
 
 On a stranded protocol the wrong-strand fraction is the cheapest available
 measure of double-stranded input (genomic DNA carry-over from incomplete DNase
@@ -236,6 +254,21 @@ with tallies measured from the RAD's stored orientations). In every mode the
 fragment is judged before the filter acts on it, so on a stranded `-l` a
 wrong-strand library shows both signals at once: a low
 `compatible_fragment_ratio` explaining a collapsed mapping rate.
+
+`-l A` is likewise resolved from the data in every mode: the one-pass reads
+modes and online alignment mode sample a prefix with the library-type detector
+(detect, lock in, filter the rest of the run), while `--deterministic` and
+RAD-input quantification detect from the whole run's records and filter the
+quantification pass. `expected_format` always reports the resolved type.
+
+One caveat for alignment input (`-a`): detection treats the reported
+alignments as an unfiltered sample of the library, but they are whatever the
+aligner chose to report. If the aligner was itself configured to keep only one
+orientation or strand, detection mirrors that upstream filter rather than the
+library — it cannot conclude `IU` when wrong-strand alignments were already
+excluded before salmon ever saw them. For a BAM/SAM filtered this way, pass
+the library type explicitly; salmon logs a warning to this effect whenever
+`-l A` is used with alignment input.
 
 ## Documented Rust-format files (diagnostic)
 

@@ -348,6 +348,39 @@ fn stranded_lib_format_counts_report_incompatible_fragments() {
         res_isr.num_mapped,
         "ISR: {isr}"
     );
+    // The observed-format histogram is measured pre-filter, so the wrong-`-l`
+    // run still records the library's true (inward-FR) shape, and the derived
+    // fields expose the mismatch: almost nothing is concordant with `ISR`, and
+    // the strand bias sits near 1 (nearly everything on the ISF side of the
+    // inward orientation).
+    assert_eq!(isr["expected_format"].as_str().unwrap(), "ISR");
+    assert!(
+        u64_field(&isr, "ISF") as f64 >= 0.9 * total_truth as f64,
+        "ISR run: {isr}"
+    );
+    assert!(
+        u64_field(&isr, "num_frags_with_concordant_consistent_mappings") as f64
+            <= 0.1 * total_truth as f64,
+        "ISR run: {isr}"
+    );
+    // C++ convention: the bias is zeroed when nothing agreed with the expected
+    // format at all (the `numAgree > 0` gate in `summarizeLibraryTypeCounts`).
+    assert_eq!(
+        isr["strand_mapping_bias"].as_f64().unwrap(),
+        0.0,
+        "ISR run: {isr}"
+    );
+    // …and the matching run shows the complementary picture.
+    assert_eq!(isf["expected_format"].as_str().unwrap(), "ISF");
+    assert!(
+        u64_field(&isf, "num_frags_with_concordant_consistent_mappings") as f64
+            >= 0.9 * total_truth as f64,
+        "ISF run: {isf}"
+    );
+    assert!(
+        isf["strand_mapping_bias"].as_f64().unwrap() >= 0.9,
+        "ISF run: {isf}"
+    );
 }
 
 /// Sketch mode must report the wrong-strand tally in `lib_format_counts.json`,
@@ -440,6 +473,21 @@ fn sketch_lib_format_counts_report_dropped_wrong_strand_fragments() {
         "sketch ISR mass {mass} vs num_mapped {}",
         res_isr.num_mapped
     );
+    // The observed-format histogram is measured pre-filter in sketch mode too:
+    // the wrong-`-l` run still records the library's true inward-FR shape (the
+    // bias itself is zeroed by the C++ `numAgree > 0` convention, since nothing
+    // agreed with `ISR`).
+    assert!(
+        isr["ISF"].as_u64().unwrap() as f64 >= 0.9 * total_truth as f64,
+        "sketch ISR: {isr}"
+    );
+    assert!(
+        isr["num_frags_with_inconsistent_or_orphan_mappings"]
+            .as_u64()
+            .unwrap() as f64
+            >= 0.9 * total_truth as f64,
+        "sketch ISR: {isr}"
+    );
 }
 
 /// The `--deterministic` mapping pass must report the same wrong-strand count.
@@ -486,6 +534,20 @@ fn deterministic_mapping_pass_reports_incompatible_fragments() {
     );
     assert!(
         v["compatible_fragment_ratio"].as_f64().unwrap() <= 0.1,
+        "deterministic pass: {v}"
+    );
+    // The deterministic pass measures the observed-format histogram too, so
+    // the phase-1 file (what a standalone `--writeRad --skipQuant` run ships)
+    // carries the same derived fields as every other mode.
+    assert!(
+        v["ISF"].as_u64().unwrap() as f64 >= 0.9 * total_truth as f64,
+        "deterministic pass: {v}"
+    );
+    assert!(
+        v["num_frags_with_inconsistent_or_orphan_mappings"]
+            .as_u64()
+            .unwrap() as f64
+            >= 0.9 * total_truth as f64,
         "deterministic pass: {v}"
     );
 }

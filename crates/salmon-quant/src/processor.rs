@@ -164,6 +164,13 @@ pub(crate) struct Shared<'a> {
     /// neither tally.
     pub num_frags_compat: &'a AtomicU64,
     pub num_frags_incompat: &'a AtomicU64,
+    /// per-observed-format fragment counts (`counts[format_id]`), the raw
+    /// histogram behind `lib_format_counts.json`'s per-format keys and its
+    /// `num_frags_with_concordant_consistent_mappings` /
+    /// `strand_mapping_bias` derivations. Tallied for every mapped fragment
+    /// regardless of the expected format — the histogram records what was
+    /// *observed*, so it is independent of what was declared or detected.
+    pub lib_format_counts: &'a [AtomicU64; salmon_core::NUM_LIB_FORMATS],
     /// selective-alignment meta counters (salmon's `aux_info/meta_info.json`):
     /// decoy-dominated fragments, dovetail fragments, fragments that had
     /// candidates but no surviving mapping, and (for mapped fragments) candidate
@@ -224,6 +231,8 @@ pub(crate) struct Counters {
     /// see [`Shared::num_frags_compat`]
     pub frags_compat: u64,
     pub frags_incompat: u64,
+    /// see [`Shared::lib_format_counts`]
+    pub lib_fmt: salmon_core::LibFormatCountsArray,
     pub decoy: u64,
     pub dovetail: u64,
     pub frags_filtered_vm: u64,
@@ -242,6 +251,9 @@ impl Counters {
         add(sh.num_orphan, self.orphan);
         add(sh.num_frags_compat, self.frags_compat);
         add(sh.num_frags_incompat, self.frags_incompat);
+        for (a, &v) in sh.lib_format_counts.iter().zip(self.lib_fmt.iter()) {
+            add(a, v);
+        }
         add(sh.num_decoy, self.decoy);
         add(sh.num_dovetail, self.dovetail);
         add(sh.num_frags_filtered_vm, self.frags_filtered_vm);
@@ -634,6 +646,33 @@ fn collect_pos(
     }
 }
 
+/// Tally a mapped fragment into the per-worker observed-format histogram: one
+/// count per distinct observed format among its placements (ports salmon's
+/// per-fragment `libTypeCountsPerFrag[i] > 0` accumulation). Pairs use their
+/// recorded format (falling back to the mate-strand derivation, which is how
+/// the RAD writer and `DiscreteFld` classify the same placement); orphans and
+/// single-end mates are a single-end observation on their strand.
+fn tally_observed_formats(
+    placements: &[ScoredMapping],
+    lib_fmt: &mut salmon_core::LibFormatCountsArray,
+) {
+    let mut mask: u16 = 0;
+    for m in placements {
+        let f = match (m.format, m.status) {
+            (Some(f), _) => f,
+            (None, MateStatus::PairedEndPaired) => observed_paired_format(m.is_fw, m.r2_fw),
+            (None, _) => salmon_core::observed_single_format(m.is_fw),
+        };
+        mask |= 1 << f.format_id();
+    }
+    let mut bits = mask;
+    while bits != 0 {
+        let i = bits.trailing_zeros() as usize;
+        lib_fmt[i] += 1;
+        bits &= bits - 1;
+    }
+}
+
 /// Cheap per-fragment work for `--deterministic`'s mapping pass: count the
 /// fragment and, for a uniquely-mapped proper pair, record its length + observed
 /// format into the order-independent [`salmon_model::DiscreteFld`]. No online
@@ -665,6 +704,7 @@ fn record_discrete(
     ) {
         counters.orphan += 1;
     }
+    tally_observed_formats(placements, &mut counters.lib_fmt);
     // Library-format accounting (see `record`). The deterministic pass does no
     // strand filtering (incompatible placements are dropped later, when the RAD
     // is quantified), but with an explicit `-l` the expected format is already
@@ -687,17 +727,18 @@ fn record_discrete(
     if placements.len() == 1 {
         let m = &placements[0];
         if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
-            // Orientation from the mate strands (sketch mode leaves `m.format`
-            // `None`), exactly as `build_rad_record` derives the RAD hit.
+            // Orientation from the mate strands rather than `m.format`, exactly
+            // as `build_rad_record` derives the RAD hit — the two must classify
+            // a placement identically for a baked FLD to match a re-derived one.
             acc.add(m.fragment_len as usize, m.is_fw, m.r2_fw);
         }
     }
     // Naive (kallisto-style) equivalence class for the rough seed EM: the
     // compatible transcripts, orientation-tagged so library-incompatible
     // placements can be dropped once the library type is resolved at end of
-    // mapping. No FLD/score weighting (the FLD isn't known yet). Sketch mode
-    // leaves `m.format` `None`, so derive the observed paired format from the mate
-    // strands (as `build_rad_record` / `DiscreteFld` do).
+    // mapping. No FLD/score weighting (the FLD isn't known yet). The observed
+    // paired format is derived from the mate strands (as `build_rad_record` /
+    // `DiscreteFld` do), keeping every deterministic classifier identical.
     if let Some(nb) = sh.naive_eq {
         let sig: Vec<NaivePlacement> = placements
             .iter()
@@ -788,6 +829,12 @@ fn record(
             }
         }
     }
+
+    // The observed-format histogram, from the raw mappings for the same reason
+    // as the detector sample above: a fragment whose every placement is
+    // wrong-strand is dropped by the filter below, and its observation is
+    // precisely what the histogram exists to report.
+    tally_observed_formats(placements, &mut counters.lib_fmt);
 
     // Strand-compatibility filtering against the expected format: the explicit
     // `-l` type, or — in auto (`-l A`) mode — the format the detector locks in

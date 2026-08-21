@@ -203,12 +203,95 @@ fn stranded_align_lib_format_counts_report_incompatible_fragments() {
         isf_res.num_mapped
     );
     assert_eq!(isf_res.num_mapped, n_fwd as u64);
+    // The observed-format histogram (pre-filter) and its C++-semantics derived
+    // fields: under a stranded ISF expectation only ISF observations are
+    // concordant, and the strand bias is the sense share of the inward
+    // orientation.
+    assert_eq!(u64_field(&isf, "ISF"), n_fwd as u64);
+    assert_eq!(u64_field(&isf, "ISR"), n_rev as u64);
+    assert_eq!(
+        u64_field(&isf, "num_frags_with_concordant_consistent_mappings"),
+        n_fwd as u64
+    );
+    assert_eq!(
+        u64_field(&isf, "num_frags_with_inconsistent_or_orphan_mappings"),
+        n_rev as u64
+    );
+    let bias = isf["strand_mapping_bias"].as_f64().unwrap();
+    let expect_bias = n_fwd as f64 / total as f64;
+    assert!(
+        (bias - expect_bias).abs() < 1e-12,
+        "bias {bias} != {expect_bias}"
+    );
+    assert_eq!(isf["expected_format"].as_str().unwrap(), "ISF");
 
-    // Unstranded: judged like any other type, and everything passes.
+    // Unstranded: judged like any other type, and everything passes — but the
+    // histogram still reports the strand split.
     let out_iu = tmp.path().join("iu_counts");
     run(&sam, &out_iu, "IU");
     let iu = lib_counts(&out_iu);
     assert_eq!(u64_field(&iu, "num_compatible_fragments"), total);
     assert_eq!(u64_field(&iu, "num_incompatible_fragments"), 0);
     assert_eq!(iu["compatible_fragment_ratio"].as_f64().unwrap(), 1.0);
+    assert_eq!(
+        u64_field(&iu, "num_frags_with_concordant_consistent_mappings"),
+        total
+    );
+    assert_eq!(
+        u64_field(&iu, "num_frags_with_inconsistent_or_orphan_mappings"),
+        0
+    );
+    let bias = iu["strand_mapping_bias"].as_f64().unwrap();
+    assert!(
+        (bias - expect_bias).abs() < 1e-12,
+        "bias {bias} != {expect_bias}"
+    );
+}
+
+/// `-l A` in online alignment mode must infer the library type from the
+/// alignments (the reads-mode prefix detector, fed from the BAM/SAM stream) and
+/// report it — where before it silently skipped detection and filtering
+/// entirely, leaving `expected_format: "A"` and a fictitious ratio.
+///
+/// Both fixtures are far below the 50k-sample lock-in budget, so no live
+/// filtering happens (same as reads mode on a small run); the end-of-run best
+/// guess is still reported and names the file's expected format.
+#[test]
+fn align_auto_library_type_detects_from_alignments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib_counts = |dir: &Path| -> serde_json::Value {
+        let s = std::fs::read_to_string(dir.join("lib_format_counts.json")).unwrap();
+        serde_json::from_str(&s).unwrap()
+    };
+
+    // Paired, 12 inward-FR vs 7 inward-RF: a 63% forward ratio is inside
+    // salmon's 30–70% unstranded band, so detection names `IU`.
+    let (n_fwd, n_rev) = (12usize, 7usize);
+    let sam = write_sam(tmp.path(), n_fwd, n_rev);
+    let out = tmp.path().join("auto_pe");
+    let res = run(&sam, &out, "A");
+    assert_eq!(res.detected_library_type.as_deref(), Some("IU"));
+    assert_eq!(res.num_mapped, (n_fwd + n_rev) as u64);
+    let v = lib_counts(&out);
+    assert_eq!(v["expected_format"].as_str().unwrap(), "IU");
+    assert_eq!(v["ISF"].as_u64().unwrap(), n_fwd as u64);
+    assert_eq!(v["ISR"].as_u64().unwrap(), n_rev as u64);
+
+    // Single-end, 48 forward vs 2 reverse: 96% forward is past the 70%
+    // threshold, so detection names `SF` (the read type comes from peeking the
+    // first record's flags, C++'s `peekBAMIsPaired`). Below the lock-in budget
+    // nothing was judged, so the counts keep the historical fallback form.
+    let se = write_single_end_sam(tmp.path(), 48, 2);
+    let out = tmp.path().join("auto_se");
+    let res = run(&se, &out, "A");
+    assert_eq!(res.detected_library_type.as_deref(), Some("SF"));
+    assert_eq!(res.num_mapped, 50);
+    let v = lib_counts(&out);
+    assert_eq!(v["expected_format"].as_str().unwrap(), "SF");
+    assert_eq!(v["SF"].as_u64().unwrap(), 48);
+    assert_eq!(v["SR"].as_u64().unwrap(), 2);
+    assert_eq!(v["num_incompatible_fragments"].as_u64().unwrap(), 0);
+    assert_eq!(v["num_assigned_fragments"].as_u64().unwrap(), 50);
+    let bias = v["strand_mapping_bias"].as_f64().unwrap();
+    assert!((bias - 0.96).abs() < 1e-12, "bias {bias} != 0.96");
 }
