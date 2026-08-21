@@ -37,9 +37,7 @@ use paraseq::Record;
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 
 use salmon_core::math::{log_add, LOG_0, LOG_1};
-use salmon_core::{
-    is_compatible, is_compatible_for_counting, observed_paired_format, LibraryFormat, MateStatus,
-};
+use salmon_core::{is_compatible, observed_paired_format, LibraryFormat, MateStatus};
 use salmon_eqclass::{
     range_factorize_bins, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement, TranscriptGroup,
     NAIVE_NO_FMT,
@@ -675,7 +673,7 @@ fn record_discrete(
     if let Some(exp) = sh.expected_format {
         if placements
             .iter()
-            .any(|m| is_compatible_for_counting(exp, m.format, m.is_fw, m.r2_fw, m.status))
+            .any(|m| is_compatible(exp, m.format, m.is_fw, m.status))
         {
             counters.frags_compat += 1;
         } else {
@@ -802,6 +800,10 @@ fn record(
     // Indices into `placements` rather than references, so the buffer can outlive the
     // call and be reused by the next fragment.
     compat.clear();
+    // Tallied here rather than derived from `compat.len()` afterwards, because
+    // with `--incompatPrior > 0` an incompatible mapping is kept (down-weighted)
+    // and is indistinguishable from a compatible one once it is in the buffer.
+    let mut num_compat_placements = 0usize;
     compat.extend(
         placements
             .iter()
@@ -809,6 +811,7 @@ fn record(
             .filter_map(|(i, m)| match expected {
                 Some(exp) => {
                     if is_compatible(exp, m.format, m.is_fw, m.status) {
+                        num_compat_placements += 1;
                         Some((MapIdx(i), m.weight))
                     } else if sh.ignore_incompat {
                         None
@@ -819,25 +822,13 @@ fn record(
                 None => Some((MapIdx(i), m.weight)),
             }),
     );
-    // Library-format accounting, independent of what is quantified above: a
+    // Library-format accounting, independent of what is quantified below: a
     // fragment that mapped somewhere but nowhere on the expected strand is the
     // wrong-strand evidence `lib_format_counts.json` reports. It is counted under
     // every `--incompatPrior`, including the default 0 where the fragment is then
     // dropped, and only when there is an expected format to compare against.
-    //
-    // Judged separately from the filter above rather than read off it, because
-    // the two questions differ in sketch mode: a sketch pair carries no observed
-    // format and the filter accepts it unseen, while the tally derives the
-    // orientation from the mates and reports what it actually was. Deliberate —
-    // teaching the filter the same trick would change which fragments a sketch
-    // run quantifies, not just how they are described (see
-    // [`is_compatible_for_counting`]). The scan short-circuits on the first
-    // compatible placement.
-    if let Some(exp) = expected {
-        if placements
-            .iter()
-            .any(|m| is_compatible_for_counting(exp, m.format, m.is_fw, m.r2_fw, m.status))
-        {
+    if expected.is_some() {
+        if num_compat_placements > 0 {
             counters.frags_compat += 1;
         } else {
             counters.frags_incompat += 1;

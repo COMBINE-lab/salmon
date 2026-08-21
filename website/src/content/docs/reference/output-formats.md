@@ -229,30 +229,13 @@ tally, so their sum can be lower than the mapped total; under an unstranded type
 every fragment is compatible and the ratio is 1.
 
 The fields are measured in every mode that writes this file: read-based
-quantification (selective alignment and `--sketch`), alignment-based
-quantification (`-a`), RAD-input quantification, and `--deterministic` (whose
-phase-2 requant rewrites the file with tallies measured from the RAD's stored
-orientations).
-
-### `--sketch`: counted, but not filtered on
-
-Sketch mode is the one place where the count and the filter deliberately
-disagree. A sketch-mode paired mapping records its two mates' orientations but
-not the `LibraryFormat` they imply, and the strand filter accepts a pair whose
-format it does not know — so a sketch run assigns the same fragments whatever
-strandedness you declare.
-
-That is a quantification behaviour, and this file does not change it. The tally
-derives the orientation from the mates, so `num_incompatible_fragments` and
-`compatible_fragment_ratio` are real numbers in sketch mode, while
-`num_assigned_fragments` and the abundances are exactly what they were. A sketch
-run against the wrong `-l` therefore shows a low ratio *and* an unchanged
-mapping rate — which is the useful signal: the ratio is telling you the declared
-library type does not match the data, not that fragments were dropped.
-
-One consequence worth knowing: a `--sketch --writeRad` run requantified from its
-RAD *does* filter those pairs, because the RAD records their orientation
-explicitly. The two runs agree on the ratio; they need not agree on abundances.
+quantification (selective alignment and `--sketch`, which applies the same
+strand filter), alignment-based quantification (`-a`), RAD-input
+quantification, and `--deterministic` (whose phase-2 requant rewrites the file
+with tallies measured from the RAD's stored orientations). In every mode the
+fragment is judged before the filter acts on it, so on a stranded `-l` a
+wrong-strand library shows both signals at once: a low
+`compatible_fragment_ratio` explaining a collapsed mapping rate.
 
 ## Documented Rust-format files (diagnostic)
 
