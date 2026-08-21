@@ -34,7 +34,7 @@
 
 mod bam;
 pub mod decode;
-mod mapping_record;
+pub mod mapping_record;
 mod output;
 mod processor;
 mod sam;
@@ -439,8 +439,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // bias we can skip loading them entirely — with a genome decoy this is a
     // multi-GB resident-memory saving.
     // The bias models read whole transcripts as bytes; mapping only reads short
-    // windows, so it holds them at two bits per base.
-    let refseq_load = if opts.seq_bias || opts.gc_bias {
+    // windows, so it holds them at two bits per base. Realizing a mapping-output
+    // record reads the bytes too, so writing records costs the byte store.
+    let writes_records = opts.write_mappings.is_some() || opts.write_bam.is_some();
+    let refseq_load = if opts.seq_bias || opts.gc_bias || writes_records {
         RefseqLoad::Bytes
     } else if !opts.sketch {
         RefseqLoad::Packed
@@ -496,6 +498,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .unwrap_or(1)
     } else {
         opts.num_threads
+    };
+    // Run-wide mapping-output settings, shared by the header and every record so
+    // the two cannot disagree. Realizing a base-level CIGAR costs two banded DPs
+    // per emitted record, so it is only switched on when records are being
+    // written at all.
+    let record_options = mapping_record::RecordOptions {
+        align_config: writes_records.then_some(&opts.map_config.align),
     };
     // SAM sink for `--writeMappings` (header written here).
     let sam_writer: Option<sam::SamWriter> = match &opts.write_mappings {
@@ -724,6 +733,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         )?;
 
         let shared = Shared {
+            record_options: &record_options,
             busy: &plan.busy,
             salmon: &salmon,
             eq: &eq_builder,
