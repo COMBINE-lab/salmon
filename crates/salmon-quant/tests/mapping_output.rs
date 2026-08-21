@@ -23,6 +23,7 @@ use salmon_quant::{quantify, QuantOptions};
 #[derive(Default)]
 struct Run {
     read_group: Option<&'static str>,
+    write_unaligned: bool,
     /// Quantify the first mates on their own, exercising the single-end path.
     single_end: bool,
 }
@@ -56,6 +57,7 @@ fn run_with_mapping_output(dir: &Path, run: Run) -> String {
     options.lib_type = "IU".to_string();
     options.num_threads = 1;
     options.write_mappings = Some(sam.clone());
+    options.write_unaligned = run.write_unaligned;
     options.read_group = run.read_group.map(|spec| ReadGroup::parse(spec).unwrap());
     quantify(&options).expect("quantifying");
 
@@ -322,6 +324,7 @@ fn single_end_records_claim_no_mate() {
         dir.path(),
         Run {
             single_end: true,
+            write_unaligned: true,
             ..Run::default()
         },
     );
@@ -352,6 +355,88 @@ fn single_end_records_claim_no_mate() {
         assert!(tag(record, "MQ:i:").is_none(), "{} has MQ", record[0]);
         if flags & 0x4 == 0 {
             assert!(tag(record, "NM:i:").is_some(), "{} lacks NM", record[0]);
+        }
+    }
+    assert!(
+        records.iter().any(|r| r[1] == "4"),
+        "the unmappable fragment should appear as a plain unmapped record"
+    );
+}
+
+/// An orphan's unmapped mate has to be in the file when unaligned reads are
+/// being written.
+///
+/// The mapped mate is flagged `MATE_UNMAPPED`, and a record that names a mate the
+/// file does not contain is one `samtools fastq` cannot round-trip and one that
+/// any reader following the flag will chase into nothing. The mate is filed at
+/// the mapped mate's position, which is where a sorted file puts it.
+#[test]
+fn an_orphans_unmapped_mate_is_written_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = run_with_mapping_output(
+        dir.path(),
+        Run {
+            write_unaligned: true,
+            ..Run::default()
+        },
+    );
+    let orphan: Vec<Vec<&str>> = records(&sam)
+        .into_iter()
+        .filter(|r| r[0] == "orphan")
+        .collect();
+    assert!(
+        !orphan.is_empty(),
+        "the orphan fragment should be in the output"
+    );
+
+    let mapped: Vec<&Vec<&str>> = orphan
+        .iter()
+        .filter(|r| r[1].parse::<u16>().unwrap() & 0x4 == 0)
+        .collect();
+    let unmapped: Vec<&Vec<&str>> = orphan
+        .iter()
+        .filter(|r| r[1].parse::<u16>().unwrap() & 0x4 != 0)
+        .collect();
+    assert!(!mapped.is_empty(), "one mate mapped: {orphan:?}");
+    assert_eq!(
+        unmapped.len(),
+        1,
+        "the unmapped mate belongs in the file exactly once: {orphan:?}"
+    );
+
+    // The two records must describe each other: same place, opposite mate bits.
+    let mapped = mapped[0];
+    let unmapped = unmapped[0];
+    assert!(
+        mapped[1].parse::<u16>().unwrap() & 0x8 != 0,
+        "the mapped mate should say its mate is unmapped"
+    );
+    assert_eq!(mapped[6], "=", "the mapped mate should point at its mate");
+    assert_eq!(
+        unmapped[2], mapped[2],
+        "the unmapped mate is filed on the same reference"
+    );
+    assert_eq!(
+        unmapped[3], mapped[3],
+        "and at the same position, so a sort keeps them together"
+    );
+    assert_eq!(unmapped[5], "*", "an unmapped record has no CIGAR");
+    assert!(
+        (mapped[1].parse::<u16>().unwrap() ^ unmapped[1].parse::<u16>().unwrap()) & 0xc0 != 0,
+        "the two records should be different mates of the pair"
+    );
+}
+
+/// Without `--sampleUnaligned` the unmapped mate is not written, and the mapped
+/// one must not claim it: a dangling mate reference is worse than an honest `*`.
+#[test]
+fn an_orphan_does_not_name_a_mate_that_was_not_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = run_with_mapping_output(dir.path(), Run::default());
+    for record in records(&sam) {
+        if record[0] == "orphan" {
+            assert_eq!(record[6], "*", "no mate record exists to point at");
+            assert_eq!(record[7], "0");
         }
     }
 }
@@ -416,6 +501,55 @@ fn the_read_group_reaches_the_header_and_every_record() {
             tag(&record, "RG:Z:"),
             Some("RG:Z:s1"),
             "every record should point at the read group: {record:?}"
+        );
+    }
+}
+
+/// Without `--sampleUnaligned` the output holds only what mapped; with it, the
+/// unmapped fragments are there too, flagged and with their bases intact, so the
+/// file covers the whole library.
+#[test]
+fn unaligned_fragments_appear_only_when_asked_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let without = run_with_mapping_output(dir.path(), Run::default());
+    assert!(
+        !records(&without)
+            .iter()
+            .any(|r| r[1].parse::<u16>().unwrap() & 0x4 != 0),
+        "no unmapped records without --sampleUnaligned"
+    );
+
+    // A fragment of pure homopolymer maps nowhere in the fixture.
+    let dir = tempfile::tempdir().unwrap();
+    let sam = run_with_mapping_output(
+        dir.path(),
+        Run {
+            write_unaligned: true,
+            ..Run::default()
+        },
+    );
+    // A fragment that mapped nowhere at all: both mates unmapped. An orphan's
+    // unmapped mate is a different case, filed at its mate's position, and is
+    // covered by its own test.
+    let unmapped: Vec<Vec<&str>> = records(&sam)
+        .into_iter()
+        .filter(|r| {
+            let flags: u16 = r[1].parse().unwrap();
+            flags & 0x4 != 0 && flags & 0x8 != 0
+        })
+        .collect();
+    assert!(
+        !unmapped.is_empty(),
+        "the fixture has a fragment that maps nowhere"
+    );
+    for record in &unmapped {
+        assert_eq!(record[2], "*", "an unmapped record names no reference");
+        assert_eq!(record[3], "0", "an unmapped record has no position");
+        assert_eq!(record[4], "0", "an unmapped record has MAPQ 0");
+        assert_eq!(record[5], "*", "an unmapped record has no CIGAR");
+        assert!(
+            record[9] != "*",
+            "an unmapped record keeps its bases, which is the reason to write it"
         );
     }
 }
