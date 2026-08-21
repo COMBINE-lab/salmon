@@ -22,11 +22,6 @@ ksw2rs = "0.2.0"
 salmon-index = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
-divan = { workspace = true }
-
-[[bench]]
-name = "align"
-harness = false
 
 [lints]
 workspace = true
