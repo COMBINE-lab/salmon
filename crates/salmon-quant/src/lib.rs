@@ -288,6 +288,23 @@ pub struct QuantResult {
     pub num_mapped: u64,
     /// mapped fragments placed as orphans (only one mate of a pair mapped)
     pub num_orphan: u64,
+    /// fragments with at least one mapping strand-compatible with the expected
+    /// library format (`lib_format_counts.json`'s `num_compatible_fragments`)
+    pub num_compatible_fragments: u64,
+    /// fragments that mapped but had *no* strand-compatible mapping
+    /// (`lib_format_counts.json`'s `num_incompatible_fragments`). On a stranded
+    /// library this is the wrong-strand fraction, the cheapest available signal
+    /// of double-stranded (genomic DNA) carry-over; see #1130.
+    ///
+    /// Counted whatever `--incompatPrior` is: under the default 0 these
+    /// fragments are dropped and excluded from `num_mapped`, above 0 they are
+    /// down-weighted and *included* in it.
+    ///
+    /// Both tallies cover only fragments filtered against a known expected
+    /// format, so under `-l A` fragments consumed before the detector locks in
+    /// are in neither, and `num_compatible_fragments + num_incompatible_fragments`
+    /// can fall short of the mapped total.
+    pub num_incompatible_fragments: u64,
     /// fragment mass (sum of equivalence-class counts) that could not be assigned
     /// to any transcript in the final min-alpha redistribution because every
     /// member of the class was truncated; reported, not rescaled. Normally 0.
@@ -404,6 +421,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let num_processed = &progress.processed;
     let num_mapped = &progress.mapped;
     let num_orphan = AtomicU64::new(0);
+    let num_frags_compat = AtomicU64::new(0);
+    let num_frags_incompat = AtomicU64::new(0);
     let num_decoy = AtomicU64::new(0);
     let num_dovetail = AtomicU64::new(0);
     let num_frags_filtered_vm = AtomicU64::new(0);
@@ -671,6 +690,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             num_processed,
             num_mapped,
             num_orphan: &num_orphan,
+            num_frags_compat: &num_frags_compat,
+            num_frags_incompat: &num_frags_incompat,
             num_decoy: &num_decoy,
             num_dovetail: &num_dovetail,
             num_frags_filtered_vm: &num_frags_filtered_vm,
@@ -1292,6 +1313,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_processed: num_processed.load(Ordering::Relaxed),
         num_mapped: num_mapped.load(Ordering::Relaxed),
         num_orphan: num_orphan.load(Ordering::Relaxed),
+        num_compatible_fragments: num_frags_compat.load(Ordering::Relaxed),
+        num_incompatible_fragments: num_frags_incompat.load(Ordering::Relaxed),
         inference_truncated_mass,
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,

@@ -167,3 +167,48 @@ fn single_end_strand_filters_respect_alignment_orientation() {
     );
     mass_conserved(&sr, "SR");
 }
+
+/// `lib_format_counts.json` must report measured strand-compatibility counts in
+/// alignment mode too, not the historical hardcoded `1.0` (#1130). The BAM
+/// streaming pass judges every reported alignment against the expected format
+/// already; this pins that the judgment reaches the output file: exact
+/// `num_compatible_fragments` / `num_incompatible_fragments`, the ratio over
+/// judged fragments, and `num_assigned_fragments` still excluding the dropped
+/// wrong-strand fragments (default `--incompatPrior 0`).
+#[test]
+fn stranded_align_lib_format_counts_report_incompatible_fragments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (n_fwd, n_rev) = (12usize, 7usize);
+    let sam = write_sam(tmp.path(), n_fwd, n_rev);
+    let total = (n_fwd + n_rev) as u64;
+
+    let lib_counts = |dir: &Path| -> serde_json::Value {
+        let s = std::fs::read_to_string(dir.join("lib_format_counts.json")).unwrap();
+        serde_json::from_str(&s).unwrap()
+    };
+    let u64_field = |v: &serde_json::Value, k: &str| v[k].as_u64().unwrap();
+
+    // Stranded ISF: the reverse fragments aligned but only on the wrong strand.
+    let out_isf = tmp.path().join("isf_counts");
+    let isf_res = run(&sam, &out_isf, "ISF");
+    let isf = lib_counts(&out_isf);
+    assert_eq!(u64_field(&isf, "num_compatible_fragments"), n_fwd as u64);
+    assert_eq!(u64_field(&isf, "num_incompatible_fragments"), n_rev as u64);
+    let ratio = isf["compatible_fragment_ratio"].as_f64().unwrap();
+    let expect = n_fwd as f64 / total as f64;
+    assert!((ratio - expect).abs() < 1e-12, "ratio {ratio} != {expect}");
+    // Dropped, so not assigned: the two counts answer different questions.
+    assert_eq!(
+        u64_field(&isf, "num_assigned_fragments"),
+        isf_res.num_mapped
+    );
+    assert_eq!(isf_res.num_mapped, n_fwd as u64);
+
+    // Unstranded: judged like any other type, and everything passes.
+    let out_iu = tmp.path().join("iu_counts");
+    run(&sam, &out_iu, "IU");
+    let iu = lib_counts(&out_iu);
+    assert_eq!(u64_field(&iu, "num_compatible_fragments"), total);
+    assert_eq!(u64_field(&iu, "num_incompatible_fragments"), 0);
+    assert_eq!(iu["compatible_fragment_ratio"].as_f64().unwrap(), 1.0);
+}

@@ -279,12 +279,18 @@ fn write_cmd_info(path: &Path, opts: &QuantOptions) -> Result<()> {
 /// `lib_format_counts.json`: how many fragments were compatible with the
 /// declared library type, which is the first thing to check when a mapping rate
 /// looks wrong.
+///
+/// `num_incompatible_fragments` extends salmon's C++ field set (#1130): it is the
+/// count of fragments that mapped but had no placement on the strand the declared
+/// library type expects. Everything else keeps its C++ name and meaning, so the
+/// file stays a drop-in for existing readers.
 #[derive(Serialize)]
 struct LibCounts {
     read_files: Vec<String>,
     expected_format: String,
     compatible_fragment_ratio: f64,
     num_compatible_fragments: u64,
+    num_incompatible_fragments: u64,
     num_assigned_fragments: u64,
     num_frags_with_concordant_consistent_mappings: u64,
     num_frags_with_inconsistent_or_orphan_mappings: u64,
@@ -292,16 +298,31 @@ struct LibCounts {
 }
 
 fn write_lib_counts(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Result<()> {
-    // No strand-compatibility filtering yet: every mapped fragment is treated
-    // as compatible with the declared library type.
     let mut read_files = paths_to_strings(&opts.mates1);
     read_files.extend(paths_to_strings(&opts.mates2));
     read_files.extend(paths_to_strings(&opts.unmated));
+    // Ratio over the fragments the strand filter actually judged, not over
+    // everything that mapped: under `-l A` the fragments consumed before the
+    // detector locks in were never compared to an expected format. An unstranded
+    // type is judged like any other and simply finds every fragment compatible.
+    let judged = res.num_compatible_fragments + res.num_incompatible_fragments;
+    let ratio = if judged > 0 {
+        res.num_compatible_fragments as f64 / judged as f64
+    } else {
+        1.0
+    };
     let counts = LibCounts {
         read_files,
         expected_format: res.library_type.clone(),
-        compatible_fragment_ratio: 1.0,
-        num_compatible_fragments: res.num_mapped,
+        compatible_fragment_ratio: ratio,
+        // Falls back to the mapped total for the unstranded / unjudged case,
+        // where every mapped fragment is compatible by definition.
+        num_compatible_fragments: if judged > 0 {
+            res.num_compatible_fragments
+        } else {
+            res.num_mapped
+        },
+        num_incompatible_fragments: res.num_incompatible_fragments,
         num_assigned_fragments: res.num_mapped,
         num_frags_with_concordant_consistent_mappings: res.num_mapped - res.num_orphan,
         num_frags_with_inconsistent_or_orphan_mappings: res.num_orphan,

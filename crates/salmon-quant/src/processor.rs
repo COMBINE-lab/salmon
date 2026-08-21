@@ -150,6 +150,20 @@ pub(crate) struct Shared<'a> {
     /// of a paired-end fragment mapped); feeds `lib_format_counts.json`'s
     /// `num_frags_with_inconsistent_or_orphan_mappings`.
     pub num_orphan: &'a AtomicU64,
+    /// fragments with at least one mapping that is strand-compatible with the
+    /// expected library format, and fragments with mappings of which *none* is.
+    /// The second is the direct, free measure of how much of the library sits on
+    /// the wrong strand. On a stranded protocol the leading cause is
+    /// double-stranded (genomic DNA) input, half of which lands on the expected
+    /// strand by chance and cannot be told apart from RNA (#1130). Both feed
+    /// `lib_format_counts.json` (`num_compatible_fragments`,
+    /// `num_incompatible_fragments`, `compatible_fragment_ratio`).
+    ///
+    /// Only fragments filtered against a *known* expected format are counted, so
+    /// under `-l A` the fragments consumed before the detector locks in are in
+    /// neither tally.
+    pub num_frags_compat: &'a AtomicU64,
+    pub num_frags_incompat: &'a AtomicU64,
     /// selective-alignment meta counters (salmon's `aux_info/meta_info.json`):
     /// decoy-dominated fragments, dovetail fragments, fragments that had
     /// candidates but no surviving mapping, and (for mapped fragments) candidate
@@ -207,6 +221,9 @@ pub(crate) struct Shared<'a> {
 #[derive(Default)]
 pub(crate) struct Counters {
     pub orphan: u64,
+    /// see [`Shared::num_frags_compat`]
+    pub frags_compat: u64,
+    pub frags_incompat: u64,
     pub decoy: u64,
     pub dovetail: u64,
     pub frags_filtered_vm: u64,
@@ -223,6 +240,8 @@ impl Counters {
             }
         };
         add(sh.num_orphan, self.orphan);
+        add(sh.num_frags_compat, self.frags_compat);
+        add(sh.num_frags_incompat, self.frags_incompat);
         add(sh.num_decoy, self.decoy);
         add(sh.num_dovetail, self.dovetail);
         add(sh.num_frags_filtered_vm, self.frags_filtered_vm);
@@ -646,6 +665,21 @@ fn record_discrete(
     ) {
         counters.orphan += 1;
     }
+    // Library-format accounting (see `record`). The deterministic pass does no
+    // strand filtering (incompatible placements are dropped later, when the RAD
+    // is quantified), but with an explicit `-l` the expected format is already
+    // known here, so the same wrong-strand tally is free. Under `-l A` the format
+    // is only resolved at end of pass, so nothing is counted.
+    if let Some(exp) = sh.expected_format {
+        if placements
+            .iter()
+            .any(|m| is_compatible(exp, m.format, m.is_fw, m.status))
+        {
+            counters.frags_compat += 1;
+        } else {
+            counters.frags_incompat += 1;
+        }
+    }
     // A uniquely-mapped proper pair unambiguously implies its fragment length and
     // orientation; its observed format also feeds order-independent `-l A`
     // detection. Uses the raw mapping (like the RAD records written this pass, and
@@ -766,6 +800,10 @@ fn record(
     // Indices into `placements` rather than references, so the buffer can outlive the
     // call and be reused by the next fragment.
     compat.clear();
+    // Tallied here rather than derived from `compat.len()` afterwards, because
+    // with `--incompatPrior > 0` an incompatible mapping is kept (down-weighted)
+    // and is indistinguishable from a compatible one once it is in the buffer.
+    let mut num_compat_placements = 0usize;
     compat.extend(
         placements
             .iter()
@@ -773,6 +811,7 @@ fn record(
             .filter_map(|(i, m)| match expected {
                 Some(exp) => {
                     if is_compatible(exp, m.format, m.is_fw, m.status) {
+                        num_compat_placements += 1;
                         Some((MapIdx(i), m.weight))
                     } else if sh.ignore_incompat {
                         None
@@ -783,6 +822,18 @@ fn record(
                 None => Some((MapIdx(i), m.weight)),
             }),
     );
+    // Library-format accounting, independent of what is quantified below: a
+    // fragment that mapped somewhere but nowhere on the expected strand is the
+    // wrong-strand evidence `lib_format_counts.json` reports. It is counted under
+    // every `--incompatPrior`, including the default 0 where the fragment is then
+    // dropped, and only when there is an expected format to compare against.
+    if expected.is_some() {
+        if num_compat_placements > 0 {
+            counters.frags_compat += 1;
+        } else {
+            counters.frags_incompat += 1;
+        }
+    }
     if compat.is_empty() {
         return; // no compatible mapping -> fragment is unassigned (not mapped)
     }

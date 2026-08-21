@@ -198,8 +198,44 @@ salmon's `GZipWriter::writeBootstrap<double>`.
 
 `lib_format_counts.json` records library-format detection: `read_files`,
 `expected_format`, `compatible_fragment_ratio`, `num_compatible_fragments`,
-`num_assigned_fragments`, `num_frags_with_concordant_consistent_mappings`,
+`num_incompatible_fragments`, `num_assigned_fragments`,
+`num_frags_with_concordant_consistent_mappings`,
 `num_frags_with_inconsistent_or_orphan_mappings`, `strand_mapping_bias`.
+
+`num_incompatible_fragments` is an addition to the C++ field set (every other
+field keeps its C++ name and meaning). It counts fragments that mapped but had
+**no** placement on the strand the declared library type expects:
+
+- `num_compatible_fragments`: fragments with at least one strand-compatible
+  mapping.
+- `num_incompatible_fragments`: fragments that mapped only on the wrong strand.
+  With the default `--incompatPrior 0` these are discarded, so they are **not**
+  included in `num_assigned_fragments`; with `--incompatPrior > 0` they are kept
+  at reduced weight and are included.
+- `compatible_fragment_ratio`: `num_compatible_fragments` over the sum of the
+  two, i.e. over the fragments the strand filter actually judged.
+
+On a stranded protocol the wrong-strand fraction is the cheapest available
+measure of double-stranded input (genomic DNA carry-over from incomplete DNase
+digestion): such fragments map to either strand with equal probability, so an
+excess of incompatible fragments implies a comparable amount of contamination
+sitting *on* the expected strand, where nothing can distinguish it from RNA.
+Comparing the ratio across samples of one cohort flags the affected libraries
+without a separate strandedness pass over an alignment.
+
+Both counts cover only fragments compared against a known expected format. Under
+`-l A` the fragments consumed before the library type is inferred are in neither
+tally, so their sum can be lower than the mapped total; under an unstranded type
+every fragment is compatible and the ratio is 1.
+
+The fields are measured in every mode that writes this file: read-based
+quantification (selective alignment and `--sketch`, which applies the same
+strand filter), alignment-based quantification (`-a`), RAD-input
+quantification, and `--deterministic` (whose phase-2 requant rewrites the file
+with tallies measured from the RAD's stored orientations). In every mode the
+fragment is judged before the filter acts on it, so on a stranded `-l` a
+wrong-strand library shows both signals at once: a low
+`compatible_fragment_ratio` explaining a collapsed mapping rate.
 
 ## Documented Rust-format files (diagnostic)
 
