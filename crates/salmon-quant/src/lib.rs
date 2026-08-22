@@ -187,6 +187,14 @@ pub struct QuantOptions {
     /// disable the lower barrier on how short bias correction may make an
     /// effective length (salmon's `--noBiasLengthThreshold`)
     pub no_bias_length_threshold: bool,
+    /// `--initUniform`: start the EM from a uniform abundance vector instead of
+    /// from the counts the mapping pass observed.
+    ///
+    /// Only the RAD quantifier has an initialisation step to apply this to, so
+    /// it takes effect under `--deterministic` (and for `-a`/`--rad` input). The
+    /// one-pass reads path has no such step: its EM starts from the running
+    /// abundances it accumulated while mapping.
+    pub init_uniform: bool,
     /// number of fragment-GC bins in the GC bias model (salmon's `--numGCBins`,
     /// default 25)
     pub gc_bins: usize,
@@ -255,6 +263,7 @@ impl QuantOptions {
             bias_speed_samp: 5,
             num_aux_model_samples: 5_000_000,
             no_bias_length_threshold: false,
+            init_uniform: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
