@@ -1215,6 +1215,12 @@ fn run_deterministic(
 
     // Phase 1 — map once, write the RAD (bakes the deterministic FLD + resolved
     // library format), skipping the online EM: quantification happens in phase 2.
+    //
+    // `skip_quant` is about to be set for phase 1 whatever the user asked, since
+    // phase 1's job is to map and write the RAD. Take the request first: with
+    // `--skipQuant` there is no phase 2, and the RAD is the deliverable rather
+    // than an intermediate. Alignment mode already worked this way.
+    let stop_after_mapping = map_opts.skip_quant;
     map_opts.write_rad = Some(rad_path.clone());
     map_opts.skip_quant = true;
     // Derive the FLD + library format order-independently during this pass and
@@ -1241,6 +1247,14 @@ fn run_deterministic(
         map_res.num_processed,
         pct
     );
+
+    if stop_after_mapping {
+        tracing::info!(
+            "--skipQuant: mapping only; the RAD at {} is the output",
+            rad_path.display()
+        );
+        return Ok(());
+    }
 
     // Phase 2 — deterministic quant from the RAD (fixed baked FLD + library
     // format ⇒ order-independent eq-classes + EM). Mirrors the `--rad` knob wiring.
