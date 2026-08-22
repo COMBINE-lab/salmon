@@ -549,7 +549,9 @@ struct QuantArgs {
     /// distribution, so the result is byte-identical across runs and thread
     /// counts. Avoids a second mapping pass. The intermediate RAD is written under
     /// the output directory and deleted on success unless --keepRad (or use
-    /// --writeRad PATH to choose its location and keep it).
+    /// --writeRad PATH to choose its location and keep it). With --skipQuant the
+    /// run stops after mapping and the RAD is kept as its output, in the output
+    /// directory even when --radScratchDir is given.
     #[arg(long = "deterministic")]
     deterministic: bool,
     /// Keep the intermediate RAD produced by --deterministic (by default it is
@@ -1269,9 +1271,25 @@ fn run_deterministic(
     if explicit && scratch_dir.is_some() {
         tracing::warn!("--radScratchDir is ignored when --writeRad names an explicit path");
     }
+    // Scratch placement is for intermediates. Under `--skipQuant` there is no
+    // phase 2 and the RAD is the run's output, so it belongs in the output
+    // directory under its stable name rather than pid-suffixed on a scratch
+    // volume nothing was meant to be kept in. An explicit `--writeRad` still
+    // wins over both.
+    let deliverable = map_opts.skip_quant;
+    if deliverable && !explicit && scratch_dir.is_some() {
+        tracing::info!(
+            "--skipQuant makes the RAD this run's output, so it is written to the output \
+             directory rather than to --radScratchDir"
+        );
+    }
     let rad_path = match rad_out {
         Some(p) => p,
-        None => intermediate_rad_path(out_dir, scratch_dir, "intermediate_mappings")?,
+        None => intermediate_rad_path(
+            out_dir,
+            if deliverable { None } else { scratch_dir },
+            "intermediate_mappings",
+        )?,
     };
     // The RAD writer opens its file before the mapping pass, so the output
     // directory (where the default intermediate lives) must exist first.
@@ -1290,6 +1308,12 @@ fn run_deterministic(
 
     // Phase 1 — map once, write the RAD (bakes the deterministic FLD + resolved
     // library format), skipping the online EM: quantification happens in phase 2.
+    //
+    // `skip_quant` is about to be set for phase 1 whatever the user asked, since
+    // phase 1's job is to map and write the RAD. Take the request first: with
+    // `--skipQuant` there is no phase 2, and the RAD is the deliverable rather
+    // than an intermediate. Alignment mode already worked this way.
+    let stop_after_mapping = map_opts.skip_quant;
     map_opts.write_rad = Some(rad_path.clone());
     map_opts.skip_quant = true;
     // Derive the FLD + library format order-independently during this pass and
@@ -1316,6 +1340,14 @@ fn run_deterministic(
         map_res.num_processed,
         pct
     );
+
+    if stop_after_mapping {
+        tracing::info!(
+            "--skipQuant: mapping only; the RAD at {} is the output",
+            rad_path.display()
+        );
+        return Ok(());
+    }
 
     // Phase 2 — deterministic quant from the RAD (fixed baked FLD + library
     // format ⇒ order-independent eq-classes + EM). Mirrors the `--rad` knob wiring.
@@ -1402,9 +1434,23 @@ fn run_deterministic_align(
     if explicit && scratch_dir.is_some() {
         tracing::warn!("--radScratchDir is ignored when --writeRad names an explicit path");
     }
+    // Same rule as the reads path: `--skipQuant` makes the RAD this run's
+    // output, and an output belongs in the output directory under a stable name
+    // rather than pid-suffixed on a scratch volume.
+    let deliverable = opts.skip_quant;
+    if deliverable && !explicit && scratch_dir.is_some() {
+        tracing::info!(
+            "--skipQuant makes the RAD this run's output, so it is written to the output \
+             directory rather than to --radScratchDir"
+        );
+    }
     let rad_path = match rad_out {
         Some(p) => p,
-        None => intermediate_rad_path(&out_dir, scratch_dir, "intermediate_alignments")?,
+        None => intermediate_rad_path(
+            &out_dir,
+            if deliverable { None } else { scratch_dir },
+            "intermediate_alignments",
+        )?,
     };
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
