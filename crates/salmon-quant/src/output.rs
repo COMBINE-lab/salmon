@@ -44,8 +44,16 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
         write_quant_sf(&dir.join("quant.sf"), res, opts.sig_digits as usize)?;
     }
     write_cmd_info(&dir.join("cmd_info.json"), opts)?;
-    write_lib_counts(&dir.join("lib_format_counts.json"), opts, res)?;
-    write_meta_info(&dir.join("aux_info").join("meta_info.json"), opts, res)?;
+    // The library-format warnings are structured diagnostics: written into
+    // `meta_info.json`'s `diagnostics` alongside the run's own, so a pipeline
+    // that only keeps the output directory sees them (#1140).
+    let lib_diags = write_lib_counts(&dir.join("lib_format_counts.json"), opts, res)?;
+    write_meta_info(
+        &dir.join("aux_info").join("meta_info.json"),
+        opts,
+        res,
+        &lib_diags,
+    )?;
     write_ambig_info(&dir.join("aux_info").join("ambig_info.tsv"), res)?;
     std::fs::create_dir_all(dir.join("libParams")).context("creating libParams")?;
     salmon_model::dumps::write_flen_dist(
@@ -257,7 +265,11 @@ fn write_cmd_info(path: &Path, opts: &QuantOptions) -> Result<()> {
 /// when a mapping rate looks wrong. The struct, its C++-matching field
 /// semantics, and its `num_incompatible_fragments` extension (#1130) live in
 /// [`salmon_core::LibFormatCountsFile`], shared with the alignment/RAD writer.
-fn write_lib_counts(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Result<()> {
+fn write_lib_counts(
+    path: &Path,
+    opts: &QuantOptions,
+    res: &QuantResult,
+) -> Result<Vec<crate::Diagnostic>> {
     let mut read_files = paths_to_strings(&opts.mates1);
     read_files.extend(paths_to_strings(&opts.mates2));
     read_files.extend(paths_to_strings(&opts.unmated));
@@ -270,7 +282,8 @@ fn write_lib_counts(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resu
         &res.lib_format_counts,
     );
     counts.log_warnings();
-    write_json(path, &counts)
+    write_json(path, &counts)?;
+    Ok(counts.diagnostics())
 }
 
 /// `aux_info/meta_info.json`: everything a downstream tool or a human needs to
@@ -355,7 +368,12 @@ struct MetaInfo {
     end_time: String,
 }
 
-fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Result<()> {
+fn write_meta_info(
+    path: &Path,
+    opts: &QuantOptions,
+    res: &QuantResult,
+    lib_diags: &[crate::Diagnostic],
+) -> Result<()> {
     // Mapping the reads answers nearly everything directly; what it cannot
     // answer comes from the index, which may predate recording it.
     let mut missing_meta_info_fields = Vec::new();
@@ -446,7 +464,11 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         inference_path: if opts.skip_quant { "none" } else { "online" },
         total_time_seconds: res.total_seconds,
         peak_rss_kb: res.peak_rss_kb,
-        diagnostics: res.diagnostics.clone(),
+        diagnostics: {
+            let mut d = res.diagnostics.clone();
+            d.extend(lib_diags.iter().cloned());
+            d
+        },
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: crate::asctime_now(),

@@ -136,8 +136,14 @@ scraping the log (the same messages are also written to
 | `very_low_mapping_rate` | warning | < 10% of fragments mapped |
 | `low_mapping_rate` | warning | < 30% of fragments mapped |
 | `library_type_mismatch` | warning | an explicit `-l` disagrees with the observed library format (reads / `--rad`) |
+| `no_concordant_mappings` | warning | no fragment's observed format agreed with an unstranded expected type — for a paired library, check the reads are properly paired |
+| `strand_bias_unstranded` | warning | strand bias > 1% under an unstranded library type (see `strand_mapping_bias` in `lib_format_counts.json`) |
+| `high_incompatible_fraction` | warning | more than 5% of judged fragments were incompatible with the expected library type |
+| `bam_score_tags_unusable` | warning | deterministic alignment mode scored by `AS`, but the BAM's `AS` tags were missing, partial, or constant — placements were weighted uniformly; consider `--errorModel -t` |
 
-An empty array means no red flags were detected.
+An empty array means no red flags were detected. The library-format codes are
+emitted by every mode that writes `lib_format_counts.json`, from the same
+conditions the log warnings use, so the log and the report cannot disagree.
 
 ### `aux_info/ambig_info.tsv` — per-transcript read partition (TSV)
 

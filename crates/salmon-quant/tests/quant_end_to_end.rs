@@ -378,6 +378,23 @@ fn stranded_lib_format_counts_report_incompatible_fragments() {
         0.0,
         "ISR run: {isr}"
     );
+    // The >5%-incompatible concern is machine-readable too: it lands in
+    // meta_info.json's diagnostics, not only in the log (#1140).
+    let meta: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out_isr.join("aux_info").join("meta_info.json")).unwrap(),
+    )
+    .unwrap();
+    let codes: Vec<&str> = meta["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert!(
+        codes.contains(&"high_incompatible_fraction"),
+        "expected high_incompatible_fraction in diagnostics, got {codes:?}"
+    );
+
     // …and the matching run shows the complementary picture.
     assert_eq!(isf["expected_format"].as_str().unwrap(), "ISF");
     assert!(

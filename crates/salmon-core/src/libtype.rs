@@ -483,34 +483,60 @@ pub fn summarize_lib_format_counts(
 
 impl LibFormatSummary {
     /// The classic end-of-run library-format warnings (ported from
-    /// `summarizeLibraryTypeCounts`), emitted by every writer of
-    /// `lib_format_counts.json` so the checks behave identically across modes:
-    /// no concordant-consistent mappings at all; a strand bias beyond 1% under
-    /// an unstranded expectation; and more than 5% of judged fragments
-    /// incompatible with the expected format.
-    pub fn log_warnings(&self, expected: LibraryFormat, compatible_fragment_ratio: f64) {
+    /// `summarizeLibraryTypeCounts`) as structured [`crate::Diagnostic`]s, so
+    /// they reach `meta_info.json`'s machine-readable `diagnostics` array and
+    /// not just whoever reads the log (#1140): no concordant-consistent
+    /// mappings at all; a strand bias beyond 1% under an unstranded
+    /// expectation; and more than 5% of judged fragments incompatible with the
+    /// expected format.
+    pub fn diagnostics(
+        &self,
+        expected: LibraryFormat,
+        compatible_fragment_ratio: f64,
+    ) -> Vec<crate::Diagnostic> {
+        let mut out = Vec::new();
         if expected.strandedness == ReadStrandedness::U {
             if self.num_concordant_consistent == 0 {
-                tracing::warn!(
+                out.push(crate::Diagnostic::new(
+                    "no_concordant_mappings",
+                    "warning",
                     "found no concordant and consistent mappings; if this is a \
                      paired-end library, are you sure the reads are properly \
                      paired? See lib_format_counts.json for details"
-                );
+                        .to_string(),
+                ));
             } else if (self.strand_mapping_bias - 0.5).abs() > 0.01 {
-                tracing::warn!(
-                    "detected a *potential* strand bias > 1% in an unstranded \
-                     protocol (strand_mapping_bias = {:.4}); see \
-                     lib_format_counts.json for details",
-                    self.strand_mapping_bias
-                );
+                out.push(crate::Diagnostic::new(
+                    "strand_bias_unstranded",
+                    "warning",
+                    format!(
+                        "detected a *potential* strand bias > 1% in an unstranded \
+                         protocol (strand_mapping_bias = {:.4}); see \
+                         lib_format_counts.json for details",
+                        self.strand_mapping_bias
+                    ),
+                ));
             }
         }
         if 1.0 - compatible_fragment_ratio > 0.05 {
-            tracing::warn!(
-                "greater than 5% of the fragments disagreed with the expected \
-                 library type ({}); see lib_format_counts.json for details",
-                expected.canonical()
-            );
+            out.push(crate::Diagnostic::new(
+                "high_incompatible_fraction",
+                "warning",
+                format!(
+                    "greater than 5% of the fragments disagreed with the expected \
+                     library type ({}); see lib_format_counts.json for details",
+                    expected.canonical()
+                ),
+            ));
+        }
+        out
+    }
+
+    /// Log [`Self::diagnostics`] as warnings — one condition set, spoken and
+    /// recorded from the same source so the two cannot drift.
+    pub fn log_warnings(&self, expected: LibraryFormat, compatible_fragment_ratio: f64) {
+        for d in self.diagnostics(expected, compatible_fragment_ratio) {
+            tracing::warn!("{}", d.message);
         }
     }
 }
@@ -623,21 +649,33 @@ impl LibFormatCountsFile {
         }
     }
 
-    /// Emit the classic end-of-run warnings for this file's contents (see
-    /// [`LibFormatSummary::log_warnings`]). A no-op when the expected format
-    /// never resolved or nothing mapped — an empty run has nothing to warn
-    /// about.
-    pub fn log_warnings(&self) {
-        if self.num_assigned_fragments == 0 {
-            return;
+    /// The classic end-of-run warnings for this file's contents, as structured
+    /// diagnostics (see [`LibFormatSummary::diagnostics`]). Empty when the
+    /// expected format never resolved, or when nothing was assigned *and*
+    /// nothing was judged incompatible — a truly empty run has nothing to warn
+    /// about, but a run whose every fragment was dropped as wrong-strand
+    /// (assigned 0, incompatible many) is exactly the run these warnings exist
+    /// for.
+    pub fn diagnostics(&self) -> Vec<crate::Diagnostic> {
+        if self.num_assigned_fragments == 0 && self.num_incompatible_fragments == 0 {
+            return Vec::new();
         }
-        if let Ok(exp) = LibraryFormat::parse(&self.expected_format) {
-            let summary = LibFormatSummary {
-                num_concordant_consistent: self.num_frags_with_concordant_consistent_mappings,
-                num_inconsistent_or_orphan: self.num_frags_with_inconsistent_or_orphan_mappings,
-                strand_mapping_bias: self.strand_mapping_bias,
-            };
-            summary.log_warnings(exp, self.compatible_fragment_ratio);
+        let Ok(exp) = LibraryFormat::parse(&self.expected_format) else {
+            return Vec::new();
+        };
+        let summary = LibFormatSummary {
+            num_concordant_consistent: self.num_frags_with_concordant_consistent_mappings,
+            num_inconsistent_or_orphan: self.num_frags_with_inconsistent_or_orphan_mappings,
+            strand_mapping_bias: self.strand_mapping_bias,
+        };
+        summary.diagnostics(exp, self.compatible_fragment_ratio)
+    }
+
+    /// Log [`Self::diagnostics`] as warnings; the writers also merge the same
+    /// diagnostics into `meta_info.json`, so the log and the report agree.
+    pub fn log_warnings(&self) {
+        for d in self.diagnostics() {
+            tracing::warn!("{}", d.message);
         }
     }
 }

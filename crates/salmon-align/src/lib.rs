@@ -2734,6 +2734,47 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
             ));
         }
     }
+    // lib_format_counts.json — reads mode writes one, so alignment mode and a
+    // RAD requant should too, or a pipeline that reads it breaks on the requant
+    // of its own output. The struct and its C++-matching field semantics live
+    // in `salmon_core::LibFormatCountsFile`, shared with reads mode; the
+    // per-format histogram and the judged compat/incompat tallies are measured
+    // in both input paths here. For phase 2 of `--deterministic` this rewrite
+    // is what puts *measured* values in the final output directory — the
+    // mapping pass's file is overwritten here, so these fields must be real,
+    // not placeholders.
+    let lib_diags: Vec<salmon_core::Diagnostic> = {
+        // The expected format is the one the strand filter actually used: the
+        // detected type only under `-l A` — the RAD derive pass also detects
+        // under an explicit `-l` (for the mismatch diagnostic), and reporting
+        // that instead would mislabel the file.
+        let expected = if LibraryFormat::is_auto(&opts.lib_type) {
+            res.detected_library_type
+                .clone()
+                .unwrap_or_else(|| opts.lib_type.clone())
+        } else {
+            LibraryFormat::parse(&opts.lib_type)
+                .map(|f| f.canonical().to_string())
+                .unwrap_or_else(|_| opts.lib_type.clone())
+        };
+        let counts = salmon_core::LibFormatCountsFile::new(
+            // The BAM / RAD is the input; the reads that produced it are not
+            // known here.
+            vec![],
+            expected,
+            res.num_mapped,
+            res.num_compatible_fragments,
+            res.num_incompatible_fragments,
+            &res.lib_format_counts,
+        );
+        counts.log_warnings();
+        std::fs::write(
+            dir.join("lib_format_counts.json"),
+            serde_json::to_string_pretty(&counts)?,
+        )?;
+        counts.diagnostics()
+    };
+
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),
         // What kind of posterior samples were actually produced, so tximport
@@ -2817,7 +2858,13 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         },
         total_time_seconds: res.total_seconds,
         peak_rss_kb: res.peak_rss_kb,
-        diagnostics: res.diagnostics.clone(),
+        // The run's own diagnostics plus the library-format warnings, so
+        // `meta_info.json` carries every machine-readable concern (#1140).
+        diagnostics: {
+            let mut d = res.diagnostics.clone();
+            d.extend(lib_diags.iter().cloned());
+            d
+        },
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: asctime_now(),
@@ -2826,46 +2873,6 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         dir.join("aux_info").join("meta_info.json"),
         serde_json::to_string_pretty(&meta)?,
     )?;
-
-    // lib_format_counts.json — reads mode writes one, so alignment mode and a
-    // RAD requant should too, or a pipeline that reads it breaks on the requant
-    // of its own output. The struct and its C++-matching field semantics live
-    // in `salmon_core::LibFormatCountsFile`, shared with reads mode; the
-    // per-format histogram and the judged compat/incompat tallies are measured
-    // in both input paths here. For phase 2 of `--deterministic` this rewrite
-    // is what puts *measured* values in the final output directory — the
-    // mapping pass's file is overwritten here, so these fields must be real,
-    // not placeholders.
-    {
-        // The expected format is the one the strand filter actually used: the
-        // detected type only under `-l A` — the RAD derive pass also detects
-        // under an explicit `-l` (for the mismatch diagnostic), and reporting
-        // that instead would mislabel the file.
-        let expected = if LibraryFormat::is_auto(&opts.lib_type) {
-            res.detected_library_type
-                .clone()
-                .unwrap_or_else(|| opts.lib_type.clone())
-        } else {
-            LibraryFormat::parse(&opts.lib_type)
-                .map(|f| f.canonical().to_string())
-                .unwrap_or_else(|_| opts.lib_type.clone())
-        };
-        let counts = salmon_core::LibFormatCountsFile::new(
-            // The reads behind the RAD when the driver knows them (reads-mode
-            // --deterministic); a standalone --rad/-a input has none to name.
-            opts.read_files.clone(),
-            expected,
-            res.num_mapped,
-            res.num_compatible_fragments,
-            res.num_incompatible_fragments,
-            &res.lib_format_counts,
-        );
-        counts.log_warnings();
-        std::fs::write(
-            dir.join("lib_format_counts.json"),
-            serde_json::to_string_pretty(&counts)?,
-        )?;
-    }
 
     // aux_info/bootstrap/{names.tsv.gz, bootstraps.gz}: posterior samples in the
     // same layout reads mode uses (gzipped tab-separated names; gzipped raw
