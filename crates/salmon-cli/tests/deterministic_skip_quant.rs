@@ -71,7 +71,7 @@ fn skip_quant_under_deterministic_maps_and_stops() {
         .unwrap()
         .success());
 
-    let run = |tag: &str, skip: bool| -> PathBuf {
+    let run = |tag: &str, skip: bool, scratch: Option<&Path>| -> PathBuf {
         let out = dir.path().join(tag);
         let mut cmd = Command::new(SALMON);
         cmd.args(["quant", "-i"])
@@ -86,11 +86,14 @@ fn skip_quant_under_deterministic_maps_and_stops() {
         if skip {
             cmd.arg("--skipQuant");
         }
+        if let Some(d) = scratch {
+            cmd.arg("--radScratchDir").arg(d);
+        }
         assert!(cmd.status().unwrap().success(), "{tag} run failed");
         out
     };
 
-    let full = run("full", false);
+    let full = run("full", false, None);
     assert!(
         full.join("quant.sf").is_file(),
         "a full run still quantifies"
@@ -100,7 +103,7 @@ fn skip_quant_under_deterministic_maps_and_stops() {
         "and still cleans up its intermediate"
     );
 
-    let mapped = run("mapped", true);
+    let mapped = run("mapped", true, None);
     assert!(
         !mapped.join("quant.sf").exists(),
         "--skipQuant must not produce abundances"
@@ -113,5 +116,23 @@ fn skip_quant_under_deterministic_maps_and_stops() {
     assert!(
         std::fs::metadata(&rad).unwrap().len() > 0,
         "and it has to have something in it"
+    );
+
+    // Scratch placement is for intermediates. Once --skipQuant promotes the RAD
+    // to the run's output, sending it to a scratch volume under a pid-suffixed
+    // name would be the wrong place and the wrong name for something the user
+    // asked to keep.
+    let scratch = dir.path().join("scratch");
+    let scratched = run("scratched", true, Some(&scratch));
+    assert!(
+        scratched.join("intermediate_mappings.rad").is_file(),
+        "a --skipQuant deliverable belongs in the output directory"
+    );
+    let in_scratch: Vec<_> = std::fs::read_dir(&scratch)
+        .map(|rd| rd.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(
+        in_scratch.is_empty(),
+        "nothing should be left in --radScratchDir: {in_scratch:?}"
     );
 }
