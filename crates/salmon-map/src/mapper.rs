@@ -596,7 +596,18 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 } else {
                     anchor.chain.ref_start()
                 },
-                format: None, // recovered pair: orientation not re-derived
+                // The recovered pair's orientation IS observed: the anchor's
+                // strand is real evidence and the rescued mate is opposite by
+                // construction (the rescue searches inward geometry). Filling
+                // it lets the one-pass strand filter judge recovered pairs the
+                // way the deterministic path always has — the RAD stores both
+                // strand bits, so a requant judged these while one-pass waved
+                // them through on `format: None` (#1140, the #1136 pattern
+                // surviving on this one site).
+                format: Some(salmon_core::observed_paired_format(
+                    anchor.is_fw,
+                    !anchor.is_fw,
+                )),
                 // SAM: the partner's leftmost is estimated from the fragment length.
                 r1_pos: if anchor_is_left {
                     anchor.chain.ref_start()
