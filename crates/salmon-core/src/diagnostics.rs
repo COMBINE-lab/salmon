@@ -220,6 +220,10 @@ pub fn free_disk_bytes(path: &std::path::Path) -> Option<u64> {
         // SAFETY: `c` is a valid NUL-terminated path and `st` a valid out
         // pointer for the duration of the call.
         if unsafe { libc::statvfs(c.as_ptr(), &mut st) } == 0 {
+            // The field widths differ per platform (u64 on Linux, narrower on
+            // macOS), so the casts are required on some targets and "identity"
+            // on others — hence the allow rather than removing them.
+            #[allow(clippy::unnecessary_cast)]
             Some(st.f_bavail as u64 * st.f_frsize as u64)
         } else {
             None
