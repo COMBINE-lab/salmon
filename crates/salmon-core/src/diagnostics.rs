@@ -195,3 +195,64 @@ impl MissingMetaField {
         }
     }
 }
+
+/// Free bytes available to unprivileged writes on the filesystem holding
+/// `path` (`statvfs`: `f_bavail * f_frsize`), or `None` where the answer is
+/// unavailable — a non-Unix platform, or a path `statvfs` rejects. Callers
+/// treat `None` as "cannot check", never as "no space".
+///
+/// Behind the deterministic-intermediate disk checks (#1140): the RAD writer
+/// probes this periodically so a filling disk fails in seconds with an
+/// actionable message instead of at the end of the mapping pass, and the
+/// two-phase drivers probe it up front to warn before minutes of work.
+// The only unsafe in the crate: `statvfs` has no std or pure-Rust equivalent,
+// and the two blocks below are the minimal FFI surface for it — a zeroed
+// plain-old-data out-parameter and one libc call that fills it.
+#[allow(unsafe_code)]
+pub fn free_disk_bytes(path: &std::path::Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        // SAFETY: `statvfs` is plain old data; the all-zero bit pattern is a
+        // valid (if meaningless) value, and the call below overwrites it.
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: `c` is a valid NUL-terminated path and `st` a valid out
+        // pointer for the duration of the call.
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } == 0 {
+            // The field widths differ per platform (u64 on Linux, narrower on
+            // macOS), so the casts are required on some targets and "identity"
+            // on others — hence the allow rather than removing them.
+            #[allow(clippy::unnecessary_cast)]
+            Some(st.f_bavail as u64 * st.f_frsize as u64)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+#[cfg(test)]
+mod fs_tests {
+    /// On Unix the probe must answer for an existing, writable directory; the
+    /// value itself is machine-dependent, so only its presence is asserted.
+    #[test]
+    #[cfg(unix)]
+    fn free_disk_bytes_answers_for_tmp() {
+        let d = std::env::temp_dir();
+        assert!(super::free_disk_bytes(&d).is_some());
+    }
+
+    /// A nonexistent path is "cannot check", not a panic.
+    #[test]
+    fn free_disk_bytes_none_for_missing_path() {
+        assert!(
+            super::free_disk_bytes(std::path::Path::new("/definitely/not/a/real/path/xyz"))
+                .is_none()
+        );
+    }
+}

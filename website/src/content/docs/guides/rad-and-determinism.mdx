@@ -196,6 +196,31 @@ does in ordinary alignment mode) — you also supply it to reconstruct reference
 sequences for bias correction. The error model is enabled only by `--errorModel`.
 :::
 
+## Disk use of the `--deterministic` intermediate
+
+The two-phase flow writes an intermediate RAD, quantifies from it, and deletes
+it on success. Budget roughly the size of your **compressed input** for it
+(measured ~110 MB per 1M read pairs on GENCODE v49 under the default lz4);
+the exact size grows with the multimapping rate, not just the read count, so
+no fixed per-fragment constant is reliable. Salmon warns at startup when the
+target volume's free space is below the total input size, and the writer
+checks free space periodically during the pass so a filling disk fails within
+seconds — with the partial file removed — rather than silently at the end of
+the mapping pass.
+
+Two knobs when space or I/O speed is a concern:
+
+- `--radScratchDir <dir>` places the intermediate on a different volume —
+  node-local scratch, or memory-backed storage such as `/dev/shm`, which
+  removes the round-trip from slow or networked filesystems entirely. The
+  file is pid-suffixed there, so concurrent runs can share one scratch
+  directory.
+- `--radCompress zstd` shrinks the intermediate a further ~30% over the lz4
+  default for ~11% extra wall time.
+
+An explicit `--writeRad PATH` always wins over `--radScratchDir`, and files at
+user-named paths are never cleaned up by salmon — they are yours.
+
 ## Compressing RAD output (`--radCompress`)
 
 RAD chunks can be compressed, on by default for both `--writeRad` and the
