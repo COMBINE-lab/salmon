@@ -665,6 +665,10 @@ struct FragRecord {
     /// salmon's behavior for CIGAR-bearing aligners (see [`salmon-align-as-weighting`]).
     #[allow(dead_code)]
     score: i32,
+    /// whether the record actually carried an `AS` tag. A missing tag reads as
+    /// `score: 0`, which is indistinguishable from a genuine zero, so presence
+    /// has to be recorded where the tag is read rather than inferred later.
+    has_score: bool,
     frag_len: i32,
     /// reverse-strand alignment (BAM `0x10` flag)
     is_reverse: bool,
@@ -810,12 +814,13 @@ fn record_to_frag<R: sam::alignment::Record>(
         .map(|(_, l)| l)
         .sum();
     let ops = if need_seq { ops } else { Vec::new() };
-    let score = record
+    let parsed_score = record
         .data()
         .get(&Tag::ALIGNMENT_SCORE)
         .and_then(|r| r.ok())
-        .and_then(|v| value_as_i32(&v))
-        .unwrap_or(0);
+        .and_then(|v| value_as_i32(&v));
+    let score = parsed_score.unwrap_or(0);
+    let has_score = parsed_score.is_some();
     let frag_len = record.template_length().map(|t| t.abs()).unwrap_or(0);
     let is_reverse = flags.is_reverse_complemented();
     let is_read1 = flags.is_first_segment();
@@ -847,6 +852,7 @@ fn record_to_frag<R: sam::alignment::Record>(
             read_2bit,
             ops,
             score,
+            has_score,
             frag_len,
             is_reverse,
             is_read1,
@@ -2921,6 +2927,7 @@ mod tests {
             read_2bit: Vec::new(),
             ops: Vec::new(),
             score: 0,
+            has_score: false,
             frag_len: 0,
             is_reverse,
             is_read1,

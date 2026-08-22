@@ -72,6 +72,13 @@ const ERROR_MODEL_ALPHA: f64 = 1.0;
 pub struct AlignRadSummary {
     pub num_processed: u64,
     pub num_mapped: u64,
+    /// What was wrong with the BAM's `AS` tags, when the run scored by them and
+    /// they could not carry that weight. `None` when the tags were usable, or
+    /// when `--errorModel` scored the alignments instead.
+    ///
+    /// Returned as well as logged so a caller (and a test) can see the judgement
+    /// without capturing log output.
+    pub score_tag_warning: Option<String>,
 }
 
 /// Project a name-grouped transcriptome BAM into a fully-baked salmon RAD at
@@ -186,7 +193,22 @@ pub fn write_alignment_rad(
         let sums = stream_grouped(&opts.bam, nthreads, || {
             WriteWorker::new(&writer, &fld, naive.as_ref())
         })?;
-        reduce_summary(sums)
+        // The scores these records carry are only as good as the tags they came
+        // from, and a BAM without them fails silently: say so before the numbers
+        // are used for anything.
+        let mut tags = ScoreTagTally::new();
+        let mut plain = Vec::with_capacity(sums.len());
+        for (processed, mapped, worker_tags) in sums {
+            tags.merge(&worker_tags);
+            plain.push((processed, mapped));
+        }
+        let complaint = tags.warning();
+        if let Some(text) = &complaint {
+            tracing::warn!("{text}");
+        }
+        let mut summary = reduce_summary(plain);
+        summary.score_tag_warning = complaint;
+        summary
     };
 
     // ---- end-of-pass bake (single quant pass) ----------------------------
@@ -228,6 +250,90 @@ pub fn write_alignment_rad(
     Ok(summary)
 }
 
+/// What the one-pass writer saw of the BAM's `AS` tags, so the run can say when
+/// it had nothing to score with.
+///
+/// Without `--errorModel`, deterministic alignment mode takes each placement's
+/// weight from the BAM's `AS`. A missing tag parses as score 0, so a BAM with no
+/// `AS` at all (or one constant value) leaves every placement equally weighted
+/// and the EM apportions multireads by effective length alone. On a stripped-`AS`
+/// BAM that measured 3x the MARD of the same file with its tags intact
+/// (COMBINE-lab/salmon#1140), which is far too large a difference to leave
+/// unremarked.
+#[derive(Clone, Copy)]
+struct ScoreTagTally {
+    records: u64,
+    with_tag: u64,
+    min: i32,
+    max: i32,
+}
+
+impl ScoreTagTally {
+    const fn new() -> Self {
+        Self {
+            records: 0,
+            with_tag: 0,
+            min: i32::MAX,
+            max: i32::MIN,
+        }
+    }
+
+    fn observe(&mut self, has_tag: bool, score: i32) {
+        self.records += 1;
+        if has_tag {
+            self.with_tag += 1;
+            self.min = self.min.min(score);
+            self.max = self.max.max(score);
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.records += other.records;
+        self.with_tag += other.with_tag;
+        self.min = self.min.min(other.min);
+        self.max = self.max.max(other.max);
+    }
+
+    /// The complaint to make about this BAM, if any. Ordered by how badly the
+    /// scores are degraded, and silent when the tags are usable.
+    fn warning(&self) -> Option<String> {
+        if self.records == 0 {
+            return None;
+        }
+        let advice = "scoring falls back to equal weights for every placement of a fragment, so \
+                      multireads are apportioned by effective length alone; pass --errorModel \
+                      with -t <transcripts.fa> to score the alignments from their own bases \
+                      instead";
+        if self.with_tag == 0 {
+            return Some(format!(
+                "no alignment in this BAM carries an AS tag ({} records read): {advice}",
+                self.records
+            ));
+        }
+        if self.with_tag < self.records {
+            return Some(format!(
+                "{} of {} alignment records carry no AS tag: those score 0 while the rest keep \
+                 the aligner's score, which is not a comparison between them. {advice}",
+                self.records - self.with_tag,
+                self.records
+            ));
+        }
+        if self.min == self.max {
+            // Legitimately reachable: error-free reads of one length through an
+            // end-to-end aligner all score the same, which simulated data does
+            // routinely. The consequence holds either way, so the wording says
+            // what the column cannot do rather than implying the BAM is broken.
+            return Some(format!(
+                "every alignment in this BAM reports the same AS ({}), which can be legitimate \
+                 for error-free reads of uniform length, but means the scores cannot distinguish \
+                 one placement from another: {advice}",
+                self.min
+            ));
+        }
+        None
+    }
+}
+
 fn reduce_summary(parts: Vec<(u64, u64)>) -> AlignRadSummary {
     let (mut num_processed, mut num_mapped) = (0u64, 0u64);
     for (p, m) in parts {
@@ -237,6 +343,7 @@ fn reduce_summary(parts: Vec<(u64, u64)>) -> AlignRadSummary {
     AlignRadSummary {
         num_processed,
         num_mapped,
+        score_tag_warning: None,
     }
 }
 
@@ -413,6 +520,8 @@ struct WriteWorker<'a> {
     scratch: Vec<FragRecord>,
     processed: u64,
     mapped: u64,
+    /// what this worker saw of the `AS` tags it is scoring by
+    tags: ScoreTagTally,
 }
 
 impl<'a> WriteWorker<'a> {
@@ -429,12 +538,13 @@ impl<'a> WriteWorker<'a> {
             scratch: Vec::new(),
             processed: 0,
             mapped: 0,
+            tags: ScoreTagTally::new(),
         }
     }
 }
 
 impl GroupWorker for WriteWorker<'_> {
-    type Output = (u64, u64);
+    type Output = (u64, u64, ScoreTagTally);
     fn handle<R: sam::alignment::Record>(&mut self, header: &Header, group: &[R]) -> Result<()> {
         self.processed += 1;
         let Some(data) = analyze_group(group, header, false, &mut self.scratch) else {
@@ -448,16 +558,23 @@ impl GroupWorker for WriteWorker<'_> {
             .collect();
         write_record(&data, &scores, &mut self.buf, self.writer)?;
         tally_fld_naive(&data, self.fld, self.naive);
+        // Per record, which is where the tag either is or is not. Judging
+        // constancy on the per-placement sum instead would miss a BAM whose
+        // every record says AS:i:100, since a pair sums to 200 and an orphan to
+        // 100 and the two look like variation.
+        for frag in &data.frags {
+            self.tags.observe(frag.has_score, frag.score);
+        }
         self.mapped += 1;
         self.scratch = data.frags;
         Ok(())
     }
-    fn finish(mut self) -> Result<(u64, u64)> {
+    fn finish(mut self) -> Result<(u64, u64, ScoreTagTally)> {
         if self.buf.nrec() > 0 {
             let bytes = self.buf.take_bytes()?;
             self.writer.append_chunk_bytes(&bytes)?;
         }
-        Ok((self.processed, self.mapped))
+        Ok((self.processed, self.mapped, self.tags))
     }
 }
 

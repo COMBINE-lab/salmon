@@ -247,3 +247,121 @@ fn deterministic_bam_is_reproducible() {
         "deterministic alignment quant must reproduce"
     );
 }
+
+// ---- AS-tag diagnostics ---------------------------------------------------
+
+/// Deterministic alignment mode without `--errorModel` scores each placement by
+/// the BAM's `AS`. These tests cover what the run says when that tag cannot
+/// carry the weight, because the failure is otherwise invisible: a missing tag
+/// reads as score 0, every placement ties, and multireads end up apportioned by
+/// effective length alone. On a stripped-`AS` BAM that measured three times the
+/// MARD of the same file with its tags intact (COMBINE-lab/salmon#1140).
+///
+/// `policy` decides the tag written on each record: `None` writes none.
+fn write_sam_with_as(dir: &Path, name: &str, policy: impl Fn(usize) -> Option<i32>) -> PathBuf {
+    let path = dir.join(name);
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:5000").unwrap();
+    let mut pos = 1usize;
+    for i in 0..40 {
+        let (l, r) = (pos + 1, pos + 201);
+        let tag = |idx: usize| match policy(idx) {
+            Some(score) => format!("\tAS:i:{score}"),
+            None => String::new(),
+        };
+        writeln!(
+            f,
+            "a{i}\t99\ttxA\t{l}\t60\t100M\t=\t{r}\t300\t*\t*{}",
+            tag(2 * i)
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "a{i}\t147\ttxA\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*{}",
+            tag(2 * i + 1)
+        )
+        .unwrap();
+        pos += 400;
+    }
+    path
+}
+
+fn warning_for(dir: &Path, name: &str, policy: impl Fn(usize) -> Option<i32>) -> Option<String> {
+    let sam = write_sam_with_as(dir, name, policy);
+    let out = dir.join(format!("{name}.out"));
+    std::fs::create_dir_all(&out).unwrap();
+    let opts = opts_for(&sam, &out);
+    let rad = dir.join(format!("{name}.rad"));
+    write_alignment_rad(&opts, &rad, ChunkCodec::None)
+        .unwrap()
+        .score_tag_warning
+}
+
+#[test]
+/// A BAM with no `AS` at all cannot be scored, and the run has to say so rather
+/// than reporting numbers derived from an all-zero score column.
+fn an_as_less_bam_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let warning = warning_for(dir.path(), "no_as.sam", |_| None).expect("a warning");
+    assert!(
+        warning.contains("no alignment in this BAM carries an AS tag"),
+        "{warning}"
+    );
+    assert!(
+        warning.contains("--errorModel"),
+        "the warning has to name the way out: {warning}"
+    );
+}
+
+#[test]
+/// One constant `AS` conveys exactly as much as none, and has to be caught at
+/// the record level: a proper pair sums to twice an orphan's score, so judging
+/// constancy on the per-placement sum would call a constant BAM varied.
+fn a_constant_as_is_reported_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let warning = warning_for(dir.path(), "const_as.sam", |_| Some(100)).expect("a warning");
+    assert!(
+        warning.contains("every alignment in this BAM reports the same AS (100)"),
+        "{warning}"
+    );
+}
+
+#[test]
+/// A partially tagged BAM is worse than either: the untagged records score 0
+/// against real scores, which is not a comparison between them.
+fn a_partially_tagged_bam_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let warning = warning_for(dir.path(), "partial_as.sam", |i| {
+        (i % 2 == 0).then_some(200 - i as i32)
+    })
+    .expect("a warning");
+    assert!(warning.contains("carry no AS tag"), "{warning}");
+}
+
+#[test]
+/// Varying tags are exactly what the mode expects, so nothing is said.
+fn usable_as_tags_draw_no_complaint() {
+    let dir = tempfile::tempdir().unwrap();
+    let warning = warning_for(dir.path(), "good_as.sam", |i| Some(150 + (i as i32 % 7)));
+    assert!(warning.is_none(), "unexpected complaint: {warning:?}");
+}
+
+#[test]
+/// With `--errorModel` the scores come from the alignments' own bases, so the
+/// state of the `AS` tags is irrelevant and saying anything about them would be
+/// noise.
+fn the_error_model_path_says_nothing_about_as() {
+    let dir = tempfile::tempdir().unwrap();
+    let (sam, fasta) = write_seq_fixture(dir.path());
+    let out = dir.path().join("em.out");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut opts = AlignQuantOptions::new(sam, out);
+    opts.lib_type = "IU".to_string();
+    opts.deterministic_error_model = true;
+    opts.transcripts = Some(fasta);
+    let rad = dir.path().join("em.rad");
+    let summary = write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    assert!(summary.score_tag_warning.is_none());
+}
