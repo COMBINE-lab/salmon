@@ -2758,9 +2758,9 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
                 .unwrap_or_else(|_| opts.lib_type.clone())
         };
         let counts = salmon_core::LibFormatCountsFile::new(
-            // The BAM / RAD is the input; the reads that produced it are not
-            // known here.
-            vec![],
+            // The reads behind the RAD when the driver knows them (reads-mode
+            // --deterministic); a standalone --rad/-a input has none to name.
+            opts.read_files.clone(),
             expected,
             res.num_mapped,
             res.num_compatible_fragments,
@@ -2801,7 +2801,23 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         frag_dist_length: res.frag_len_dist.len(),
         frag_length_mean: res.frag_len_mean,
         frag_length_sd: res.frag_len_sd,
-        frag_length_source: res.frag_len_source.as_str(),
+        // In the integrated `--deterministic` flow (`preserve_cmd_info`, like
+        // the invocation record above) provenance describes the user's run,
+        // not the internal RAD handoff: phase 1 of this same run observed the
+        // FLD (paired) or defaulted it (single-end, no lengths to observe);
+        // the intermediate RAD merely carried it. The rad_baked* spellings
+        // stay for standalone `--rad` input, where the RAD really is the
+        // source (#1140).
+        frag_length_source: match (opts.preserve_cmd_info, res.frag_len_source) {
+            (true, salmon_model::FragLengthSource::RadBaked) => {
+                salmon_model::FragLengthSource::Reads
+            }
+            (true, salmon_model::FragLengthSource::RadBakedPrior) => {
+                salmon_model::FragLengthSource::Prior
+            }
+            (_, s) => s,
+        }
+        .as_str(),
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
         pos_bias_correct: opts.pos_bias,
