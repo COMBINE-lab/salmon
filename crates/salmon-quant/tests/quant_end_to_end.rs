@@ -1206,3 +1206,98 @@ fn pseudoalignment_strand_filter_respects_library_type() {
         auto.num_mapped
     );
 }
+
+/// `--recoverOrphans` pairs must be strand-judged like every other proper pair
+/// (#1140): the rescue site knows both mates' strands (the anchor's is
+/// observed; the rescued mate's is opposite by construction) but left
+/// `format: None`, which the one-pass filter accepts unseen — so a wrong-`-l`
+/// run kept and counted recovered wrong-strand pairs that the deterministic
+/// path (judging the RAD's stored strand bits) dropped. The #1136 pattern,
+/// surviving on this one site.
+///
+/// The fixture makes rescue necessary: mate 2 carries a substitution every
+/// 10 bases, so no clean 31-mer survives for seeding (the mate is unmappable
+/// alone) while banded DP still aligns it well above the score floor.
+#[test]
+fn recovered_pairs_are_strand_judged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2, truth) = simulate(tmp.path());
+    let total_truth: u64 = truth.values().sum();
+
+    // Corrupt every mate-2 read: substitute positions 5, 15, ..., killing all
+    // 31-mer seeds while keeping the read alignable by DP.
+    let corrupt = |b: u8| match b {
+        b'A' => b'C',
+        b'C' => b'G',
+        b'G' => b'T',
+        _ => b'A',
+    };
+    let r2_bad = tmp.path().join("reads_2_bad.fq");
+    {
+        let text = std::fs::read_to_string(&r2).unwrap();
+        let mut out = String::with_capacity(text.len());
+        for (i, line) in text.lines().enumerate() {
+            if i % 4 == 1 {
+                let mut seq: Vec<u8> = line.bytes().collect();
+                let mut p = 5;
+                while p < seq.len() {
+                    seq[p] = corrupt(seq[p]);
+                    p += 10;
+                }
+                out.push_str(std::str::from_utf8(&seq).unwrap());
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        std::fs::write(&r2_bad, out).unwrap();
+    }
+
+    let idx_dir = tmp.path().join("idx");
+    let mut bopts = IndexBuildOptions::new(vec![fasta], idx_dir.clone());
+    bopts.threads = 1;
+    build(&bopts).expect("build index");
+
+    let quant = |lib_type: &str, recover: bool, out: PathBuf| {
+        let mut opts = QuantOptions::new(idx_dir.clone(), out);
+        opts.mates1 = vec![r1.clone()];
+        opts.mates2 = vec![r2_bad.clone()];
+        opts.lib_type = lib_type.to_string();
+        opts.num_threads = 1;
+        opts.map_config.recover_orphans = recover;
+        quantify(&opts).unwrap_or_else(|e| panic!("quantify {lib_type}: {e}"))
+    };
+
+    // Without rescue, the corrupted mates orphan; with it, pairs are recovered
+    // — this is the guard that the fixture actually exercises the rescue path
+    // rather than mapping normally.
+    let plain = quant("ISF", false, tmp.path().join("no_rescue"));
+    let rescued = quant("ISF", true, tmp.path().join("rescue_isf"));
+    assert!(
+        rescued.num_orphan < plain.num_orphan,
+        "rescue must convert orphans ({}) into pairs ({} orphans remain)",
+        plain.num_orphan,
+        rescued.num_orphan
+    );
+    assert!(
+        rescued.num_mapped as f64 >= 0.9 * total_truth as f64,
+        "matching library type keeps the recovered pairs: {} / {total_truth}",
+        rescued.num_mapped
+    );
+
+    // The regression: under the opposite stranded type, recovered pairs are
+    // judged on their observed orientation and dropped — they used to pass the
+    // filter unseen on `format: None` and be counted compatible.
+    let wrong = quant("ISR", true, tmp.path().join("rescue_isr"));
+    assert!(
+        (wrong.num_mapped as f64) <= 0.1 * (rescued.num_mapped as f64),
+        "wrong-strand recovered pairs must be dropped, kept {} of {}",
+        wrong.num_mapped,
+        rescued.num_mapped
+    );
+    assert!(
+        wrong.num_incompatible_fragments as f64 >= 0.8 * total_truth as f64,
+        "…and counted incompatible, not compatible: {} of {total_truth}",
+        wrong.num_incompatible_fragments
+    );
+}
