@@ -527,6 +527,8 @@ impl CollapsedEqClasses {
 ///
 /// A sentinel value is used instead of `Option<u8>` because these placements are
 /// stored in the millions and the extra byte per placement would matter.
+pub const NAIVE_NO_FMT: u8 = u8::MAX;
+
 /// Write `aux_info/eq_classes.txt.gz` in salmon's format: the transcript count,
 /// the equivalence-class count, all transcript names (one per line, in the index
 /// order the classes reference), then one line per class.
@@ -555,6 +557,9 @@ pub fn write_eq_classes(
     let num_txps = names.len();
     std::fs::create_dir_all(dir.join("aux_info"))?;
     let f = std::fs::File::create(dir.join("aux_info").join("eq_classes.txt.gz"))?;
+    // One `write!` per field per class is a lot of small writes; buffer them
+    // before they reach the encoder.
+    let f = std::io::BufWriter::new(f);
     let mut w = flate2::write::GzEncoder::new(f, flate2::Compression::new(6));
 
     if with_weights {
@@ -595,8 +600,6 @@ pub fn write_eq_classes(
     w.finish()?;
     Ok(())
 }
-
-pub const NAIVE_NO_FMT: u8 = u8::MAX;
 
 /// One placement of a NAIVE fragment signature: a transcript plus enough
 /// orientation/strand info to drop it later if it is library-incompatible.
