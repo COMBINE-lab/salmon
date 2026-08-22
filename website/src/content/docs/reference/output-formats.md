@@ -440,6 +440,24 @@ formats cannot drift apart.
 Both options apply to the read-mapping path only. In alignment mode (`-a`) and
 RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
 
+### `MAPQ`
+
+SAM's `MAPQ` is a phred-scaled probability that a placement is wrong, and salmon
+does not compute one: its design is to keep every plausible placement and let the
+EM apportion them. What it does know is how many placements a fragment has, which
+is what STAR reports, so `MAPQ` follows STAR's mapping:
+
+| placements (`NH`) | `MAPQ` |
+|---|---|
+| 1 | 255 |
+| 2 | 3 |
+| 3 or 4 | 1 |
+| 5 or more | 0 |
+
+Matching STAR matters because the tools downstream of a salmon BAM are tuned to
+it: `samtools view -q 255` means "uniquely placed" to all of them. Before this,
+every record carried a constant `1`, so that filter discarded the entire file.
+
 ### Compression threads
 
 `--writeBam` compresses BGZF blocks on a small pool of threads that run

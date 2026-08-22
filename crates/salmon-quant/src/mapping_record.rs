@@ -165,6 +165,31 @@ pub fn complement(base: u8) -> u8 {
     }
 }
 
+/// The `MAPQ` to report for a fragment with `nh` placements.
+///
+/// SAM's `MAPQ` is a phred-scaled probability that the placement is wrong, and
+/// salmon does not compute one: its whole design is to keep every plausible
+/// placement and let the EM apportion them. What it does know is *how many*
+/// placements a fragment has, which is the same thing STAR reports, so this uses
+/// STAR's mapping: a uniquely placed fragment gets 255 and the value falls off
+/// as the fragment becomes more ambiguous. Matching STAR matters because the
+/// RNA-seq tools downstream of a salmon BAM are the ones already tuned to it: to
+/// all of them `-q 255` means "uniquely placed".
+///
+/// The previous hardcoded `1` made every record look ambiguous, so any such
+/// filter discarded the whole file. It is the one placeholder in this output
+/// that costs nothing to replace: the count is already in hand when the records
+/// are written, so no alignment work is implied (COMBINE-lab/salmon#1140,
+/// #1141).
+pub fn mapping_quality(nh: usize) -> u8 {
+    match nh {
+        0 | 1 => 255,
+        2 => 3,
+        3..=4 => 1,
+        _ => 0,
+    }
+}
+
 /// The CIGAR and clamped position for a read placed at `pos` on a transcript of
 /// length `txp_len`.
 ///
@@ -245,6 +270,7 @@ pub fn emit_fragment_records(
     let name1 = read_name(r1_id);
     let (name2, r2_seq) = r2.map_or((name1, &[][..]), |(id, seq)| (read_name(id), seq));
     let nh = maps.len();
+    let mapq = mapping_quality(nh);
 
     for (index, mapping) in maps.iter().enumerate() {
         // The first placement is primary; the rest are marked secondary so a
@@ -297,7 +323,7 @@ pub fn emit_fragment_records(
                     flags: f1,
                     reference_id: tid,
                     position: p1,
-                    mapping_quality: 1,
+                    mapping_quality: mapq,
                     cigar: c1,
                     mate_reference_id: Some(tid),
                     mate_position: Some(p2),
@@ -314,7 +340,7 @@ pub fn emit_fragment_records(
                     flags: f2,
                     reference_id: tid,
                     position: p2,
-                    mapping_quality: 1,
+                    mapping_quality: mapq,
                     cigar: c2,
                     mate_reference_id: Some(tid),
                     mate_position: Some(p1),
@@ -335,7 +361,7 @@ pub fn emit_fragment_records(
                     flags: secondary | if mapping.is_fw { 0 } else { IS_RC },
                     reference_id: tid,
                     position,
-                    mapping_quality: 1,
+                    mapping_quality: mapq,
                     cigar,
                     mate_reference_id: None,
                     mate_position: None,
@@ -382,7 +408,7 @@ pub fn emit_fragment_records(
                         | if forward { 0 } else { IS_RC },
                     reference_id: tid,
                     position,
-                    mapping_quality: 1,
+                    mapping_quality: mapq,
                     cigar,
                     mate_reference_id: None,
                     mate_position: None,
@@ -398,4 +424,20 @@ pub fn emit_fragment_records(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MAPQ has to distinguish a uniquely placed fragment from an ambiguous one.
+    #[test]
+    fn mapping_quality_follows_the_star_convention() {
+        assert_eq!(mapping_quality(1), 255);
+        assert_eq!(mapping_quality(2), 3);
+        assert_eq!(mapping_quality(3), 1);
+        assert_eq!(mapping_quality(4), 1);
+        assert_eq!(mapping_quality(5), 0);
+        assert_eq!(mapping_quality(0), 255);
+    }
 }
