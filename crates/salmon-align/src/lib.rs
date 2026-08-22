@@ -185,8 +185,19 @@ pub struct AlignQuantOptions {
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
     /// initialize the EM uniformly instead of with the online-estimate-blended
-    /// warm start (`--initUniform`)
+    /// warm start (`--initUniform`). Toggles behavior only in online alignment
+    /// mode ([`quantify_alignments`]), the one path with a warm start to
+    /// replace; the RAD quantifier always starts uniform, so there the flag is
+    /// honoured by construction.
     pub init_uniform: bool,
+    /// wall-clock seconds a driver already spent before this call (phase 1 of
+    /// `--deterministic`, or genome projection); added to the reported
+    /// `total_time_seconds` so `meta_info.json` covers the whole run rather
+    /// than only the quantification pass
+    pub prior_seconds: f64,
+    /// start time (asctime) of that earlier phase; when set, reported as the
+    /// run's `start_time` instead of this pass's own
+    pub external_start_time: Option<String>,
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
@@ -252,6 +263,8 @@ impl AlignQuantOptions {
             explicit_fld_args: ExplicitFldArgs::default(),
             forgetting_factor: 0.65,
             init_uniform: false,
+            prior_seconds: 0.0,
+            external_start_time: None,
             sig_digits: 3,
             num_error_bins: 4,
             discard_orphans: false,
@@ -356,7 +369,7 @@ pub struct AlignQuantResult {
 }
 
 /// Current local time as an asctime-style string, matching salmon's timestamps.
-fn asctime_now() -> String {
+pub fn asctime_now() -> String {
     jiff::Zoned::now()
         .strftime("%a %b %e %H:%M:%S %Y")
         .to_string()
@@ -2015,7 +2028,7 @@ fn apply_bias_correction(
 
 /// Run alignment-based quantification end-to-end.
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
-    let start_time = asctime_now();
+    let start_time = opts.external_start_time.clone().unwrap_or_else(asctime_now);
     let run_timer = std::time::Instant::now();
     let mut timer = PhaseTimer::new();
     let header = read_alignment_header(&opts.bam)?;
@@ -2491,7 +2504,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         em_iters,
         em_converged,
         detected_library_type,
-        total_seconds: run_timer.elapsed().as_secs_f64(),
+        total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
         diagnostics,
     };
@@ -2589,6 +2602,11 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_em_iterations: u32,
         em_converged: bool,
         detected_library_type: Option<String>,
+        /// which inference path produced these results: `deterministic` (RAD
+        /// input — including `--deterministic`'s phase 2) or `online` (the
+        /// streaming BAM pass). Makes the online-to-deterministic transition
+        /// auditable from existing output (#1140).
+        inference_path: &'static str,
         total_time_seconds: f64,
         peak_rss_kb: u64,
         diagnostics: Vec<salmon_core::Diagnostic>,
@@ -2714,6 +2732,10 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
         detected_library_type: res.detected_library_type.clone(),
+        inference_path: match res.source {
+            FragmentSource::Rad => "deterministic",
+            FragmentSource::Bam => "online",
+        },
         total_time_seconds: res.total_seconds,
         peak_rss_kb: res.peak_rss_kb,
         diagnostics: res.diagnostics.clone(),

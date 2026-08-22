@@ -556,6 +556,12 @@ struct QuantArgs {
     /// deleted once quantification finishes). Ignored without --deterministic.
     #[arg(long = "keepRad")]
     keep_rad: bool,
+    /// Directory for the intermediate RAD written by --deterministic (default:
+    /// the output directory). Point this at node-local or memory-backed
+    /// storage (e.g. /dev/shm) when the output volume is slow, networked, or
+    /// space-constrained. Ignored when --writeRad names an explicit path.
+    #[arg(long = "radScratchDir")]
+    rad_scratch_dir: Option<PathBuf>,
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
@@ -687,7 +693,10 @@ struct QuantArgs {
     /// Online-phase forgetting factor in (0.5, 1.0].
     #[arg(short = 'f', long = "forgettingFactor", default_value_t = 0.65)]
     forgetting_factor: f64,
-    /// Initialize the optimizer uniformly instead of from the online estimates.
+    /// Initialize the optimizer uniformly. In reads mode (one-pass and
+    /// --deterministic) the optimizer already starts uniform, so this is the
+    /// existing behavior; in online alignment mode (-a) it replaces the
+    /// warm start from the online estimates.
     #[arg(long = "initUniform")]
     init_uniform: bool,
     /// Interpret --vbPrior as a per-transcript prior (salmon's default).
@@ -1104,11 +1113,15 @@ fn write_gene_level(
 ///   placements were already scored and filtered during mapping.
 /// * `bam`, `output_dir`, `progress`: set by the caller, which owns the paths and
 ///   the run's lifecycle.
+/// * `prior_seconds`, `external_start_time`: computed from the caller's clock
+///   after phase 1 finishes, so they cannot be part of a mapping done before it
+///   starts; the caller sets them just before phase 2.
 ///
-/// One absence here is a bug rather than a decision: `skip_quant` is set on
-/// phase 1 unconditionally (its job is to map and write the RAD) and never
-/// reaches phase 2, so `--skipQuant --deterministic` quantifies anyway. Being
-/// able to see that from this list is the argument for the list.
+/// One absence here was a bug rather than a decision, found *from* this list:
+/// `skip_quant` is set on phase 1 unconditionally (its job is to map and write
+/// the RAD) and never reached phase 2, so `--skipQuant --deterministic`
+/// quantified anyway — fixed in #1149 by stopping after phase 1. Being able to
+/// see that from this list is the argument for the list.
 fn requant_options(
     map_opts: &QuantOptions,
     rad_path: &std::path::Path,
@@ -1153,6 +1166,83 @@ fn requant_options(
 /// Bias correction needs the reference sequence, but since we control both passes
 /// and phase 1 loads the index, we hand the index's sequences to phase 2 — so
 /// `--deterministic --seqBias/--gcBias/--posBias` needs no separate `-t`.
+/// Where a two-phase run's salmon-owned intermediate RAD lives: in
+/// `--radScratchDir` when given (created if needed; pid-suffixed so concurrent
+/// runs sharing one scratch volume cannot collide at the finalize rename), else
+/// under the output directory as before.
+fn intermediate_rad_path(
+    out_dir: &std::path::Path,
+    scratch_dir: Option<&std::path::Path>,
+    stem: &str,
+) -> Result<PathBuf> {
+    match scratch_dir {
+        Some(d) => {
+            std::fs::create_dir_all(d)
+                .with_context(|| format!("creating --radScratchDir {}", d.display()))?;
+            Ok(d.join(format!("{stem}-{}.rad", std::process::id())))
+        }
+        None => Ok(out_dir.join(format!("{stem}.rad"))),
+    }
+}
+
+/// Best-effort removal of a salmon-owned intermediate RAD after a failed phase:
+/// the finalized file if it exists, and any `.partial-*` sibling a failed
+/// mapping pass left behind. The failure that fills a disk is precisely the one
+/// where the user needs the space back (#1140); an explicit `--writeRad` path
+/// is user-owned evidence and is never cleaned here.
+fn cleanup_intermediate_rad(path: &std::path::Path) {
+    let _ = std::fs::remove_file(path);
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) {
+        let prefix = format!("{name}.partial-");
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                if e.file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with(&prefix))
+                {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+}
+
+/// Total size of the given input files, for the intermediate-RAD space
+/// preflight; unreadable paths contribute 0 (the mapping pass will report them
+/// properly).
+fn total_file_bytes<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) -> u64 {
+    paths
+        .into_iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// Warn up front when the volume that will hold the intermediate RAD has less
+/// free space than the total compressed input. The lz4 intermediate is
+/// typically of the same order as the compressed input (and grows with the
+/// multimapping rate, so no fixed per-fragment constant is safe — #1140); this
+/// is a warning rather than an error because the estimate is a proxy, and the
+/// RAD writer's periodic low-space check turns a genuinely filling disk into a
+/// prompt, actionable failure.
+fn preflight_rad_space(rad_path: &std::path::Path, input_bytes: u64) {
+    let dir = rad_path.parent().unwrap_or(std::path::Path::new("."));
+    if let Some(free) = salmon_core::free_disk_bytes(dir) {
+        if free < input_bytes {
+            let gib = |b: u64| b as f64 / (1024.0 * 1024.0 * 1024.0);
+            tracing::warn!(
+                "{} has {:.1} GiB free, less than the {:.1} GiB of input; the \
+                 deterministic intermediate RAD is typically of the same order as \
+                 the compressed input and may not fit. Consider --radScratchDir \
+                 <dir> (e.g. /dev/shm or node-local scratch) or --radCompress zstd.",
+                dir.display(),
+                gib(free),
+                gib(input_bytes)
+            );
+        }
+    }
+}
+
 // `--deterministic` (reads mode): a two-pass run. The first pass maps to a RAD
 // with order-independent models baked into the header; the second quantifies
 // from it. Splitting the run this way is what makes the result independent of
@@ -1160,21 +1250,43 @@ fn requant_options(
 fn run_deterministic(
     mut map_opts: QuantOptions,
     rad_out: Option<PathBuf>,
+    scratch_dir: Option<&std::path::Path>,
     keep_rad: bool,
     bias_targets: Option<PathBuf>,
     gene_map: Option<&GeneMapOpts>,
     out_dir: &std::path::Path,
 ) -> Result<()> {
+    // Wall-clock accounting spans both phases: phase 2 rewrites
+    // `meta_info.json` into the final output directory, and its
+    // `total_time_seconds` must cover the whole run, not just the requant
+    // (#1140: a 10M-pair run otherwise reports ~0.4s against minutes of wall).
+    let run_start = std::time::Instant::now();
     let bias_on = map_opts.seq_bias || map_opts.gc_bias || map_opts.pos_bias;
     // An explicit `--writeRad PATH` is honoured (and kept — it was a requested
     // output); otherwise a temp under the output directory, removed on success
     // unless `--keepRad`.
     let explicit = rad_out.is_some();
-    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("intermediate_mappings.rad"));
+    if explicit && scratch_dir.is_some() {
+        tracing::warn!("--radScratchDir is ignored when --writeRad names an explicit path");
+    }
+    let rad_path = match rad_out {
+        Some(p) => p,
+        None => intermediate_rad_path(out_dir, scratch_dir, "intermediate_mappings")?,
+    };
     // The RAD writer opens its file before the mapping pass, so the output
     // directory (where the default intermediate lives) must exist first.
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    preflight_rad_space(
+        &rad_path,
+        total_file_bytes(
+            map_opts
+                .mates1
+                .iter()
+                .chain(map_opts.mates2.iter())
+                .chain(map_opts.unmated.iter()),
+        ),
+    );
 
     // Phase 1 — map once, write the RAD (bakes the deterministic FLD + resolved
     // library format), skipping the online EM: quantification happens in phase 2.
@@ -1184,7 +1296,15 @@ fn run_deterministic(
     // bake them (see `QuantOptions::deterministic_fld`), so phase 2 is a single
     // pass and the whole result is byte-identical across thread counts.
     map_opts.deterministic_fld = true;
-    let map_res = quantify(&map_opts).context("deterministic mapping pass failed")?;
+    let map_res = match quantify(&map_opts) {
+        Ok(r) => r,
+        Err(e) => {
+            if !explicit {
+                cleanup_intermediate_rad(&rad_path);
+            }
+            return Err(e).context("deterministic mapping pass failed");
+        }
+    };
     let pct = if map_res.num_processed > 0 {
         100.0 * map_res.num_mapped as f64 / map_res.num_processed as f64
     } else {
@@ -1209,7 +1329,17 @@ fn run_deterministic(
                 .context("loading reference sequences from the index for deterministic bias")?,
         );
     }
-    let res = quantify_rad(&q, &rad_path).context("deterministic requant pass failed")?;
+    q.prior_seconds = run_start.elapsed().as_secs_f64();
+    q.external_start_time = Some(map_res.start_time.clone());
+    let res = match quantify_rad(&q, &rad_path) {
+        Ok(r) => r,
+        Err(e) => {
+            if !explicit && !keep_rad {
+                cleanup_intermediate_rad(&rad_path);
+            }
+            return Err(e).context("deterministic requant pass failed");
+        }
+    };
     let pct2 = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64
     } else {
@@ -1254,25 +1384,43 @@ fn run_deterministic(
 /// BAM `AS` tag); the online alignment error model is not used in this mode.
 // The same two-pass split for alignment input: BAM to RAD, then quantify.
 fn run_deterministic_align(
-    opts: AlignQuantOptions,
+    mut opts: AlignQuantOptions,
     rad_out: Option<PathBuf>,
+    scratch_dir: Option<&std::path::Path>,
     keep_rad: bool,
     gene_map: Option<&GeneMapOpts>,
     codec: ChunkCodec,
 ) -> Result<()> {
+    // Both phases count toward the reported run time (see run_deterministic).
+    let run_start = std::time::Instant::now();
+    let start_time = salmon_align::asctime_now();
     let out_dir = opts.output_dir.clone();
     // An explicit `--writeRad PATH` is honoured and kept; otherwise a temp under
     // the output dir, removed on success unless `--keepRad` (or `--skipQuant`,
     // where the RAD is the deliverable).
     let explicit = rad_out.is_some();
-    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("intermediate_alignments.rad"));
+    if explicit && scratch_dir.is_some() {
+        tracing::warn!("--radScratchDir is ignored when --writeRad names an explicit path");
+    }
+    let rad_path = match rad_out {
+        Some(p) => p,
+        None => intermediate_rad_path(&out_dir, scratch_dir, "intermediate_alignments")?,
+    };
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    preflight_rad_space(&rad_path, total_file_bytes(std::iter::once(&opts.bam)));
 
     // Phase 1 — one BAM pass: write placements + bake FLD / library format
     // (+ rough abundances when bias is on) so phase 2 is a single baked pass.
-    let summary = salmon_align::write_alignment_rad(&opts, &rad_path, codec)
-        .context("deterministic alignment RAD-write pass failed")?;
+    let summary = match salmon_align::write_alignment_rad(&opts, &rad_path, codec) {
+        Ok(r) => r,
+        Err(e) => {
+            if !explicit {
+                cleanup_intermediate_rad(&rad_path);
+            }
+            return Err(e).context("deterministic alignment RAD-write pass failed");
+        }
+    };
     let pct = if summary.num_processed > 0 {
         100.0 * summary.num_mapped as f64 / summary.num_processed as f64
     } else {
@@ -1286,7 +1434,17 @@ fn run_deterministic_align(
     );
 
     // Phase 2 — quantify from the fully-baked RAD (single pass, order-independent).
-    let res = quantify_rad(&opts, &rad_path).context("deterministic requant pass failed")?;
+    opts.prior_seconds = run_start.elapsed().as_secs_f64();
+    opts.external_start_time = Some(start_time);
+    let res = match quantify_rad(&opts, &rad_path) {
+        Ok(r) => r,
+        Err(e) => {
+            if !explicit && !keep_rad && !opts.skip_quant {
+                cleanup_intermediate_rad(&rad_path);
+            }
+            return Err(e).context("deterministic requant pass failed");
+        }
+    };
     let pct2 = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64
     } else {
@@ -1344,17 +1502,36 @@ fn run_genome_project(
     gp: GenomeProjectOptions,
     q: AlignQuantOptions,
     rad_out: Option<PathBuf>,
+    scratch_dir: Option<&std::path::Path>,
     keep_rad: bool,
     gene_map: Option<&GeneMapOpts>,
 ) -> Result<()> {
+    // Both phases count toward the reported run time (see run_deterministic).
+    let run_start = std::time::Instant::now();
+    let start_time = salmon_align::asctime_now();
     let out_dir = q.output_dir.clone();
     let explicit = rad_out.is_some();
-    let rad_path = rad_out.unwrap_or_else(|| out_dir.join("genome_projected.rad"));
+    if explicit && scratch_dir.is_some() {
+        tracing::warn!("--radScratchDir is ignored when --writeRad names an explicit path");
+    }
+    let rad_path = match rad_out {
+        Some(p) => p,
+        None => intermediate_rad_path(&out_dir, scratch_dir, "genome_projected")?,
+    };
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+    preflight_rad_space(&rad_path, total_file_bytes(std::iter::once(&gp.bam)));
 
     // Phase 1 — project the genome BAM into a fully-baked transcriptome RAD.
-    let art = project_genome_bam_to_rad(&gp, &rad_path).context("genome projection pass failed")?;
+    let art = match project_genome_bam_to_rad(&gp, &rad_path) {
+        Ok(r) => r,
+        Err(e) => {
+            if !explicit {
+                cleanup_intermediate_rad(&rad_path);
+            }
+            return Err(e).context("genome projection pass failed");
+        }
+    };
     let pct = if art.num_processed > 0 {
         100.0 * art.num_mapped as f64 / art.num_processed as f64
     } else {
@@ -1374,7 +1551,17 @@ fn run_genome_project(
     if q.ref_seqs.is_none() {
         q.ref_seqs = art.ref_seqs;
     }
-    let res = quantify_rad(&q, &rad_path).context("genome-projected quantification failed")?;
+    q.prior_seconds = run_start.elapsed().as_secs_f64();
+    q.external_start_time = Some(start_time);
+    let res = match quantify_rad(&q, &rad_path) {
+        Ok(r) => r,
+        Err(e) => {
+            if !explicit && !keep_rad {
+                cleanup_intermediate_rad(&rad_path);
+            }
+            return Err(e).context("genome-projected quantification failed");
+        }
+    };
     tracing::info!(
         "{} fragments from projected RAD, {} quantified; {} equivalence classes",
         res.num_processed,
@@ -1562,6 +1749,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 gp,
                 opts,
                 args.write_rad.clone(),
+                args.rad_scratch_dir.as_deref(),
                 args.keep_rad,
                 gene_map.as_ref(),
             );
@@ -1576,6 +1764,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             return run_deterministic_align(
                 opts,
                 args.write_rad.clone(),
+                args.rad_scratch_dir.as_deref(),
                 args.keep_rad,
                 gene_map.as_ref(),
                 codec,
@@ -1828,23 +2017,23 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         return run_deterministic(
             opts,
             rad_out,
+            args.rad_scratch_dir.as_deref(),
             args.keep_rad,
             args.targets.clone(),
             gene_map.as_ref(),
             &out_dir,
         );
     }
-    // `--initUniform` reaches the EM through the RAD quantifier, which the
-    // one-pass reads path does not use: the online EM starts from its own
-    // running abundances, and there is no point at which a uniform
-    // initialisation could be applied. Say so rather than accepting the flag and
-    // doing nothing with it.
-    if args.init_uniform {
-        tracing::warn!(
-            "--initUniform has no effect in one-pass reads mode: the online EM has no separate \
-             initialisation step. It applies to alignment input (-a) and to --deterministic."
-        );
-    }
+    // `--initUniform` asks for a uniform optimizer start, and in one-pass reads
+    // mode that is already the only initialization there is: the offline EM
+    // always starts uniform (the C++ online-blended warm start was deliberately
+    // not carried over — measured not to change the converged estimate, and
+    // dropping it removed an order-dependent step; see the `--meta` note above,
+    // which records the same fact). The same holds under `--deterministic`,
+    // whose RAD quantifier likewise always starts uniform. So the flag is
+    // honoured by construction in both modes and is accepted silently; the one
+    // path where it toggles anything is online alignment mode (`-a`), whose
+    // offline EM otherwise warm-starts from the online estimates.
 
     // Live mapping spinner on an interactive terminal (unless --quiet/--no-progress).
     let progress = Arc::new(ProgressCounters::default());
@@ -2379,5 +2568,48 @@ mod tests {
         assert!(opts.ignore_tx_version);
         assert_eq!(opts.map.get("T1").map(String::as_str), Some("G1"));
         assert_eq!(opts.map.get("T2").map(String::as_str), Some("G1"));
+    }
+
+    /// The salmon-owned intermediate goes to the scratch dir (pid-suffixed so
+    /// concurrent runs sharing one scratch volume cannot collide) when given,
+    /// else under the output directory with the historical fixed name.
+    #[test]
+    fn intermediate_rad_path_placement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("out");
+        let scratch = tmp.path().join("scratch");
+
+        let p = intermediate_rad_path(&out, None, "intermediate_mappings").unwrap();
+        assert_eq!(p, out.join("intermediate_mappings.rad"));
+
+        let p = intermediate_rad_path(&out, Some(&scratch), "intermediate_mappings").unwrap();
+        assert!(scratch.is_dir(), "scratch dir must be created");
+        assert_eq!(p.parent().unwrap(), scratch);
+        let name = p.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("intermediate_mappings-") && name.ends_with(".rad"),
+            "pid-suffixed name, got {name}"
+        );
+    }
+
+    /// After a failed pass, cleanup removes the finalized intermediate and any
+    /// `.partial-*` sibling, and touches nothing else in the directory.
+    #[test]
+    fn cleanup_intermediate_rad_removes_file_and_partials() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rad = tmp.path().join("intermediate_mappings.rad");
+        let partial = tmp.path().join("intermediate_mappings.rad.partial-12345");
+        let bystander = tmp.path().join("quant.sf");
+        std::fs::write(&rad, b"x").unwrap();
+        std::fs::write(&partial, b"x").unwrap();
+        std::fs::write(&bystander, b"x").unwrap();
+
+        cleanup_intermediate_rad(&rad);
+        assert!(!rad.exists());
+        assert!(!partial.exists());
+        assert!(bystander.exists());
+
+        // Idempotent on an already-clean directory.
+        cleanup_intermediate_rad(&rad);
     }
 }

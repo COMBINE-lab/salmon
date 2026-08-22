@@ -133,6 +133,7 @@ See the [RAD I/O & deterministic quantification](../../guides/rad-and-determinis
 | `--skipQuant` | Skip quantification (EM, Gibbs/bootstrap, `quant.sf`); still map, build equivalence classes, detect library type, write metadata. |
 | `--deterministic` | Reproducible reads-mode quantification: map once to an intermediate RAD, then quantify from it with a fixed fragment-length distribution. Byte-identical across runs and thread counts. |
 | `--keepRad` | Keep the `--deterministic` intermediate RAD (deleted by default). |
+| `--radScratchDir <DIR>` | Directory for the `--deterministic` intermediate RAD (default: the output directory). Point at node-local or memory-backed storage (e.g. `/dev/shm`) when the output volume is slow, networked, or space-constrained. Ignored with an explicit `--writeRad`. |
 | `--radCompress <CODEC>` | RAD chunk compression for `--writeRad` / `--deterministic`: `lz4` (default), `zstd` (smaller), or `none`. |
 | `--noCompressRad` | Write uncompressed RAD chunks (overrides `--radCompress`). |
 

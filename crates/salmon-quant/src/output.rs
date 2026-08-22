@@ -363,6 +363,12 @@ struct MetaInfo {
     em_converged: bool,
     /// library format observed by the auto-detector (null if not observed)
     detected_library_type: Option<String>,
+    /// which inference path produced these results: `online` (the one-pass
+    /// streaming quant), or `none` for a mapping-only `--skipQuant` pass (a
+    /// `--deterministic` run's phase 2 rewrites this file with
+    /// `deterministic`). Makes the online-to-deterministic transition
+    /// auditable from existing output (#1140).
+    inference_path: &'static str,
     /// total wall-clock seconds and peak resident set size (KiB, Linux)
     total_time_seconds: f64,
     peak_rss_kb: u64,
@@ -461,6 +467,7 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
         detected_library_type: res.detected_library_type.clone(),
+        inference_path: if opts.skip_quant { "none" } else { "online" },
         total_time_seconds: res.total_seconds,
         peak_rss_kb: res.peak_rss_kb,
         diagnostics: res.diagnostics.clone(),

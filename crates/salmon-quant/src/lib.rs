@@ -187,13 +187,15 @@ pub struct QuantOptions {
     /// disable the lower barrier on how short bias correction may make an
     /// effective length (salmon's `--noBiasLengthThreshold`)
     pub no_bias_length_threshold: bool,
-    /// `--initUniform`: start the EM from a uniform abundance vector instead of
-    /// from the counts the mapping pass observed.
+    /// `--initUniform`: start the optimizer from a uniform abundance vector.
     ///
-    /// Only the RAD quantifier has an initialisation step to apply this to, so
-    /// it takes effect under `--deterministic` (and for `-a`/`--rad` input). The
-    /// one-pass reads path has no such step: its EM starts from the running
-    /// abundances it accumulated while mapping.
+    /// In reads mode this is already the only initialization: the offline EM
+    /// always starts uniform, both one-pass and under `--deterministic` (the
+    /// C++ online-blended warm start was deliberately not ported — measured
+    /// not to change the converged estimate, and dropping it removed an
+    /// order-dependent step). The flag is therefore honoured by construction
+    /// here; the one path where it toggles behavior is online alignment mode
+    /// (`-a`), whose EM otherwise warm-starts from the online estimates.
     pub init_uniform: bool,
     /// number of fragment-GC bins in the GC bias model (salmon's `--numGCBins`,
     /// default 25)
