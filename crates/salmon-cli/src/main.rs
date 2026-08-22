@@ -1085,8 +1085,30 @@ fn write_gene_level(
 /// passed silently did nothing. That is how `--biasSpeedSamp` and
 /// `--noBiasLengthThreshold` came to be ignored under `--deterministic`.
 ///
-/// `ref_seqs` is deliberately not set here; it needs to read the index from disk
-/// and only the caller knows whether bias correction asked for it.
+/// # Deliberately not forwarded
+///
+/// The point of the function is to make "audited and correctly omitted"
+/// distinguishable from "forgotten", which a test cannot do for an absence. Every
+/// field of `AlignQuantOptions` this leaves alone is here, with why:
+///
+/// * `ref_seqs`: needs to read the index from disk, and only the caller knows
+///   whether bias correction asked for it. Set immediately after this returns.
+/// * `explicit_fld_args`, `fld_policy`: phase 1 already folded the user's FLD
+///   prior into the bake. Forwarding them would have phase 2 warn that a baked
+///   FLD overrides the run's own `--fldMean`, against a bake that came from that
+///   very argument.
+/// * `forgetting_factor`, `num_aux_model_samples`, `num_pre_aux_model_samples`:
+///   online-inference knobs. Phase 2 has no online phase to apply them to.
+/// * `num_error_bins`, `discard_orphans`, `no_error_model`,
+///   `deterministic_error_model`: BAM-side knobs. Phase 2 reads a RAD whose
+///   placements were already scored and filtered during mapping.
+/// * `bam`, `output_dir`, `progress`: set by the caller, which owns the paths and
+///   the run's lifecycle.
+///
+/// One absence here is a bug rather than a decision: `skip_quant` is set on
+/// phase 1 unconditionally (its job is to map and write the RAD) and never
+/// reaches phase 2, so `--skipQuant --deterministic` quantifies anyway. Being
+/// able to see that from this list is the argument for the list.
 fn requant_options(
     map_opts: &QuantOptions,
     rad_path: &std::path::Path,
