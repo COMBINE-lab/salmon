@@ -193,6 +193,10 @@ pub struct QuantOptions {
     /// number of conditioning (context) bins in the GC bias model (salmon's
     /// `--conditionalGCBins`, default 3)
     pub cond_gc_bins: usize,
+    /// use the abundance-free within-transcript GC-bias estimator instead of the
+    /// default cross-transcript observed/expected ratio (`--gcBiasMethod
+    /// within-txp`). Only meaningful with `--gcBias`.
+    pub within_txp_gc_bias: bool,
     /// skip the abundance estimation (EM + Gibbs/bootstrap) and `quant.sf`,
     /// emitting only equivalence classes, library type, and metadata
     /// (salmon's `--skipQuant`)
@@ -257,6 +261,7 @@ impl QuantOptions {
             no_bias_length_threshold: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
+            within_txp_gc_bias: false,
             skip_quant: false,
             num_pre_aux_model_samples: processor::NUM_PRE_BURNIN,
             progress: None,
@@ -565,6 +570,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             opts.gc_bins,
         ))
     });
+    // Per-transcript observed fragment-GC accumulator for the within-transcript
+    // GC-bias estimator (`--gcBiasMethod within-txp`); only when GC-correcting.
+    let collect_within_txp = opts.gc_bias && opts.within_txp_gc_bias;
+    let within_txp_obs = collect_within_txp
+        .then(|| std::sync::Mutex::new(std::collections::HashMap::<u32, Vec<u32>>::new()));
 
     // For `--posBias`: transcript length-class quantiles + per-transcript class,
     // and the shared observed (5', 3') positional-bias models per length class.
@@ -653,6 +663,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             gc_bins: opts.gc_bins,
             gc_store,
             gcbias_obs: gcbias_obs.as_ref(),
+            collect_within_txp,
+            within_txp_obs: within_txp_obs.as_ref(),
             collect_posbias: opts.pos_bias,
             length_class: length_class.as_deref(),
             posbias_obs: posbias_obs.as_ref(),
@@ -997,31 +1009,84 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let store = gc_store;
         let gc_ratio_model = if let Some(m) = gcbias_obs {
             let mut obs = m.into_inner().unwrap();
-            let mut exp = salmon_model::build_expected_gc(
-                num_targets,
-                |t| salmon.ref_seq(t as u32),
-                |t| store.unwrap().view(t),
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-                fld_low,
-                fld_high,
-                opts.cond_gc_bins,
-                opts.gc_bins,
-                k,
-                opts.bias_speed_samp,
-            );
-            // Capture the (normalized) observed/expected GC tables for the dumps
-            // before gc_ratio consumes them (normalize is idempotent).
-            obs.normalize();
-            exp.normalize();
-            bias_dump.obs_gc = obs.dump().to_vec();
-            bias_dump.exp_gc = exp.dump().to_vec();
-            Some(salmon_model::gc_ratio(
-                &mut obs,
-                &mut exp,
-                salmon_model::gcbias::GC_MAX_RATIO,
-            ))
+            if let Some(wt) = within_txp_obs {
+                // WITHIN-TRANSCRIPT estimator: abundance-free GC-bias shape from
+                // per-transcript observed (O_t) vs salmon's own geometry-aware
+                // possible-fragment (B_t) marginals, over well-covered transcripts.
+                // No abundance weighting (that is the whole point) → the expected
+                // model / seed abundances are not used for GC here.
+                const MIN_TXP_FRAGS: u32 = 80; // per-transcript coverage floor
+                const MIN_BIN_SUPPORT: usize = 30; // transcripts probing a GC bin
+                let obs_pt = wt.into_inner().unwrap();
+                let covered: Vec<(u32, Vec<f64>)> = obs_pt
+                    .into_iter()
+                    .filter(|(_, c)| c.iter().sum::<u32>() >= MIN_TXP_FRAGS)
+                    .map(|(tid, c)| (tid, c.iter().map(|&x| x as f64).collect()))
+                    .collect();
+                let poss: Vec<Option<Vec<f64>>> = covered
+                    .par_iter()
+                    .map(|(tid, _)| {
+                        let view = store.unwrap().view(*tid as usize);
+                        let ref_len = view.ref_len();
+                        salmon_model::transcript_gc_geometry(
+                            &view,
+                            ref_len,
+                            &fld_cdf,
+                            fld_low,
+                            fld_high,
+                            opts.gc_bins,
+                            k,
+                            opts.bias_speed_samp,
+                        )
+                    })
+                    .collect();
+                let (obs_marg, poss_marg): (Vec<_>, Vec<_>) = covered
+                    .into_iter()
+                    .zip(poss)
+                    .filter_map(|((_, o), p)| p.map(|pp| (o, pp)))
+                    .unzip();
+                tracing::info!(
+                    "GC bias: within-transcript estimator over {} well-covered transcripts",
+                    obs_marg.len()
+                );
+                let curve = salmon_model::estimate_within_txp_gc_curve(
+                    &obs_marg,
+                    &poss_marg,
+                    opts.gc_bins,
+                    MIN_BIN_SUPPORT,
+                );
+                obs.normalize();
+                bias_dump.obs_gc = obs.dump().to_vec();
+                let mut ratio = salmon_model::GcFragModel::new(opts.cond_gc_bins, opts.gc_bins);
+                ratio.set_marginal_ratio(&curve);
+                Some(ratio)
+            } else {
+                let mut exp = salmon_model::build_expected_gc(
+                    num_targets,
+                    |t| salmon.ref_seq(t as u32),
+                    |t| store.unwrap().view(t),
+                    &em.alphas,
+                    &eff_lengths,
+                    &fld_cdf,
+                    fld_low,
+                    fld_high,
+                    opts.cond_gc_bins,
+                    opts.gc_bins,
+                    k,
+                    opts.bias_speed_samp,
+                );
+                // Capture the (normalized) observed/expected GC tables for the dumps
+                // before gc_ratio consumes them (normalize is idempotent).
+                obs.normalize();
+                exp.normalize();
+                bias_dump.obs_gc = obs.dump().to_vec();
+                bias_dump.exp_gc = exp.dump().to_vec();
+                Some(salmon_model::gc_ratio(
+                    &mut obs,
+                    &mut exp,
+                    salmon_model::gcbias::GC_MAX_RATIO,
+                ))
+            }
         } else {
             None
         };

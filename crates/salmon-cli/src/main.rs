@@ -562,6 +562,11 @@ struct QuantArgs {
     /// Enable fragment-GC bias correction.
     #[arg(long = "gcBias")]
     gc_bias: bool,
+    /// GC-bias estimation method (reads mode): `obs-exp` (default,
+    /// cross-transcript observed/expected) or `within-txp` (abundance-free
+    /// within-transcript shape). Only used with `--gcBias`.
+    #[arg(long = "gcBiasMethod", default_value = "obs-exp")]
+    gc_bias_method: String,
     /// Enable positional bias correction.
     #[arg(long = "posBias")]
     pos_bias: bool,
@@ -1697,6 +1702,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.write_rad = args.write_rad;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
+    opts.within_txp_gc_bias = args.gc_bias_method.eq_ignore_ascii_case("within-txp");
     opts.pos_bias = args.pos_bias;
     opts.bias_seed_em_iters = args.bias_seed_em_iters;
     opts.dump_bias_models = args.dump_bias_models;

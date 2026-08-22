@@ -68,8 +68,9 @@ pub use fld::{
     ambig_frag_log_prob, smoothed_effective_length, DiscreteFld, FragmentLengthDistribution,
 };
 pub use gcbias::{
-    build_expected_gc, gc_corrected_effective_length, gc_desc, gc_prefix, gc_ratio, GcFragModel,
-    GcRank, GcStore, GcView, GC_SAMP_STRIDE,
+    build_expected_gc, estimate_within_txp_gc_curve, gc_corrected_effective_length, gc_desc,
+    gc_prefix, gc_ratio, transcript_gc_geometry, GcFragModel, GcRank, GcStore, GcView,
+    GC_SAMP_STRIDE,
 };
 pub use libdetect::{infer_format_from_counts, LibraryTypeDetector};
 pub use posbias::{

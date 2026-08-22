@@ -144,6 +144,33 @@ impl GcFragModel {
         self.counts[self.idx(ctx_frac, gc_frac)]
     }
 
+    /// Overwrite this (ratio) model with a marginal GC curve broadcast across all
+    /// conditioning bins. `curve` must have `gc_bins` entries. Marks the model
+    /// normalized (ratio models are consumed directly). Used to install an
+    /// abundance-free within-transcript bias curve as the GC ratio model.
+    pub fn set_marginal_ratio(&mut self, curve: &[f64]) {
+        assert_eq!(curve.len(), self.gc_bins, "curve must have gc_bins entries");
+        for ctx in 0..self.cond_bins {
+            for gc in 0..self.gc_bins {
+                self.counts[ctx * self.gc_bins + gc] = curve[gc];
+            }
+        }
+        self.normalized = true;
+    }
+
+    /// The marginal GC distribution (summed over conditioning bins), length
+    /// `gc_bins`. Reads the materialized `counts` (call after `normalize`, or on a
+    /// model built by [`transcript_gc_geometry`]).
+    pub fn marginal_gc(&self) -> Vec<f64> {
+        let mut m = vec![0.0; self.gc_bins];
+        for ctx in 0..self.cond_bins {
+            for gc in 0..self.gc_bins {
+                m[gc] += self.counts[ctx * self.gc_bins + gc];
+            }
+        }
+        m
+    }
+
     /// Merge another (compatible) model's counts. Both must be pre-normalization.
     pub fn combine_counts(&mut self, other: &GcFragModel) {
         debug_assert!(!self.normalized && !other.normalized);
@@ -212,6 +239,168 @@ pub fn gc_ratio(
     }
     out.normalized = true; // a ratio model is used directly, not re-normalized
     out
+}
+
+/// The unweighted per-transcript *possible-fragment* GC marginal — salmon's
+/// geometry-aware background for ONE transcript: the same inner computation as
+/// [`build_expected_gc`]'s per-transcript term, but WITHOUT the `alpha/effLen`
+/// abundance weighting. This is the denominator `B_t` of the abundance-free
+/// within-transcript bias estimator. Using salmon's own fragment geometry (not
+/// naive sliding windows) is what makes the recovered shape flat on bias-free
+/// data. Returns a length-`gc_bins` vector (unnormalized fragment mass per GC
+/// bin), or `None` if the transcript is too short / carries negligible FLD mass.
+pub fn transcript_gc_geometry(
+    view: &GcView,
+    ref_len: usize,
+    cdf: &[f64],
+    fld_low: usize,
+    fld_high: usize,
+    gc_bins: usize,
+    k: usize,
+    stride: usize,
+) -> Option<Vec<f64>> {
+    if ref_len <= k {
+        return None;
+    }
+    let cdf_max_arg = (cdf.len() - 1).min(ref_len);
+    let cdf_max_val = cdf[cdf_max_arg];
+    if cdf_max_val < MIN_CDF_MASS {
+        return None;
+    }
+    let ctx = GcContext::build(view);
+    let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
+    let sp = if fld_low > 0 { fld_low as i32 - 1 } else { 0 };
+    let stride = stride.max(1) as i32;
+    let mut marg = vec![0.0f64; gc_bins];
+    for frag_start in 0..(ref_len - k) {
+        let mut prev = cond(sp);
+        let mut fl = fld_low as i32;
+        while fl <= fld_high as i32 {
+            let frag_end = frag_start as i32 + fl - 1;
+            if (frag_end as usize) < ref_len {
+                if let Some((ff, _cf)) = ctx.desc(frag_start as i32, frag_end) {
+                    marg[bin_frac(ff, gc_bins)] += cond(fl) - prev;
+                }
+                prev = cond(fl);
+            } else {
+                break;
+            }
+            fl += stride;
+        }
+    }
+    Some(marg)
+}
+
+/// Estimate the abundance-free GC-bias SHAPE from within-transcript variation:
+/// each transcript is its own abundance control. Given per-covered-transcript
+/// observed GC counts `obs` and possible-fragment GC marginals `poss` (both
+/// length `gc_bins`, parallel slices), solve the two-way fixed-effects model
+///
+/// ```text
+/// log( obs_frac_t(g) / poss_frac_t(g) ) = logb(g) + offset_t + noise
+/// ```
+///
+/// by alternating means (Gauss–Seidel); the per-transcript `offset_t` absorbs
+/// that transcript's abundance and normalization, leaving `logb(g)` — the
+/// abundance-free bias shape. Returns the RATIO curve `exp(logb)`, normalized to
+/// mean 1, with GC bins the panel never probes set to the nearest sampled edge
+/// (neutral tails, no cliffs). `min_support` is the minimum transcript count a
+/// bin needs to be trusted (else edge-filled).
+pub fn estimate_within_txp_gc_curve(
+    obs: &[Vec<f64>],
+    poss: &[Vec<f64>],
+    gc_bins: usize,
+    min_support: usize,
+) -> Vec<f64> {
+    assert_eq!(obs.len(), poss.len());
+    // Sparse (transcript, bin, log-ratio) entries over the GC bins each
+    // transcript actually probes (`poss` has support there).
+    let (mut ti, mut bi, mut rv) = (Vec::new(), Vec::new(), Vec::new());
+    let mut nt = 0usize;
+    for (o, p) in obs.iter().zip(poss.iter()) {
+        let nobs: f64 = o.iter().sum();
+        let npos: f64 = p.iter().sum();
+        if nobs <= 0.0 || npos <= 0.0 {
+            continue;
+        }
+        let mut any = false;
+        for g in 0..gc_bins {
+            let bfrac = p[g] / npos;
+            if bfrac <= 0.004 {
+                continue;
+            }
+            let ofrac = (o[g] + 0.5) / (nobs + 0.5 * gc_bins as f64);
+            ti.push(nt as u32);
+            bi.push(g as u32);
+            rv.push(ofrac.ln() - bfrac.ln());
+            any = true;
+        }
+        if any {
+            nt += 1;
+        }
+    }
+    let mut logb = vec![0.0f64; gc_bins];
+    let mut off = vec![0.0f64; nt];
+    let mut cnt_bin = vec![0.0f64; gc_bins];
+    let mut cnt_t = vec![0.0f64; nt];
+    for &b in &bi {
+        cnt_bin[b as usize] += 1.0;
+    }
+    for &t in &ti {
+        cnt_t[t as usize] += 1.0;
+    }
+    for _ in 0..300 {
+        let mut num_b = vec![0.0f64; gc_bins];
+        for e in 0..rv.len() {
+            num_b[bi[e] as usize] += rv[e] - off[ti[e] as usize];
+        }
+        let mut max_d = 0.0f64;
+        for g in 0..gc_bins {
+            if cnt_bin[g] > 0.0 {
+                let nb = num_b[g] / cnt_bin[g];
+                max_d = max_d.max((nb - logb[g]).abs());
+                logb[g] = nb;
+            }
+        }
+        let mut num_t = vec![0.0f64; nt];
+        for e in 0..rv.len() {
+            num_t[ti[e] as usize] += rv[e] - logb[bi[e] as usize];
+        }
+        for t in 0..nt {
+            if cnt_t[t] > 0.0 {
+                off[t] = num_t[t] / cnt_t[t];
+            }
+        }
+        if max_d < 1e-7 {
+            break;
+        }
+    }
+    let sampled: Vec<usize> = (0..gc_bins)
+        .filter(|&g| cnt_bin[g] >= min_support as f64)
+        .collect();
+    if sampled.is_empty() {
+        return vec![1.0; gc_bins];
+    }
+    let mean: f64 = sampled.iter().map(|&g| logb[g]).sum::<f64>() / sampled.len() as f64;
+    let mut curve = vec![1.0f64; gc_bins];
+    for &g in &sampled {
+        curve[g] = (logb[g] - mean).exp();
+    }
+    let (lo, hi) = (sampled[0], *sampled.last().unwrap());
+    let (lo_val, hi_val) = (curve[lo], curve[hi]);
+    for c in curve.iter_mut().take(lo) {
+        *c = lo_val;
+    }
+    for c in curve.iter_mut().take(gc_bins).skip(hi + 1) {
+        *c = hi_val;
+    }
+    let m: f64 = curve.iter().sum::<f64>() / gc_bins as f64;
+    if m > 0.0 {
+        for c in curve.iter_mut() {
+            *c /= m;
+        }
+    }
+    curve
 }
 
 // ===========================================================================
@@ -778,6 +967,59 @@ mod tests {
 
     /// Coarse binning must floor, and must clamp 100 into the last bin rather
     /// than overflowing past it.
+    #[test]
+    fn within_txp_recovers_monotonic_bias_abundance_free() {
+        // Synthetic panel: a monotonic GC bias b(g)=exp(0.2*(g-10)); each
+        // transcript probes a narrow overlapping GC window (its own abundance
+        // control) with a WILDLY different abundance scale. The estimator must
+        // recover the bias SHAPE despite the abundance variation (that is the
+        // whole point of the per-transcript offset).
+        let nb = 20usize;
+        let true_b: Vec<f64> = (0..nb).map(|g| (0.2 * (g as f64 - 10.0)).exp()).collect();
+        let mut obs = Vec::new();
+        let mut poss = Vec::new();
+        // transcripts centered across the range; 5-bin windows overlap to chain.
+        for c in 2..18 {
+            for rep in 0..4 {
+                // abundance scale spans 4 orders of magnitude across transcripts
+                let scale = 10f64.powi((c as i32 % 5) - 2) * (1.0 + rep as f64);
+                let mut p = vec![0.0; nb];
+                let mut o = vec![0.0; nb];
+                for g in c - 2..=c + 2 {
+                    p[g] = 100.0; // flat possible distribution over the window
+                    o[g] = 100.0 * true_b[g] * scale;
+                }
+                poss.push(p);
+                obs.push(o);
+            }
+        }
+        let curve = estimate_within_txp_gc_curve(&obs, &poss, nb, 3);
+        // recovered curve should be monotonically increasing over the sampled
+        // interior and match the true shape (ratio of endpoints) closely.
+        for g in 3..16 {
+            assert!(
+                curve[g + 1] >= curve[g] - 1e-9,
+                "not monotonic at {g}: {} -> {}",
+                curve[g],
+                curve[g + 1]
+            );
+        }
+        // Over the well-covered interior [5,15] the recovered shape should match
+        // the true bias tightly (the extreme edge bins saturate, as expected of a
+        // within-transcript estimator — less internal variation there).
+        let (lo, hi) = (5usize, 15usize);
+        let tmean: f64 = (lo..=hi).map(|g| true_b[g]).sum::<f64>() / (hi - lo + 1) as f64;
+        let cmean: f64 = (lo..=hi).map(|g| curve[g]).sum::<f64>() / (hi - lo + 1) as f64;
+        for g in lo..=hi {
+            let t = true_b[g] / tmean;
+            let c = curve[g] / cmean;
+            assert!(
+                (t - c).abs() / t < 0.10,
+                "bin {g}: recovered {c:.3} vs true {t:.3}"
+            );
+        }
+    }
+
     #[test]
     fn bin_frac_coarse() {
         // 3 bins: width 33.33 -> [0,33),[33,66),[66,100]

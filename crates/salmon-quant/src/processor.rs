@@ -113,6 +113,12 @@ pub(crate) struct Shared<'a> {
     pub gc_store: Option<salmon_model::GcStore<'a>>,
     /// shared observed fragment-GC model to merge per-thread results into
     pub gcbias_obs: Option<&'a Mutex<GcFragModel>>,
+    /// collect per-transcript observed fragment-GC for the within-transcript
+    /// bias estimator (`--gcBiasMethod within-txp`)
+    pub collect_within_txp: bool,
+    /// shared per-transcript observed GC-bin counts (`tid -> [gc_bins]`) to merge
+    /// per-thread maps into (summed → order-independent)
+    pub within_txp_obs: Option<&'a Mutex<std::collections::HashMap<u32, Vec<u32>>>>,
     /// collect observed positional bias (`--posBias`)
     pub collect_posbias: bool,
     /// per-transcript length-class index (for positional bias), when pos-correcting
@@ -339,6 +345,9 @@ pub(crate) struct QuantProcessor<'a> {
     pub seqbias: Option<(SBModel, SBModel)>,
     /// per-thread observed fragment-GC model (when collecting)
     pub gcbias: Option<GcFragModel>,
+    /// per-thread per-transcript observed GC-bin counts (`tid -> [gc_bins]`) for
+    /// the within-transcript bias estimator (`--gcBiasMethod within-txp`)
+    pub within_txp_gc: Option<std::collections::HashMap<u32, Vec<u32>>>,
     /// per-thread observed (5', 3') positional-bias models, per length class
     pub posbias: Option<(Vec<SimplePosBias>, Vec<SimplePosBias>)>,
     /// per-thread unmapped-fragment name lines, flushed to the shared writer per
@@ -367,6 +376,9 @@ impl<'a> QuantProcessor<'a> {
         let gcbias = shared
             .collect_gcbias
             .then(|| GcFragModel::new(shared.cond_gc_bins, shared.gc_bins));
+        let within_txp_gc = shared
+            .collect_within_txp
+            .then(std::collections::HashMap::new);
         let posbias = shared.collect_posbias.then(|| {
             (
                 (0..NUM_LENGTH_CLASSES)
@@ -385,6 +397,7 @@ impl<'a> QuantProcessor<'a> {
             sketch_scratch: None,
             seqbias,
             gcbias,
+            within_txp_gc,
             posbias,
             unmapped: String::new(),
             sam_buf: String::new(),
@@ -582,6 +595,40 @@ fn collect_gc(
     }
 }
 
+/// Accumulate per-transcript observed fragment-GC bin counts for the
+/// within-transcript bias estimator: one unit count per compatible proper-pair
+/// placement, keyed by transcript, on the same `gc_bins` grid as
+/// `transcript_gc_geometry`'s `B_t`. Unweighted integer counts → the per-thread
+/// maps merge order-independently (deterministic).
+///
+/// Uses ALL compatible proper-pair placements (not unique-only): on an
+/// isoform-rich transcriptome, restricting to uniquely-mapped fragments both
+/// starves coverage and selects a GC-skewed subset (the paralog-free transcripts)
+/// — empirically WORSE on accuracy and bias-free safety than keeping all
+/// placements (the multi-mapping smear averages out across the panel).
+fn collect_within_txp_gc(
+    sh: &Shared,
+    compat: &[(&ScoredMapping, f64)],
+    map: &mut std::collections::HashMap<u32, Vec<u32>>,
+) {
+    let Some(store) = sh.gc_store else { return };
+    for (m, _) in compat.iter() {
+        if m.status != MateStatus::PairedEndPaired || m.fragment_len <= 0 {
+            continue;
+        }
+        let start = m.ref_pos;
+        let stop = m.ref_pos + m.fragment_len - 1;
+        let view = store.view(m.tid as usize);
+        if start < 0 || stop >= view.ref_len() as i32 {
+            continue;
+        }
+        if let Some((ff, _cf)) = gc_desc(&view, start, stop) {
+            let bin = salmon_model::gcbias::bin_frac(ff, sh.gc_bins);
+            map.entry(m.tid).or_insert_with(|| vec![0u32; sh.gc_bins])[bin] += 1;
+        }
+    }
+}
+
 /// Collect observed positional-bias mass for one fragment's compatible mappings,
 /// each weighted by `bias_w[k]` (log space). Mirrors salmon's
 /// `observedPosBias{Fwd,RC}[lengthClass].addMass(pos, refLen, logProb)`.
@@ -721,6 +768,7 @@ fn record(
     scratch: &mut RecordScratch,
     seqbias: Option<&mut (SBModel, SBModel)>,
     gcbias: Option<&mut GcFragModel>,
+    within_txp_gc: Option<&mut std::collections::HashMap<u32, Vec<u32>>>,
     posbias: Option<&mut (Vec<SimplePosBias>, Vec<SimplePosBias>)>,
 ) {
     // Still a shared atomic: unlike the other counters this one is *read* below,
@@ -937,6 +985,9 @@ fn record(
         }
         if let Some(gc) = gcbias {
             collect_gc(sh, placements, compat, bias_w, gc);
+        }
+        if let Some(map) = within_txp_gc {
+            collect_within_txp_gc(sh, &compat, map);
         }
         if let Some(pos) = posbias {
             collect_pos(sh, placements, compat, bias_w, pos);
@@ -1191,6 +1242,17 @@ fn merge_bias(proc: &QuantProcessor) {
         let mut g = shared_mtx.lock().unwrap();
         g.combine_counts(local);
     }
+    if let (Some(local), Some(shared_mtx)) =
+        (proc.within_txp_gc.as_ref(), proc.shared.within_txp_obs)
+    {
+        let mut g = shared_mtx.lock().unwrap();
+        for (tid, counts) in local {
+            let e = g.entry(*tid).or_insert_with(|| vec![0u32; counts.len()]);
+            for (a, b) in e.iter_mut().zip(counts) {
+                *a += *b;
+            }
+        }
+    }
     if let (Some(local), Some(shared_mtx)) = (proc.posbias.as_ref(), proc.shared.posbias_obs) {
         let mut g = shared_mtx.lock().unwrap();
         for (a, b) in g.0.iter_mut().zip(&local.0) {
@@ -1223,6 +1285,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             sketch_scratch,
             seqbias,
             gcbias,
+            within_txp_gc,
             posbias,
             unmapped,
             sam_buf,
@@ -1362,6 +1425,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     scratch,
                     seqbias.as_mut(),
                     gcbias.as_mut(),
+                    within_txp_gc.as_mut(),
                     posbias.as_mut(),
                 );
             }
@@ -1409,6 +1473,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             sketch_scratch,
             seqbias,
             gcbias,
+            within_txp_gc,
             posbias,
             unmapped,
             sam_buf,
@@ -1515,6 +1580,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     scratch,
                     seqbias.as_mut(),
                     gcbias.as_mut(),
+                    within_txp_gc.as_mut(),
                     posbias.as_mut(),
                 );
             }
