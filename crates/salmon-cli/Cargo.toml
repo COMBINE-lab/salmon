@@ -33,6 +33,7 @@ sysalloc = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
+flate2 = { workspace = true }
 
 [lints]
 workspace = true

@@ -1999,6 +1999,20 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // alignment input; analogous to "mapping" in the reads driver).
     timer.mark("rad_read");
 
+    // The classes as the EM will consume them. Written from here rather than
+    // from the mapping pass because this is the only place they exist: a
+    // deterministic run's first pass maps and writes the RAD without ever
+    // assembling a class (COMBINE-lab/salmon#1140).
+    if opts.dump_eq || opts.dump_eq_weights {
+        salmon_eqclass::write_eq_classes(
+            &opts.output_dir,
+            &names,
+            &collapsed,
+            opts.dump_eq_weights,
+        )
+        .context("writing eq_classes.txt.gz")?;
+    }
+
     // Deterministic EM from a uniform start. With a fixed FLD the collapsed
     // classes are independent of fragment/worker order, so the EM fixed point is
     // reproducible; there is no online warm-start (it was proven not to affect the

@@ -39,7 +39,7 @@ mod output;
 mod processor;
 mod sam;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
@@ -912,8 +912,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     timer.mark("eff_length_collapse");
 
     if opts.dump_eq || opts.dump_eq_weights {
-        dump_eq_classes(&opts.output_dir, &salmon, &collapsed, opts.dump_eq_weights)
-            .context("writing eq_classes.txt.gz")?;
+        let names: Vec<String> = (0..salmon.num_refs())
+            .map(|t| salmon.ref_name(t).to_string())
+            .collect();
+        salmon_eqclass::write_eq_classes(
+            &opts.output_dir,
+            &names,
+            &collapsed,
+            opts.dump_eq_weights,
+        )
+        .context("writing eq_classes.txt.gz")?;
     }
     let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
     // salmon runs a *single* offline EM: after a short burn-in (`targetIt = 10`
@@ -1395,69 +1403,4 @@ pub(crate) fn asctime_now() -> String {
     jiff::Zoned::now()
         .strftime("%a %b %e %H:%M:%S %Y")
         .to_string()
-}
-
-/// Write the naive equivalence classes (collapsing any range-factorized
-/// sub-classes back to their transcript set) for comparison/diagnostics.
-/// Write `aux_info/eq_classes.txt.gz` in salmon's format: the transcript count,
-/// the equivalence-class count, all transcript names (one per line, the index
-/// order the classes reference), then one line per class. Without `with_weights`
-/// classes are collapsed by transcript set (`groupSize`, tids…, summed count),
-/// matching salmon's `--dumpEq`; with `with_weights` each class is emitted as-is
-/// with its per-transcript combined weights before the count (`--dumpEqWeights`).
-/// Serialize the equivalence classes for inspection or for a downstream tool.
-///
-/// This is the intermediate the EM actually consumes, so dumping it is the way to
-/// see what salmon inferred *before* the statistics: which transcript sets the
-/// reads were compatible with, and how many reads fell into each.
-fn dump_eq_classes(
-    dir: &Path,
-    salmon: &SalmonIndex,
-    collapsed: &salmon_eqclass::CollapsedEqClasses,
-    with_weights: bool,
-) -> Result<()> {
-    use std::collections::BTreeMap;
-    use std::io::Write as _;
-    let num_txps = salmon.num_refs();
-    std::fs::create_dir_all(dir.join("aux_info"))?;
-    let f = std::fs::File::create(dir.join("aux_info").join("eq_classes.txt.gz"))?;
-    let mut w = flate2::write::GzEncoder::new(f, flate2::Compression::new(6));
-
-    if with_weights {
-        writeln!(w, "{num_txps}")?;
-        writeln!(w, "{}", collapsed.classes.len())?;
-        for t in 0..num_txps {
-            writeln!(w, "{}", salmon.ref_name(t))?;
-        }
-        for (group, value) in &collapsed.classes {
-            write!(w, "{}", group.txps.len())?;
-            for &tid in &group.txps {
-                write!(w, "\t{tid}")?;
-            }
-            for wt in &value.combined_weights {
-                write!(w, "\t{wt}")?;
-            }
-            writeln!(w, "\t{}", value.count)?;
-        }
-    } else {
-        // Collapse range-factorized sub-classes that share a transcript set.
-        let mut merged: BTreeMap<&Vec<u32>, u64> = BTreeMap::new();
-        for (group, value) in &collapsed.classes {
-            *merged.entry(&group.txps).or_insert(0) += value.count;
-        }
-        writeln!(w, "{num_txps}")?;
-        writeln!(w, "{}", merged.len())?;
-        for t in 0..num_txps {
-            writeln!(w, "{}", salmon.ref_name(t))?;
-        }
-        for (txps, count) in &merged {
-            write!(w, "{}", txps.len())?;
-            for &tid in *txps {
-                write!(w, "\t{tid}")?;
-            }
-            writeln!(w, "\t{count}")?;
-        }
-    }
-    w.finish()?;
-    Ok(())
 }
