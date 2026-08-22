@@ -1097,6 +1097,11 @@ fn run_deterministic(
     gene_map: Option<&GeneMapOpts>,
     out_dir: &std::path::Path,
 ) -> Result<()> {
+    // Wall-clock accounting spans both phases: phase 2 rewrites
+    // `meta_info.json` into the final output directory, and its
+    // `total_time_seconds` must cover the whole run, not just the requant
+    // (#1140: a 10M-pair run otherwise reports ~0.4s against minutes of wall).
+    let run_start = std::time::Instant::now();
     let bias_on = map_opts.seq_bias || map_opts.gc_bias || map_opts.pos_bias;
     // An explicit `--writeRad PATH` is honoured (and kept — it was a requested
     // output); otherwise a temp under the output directory, removed on success
@@ -1160,6 +1165,8 @@ fn run_deterministic(
     q.num_bootstraps = map_opts.num_bootstraps;
     q.num_gibbs_samples = map_opts.num_gibbs_samples;
     q.thinning_factor = map_opts.thinning_factor;
+    q.prior_seconds = run_start.elapsed().as_secs_f64();
+    q.external_start_time = Some(map_res.start_time.clone());
     let res = quantify_rad(&q, &rad_path).context("deterministic requant pass failed")?;
     let pct2 = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64
@@ -1205,12 +1212,15 @@ fn run_deterministic(
 /// BAM `AS` tag); the online alignment error model is not used in this mode.
 // The same two-pass split for alignment input: BAM to RAD, then quantify.
 fn run_deterministic_align(
-    opts: AlignQuantOptions,
+    mut opts: AlignQuantOptions,
     rad_out: Option<PathBuf>,
     keep_rad: bool,
     gene_map: Option<&GeneMapOpts>,
     codec: ChunkCodec,
 ) -> Result<()> {
+    // Both phases count toward the reported run time (see run_deterministic).
+    let run_start = std::time::Instant::now();
+    let start_time = salmon_align::asctime_now();
     let out_dir = opts.output_dir.clone();
     // An explicit `--writeRad PATH` is honoured and kept; otherwise a temp under
     // the output dir, removed on success unless `--keepRad` (or `--skipQuant`,
@@ -1237,6 +1247,8 @@ fn run_deterministic_align(
     );
 
     // Phase 2 — quantify from the fully-baked RAD (single pass, order-independent).
+    opts.prior_seconds = run_start.elapsed().as_secs_f64();
+    opts.external_start_time = Some(start_time);
     let res = quantify_rad(&opts, &rad_path).context("deterministic requant pass failed")?;
     let pct2 = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64
@@ -1298,6 +1310,9 @@ fn run_genome_project(
     keep_rad: bool,
     gene_map: Option<&GeneMapOpts>,
 ) -> Result<()> {
+    // Both phases count toward the reported run time (see run_deterministic).
+    let run_start = std::time::Instant::now();
+    let start_time = salmon_align::asctime_now();
     let out_dir = q.output_dir.clone();
     let explicit = rad_out.is_some();
     let rad_path = rad_out.unwrap_or_else(|| out_dir.join("genome_projected.rad"));
@@ -1325,6 +1340,8 @@ fn run_genome_project(
     if q.ref_seqs.is_none() {
         q.ref_seqs = art.ref_seqs;
     }
+    q.prior_seconds = run_start.elapsed().as_secs_f64();
+    q.external_start_time = Some(start_time);
     let res = quantify_rad(&q, &rad_path).context("genome-projected quantification failed")?;
     tracing::info!(
         "{} fragments from projected RAD, {} quantified; {} equivalence classes",
