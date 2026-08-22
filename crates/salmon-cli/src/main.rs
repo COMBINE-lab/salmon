@@ -1378,9 +1378,23 @@ fn run_deterministic_align(
     if explicit && scratch_dir.is_some() {
         tracing::warn!("--radScratchDir is ignored when --writeRad names an explicit path");
     }
+    // Same rule as the reads path: `--skipQuant` makes the RAD this run's
+    // output, and an output belongs in the output directory under a stable name
+    // rather than pid-suffixed on a scratch volume.
+    let deliverable = opts.skip_quant;
+    if deliverable && !explicit && scratch_dir.is_some() {
+        tracing::info!(
+            "--skipQuant makes the RAD this run's output, so it is written to the output \
+             directory rather than to --radScratchDir"
+        );
+    }
     let rad_path = match rad_out {
         Some(p) => p,
-        None => intermediate_rad_path(&out_dir, scratch_dir, "intermediate_alignments")?,
+        None => intermediate_rad_path(
+            &out_dir,
+            if deliverable { None } else { scratch_dir },
+            "intermediate_alignments",
+        )?,
     };
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;

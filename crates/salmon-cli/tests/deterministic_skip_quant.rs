@@ -136,3 +136,61 @@ fn skip_quant_under_deterministic_maps_and_stops() {
         "nothing should be left in --radScratchDir: {in_scratch:?}"
     );
 }
+
+/// A tiny name-grouped transcriptome SAM: inward pairs, unique placements, no
+/// `AS` (which alignment mode tolerates and warns about; irrelevant here).
+fn write_sam(dir: &Path) -> PathBuf {
+    let path = dir.join("aln.sam");
+    let mut text = String::from("@HD\tVN:1.6\tSO:queryname\n");
+    text.push_str("@SQ\tSN:txA\tLN:3000\n@SQ\tSN:txB\tLN:3000\n");
+    for i in 0..60 {
+        let tx = if i % 2 == 0 { "txA" } else { "txB" };
+        let (l, r) = (1 + i * 20, 201 + i * 20);
+        text.push_str(&format!(
+            "p{i}\t99\t{tx}\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\n"
+        ));
+        text.push_str(&format!(
+            "p{i}\t147\t{tx}\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\n"
+        ));
+    }
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+/// The `-a` spelling has the same deliverable, so it needs the same placement
+/// rule: `-a --deterministic --skipQuant` writes its RAD to the output
+/// directory even when `--radScratchDir` points somewhere else.
+fn skip_quant_under_deterministic_alignment_keeps_the_rad_in_the_output_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_sam(dir.path());
+    let out = dir.path().join("out");
+    let scratch = dir.path().join("scratch");
+
+    assert!(Command::new(SALMON)
+        .args(["quant", "-a"])
+        .arg(&sam)
+        .args(["-l", "IU", "-p", "2", "-o"])
+        .arg(&out)
+        .args(["--deterministic", "--skipQuant", "--radScratchDir"])
+        .arg(&scratch)
+        .status()
+        .unwrap()
+        .success());
+
+    assert!(
+        !out.join("quant.sf").exists(),
+        "--skipQuant must not produce abundances"
+    );
+    assert!(
+        out.join("intermediate_alignments.rad").is_file(),
+        "the deliverable belongs in the output directory under its stable name"
+    );
+    let in_scratch: Vec<_> = std::fs::read_dir(&scratch)
+        .map(|rd| rd.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(
+        in_scratch.is_empty(),
+        "nothing should be left in --radScratchDir: {in_scratch:?}"
+    );
+}
