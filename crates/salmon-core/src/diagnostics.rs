@@ -31,9 +31,11 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    /// Private constructor; the codes and severities are all chosen inside this
-    /// module so they stay consistent.
-    fn new(code: &str, severity: &str, message: String) -> Self {
+    /// The codes and severities are normally chosen inside this module so they
+    /// stay consistent; public so a driver can hand a phase-1-born diagnostic
+    /// into a later pass's `meta_info.json` (e.g. the deterministic alignment
+    /// pass's unusable-`AS` verdict, #1140).
+    pub fn new(code: &str, severity: &str, message: String) -> Self {
         Self {
             code: code.to_string(),
             severity: severity.to_string(),

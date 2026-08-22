@@ -136,8 +136,14 @@ scraping the log (the same messages are also written to
 | `very_low_mapping_rate` | warning | < 10% of fragments mapped |
 | `low_mapping_rate` | warning | < 30% of fragments mapped |
 | `library_type_mismatch` | warning | an explicit `-l` disagrees with the observed library format (reads / `--rad`) |
+| `no_concordant_mappings` | warning | no fragment's observed format agreed with an unstranded expected type — for a paired library, check the reads are properly paired |
+| `strand_bias_unstranded` | warning | strand bias > 1% under an unstranded library type (see `strand_mapping_bias` in `lib_format_counts.json`) |
+| `high_incompatible_fraction` | warning | more than 5% of judged fragments were incompatible with the expected library type |
+| `bam_score_tags_unusable` | warning | deterministic alignment mode scored by `AS`, but the BAM's `AS` tags were missing, partial, or constant — placements were weighted uniformly; consider `--errorModel -t` |
 
-An empty array means no red flags were detected.
+An empty array means no red flags were detected. The library-format codes are
+emitted by every mode that writes `lib_format_counts.json`, from the same
+conditions the log warnings use, so the log and the report cannot disagree.
 
 ### `aux_info/ambig_info.tsv` — per-transcript read partition (TSV)
 
@@ -439,6 +445,27 @@ formats cannot drift apart.
 
 Both options apply to the read-mapping path only. In alignment mode (`-a`) and
 RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
+
+### The pseudoalignment output contract
+
+This output is a **diagnostic view of salmon's mappings**, not a
+general-purpose aligner output, and several fields are deliberately nominal —
+for brevity, and because the mapping path computes scores without base-level
+alignments (score-only dynamic programming, no traceback) and does not compute
+them just because output was requested:
+
+- **`CIGAR`** is synthesized from the read length (`<readLen>M`, plus a clip at
+  a transcript end). It records *where* the mapping is, not a base-level
+  alignment; indels are not represented, and no `NM`/`MD` accompany it.
+- **`AS`** is the score salmon's mapper assigned to the placement — the same
+  number quantification used — not a score recomputed from the record's own
+  CIGAR. It is comparable across records within one run, not across aligners.
+- **`MAPQ`** reflects only the placement count, not alignment confidence — see
+  below.
+
+Treat the records as positions + pairing + the quantifier's scores. If you need
+true base-level alignments, run a general-purpose aligner; a possible opt-in
+"realized alignment" output mode is under discussion (see #1141).
 
 ### `MAPQ`
 

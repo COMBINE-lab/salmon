@@ -551,16 +551,23 @@ struct QuantArgs {
     /// piscem map-bulk compatible and can be re-quantified with `--rad`.
     #[arg(long = "writeRad")]
     write_rad: Option<PathBuf>,
-    /// Deterministic quantification (reads/FASTQ input): map once to an
-    /// intermediate RAD, then quantify from it with a fixed fragment-length
-    /// distribution, so the result is byte-identical across runs and thread
-    /// counts. Avoids a second mapping pass. The intermediate RAD is written under
+    /// Deterministic quantification: map once to an intermediate RAD, then
+    /// quantify from it with a fixed fragment-length distribution, so the
+    /// result is byte-identical across runs and thread counts. **The default
+    /// since 2.6.0** — the flag is accepted as a no-op; use --online for the
+    /// deprecated one-pass path. The intermediate RAD is written under
     /// the output directory and deleted on success unless --keepRad (or use
     /// --writeRad PATH to choose its location and keep it). With --skipQuant the
     /// run stops after mapping and the RAD is kept as its output, in the output
     /// directory even when --radScratchDir is given.
     #[arg(long = "deterministic")]
     deterministic: bool,
+    /// Quantify with the pre-2.6 online one-pass path instead of the default
+    /// deterministic two-phase flow. Deprecated: results depend on the thread
+    /// count (the default is byte-identical at any -p); scheduled for removal
+    /// in 2.7.0.
+    #[arg(long = "online", conflicts_with = "deterministic")]
+    online: bool,
     /// Keep the intermediate RAD produced by --deterministic (by default it is
     /// deleted once quantification finishes). Ignored without --deterministic.
     #[arg(long = "keepRad")]
@@ -699,9 +706,11 @@ struct QuantArgs {
     /// fragment-length sensitivity analysis actually vary anything.
     #[arg(long = "fldPolicy", value_enum, default_value_t = FldPolicyArg::Baked)]
     fld_policy: FldPolicyArg,
-    /// Online-phase forgetting factor in (0.5, 1.0].
-    #[arg(short = 'f', long = "forgettingFactor", default_value_t = 0.65)]
-    forgetting_factor: f64,
+    /// Online-phase forgetting factor in (0.5, 1.0]; default 0.65. Online-path
+    /// only (--online, deprecated): ignored with a warning under the default
+    /// deterministic mode.
+    #[arg(short = 'f', long = "forgettingFactor")]
+    forgetting_factor: Option<f64>,
     /// Initialize the optimizer uniformly. In reads mode (one-pass and
     /// --deterministic) the optimizer already starts uniform, so this is the
     /// existing behavior; in online alignment mode (-a) it replaces the
@@ -790,9 +799,11 @@ struct QuantArgs {
     #[arg(long = "biasSpeedSamp", default_value_t = 5)]
     bias_speed_samp: usize,
     /// Number of leading fragments used to train the auxiliary models
-    /// (fragment-length / bias / error); they are fixed afterward.
-    #[arg(long = "numAuxModelSamples", default_value_t = 5_000_000)]
-    num_aux_model_samples: u64,
+    /// (fragment-length / bias / error); they are fixed afterward; default
+    /// 5000000. Online-path only (--online, deprecated): ignored with a
+    /// warning under the default deterministic mode.
+    #[arg(long = "numAuxModelSamples")]
+    num_aux_model_samples: Option<u64>,
     /// Disable the lower threshold on how short bias correction may make an
     /// effective length (increases precision, reduces robustness). Experimental.
     #[arg(long = "noBiasLengthThreshold")]
@@ -840,9 +851,11 @@ struct QuantArgs {
     eqclasses: Option<PathBuf>,
     /// Fragments processed before the auxiliary (fragment-length) model is
     /// applied during online inference. (salmon's --numPreAuxModelSamples;
-    /// salmon's default is 1000000, this port's is 5000.)
-    #[arg(long = "numPreAuxModelSamples", default_value_t = 5000)]
-    num_pre_aux_model_samples: u64,
+    /// salmon's default is 1000000, this port's is 5000.) Online-path only
+    /// (--online, deprecated): ignored with a warning under the default
+    /// deterministic mode.
+    #[arg(long = "numPreAuxModelSamples")]
+    num_pre_aux_model_samples: Option<u64>,
     /// [accepted; not yet implemented] disable fragment-length-distribution
     /// concordance in the per-fragment probability.
     #[arg(long = "noFragLengthDist")]
@@ -1275,6 +1288,9 @@ fn run_deterministic(
     bias_targets: Option<PathBuf>,
     gene_map: Option<&GeneMapOpts>,
     out_dir: &std::path::Path,
+    // The live mapping spinner, owned here so it can be stopped the moment
+    // phase 1 finishes (its counters do not advance during the requant).
+    spinner: Option<ProgressGuard>,
 ) -> Result<()> {
     // Wall-clock accounting spans both phases: phase 2 rewrites
     // `meta_info.json` into the final output directory, and its
@@ -1360,6 +1376,7 @@ fn run_deterministic(
             return Err(e).context("deterministic mapping pass failed");
         }
     };
+    drop(spinner); // stop + clear the mapping spinner before phase-2 logging
     let pct = if map_res.num_processed > 0 {
         100.0 * map_res.num_mapped as f64 / map_res.num_processed as f64
     } else {
@@ -1532,6 +1549,16 @@ fn run_deterministic_align(
         summary.num_processed,
         pct
     );
+    // The unusable-`AS` verdict is born here in phase 1, but `meta_info.json`
+    // is written by phase 2 — hand it across so pipelines that only keep the
+    // output directory see it in `diagnostics`, not just the log (#1140).
+    if let Some(w) = &summary.score_tag_warning {
+        opts.extra_diagnostics.push(salmon_core::Diagnostic::new(
+            "bam_score_tags_unusable",
+            "warning",
+            w.clone(),
+        ));
+    }
 
     // Phase 2 — quantify from the fully-baked RAD (single pass, order-independent).
     opts.prior_seconds = run_start.elapsed().as_secs_f64();
@@ -1751,6 +1778,38 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         .build_global();
     let out_dir = args.output.clone();
     let gene_map = load_gene_map(args.gene_map.clone(), args.ignore_tx_version)?;
+
+    // 2.6.0 flips the default to the deterministic two-phase flow; `--online`
+    // selects the pre-2.6 one-pass path for one deprecation cycle. The knobs
+    // that only exist on the online path warn when passed without it, rather
+    // than being silently inert under the new default — silent inertness is
+    // the exact failure mode #1140's audit spent a release hunting down.
+    if args.online {
+        tracing::warn!(
+            "--online selects the deprecated one-pass quantification path (removal planned \
+             for 2.7.0). Its results depend on the thread count; the default deterministic \
+             mode is byte-identical at any -p and was measured as fast or faster."
+        );
+    } else {
+        let mut inert: Vec<&str> = Vec::new();
+        if args.forgetting_factor.is_some() {
+            inert.push("--forgettingFactor");
+        }
+        if args.num_aux_model_samples.is_some() {
+            inert.push("--numAuxModelSamples");
+        }
+        if args.num_pre_aux_model_samples.is_some() {
+            inert.push("--numPreAuxModelSamples");
+        }
+        if !inert.is_empty() {
+            tracing::warn!(
+                "{} configure the online inference path, which the default deterministic \
+                 mode does not run: ignored. Pass --online (deprecated, removal planned \
+                 for 2.7.0) to use them.",
+                inert.join(", ")
+            );
+        }
+    }
     // `--meta` (metagenomic preset) forces plain EM (no VBEM) and disables rich /
     // range-factorized equivalence classes, matching salmon's --meta. salmon's
     // preset also sets initUniform; the Rust offline EM already initializes
@@ -1794,21 +1853,21 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
         opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
         opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
-        opts.forgetting_factor = args.forgetting_factor;
+        opts.forgetting_factor = args.forgetting_factor.unwrap_or(0.65);
         opts.init_uniform = args.init_uniform;
         opts.dump_eq = args.dump_eq;
         opts.dump_eq_weights = args.dump_eq_weights;
         opts.no_length_correction = args.no_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.bias_speed_samp = args.bias_speed_samp;
-        opts.num_aux_model_samples = args.num_aux_model_samples;
+        opts.num_aux_model_samples = args.num_aux_model_samples.unwrap_or(5_000_000);
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.num_error_bins = args.num_error_bins;
         opts.discard_orphans = args.discard_orphans;
         opts.gc_bins = args.num_gc_bins;
         opts.cond_gc_bins = args.conditional_gc_bins;
         opts.skip_quant = args.skip_quant;
-        opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
+        opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples.unwrap_or(5_000);
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
         opts.thinning_factor = args.thinning_factor;
@@ -1822,10 +1881,10 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             // Genome projection is inherently deterministic (RAD-based) and has no
             // error model (bramble exposes no projected CIGAR), so flags that only
             // matter for transcriptomic alignment are accepted but no-ops here.
-            if args.deterministic {
+            if args.online {
                 tracing::warn!(
-                    "--deterministic is redundant in genome-projection mode (--annotation): \
-                     projection is already deterministic; ignoring it"
+                    "--online has no effect in genome-projection mode (--annotation): \
+                     projection is inherently RAD-based and deterministic; ignoring it"
                 );
             }
             if args.error_model {
@@ -1859,11 +1918,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             );
         }
 
-        // `--deterministic`: write the BAM's placements to an intermediate RAD
-        // (baking the FLD/library-format + rough abundances) and requantify from
-        // it, for results byte-identical across thread counts. Score-based; no
-        // online error model.
-        if args.deterministic {
+        // Default (2.6.0): deterministic alignment quant — write the BAM's
+        // placements to an intermediate RAD (baking the FLD/library-format +
+        // rough abundances) and requantify from it, for results byte-identical
+        // across thread counts. Score-based (`AS`); `--errorModel` opts into
+        // the order-independent error model. `--online` selects the deprecated
+        // one-pass path below, which is the only place the online error model
+        // still lives.
+        if !args.online {
             let codec = rad_codec_from_args(args.no_compress_rad, &args.rad_compress)?;
             return run_deterministic_align(
                 opts,
@@ -1875,6 +1937,16 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             );
         }
 
+        // The online alignment path never supported these two (C++ did); the
+        // deterministic default honours them, so under `--online` they warn
+        // rather than silently doing nothing (#1140: no parity work for a path
+        // scheduled for removal).
+        if args.no_length_correction || args.no_frag_length_dist {
+            tracing::warn!(
+                "--noLengthCorrection/--noFragLengthDist are not supported on the deprecated \
+                 online alignment path: ignored. The default (deterministic) mode honours them."
+            );
+        }
         // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
         let progress = Arc::new(ProgressCounters::default());
         let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
@@ -2090,12 +2162,12 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.pair.post_merge_chain_sub_thresh = args.post_merge_chain_sub_thresh;
     // model toggles (Tier 2)
     opts.bias_speed_samp = args.bias_speed_samp;
-    opts.num_aux_model_samples = args.num_aux_model_samples;
+    opts.num_aux_model_samples = args.num_aux_model_samples.unwrap_or(5_000_000);
     opts.no_bias_length_threshold = args.no_bias_length_threshold;
     opts.gc_bins = args.num_gc_bins;
     opts.cond_gc_bins = args.conditional_gc_bins;
     opts.skip_quant = args.skip_quant;
-    opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
+    opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples.unwrap_or(5_000);
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;
@@ -2115,13 +2187,26 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
     opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
     warn_unsupported_fld_policy(args.fld_policy, "reads mode");
-    opts.forgetting_factor = args.forgetting_factor;
+    opts.forgetting_factor = args.forgetting_factor.unwrap_or(0.65);
     opts.init_uniform = args.init_uniform;
 
-    // Deterministic mode: map once to an intermediate RAD, then quantify from it
-    // with a fixed FLD (byte-identical output, no second mapping pass).
-    if args.deterministic {
+    // Default (2.6.0): deterministic mode — map once to an intermediate RAD,
+    // then quantify from it with a fixed FLD (byte-identical output at any
+    // thread count, no second mapping pass). `--online` selects the deprecated
+    // one-pass path below.
+    if !args.online {
         let rad_out = opts.write_rad.take(); // honour an explicit --writeRad path
+                                             // The phase-1 mapping spinner, wired exactly as the one-pass path wires
+                                             // its own: a default mode cannot be a silent black box for the minutes
+                                             // the mapping pass takes. Handed into the driver so it stops when
+                                             // phase 1 does, rather than spinning frozen through phase 2.
+        let progress = Arc::new(ProgressCounters::default());
+        let spinner = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
+            opts.progress = Some(progress.clone());
+            Some(ProgressGuard::start(progress))
+        } else {
+            None
+        };
         return run_deterministic(
             opts,
             rad_out,
@@ -2130,6 +2215,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             args.targets.clone(),
             gene_map.as_ref(),
             &out_dir,
+            spinner,
         );
     }
     // `--initUniform` asks for a uniform optimizer start, and in one-pass reads

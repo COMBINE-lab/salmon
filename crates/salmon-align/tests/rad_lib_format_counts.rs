@@ -136,6 +136,23 @@ fn rad_requant_lib_format_counts_report_incompatible_fragments() {
     let v = lib_counts(&out_isr);
     assert_eq!(u64_field(&v, "num_compatible_fragments"), n_isr as u64);
     assert_eq!(u64_field(&v, "num_incompatible_fragments"), n_isf as u64);
+    // The >5% incompatible warning is not only spoken: it lands in
+    // meta_info.json's machine-readable diagnostics (#1140), so a pipeline
+    // that never sees the log still sees the concern.
+    let meta: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out_isr.join("aux_info").join("meta_info.json")).unwrap(),
+    )
+    .unwrap();
+    let codes: Vec<&str> = meta["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert!(
+        codes.contains(&"high_incompatible_fraction"),
+        "expected high_incompatible_fraction in diagnostics, got {codes:?}"
+    );
 
     // Unstranded: judged like any other type, and everything passes — but the
     // histogram-derived fields still expose the strand split, which is exactly
