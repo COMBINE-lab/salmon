@@ -959,6 +959,14 @@ fn load_provenance(file_tag_map: &TagMap) -> RadProvenance {
             Some(TagValue::U8(v)) => Some(*v == 1),
             _ => None,
         },
+        first_decoy_index: match file_tag_map.get(salmon_rad::FIRST_DECOY_INDEX_TAG) {
+            Some(TagValue::U64(v)) => Some(*v),
+            _ => None,
+        },
+        num_decoys: match file_tag_map.get(salmon_rad::NUM_DECOYS_TAG) {
+            Some(TagValue::U64(v)) => Some(*v),
+            _ => None,
+        },
     });
     // Split back into the lines they were joined from; an aligner's command line
     // may contain anything except a newline, so this round-trips.

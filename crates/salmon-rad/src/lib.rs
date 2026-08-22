@@ -242,6 +242,19 @@ pub const INDEX_DECOY_NAME_HASH_TAG: &str = "index_decoy_name_hash";
 /// Written only when the index actually recorded it; absent means unknown,
 /// which a reader must not collapse to `false`.
 pub const KEEP_DUPLICATES_TAG: &str = "keep_duplicates";
+/// File-tag name: index of the first decoy reference in the header's reference
+/// table. Written only for an index that has decoys; absent means either "no
+/// decoys" or "written before this was recorded" — a reader that needs the
+/// distinction pairs it with [`NUM_DECOYS_TAG`].
+///
+/// This is what lets a requant exclude the decoy block from `quant.sf` the way
+/// reads mode does: the RAD header must carry every reference (records point
+/// into it), so without the boundary a reader cannot tell decoys apart
+/// (#1140).
+pub const FIRST_DECOY_INDEX_TAG: &str = "first_decoy_index";
+/// File-tag name: number of decoy references starting at
+/// [`FIRST_DECOY_INDEX_TAG`].
+pub const NUM_DECOYS_TAG: &str = "num_decoys";
 /// Whether `value` can be written under `tag_type` without being shortened.
 ///
 /// A thin pass-through to [`libradicl::rad_types::TagValue::fits`], re-exported
@@ -343,6 +356,11 @@ pub struct IndexProvenance {
     /// whether the index was built with `--keepDuplicates`; `None` when the
     /// index predates recording it, which must not be reported as `false`
     pub keep_duplicates: Option<bool>,
+    /// index of the first decoy reference in the reference table; `None` when
+    /// the index has no decoys (or predates recording it)
+    pub first_decoy_index: Option<u64>,
+    /// decoy count starting at `first_decoy_index`
+    pub num_decoys: Option<u64>,
 }
 
 /// Counters describing what a mapping pass *saw*, as opposed to what it wrote.

@@ -133,7 +133,8 @@ fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
     let row_indices: Vec<usize> =
-        quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys).collect();
+        salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
+            .collect();
 
     let f = std::fs::File::create(dir.join("names.tsv.gz"))?;
     let mut enc = GzEncoder::new(f, Compression::new(6));
@@ -172,32 +173,6 @@ fn select_sample_bytes(sample: &[f64], row_indices: &[usize]) -> Vec<u8> {
     out
 }
 
-/// Reference indices to emit in `quant.sf`, in order, given the decoy layout.
-///
-/// The index numbering is `[transcripts][decoys][short transcripts]`: transcripts
-/// occupy `[0, first_decoy_index)`, the decoy block `[first_decoy_index,
-/// first_decoy_index + num_decoys)` is skipped, and sub-`k` "short" transcripts
-/// (no k-mers, never seeded, always 0 reads) occupy the tail
-/// `[first_decoy_index + num_decoys, total)` and are still reported.
-///
-/// `first_decoy_index == None` means no decoys (emit everything). A legacy index
-/// that recorded decoys but not `num_decoys` (== 0) keeps the old behavior:
-/// everything from `first_decoy_index` on is treated as decoy and dropped. The
-/// build guarantees decoys are one contiguous block, so the emitted set is simply
-/// the two non-decoy ranges below.
-fn quant_row_indices(
-    total: usize,
-    first_decoy_index: Option<usize>,
-    num_decoys: usize,
-) -> impl Iterator<Item = usize> {
-    let fdi = first_decoy_index.unwrap_or(total).min(total);
-    let decoy_end = match first_decoy_index {
-        Some(_) if num_decoys > 0 => (fdi + num_decoys).min(total),
-        _ => total,
-    };
-    (0..fdi).chain(decoy_end..total)
-}
-
 /// `quant.sf`: `Name  Length  EffectiveLength  TPM  NumReads`.
 ///
 /// The four numbers per transcript: its annotated length, the effective length
@@ -218,7 +193,8 @@ fn write_quant_sf(path: &Path, res: &QuantResult, sig_digits: usize) -> Result<(
     // `quant.sf` lists every input transcript.
     // salmon writes EffectiveLength and NumReads with `--sigDigits` decimals
     // (default 3) and TPM with the fixed `{:f}` (6-decimal) format.
-    for i in quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys) {
+    for i in salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
+    {
         writeln!(
             w,
             "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
@@ -488,11 +464,11 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{quant_row_indices, select_names_tsv, select_sample_bytes};
+    use super::{select_names_tsv, select_sample_bytes};
 
     /// Collect the emitted row indices for a given reference layout.
     fn rows(total: usize, fdi: Option<usize>, nd: usize) -> Vec<usize> {
-        quant_row_indices(total, fdi, nd).collect()
+        salmon_core::quant_row_indices(total, fdi, nd).collect()
     }
 
     /// The ordinary case: no decoys, so every reference is reported.
@@ -548,7 +524,8 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let sample = vec![10.0_f64, 20.0, 30.0, 7.0, 9.0, 0.0];
-        let row_indices: Vec<usize> = quant_row_indices(names.len(), Some(3), 2).collect();
+        let row_indices: Vec<usize> =
+            salmon_core::quant_row_indices(names.len(), Some(3), 2).collect();
         assert_eq!(row_indices, vec![0, 1, 2, 5]);
 
         let names_tsv = select_names_tsv(&names, &row_indices);

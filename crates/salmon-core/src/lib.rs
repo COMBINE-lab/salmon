@@ -66,6 +66,29 @@ pub use libtype::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 pub use mate::MateStatus;
 pub use transcript::Transcript;
 
+/// The output-row indices for a reference table laid out as
+/// `[transcripts][decoys][shorts]`: quantified transcripts `[0, first_decoy)`,
+/// the decoy block skipped, and sub-`k` "short" transcripts (reported with zero
+/// counts) after it. `first_decoy_index == None` means no decoys — every
+/// reference is a row.
+///
+/// Shared by the reads-mode writer and the RAD-requant writer so `quant.sf`
+/// (and the files positionally aligned with it) contain the same row set in
+/// every mode (#1140): decoys are references the index carries for mapping
+/// specificity, never quantification targets.
+pub fn quant_row_indices(
+    total: usize,
+    first_decoy_index: Option<usize>,
+    num_decoys: usize,
+) -> impl Iterator<Item = usize> {
+    let fdi = first_decoy_index.unwrap_or(total).min(total);
+    let decoy_end = match first_decoy_index {
+        Some(_) if num_decoys > 0 => (fdi + num_decoys).min(total),
+        _ => total,
+    };
+    (0..fdi).chain(decoy_end..total)
+}
+
 /// A set of reference sequences held as one contiguous buffer plus endpoint
 /// offsets, handing out `&[u8]` views.
 ///

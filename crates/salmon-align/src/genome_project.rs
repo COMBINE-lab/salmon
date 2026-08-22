@@ -220,6 +220,17 @@ pub fn project_genome_bam_to_rad(
         let em = salmon_infer::optimize(&collapsed, num_refs, &ro, Some(&eff_lengths));
         writer.set_initial_abundances(&em.alphas);
     }
+    // Bake the pass counters so the requant's meta_info.json reports this
+    // run's true num_processed / mapping rate instead of a placeholder
+    // (#1140). Projection has no dovetail/score-filter/decoy notions; those
+    // stay 0.
+    writer.set_map_counters(salmon_rad::MapCounters {
+        num_processed,
+        num_dovetail: 0,
+        num_filtered_vm: 0,
+        num_below_threshold_vm: 0,
+        num_decoy_fragments: 0,
+    });
     writer.finalize()?;
 
     Ok(ProjectionArtifacts {
