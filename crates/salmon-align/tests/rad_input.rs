@@ -1172,3 +1172,109 @@ fn measure_thread_count_fp_deviation() {
          (reported precision step: 5e-4 for NumReads, 5e-7 for TPM)"
     );
 }
+
+// ---- --noLengthCorrection / --noFragLengthDist ----------------------------
+
+/// A RAD with two transcripts of different lengths and proper pairs on each, so
+/// both the effective-length divisor and the fragment-length term have something
+/// to act on.
+fn write_length_knob_rad(rad: &Path) {
+    let names = ["short", "long"];
+    let lens = [900u32, 6000];
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for (tid, n) in [(0u32, 150), (1, 150)] {
+        for i in 0..n {
+            // Fragment lengths spread around 200, so the FLD term is not constant.
+            frags.push(vec![(tid, Some(150 + (i % 100) as u16), 0)]);
+        }
+    }
+    write_rad(rad, &names, &lens, RadProfile::Sketch, &frags, None);
+}
+
+#[test]
+/// `--noLengthCorrection` has to reach the RAD path: the divisor is the raw
+/// reference length, as it is in reads mode.
+///
+/// Until #1140 the flag was accepted and dropped on the way to the requant, so
+/// `--deterministic --noLengthCorrection` silently corrected lengths anyway.
+/// That matters most to 3' tagged-end protocols, where a fragment does not
+/// sample a transcript's interior uniformly and the corrected length describes
+/// something the data never did.
+fn no_length_correction_uses_raw_lengths() {
+    let dir = tempfile::tempdir().unwrap();
+    let rad = dir.path().join("m.rad");
+    write_length_knob_rad(&rad);
+
+    let out = dir.path().join("corrected");
+    std::fs::create_dir_all(&out).unwrap();
+    let corrected = quantify_rad(&opts_for(&out), &rad).unwrap();
+    assert!(
+        corrected
+            .eff_lengths
+            .iter()
+            .zip(&corrected.lengths)
+            .all(|(&e, &l)| e < l as f64),
+        "the default has to shorten every transcript: {:?} vs {:?}",
+        corrected.eff_lengths,
+        corrected.lengths
+    );
+
+    let out = dir.path().join("raw");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut opts = opts_for(&out);
+    opts.no_length_correction = true;
+    let raw = quantify_rad(&opts, &rad).unwrap();
+    assert_eq!(
+        raw.eff_lengths,
+        raw.lengths.iter().map(|&l| l as f64).collect::<Vec<_>>(),
+        "with --noLengthCorrection the effective length is the reference length"
+    );
+}
+
+#[test]
+/// `--noFragLengthDist` has to reach the RAD path too, and it acts on the
+/// weights rather than on the lengths: the effective lengths are untouched while
+/// the placement weights, and so the estimates, change.
+fn no_frag_length_dist_changes_weights_not_lengths() {
+    let dir = tempfile::tempdir().unwrap();
+    let rad = dir.path().join("m.rad");
+    // Both transcripts are the same length, so their effective lengths are
+    // equal and the split cannot come from the length divisor. Each fragment is
+    // ambiguous between them, and the two placements report different fragment
+    // lengths: 190, right at the FLD's mean, against 700 far out in its tail.
+    // With the fragment-length term the near-mean placement takes almost all the
+    // weight; without it the two placements are indistinguishable and the
+    // fragment splits evenly.
+    let names = ["a", "b"];
+    let lens = [6000u32, 6000];
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for _ in 0..300 {
+        frags.push(vec![(0u32, Some(190), 0), (1u32, Some(700), 0)]);
+    }
+    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags, None);
+
+    let run = |no_fld: bool, tag: &str| {
+        let out = dir.path().join(tag);
+        std::fs::create_dir_all(&out).unwrap();
+        let mut opts = opts_for(&out);
+        opts.no_frag_length_dist = no_fld;
+        quantify_rad(&opts, &rad).unwrap()
+    };
+    let with = run(false, "with_fld");
+    let without = run(true, "without_fld");
+
+    assert_eq!(
+        with.eff_lengths, without.eff_lengths,
+        "the flag is about the weights, not the lengths"
+    );
+    assert!(
+        with.counts[0] > 290.0,
+        "with the term, the near-mean placement should take the fragment: {:?}",
+        with.counts
+    );
+    assert!(
+        (without.counts[0] - without.counts[1]).abs() < 1.0,
+        "without it the two placements are indistinguishable and the mass splits: {:?}",
+        without.counts
+    );
+}
