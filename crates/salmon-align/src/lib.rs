@@ -185,7 +185,10 @@ pub struct AlignQuantOptions {
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
     /// initialize the EM uniformly instead of with the online-estimate-blended
-    /// warm start (`--initUniform`)
+    /// warm start (`--initUniform`). Toggles behavior only in online alignment
+    /// mode ([`quantify_alignments`]), the one path with a warm start to
+    /// replace; the RAD quantifier always starts uniform, so there the flag is
+    /// honoured by construction.
     pub init_uniform: bool,
     /// wall-clock seconds a driver already spent before this call (phase 1 of
     /// `--deterministic`, or genome projection); added to the reported

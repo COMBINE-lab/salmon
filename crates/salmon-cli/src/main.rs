@@ -693,7 +693,10 @@ struct QuantArgs {
     /// Online-phase forgetting factor in (0.5, 1.0].
     #[arg(short = 'f', long = "forgettingFactor", default_value_t = 0.65)]
     forgetting_factor: f64,
-    /// Initialize the optimizer uniformly instead of from the online estimates.
+    /// Initialize the optimizer uniformly. In reads mode (one-pass and
+    /// --deterministic) the optimizer already starts uniform, so this is the
+    /// existing behavior; in online alignment mode (-a) it replaces the
+    /// warm start from the online estimates.
     #[arg(long = "initUniform")]
     init_uniform: bool,
     /// Interpret --vbPrior as a per-transcript prior (salmon's default).
@@ -1082,6 +1085,78 @@ fn write_gene_level(
     Ok(())
 }
 
+/// The phase-2 options for a deterministic reads-mode run: every knob from the
+/// reads-mode request that the RAD quantifier can honour, carried across.
+///
+/// This is a separate function so the forwarding can be asserted field by field
+/// in a test. A knob that is simply forgotten here does not fail loudly: the
+/// second pass runs with the default, the run succeeds, and the flag the user
+/// passed silently did nothing. That is how `--biasSpeedSamp` and
+/// `--noBiasLengthThreshold` came to be ignored under `--deterministic`.
+///
+/// # Deliberately not forwarded
+///
+/// The point of the function is to make "audited and correctly omitted"
+/// distinguishable from "forgotten", which a test cannot do for an absence. Every
+/// field of `AlignQuantOptions` this leaves alone is here, with why:
+///
+/// * `ref_seqs`: needs to read the index from disk, and only the caller knows
+///   whether bias correction asked for it. Set immediately after this returns.
+/// * `explicit_fld_args`, `fld_policy`: phase 1 already folded the user's FLD
+///   prior into the bake. Forwarding them would have phase 2 warn that a baked
+///   FLD overrides the run's own `--fldMean`, against a bake that came from that
+///   very argument.
+/// * `forgetting_factor`, `num_aux_model_samples`, `num_pre_aux_model_samples`:
+///   online-inference knobs. Phase 2 has no online phase to apply them to.
+/// * `num_error_bins`, `discard_orphans`, `no_error_model`,
+///   `deterministic_error_model`: BAM-side knobs. Phase 2 reads a RAD whose
+///   placements were already scored and filtered during mapping.
+/// * `bam`, `output_dir`, `progress`: set by the caller, which owns the paths and
+///   the run's lifecycle.
+/// * `prior_seconds`, `external_start_time`: computed from the caller's clock
+///   after phase 1 finishes, so they cannot be part of a mapping done before it
+///   starts; the caller sets them just before phase 2.
+///
+/// One absence here was a bug rather than a decision, found *from* this list:
+/// `skip_quant` is set on phase 1 unconditionally (its job is to map and write
+/// the RAD) and never reached phase 2, so `--skipQuant --deterministic`
+/// quantified anyway — fixed in #1149 by stopping after phase 1. Being able to
+/// see that from this list is the argument for the list.
+fn requant_options(
+    map_opts: &QuantOptions,
+    rad_path: &std::path::Path,
+    out_dir: &std::path::Path,
+    bias_targets: Option<PathBuf>,
+) -> AlignQuantOptions {
+    let mut q = AlignQuantOptions::new(rad_path.to_path_buf(), out_dir.to_path_buf());
+    q.lib_type = map_opts.lib_type.clone();
+    q.em = map_opts.em.clone();
+    q.range_factorization_bins = map_opts.range_factorization_bins;
+    q.transcripts = bias_targets;
+    q.seq_bias = map_opts.seq_bias;
+    q.gc_bias = map_opts.gc_bias;
+    q.pos_bias = map_opts.pos_bias;
+    q.bias_seed_em_iters = map_opts.bias_seed_em_iters;
+    q.score_exp = map_opts.map_config.score.score_exp;
+    q.incompat_prior = map_opts.incompat_prior;
+    q.sig_digits = map_opts.sig_digits;
+    q.fld_mean = map_opts.fld_mean;
+    q.fld_sd = map_opts.fld_sd;
+    q.fld_max = map_opts.fld_max;
+    q.gc_bins = map_opts.gc_bins;
+    q.cond_gc_bins = map_opts.cond_gc_bins;
+    q.num_bootstraps = map_opts.num_bootstraps;
+    q.num_gibbs_samples = map_opts.num_gibbs_samples;
+    q.thinning_factor = map_opts.thinning_factor;
+    // The three below were missing until #1140's audit. They are not
+    // online-only knobs: the RAD quantifier honours all three, so dropping them
+    // meant the flag was accepted and then ignored.
+    q.bias_speed_samp = map_opts.bias_speed_samp;
+    q.no_bias_length_threshold = map_opts.no_bias_length_threshold;
+    q.init_uniform = map_opts.init_uniform;
+    q
+}
+
 /// Deterministic reads-mode quantification: map the FASTQ once to an
 /// intermediate RAD (baking a fixed, order-independent FLD and the resolved
 /// library format), then quantify from that RAD via [`quantify_rad`]. Because the
@@ -1244,35 +1319,16 @@ fn run_deterministic(
 
     // Phase 2 — deterministic quant from the RAD (fixed baked FLD + library
     // format ⇒ order-independent eq-classes + EM). Mirrors the `--rad` knob wiring.
-    let mut q = AlignQuantOptions::new(rad_path.clone(), out_dir.to_path_buf());
-    q.lib_type = map_opts.lib_type.clone();
-    q.em = map_opts.em.clone();
-    q.range_factorization_bins = map_opts.range_factorization_bins;
+    let mut q = requant_options(&map_opts, &rad_path, out_dir, bias_targets);
     // Bias needs the reference sequence. Prefer the index's own sequences (we
     // already built the index for phase 1), so the user need not pass `-t`; an
     // explicit `-t` is still honoured as a fallback.
-    q.transcripts = bias_targets;
     if bias_on {
         q.ref_seqs = Some(
             salmon_index::load_ref_seqs(&map_opts.index_dir)
                 .context("loading reference sequences from the index for deterministic bias")?,
         );
     }
-    q.seq_bias = map_opts.seq_bias;
-    q.gc_bias = map_opts.gc_bias;
-    q.pos_bias = map_opts.pos_bias;
-    q.bias_seed_em_iters = map_opts.bias_seed_em_iters;
-    q.score_exp = map_opts.map_config.score.score_exp;
-    q.incompat_prior = map_opts.incompat_prior;
-    q.sig_digits = map_opts.sig_digits;
-    q.fld_mean = map_opts.fld_mean;
-    q.fld_sd = map_opts.fld_sd;
-    q.fld_max = map_opts.fld_max;
-    q.gc_bins = map_opts.gc_bins;
-    q.cond_gc_bins = map_opts.cond_gc_bins;
-    q.num_bootstraps = map_opts.num_bootstraps;
-    q.num_gibbs_samples = map_opts.num_gibbs_samples;
-    q.thinning_factor = map_opts.thinning_factor;
     q.prior_seconds = run_start.elapsed().as_secs_f64();
     q.external_start_time = Some(map_res.start_time.clone());
     let res = match quantify_rad(&q, &rad_path) {
@@ -1952,6 +2008,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
     warn_unsupported_fld_policy(args.fld_policy, "reads mode");
     opts.forgetting_factor = args.forgetting_factor;
+    opts.init_uniform = args.init_uniform;
 
     // Deterministic mode: map once to an intermediate RAD, then quantify from it
     // with a fixed FLD (byte-identical output, no second mapping pass).
@@ -1967,6 +2024,16 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             &out_dir,
         );
     }
+    // `--initUniform` asks for a uniform optimizer start, and in one-pass reads
+    // mode that is already the only initialization there is: the offline EM
+    // always starts uniform (the C++ online-blended warm start was deliberately
+    // not carried over — measured not to change the converged estimate, and
+    // dropping it removed an order-dependent step; see the `--meta` note above,
+    // which records the same fact). The same holds under `--deterministic`,
+    // whose RAD quantifier likewise always starts uniform. So the flag is
+    // honoured by construction in both modes and is accepted silently; the one
+    // path where it toggles anything is online alignment mode (`-a`), whose
+    // offline EM otherwise warm-starts from the online estimates.
 
     // Live mapping spinner on an interactive terminal (unless --quiet/--no-progress).
     let progress = Arc::new(ProgressCounters::default());
@@ -2260,6 +2327,93 @@ mod tests {
             Command::Quant(args) => Ok(args),
             _ => unreachable!("parsed a non-quant subcommand"),
         }
+    }
+
+    use std::path::Path;
+
+    /// Every knob phase 2 can honour has to survive the hand-off, and the only
+    /// way to be sure is to check them one by one.
+    ///
+    /// A forgotten field is invisible at runtime: the requant runs with the
+    /// default, the run succeeds, and the flag the user passed did nothing.
+    /// `--biasSpeedSamp` and `--noBiasLengthThreshold` were dropped exactly that
+    /// way (COMBINE-lab/salmon#1140), and `--initUniform` never reached reads
+    /// mode at all. Each value below is deliberately different from the
+    /// `AlignQuantOptions` default, so a field that is not forwarded fails here
+    /// rather than merely looking plausible.
+    #[test]
+    fn deterministic_requant_forwards_every_supported_knob() {
+        let mut map_opts = QuantOptions::new(PathBuf::from("idx"), PathBuf::from("out"));
+        map_opts.lib_type = "ISR".to_string();
+        map_opts.em.vb_prior = 0.017;
+        map_opts.em.use_vbem = false;
+        map_opts.range_factorization_bins = 7;
+        map_opts.seq_bias = true;
+        map_opts.gc_bias = true;
+        map_opts.pos_bias = true;
+        map_opts.bias_seed_em_iters = 13;
+        map_opts.map_config.score.score_exp = 1.75;
+        map_opts.incompat_prior = 1e-7;
+        map_opts.sig_digits = 5;
+        map_opts.fld_mean = 271.0;
+        map_opts.fld_sd = 33.0;
+        map_opts.fld_max = 777;
+        map_opts.gc_bins = 17;
+        map_opts.cond_gc_bins = 5;
+        map_opts.num_bootstraps = 11;
+        map_opts.num_gibbs_samples = 23;
+        map_opts.thinning_factor = 9;
+        map_opts.bias_speed_samp = 25;
+        map_opts.no_bias_length_threshold = true;
+        map_opts.init_uniform = true;
+
+        let q = requant_options(
+            &map_opts,
+            Path::new("inter.rad"),
+            Path::new("out"),
+            Some(PathBuf::from("targets.fa")),
+        );
+
+        assert_eq!(q.bam, PathBuf::from("inter.rad"));
+        assert_eq!(q.output_dir, PathBuf::from("out"));
+        assert_eq!(q.lib_type, "ISR");
+        assert_eq!(q.em.vb_prior, 0.017);
+        assert!(!q.em.use_vbem);
+        assert_eq!(q.range_factorization_bins, 7);
+        assert_eq!(q.transcripts, Some(PathBuf::from("targets.fa")));
+        assert!(q.seq_bias && q.gc_bias && q.pos_bias);
+        assert_eq!(q.bias_seed_em_iters, 13);
+        assert_eq!(q.score_exp, 1.75);
+        assert_eq!(q.incompat_prior, 1e-7);
+        assert_eq!(q.sig_digits, 5);
+        assert_eq!(q.fld_mean, 271.0);
+        assert_eq!(q.fld_sd, 33.0);
+        assert_eq!(q.fld_max, 777);
+        assert_eq!(q.gc_bins, 17);
+        assert_eq!(q.cond_gc_bins, 5);
+        assert_eq!(q.num_bootstraps, 11);
+        assert_eq!(q.num_gibbs_samples, 23);
+        assert_eq!(q.thinning_factor, 9);
+        assert_eq!(q.bias_speed_samp, 25);
+        assert!(q.no_bias_length_threshold);
+        assert!(q.init_uniform);
+    }
+
+    /// The three knobs #1140 found dropped, checked against a default request
+    /// rather than against each other: with none of them set, phase 2 must see
+    /// the `AlignQuantOptions` defaults, so the test above is measuring
+    /// forwarding and not a coincidence.
+    #[test]
+    fn deterministic_requant_leaves_unset_knobs_at_their_defaults() {
+        let map_opts = QuantOptions::new(PathBuf::from("idx"), PathBuf::from("out"));
+        let defaults = AlignQuantOptions::new(PathBuf::from("inter.rad"), PathBuf::from("out"));
+        let q = requant_options(&map_opts, Path::new("inter.rad"), Path::new("out"), None);
+        assert_eq!(q.bias_speed_samp, defaults.bias_speed_samp);
+        assert_eq!(
+            q.no_bias_length_threshold,
+            defaults.no_bias_length_threshold
+        );
+        assert_eq!(q.init_uniform, defaults.init_uniform);
     }
 
     /// `--writeSam` is a spelling of `--writeMappings`, giving SAM output a

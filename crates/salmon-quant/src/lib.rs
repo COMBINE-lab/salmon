@@ -187,6 +187,16 @@ pub struct QuantOptions {
     /// disable the lower barrier on how short bias correction may make an
     /// effective length (salmon's `--noBiasLengthThreshold`)
     pub no_bias_length_threshold: bool,
+    /// `--initUniform`: start the optimizer from a uniform abundance vector.
+    ///
+    /// In reads mode this is already the only initialization: the offline EM
+    /// always starts uniform, both one-pass and under `--deterministic` (the
+    /// C++ online-blended warm start was deliberately not ported — measured
+    /// not to change the converged estimate, and dropping it removed an
+    /// order-dependent step). The flag is therefore honoured by construction
+    /// here; the one path where it toggles behavior is online alignment mode
+    /// (`-a`), whose EM otherwise warm-starts from the online estimates.
+    pub init_uniform: bool,
     /// number of fragment-GC bins in the GC bias model (salmon's `--numGCBins`,
     /// default 25)
     pub gc_bins: usize,
@@ -255,6 +265,7 @@ impl QuantOptions {
             bias_speed_samp: 5,
             num_aux_model_samples: 5_000_000,
             no_bias_length_threshold: false,
+            init_uniform: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
