@@ -527,6 +527,75 @@ impl CollapsedEqClasses {
 ///
 /// A sentinel value is used instead of `Option<u8>` because these placements are
 /// stored in the millions and the extra byte per placement would matter.
+/// Write `aux_info/eq_classes.txt.gz` in salmon's format: the transcript count,
+/// the equivalence-class count, all transcript names (one per line, in the index
+/// order the classes reference), then one line per class.
+///
+/// Without `with_weights`, classes are collapsed by transcript set (`groupSize`,
+/// tids, summed count), matching salmon's `--dumpEq`; with `with_weights` each
+/// class is emitted as-is with its per-transcript combined weights before the
+/// count (`--dumpEqWeights`).
+///
+/// This is the intermediate the EM actually consumes, so dumping it is how to
+/// see what salmon inferred *before* the statistics: which transcript sets the
+/// fragments were compatible with, and how many fell into each.
+///
+/// It lives here, beside [`CollapsedEqClasses`], because both the read-mapping
+/// path and the RAD path have to produce the same bytes for the same classes.
+/// When it lived in one of them, the other could not dump at all
+/// (COMBINE-lab/salmon#1140).
+pub fn write_eq_classes(
+    dir: &std::path::Path,
+    names: &[String],
+    collapsed: &CollapsedEqClasses,
+    with_weights: bool,
+) -> std::io::Result<()> {
+    use std::collections::BTreeMap;
+    use std::io::Write as _;
+    let num_txps = names.len();
+    std::fs::create_dir_all(dir.join("aux_info"))?;
+    let f = std::fs::File::create(dir.join("aux_info").join("eq_classes.txt.gz"))?;
+    let mut w = flate2::write::GzEncoder::new(f, flate2::Compression::new(6));
+
+    if with_weights {
+        writeln!(w, "{num_txps}")?;
+        writeln!(w, "{}", collapsed.classes.len())?;
+        for name in names {
+            writeln!(w, "{name}")?;
+        }
+        for (group, value) in &collapsed.classes {
+            write!(w, "{}", group.txps.len())?;
+            for &tid in &group.txps {
+                write!(w, "\t{tid}")?;
+            }
+            for wt in &value.combined_weights {
+                write!(w, "\t{wt}")?;
+            }
+            writeln!(w, "\t{}", value.count)?;
+        }
+    } else {
+        // Collapse range-factorized sub-classes that share a transcript set.
+        let mut merged: BTreeMap<&Vec<u32>, u64> = BTreeMap::new();
+        for (group, value) in &collapsed.classes {
+            *merged.entry(&group.txps).or_insert(0) += value.count;
+        }
+        writeln!(w, "{num_txps}")?;
+        writeln!(w, "{}", merged.len())?;
+        for name in names {
+            writeln!(w, "{name}")?;
+        }
+        for (txps, count) in &merged {
+            write!(w, "{}", txps.len())?;
+            for &tid in *txps {
+                write!(w, "\t{tid}")?;
+            }
+            writeln!(w, "\t{count}")?;
+        }
+    }
+    w.finish()?;
+    Ok(())
+}
+
 pub const NAIVE_NO_FMT: u8 = u8::MAX;
 
 /// One placement of a NAIVE fragment signature: a transcript plus enough
@@ -635,6 +704,76 @@ impl NaiveEqBuilder {
 
 #[cfg(test)]
 mod tests {
+
+    /// The `--dumpEq` file is what a downstream tool reads instead of re-deriving
+    /// the classes, so its two shapes have to stay exactly what salmon promises:
+    /// collapsed by transcript set without weights, verbatim with them.
+    #[test]
+    fn eq_class_dump_collapses_only_without_weights() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = vec!["txA".to_string(), "txB".to_string(), "txC".to_string()];
+        // Two classes over the same transcript set (as range factorization
+        // produces) plus one over another set.
+        let classes = vec![
+            (
+                TranscriptGroup::new(vec![0, 1]),
+                TGValue {
+                    acc: Vec::new(),
+                    weights: vec![0.5, 0.5],
+                    combined_weights: vec![0.25, 0.75],
+                    count: 3,
+                },
+            ),
+            (
+                TranscriptGroup::new(vec![0, 1]),
+                TGValue {
+                    acc: Vec::new(),
+                    weights: vec![0.5, 0.5],
+                    combined_weights: vec![0.6, 0.4],
+                    count: 4,
+                },
+            ),
+            (
+                TranscriptGroup::new(vec![2]),
+                TGValue {
+                    acc: Vec::new(),
+                    weights: vec![1.0],
+                    combined_weights: vec![1.0],
+                    count: 5,
+                },
+            ),
+        ];
+        let collapsed = CollapsedEqClasses {
+            classes,
+            total_count: 12,
+        };
+
+        let read = |with_weights: bool| -> Vec<String> {
+            write_eq_classes(dir.path(), &names, &collapsed, with_weights).unwrap();
+            let f =
+                std::fs::File::open(dir.path().join("aux_info").join("eq_classes.txt.gz")).unwrap();
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(f), &mut text).unwrap();
+            text.lines().map(str::to_string).collect()
+        };
+
+        let plain = read(false);
+        assert_eq!(plain[0], "3", "transcript count");
+        assert_eq!(
+            plain[1], "2",
+            "the two classes on {{txA,txB}} collapse into one"
+        );
+        assert_eq!(&plain[2..5], &["txA", "txB", "txC"]);
+        // Collapsed: group size, tids, summed count. No weights.
+        assert_eq!(plain[5], "2\t0\t1\t7");
+        assert_eq!(plain[6], "1\t2\t5");
+
+        let weighted = read(true);
+        assert_eq!(weighted[1], "3", "with weights nothing is collapsed");
+        assert_eq!(weighted[5], "2\t0\t1\t0.25\t0.75\t3");
+        assert_eq!(weighted[6], "2\t0\t1\t0.6\t0.4\t4");
+        assert_eq!(weighted[7], "1\t2\t1\t5");
+    }
     use super::*;
 
     /// A group must be order-insensitive and duplicate-insensitive: the same

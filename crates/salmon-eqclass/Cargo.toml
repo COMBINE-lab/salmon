@@ -10,8 +10,12 @@ description = "Equivalence-class data structures and concurrent builder for the 
 
 [dependencies]
 salmon-core = { workspace = true }
+flate2 = { workspace = true }
 dashmap = { workspace = true }
 xxhash-rust = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

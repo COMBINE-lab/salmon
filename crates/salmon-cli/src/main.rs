@@ -1156,6 +1156,12 @@ fn requant_options(
     q.bias_speed_samp = map_opts.bias_speed_samp;
     q.no_bias_length_threshold = map_opts.no_bias_length_threshold;
     q.init_uniform = map_opts.init_uniform;
+    // Phase 2 is where the equivalence classes exist, so it is where they are
+    // dumped. Phase 1 has none to dump (COMBINE-lab/salmon#1140), which is why
+    // this mapping has to be built from the request as the user made it, before
+    // the driver clears the flags for phase 1.
+    q.dump_eq = map_opts.dump_eq;
+    q.dump_eq_weights = map_opts.dump_eq_weights;
     q
 }
 
@@ -1306,6 +1312,13 @@ fn run_deterministic(
         ),
     );
 
+    // Phase 2's options, built from the request exactly as the user made it and
+    // before phase 1 rewrites parts of it for its own purposes. Everything it
+    // needs (the RAD path, the bias targets) is known by now, and building it
+    // here is what keeps "the phase-2 options" meaning the user's request rather
+    // than whatever phase 1 left behind.
+    let mut q = requant_options(&map_opts, &rad_path, out_dir, bias_targets);
+
     // Phase 1 — map once, write the RAD (bakes the deterministic FLD + resolved
     // library format), skipping the online EM: quantification happens in phase 2.
     //
@@ -1316,6 +1329,12 @@ fn run_deterministic(
     let stop_after_mapping = map_opts.skip_quant;
     map_opts.write_rad = Some(rad_path.clone());
     map_opts.skip_quant = true;
+    // The classes live in phase 2, which already has these flags. Left on here,
+    // phase 1 pays for `build_eq` and then writes a well-formed
+    // `eq_classes.txt.gz` declaring zero classes, which phase 2 never overwrites
+    // (COMBINE-lab/salmon#1140).
+    map_opts.dump_eq = false;
+    map_opts.dump_eq_weights = false;
     // Derive the FLD + library format order-independently during this pass and
     // bake them (see `QuantOptions::deterministic_fld`), so phase 2 is a single
     // pass and the whole result is byte-identical across thread counts.
@@ -1342,6 +1361,19 @@ fn run_deterministic(
     );
 
     if stop_after_mapping {
+        // The classes are built by phase 2, which is exactly the pass
+        // `--skipQuant` asks not to run, so there is nothing to dump. Saying so
+        // beats writing no file and no explanation: one-pass `--skipQuant
+        // --dumpEq` does produce a dump, so the difference would otherwise look
+        // like the flag being dropped.
+        if q.dump_eq || q.dump_eq_weights {
+            tracing::warn!(
+                "--dumpEq/--dumpEqWeights has nothing to write under --skipQuant --deterministic: \
+                 equivalence classes are built by the quantification pass, which --skipQuant \
+                 skips. Quantify the RAD that was kept with `--rad {} --dumpEq` to produce them.",
+                rad_path.display()
+            );
+        }
         tracing::info!(
             "--skipQuant: mapping only; the RAD at {} is the output",
             rad_path.display()
@@ -1351,7 +1383,6 @@ fn run_deterministic(
 
     // Phase 2 — deterministic quant from the RAD (fixed baked FLD + library
     // format ⇒ order-independent eq-classes + EM). Mirrors the `--rad` knob wiring.
-    let mut q = requant_options(&map_opts, &rad_path, out_dir, bias_targets);
     // Bias needs the reference sequence. Prefer the index's own sequences (we
     // already built the index for phase 1), so the user need not pass `-t`; an
     // explicit `-t` is still honoured as a fallback.
@@ -1742,6 +1773,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
         opts.forgetting_factor = args.forgetting_factor;
         opts.init_uniform = args.init_uniform;
+        opts.dump_eq = args.dump_eq;
+        opts.dump_eq_weights = args.dump_eq_weights;
         opts.bias_speed_samp = args.bias_speed_samp;
         opts.num_aux_model_samples = args.num_aux_model_samples;
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
@@ -1917,6 +1950,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             max: args.fld_max.is_some(),
         };
         opts.skip_quant = args.skip_quant;
+        opts.dump_eq = args.dump_eq;
+        opts.dump_eq_weights = args.dump_eq_weights;
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
         opts.thinning_factor = args.thinning_factor;
@@ -2412,6 +2447,8 @@ mod tests {
         map_opts.bias_speed_samp = 25;
         map_opts.no_bias_length_threshold = true;
         map_opts.init_uniform = true;
+        map_opts.dump_eq = true;
+        map_opts.dump_eq_weights = true;
 
         let q = requant_options(
             &map_opts,
@@ -2443,6 +2480,8 @@ mod tests {
         assert_eq!(q.bias_speed_samp, 25);
         assert!(q.no_bias_length_threshold);
         assert!(q.init_uniform);
+        assert!(q.dump_eq);
+        assert!(q.dump_eq_weights);
     }
 
     /// The three knobs #1140 found dropped, checked against a default request
@@ -2460,6 +2499,8 @@ mod tests {
             defaults.no_bias_length_threshold
         );
         assert_eq!(q.init_uniform, defaults.init_uniform);
+        assert_eq!(q.dump_eq, defaults.dump_eq);
+        assert_eq!(q.dump_eq_weights, defaults.dump_eq_weights);
     }
 
     /// `--writeSam` is a spelling of `--writeMappings`, giving SAM output a

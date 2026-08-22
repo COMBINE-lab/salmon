@@ -198,6 +198,12 @@ pub struct AlignQuantOptions {
     /// start time (asctime) of that earlier phase; when set, reported as the
     /// run's `start_time` instead of this pass's own
     pub external_start_time: Option<String>,
+    /// `--dumpEq`: write `aux_info/eq_classes.txt.gz`, the equivalence classes
+    /// the EM consumed, collapsed by transcript set.
+    pub dump_eq: bool,
+    /// `--dumpEqWeights`: the same file with each class's per-transcript
+    /// combined weights, and without collapsing range-factorized sub-classes.
+    pub dump_eq_weights: bool,
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
@@ -265,6 +271,8 @@ impl AlignQuantOptions {
             init_uniform: false,
             prior_seconds: 0.0,
             external_start_time: None,
+            dump_eq: false,
+            dump_eq_weights: false,
             sig_digits: 3,
             num_error_bins: 4,
             discard_orphans: false,

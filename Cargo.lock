@@ -2734,6 +2734,7 @@ version = "2.5.1"
 dependencies = [
  "anyhow",
  "clap",
+ "flate2",
  "indicatif",
  "mimalloc",
  "piscem-rs",
@@ -2768,7 +2769,9 @@ name = "salmon-eqclass"
 version = "2.5.1"
 dependencies = [
  "dashmap",
+ "flate2",
  "salmon-core",
+ "tempfile",
  "xxhash-rust",
 ]
 
