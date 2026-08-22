@@ -2775,6 +2775,19 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         counts.diagnostics()
     };
 
+    // Warn wherever the mass was actually dropped — this writer is shared by
+    // every quantify_rad driver and the online alignment path, so the 2.6.0
+    // default surfaces the condition it computes instead of only recording it
+    // silently in meta_info.json (#1140: the warning previously lived only in
+    // the deprecated drivers).
+    if res.inference_truncated_mass > 0.0 {
+        tracing::warn!(
+            "{:.3} fragments of equivalence-class mass could not be assigned (every member \
+             transcript was truncated below the min-alpha threshold); reported as \
+             inference_truncated_mass in meta_info.json",
+            res.inference_truncated_mass
+        );
+    }
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),
         // What kind of posterior samples were actually produced, so tximport
@@ -2874,11 +2887,16 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         },
         total_time_seconds: res.total_seconds,
         peak_rss_kb: res.peak_rss_kb,
-        // The run's own diagnostics plus the library-format warnings, so
-        // `meta_info.json` carries every machine-readable concern (#1140).
+        // The run's own diagnostics, the library-format warnings, and any
+        // driver-supplied diagnostics (`extra_diagnostics`, e.g. phase 1's
+        // AS-tag warning), so `meta_info.json` carries every machine-readable
+        // concern (#1140). Appended here, in the writer both `quantify_rad`
+        // and `quantify_alignments` share, so the field's promise holds on
+        // every path rather than only the RAD one.
         diagnostics: {
             let mut d = res.diagnostics.clone();
             d.extend(lib_diags.iter().cloned());
+            d.extend(opts.extra_diagnostics.iter().cloned());
             d
         },
         call: "quant".to_string(),

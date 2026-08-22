@@ -365,3 +365,67 @@ fn the_error_model_path_says_nothing_about_as() {
     let summary = write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
     assert!(summary.score_tag_warning.is_none());
 }
+
+/// The baked library-format tag records what the pass *observed* (detected
+/// wins), matching the reads-mode deterministic writer — so an explicit `-l`
+/// that contradicts the alignments fires `library_type_mismatch` in phase 2.
+/// The writer used to bake the user's assertion (expected wins), which both
+/// silenced that diagnostic on this path and echoed the assertion back as
+/// `detected_library_type` (#1140, audit F18).
+#[test]
+fn a_wrong_explicit_lib_type_is_diagnosed() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_sam(dir.path()); // fixture pairs are ISF
+
+    let out = dir.path().join("wrong");
+    let rad = dir.path().join("wrong.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "ISR".to_string();
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    quantify_rad(&opts, &rad).unwrap();
+    let meta = std::fs::read_to_string(out.join("aux_info").join("meta_info.json")).unwrap();
+    assert!(
+        meta.contains("library_type_mismatch"),
+        "an ISR assertion over ISF alignments must be diagnosed: {meta}"
+    );
+    assert!(
+        meta.contains("observed format 'ISF'"),
+        "the diagnostic must name what was actually observed: {meta}"
+    );
+
+    // Control: the matching -l draws no complaint.
+    let out_ok = dir.path().join("right");
+    let rad_ok = dir.path().join("right.rad");
+    let mut opts_ok = opts_for(&sam, &out_ok);
+    opts_ok.lib_type = "ISF".to_string();
+    write_alignment_rad(&opts_ok, &rad_ok, ChunkCodec::None).unwrap();
+    quantify_rad(&opts_ok, &rad_ok).unwrap();
+    let meta_ok = std::fs::read_to_string(out_ok.join("aux_info").join("meta_info.json")).unwrap();
+    assert!(
+        !meta_ok.contains("library_type_mismatch"),
+        "a correct explicit -l must not be flagged: {meta_ok}"
+    );
+}
+
+/// `extra_diagnostics` is documented as appended on every path, but only
+/// `quantify_rad` honoured it — the online alignment path dropped the
+/// driver's diagnostics silently (#1140, audit F20). The append now lives in
+/// the shared output writer; this pins the alignment path.
+#[test]
+fn driver_diagnostics_reach_meta_on_the_alignment_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_sam(dir.path());
+    let out = dir.path().join("q");
+    let mut opts = opts_for(&sam, &out);
+    opts.extra_diagnostics.push(salmon_core::Diagnostic::new(
+        "test_probe_diagnostic",
+        "warning",
+        "carried across from the driver".to_string(),
+    ));
+    salmon_align::quantify_alignments(&opts).unwrap();
+    let meta = std::fs::read_to_string(out.join("aux_info").join("meta_info.json")).unwrap();
+    assert!(
+        meta.contains("test_probe_diagnostic"),
+        "driver-supplied diagnostics must reach meta_info.json on the online -a path: {meta}"
+    );
+}

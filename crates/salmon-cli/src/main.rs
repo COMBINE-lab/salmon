@@ -390,7 +390,11 @@ struct QuantArgs {
     /// `piscem map-bulk`) to quantify directly, in parallel.
     #[arg(long = "rad", conflicts_with_all = ["alignments", "mates1", "mates2", "unmated"])]
     rad: Option<PathBuf>,
-    /// Transcriptome FASTA (alignment mode `-a`): enables the alignment error model.
+    /// Transcriptome FASTA for alignment mode (`-a`) and RAD-input mode
+    /// (`--rad`): supplies the reference sequences that seq/GC bias correction
+    /// needs, and (under `--online -a`) enables the alignment error model — the
+    /// default alignment path takes `--errorModel` instead. Ignored in reads
+    /// mode, where the index already carries the sequences.
     #[arg(short = 't', long = "targets")]
     targets: Option<PathBuf>,
     /// Disable the alignment error model (alignment mode).
@@ -1285,7 +1289,6 @@ fn run_deterministic(
     rad_out: Option<PathBuf>,
     scratch_dir: Option<&std::path::Path>,
     keep_rad: bool,
-    bias_targets: Option<PathBuf>,
     gene_map: Option<&GeneMapOpts>,
     out_dir: &std::path::Path,
     // The live mapping spinner, owned here so it can be stopped the moment
@@ -1345,7 +1348,11 @@ fn run_deterministic(
     // needs (the RAD path, the bias targets) is known by now, and building it
     // here is what keeps "the phase-2 options" meaning the user's request rather
     // than whatever phase 1 left behind.
-    let mut q = requant_options(&map_opts, &rad_path, out_dir, bias_targets);
+    // No `-t` fallback here: reads mode warns and ignores the flag (the index
+    // carries the reference sequences; see the bias load below). The
+    // `bias_targets` seam on `requant_options` exists for the alignment/RAD
+    // drivers, which have no index to fall back on.
+    let mut q = requant_options(&map_opts, &rad_path, out_dir, None);
 
     // Phase 1 — map once, write the RAD (bakes the deterministic FLD + resolved
     // library format), skipping the online EM: quantification happens in phase 2.
@@ -1412,9 +1419,12 @@ fn run_deterministic(
 
     // Phase 2 — deterministic quant from the RAD (fixed baked FLD + library
     // format ⇒ order-independent eq-classes + EM). Mirrors the `--rad` knob wiring.
-    // Bias needs the reference sequence. Prefer the index's own sequences (we
-    // already built the index for phase 1), so the user need not pass `-t`; an
-    // explicit `-t` is still honoured as a fallback.
+    // Bias needs the reference sequence, and in reads mode it always comes
+    // from the index (which carries the sequences by construction — we just
+    // mapped against it); `-t` is warned-and-ignored at dispatch. A previous
+    // comment here claimed `-t` was "honoured as a fallback", but the fallback
+    // was unreachable: with bias on this load always wins, with bias off the
+    // sequences are never read (#1140).
     if bias_on {
         q.ref_seqs = Some(
             salmon_index::load_ref_seqs(&map_opts.index_dir)
@@ -1827,6 +1837,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     }
     // Alignment-based mode: quantify directly from a BAM.
     if let Some(bam) = args.alignments {
+        if args.index.is_some() {
+            // Accepted-but-inert flags must say so (#1140): the BAM is
+            // quantified as given; no index is consulted in this mode.
+            tracing::warn!(
+                "-i/--index is ignored in alignment mode (-a): the input alignments are \
+                 quantified directly and the index is never consulted"
+            );
+        }
         warn_unsupported_mapping_output(
             &args.write_mappings,
             &args.write_bam,
@@ -1985,14 +2003,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                 res.num_eq_classes
             );
         }
-        if res.inference_truncated_mass > 0.0 {
-            tracing::warn!(
-                "{:.3} fragments of equivalence-class mass could not be assigned (every member \
-                 transcript was truncated below the min-alpha threshold); reported as \
-                 inference_truncated_mass in meta_info.json",
-                res.inference_truncated_mass
-            );
-        }
+        // The truncated-mass warning now fires in the shared output writer,
+        // covering this path and every quantify_rad driver alike (#1140).
         if let Some(gm) = &gene_map {
             write_gene_level(
                 &out_dir,
@@ -2009,6 +2021,13 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
 
     // RAD-input mode: quantify directly from a RAD file of mappings, in parallel.
     if let Some(rad_path) = args.rad {
+        if args.index.is_some() {
+            // Accepted-but-inert flags must say so (#1140), same as `-a` above.
+            tracing::warn!(
+                "-i/--index is ignored in RAD-input mode (--rad): the RAD's own reference \
+                 table is used and the index is never consulted"
+            );
+        }
         warn_unsupported_mapping_output(
             &args.write_mappings,
             &args.write_bam,
@@ -2091,6 +2110,16 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         "the number of -1 and -2 files must match"
     );
     let index = args.index.context("reads mode requires -i/--index")?;
+    if args.targets.is_some() {
+        // Accepted-but-inert flags must say so (#1140). Both reads paths ignore
+        // `-t`: bias correction loads the reference sequences from the index
+        // (which carries them by construction), and the alignment error model
+        // it enables belongs to alignment input (`-a`).
+        tracing::warn!(
+            "-t/--targets is ignored in reads mode: bias correction uses the index's own \
+             reference sequences, and the alignment error model applies only to -a input"
+        );
+    }
 
     let mut opts = QuantOptions::new(index, args.output);
     opts.mates1 = args.mates1;
@@ -2212,7 +2241,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             rad_out,
             args.rad_scratch_dir.as_deref(),
             args.keep_rad,
-            args.targets.clone(),
             gene_map.as_ref(),
             &out_dir,
             spinner,
