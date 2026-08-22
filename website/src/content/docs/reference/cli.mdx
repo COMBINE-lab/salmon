@@ -131,7 +131,8 @@ See the [RAD I/O & deterministic quantification](../../guides/rad-and-determinis
 | --- | --- |
 | `--writeRad <FILE>` | Write per-fragment mappings to a RAD file (piscem `map-bulk`-compatible). Quantification still runs unless `--skipQuant`. |
 | `--skipQuant` | Skip quantification (EM, Gibbs/bootstrap, `quant.sf`); still map, build equivalence classes, detect library type, write metadata. |
-| `--deterministic` | Reproducible reads-mode quantification: map once to an intermediate RAD, then quantify from it with a fixed fragment-length distribution. Byte-identical across runs and thread counts. |
+| `--deterministic` | **The default since 2.6.0** (accepted as a no-op): map once to an intermediate RAD, then quantify from it with a fixed fragment-length distribution. Byte-identical across runs and thread counts. |
+| `--online` | Quantify with the pre-2.6 online one-pass path instead. **Deprecated** (removal planned for 2.7.0): results depend on the thread count. Online-only knobs (`--forgettingFactor`, `--numAuxModelSamples`, `--numPreAuxModelSamples`) warn and are ignored without it. |
 | `--keepRad` | Keep the `--deterministic` intermediate RAD (deleted by default). |
 | `--radScratchDir <DIR>` | Directory for the `--deterministic` intermediate RAD (default: the output directory). Point at node-local or memory-backed storage (e.g. `/dev/shm`) when the output volume is slow, networked, or space-constrained. Ignored with an explicit `--writeRad`. |
 | `--radCompress <CODEC>` | RAD chunk compression for `--writeRad` / `--deterministic`: `lz4` (default), `zstd` (smaller), or `none`. |

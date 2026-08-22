@@ -225,6 +225,11 @@ pub struct AlignQuantOptions {
     /// `--noFragLengthDist`: drop the fragment-length term from a placement's
     /// weight, leaving score and compatibility to decide it.
     pub no_frag_length_dist: bool,
+    /// diagnostics born in an earlier phase the driver ran (e.g. the
+    /// deterministic alignment pass's unusable-`AS` verdict), appended to this
+    /// pass's own in `meta_info.json` — so a pipeline that only keeps the
+    /// output directory sees them, not just whoever read the log (#1140)
+    pub extra_diagnostics: Vec<salmon_core::Diagnostic>,
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
@@ -298,6 +303,7 @@ impl AlignQuantOptions {
             dump_eq_weights: false,
             no_length_correction: false,
             no_frag_length_dist: false,
+            extra_diagnostics: Vec::new(),
             sig_digits: 3,
             num_error_bins: 4,
             discard_orphans: false,

@@ -105,7 +105,7 @@ piscem map-bulk -i piscem_index -1 r1.fq.gz -2 r2.fq.gz -t 16 -o pi
 salmon quant --rad pi.rad -l A -p 16 -o out_quant
 ```
 
-## Deterministic quantification (`--deterministic`)
+## Deterministic quantification (the default)
 
 RAD-mode quantification is deterministic: repeated runs at `-p 1` are
 **byte-identical**, and across thread counts every value agrees to at least
@@ -115,17 +115,25 @@ count can perturb is the floating-point association order inside the EM's
 parallel reduction; measured across 2–32 threads on a deliberately hard input,
 the largest deviation was 4.5×10⁻¹³. Everything upstream of the EM is
 integer-accumulated and exactly thread-count independent — see below.)
-`--deterministic` brings the same guarantee to FASTQ input directly:
+Since **2.6.0 this is how salmon quantifies by default** — a plain run brings
+the same guarantee to FASTQ input directly:
 
 ```sh
-salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 16 \
-  --deterministic -o out
+salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 16 -o out
 ```
 
 It maps the reads once to an intermediate RAD, then quantifies from it with a
 fixed fragment-length distribution — no second mapping pass. The intermediate RAD
 is written under the output directory and removed on success unless you pass
 `--keepRad` (or `--writeRad <PATH>` to choose its location and keep it).
+`--deterministic` is still accepted as a no-op, and `meta_info.json` records
+which path ran in `inference_path`.
+
+The pre-2.6 online one-pass path remains available for one release cycle behind
+`--online` (**deprecated**, removal planned for 2.7.0). Its results depend on
+the thread count, and the online-only knobs — `--forgettingFactor`,
+`--numAuxModelSamples`, `--numPreAuxModelSamples` — warn and are ignored unless
+`--online` is passed.
 
 The determinism comes from making the computation itself order-independent rather
 than sorting records:
