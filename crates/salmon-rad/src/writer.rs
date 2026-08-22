@@ -71,7 +71,22 @@ pub struct RadOutputWriter {
     has_index_prov: bool,
     /// chunk compression codec applied by worker buffers (advertised in the header).
     codec: ChunkCodec,
+    /// Bytes appended since the last free-disk-space probe (all workers).
+    ///
+    /// A filling disk should fail in seconds with an actionable message, not
+    /// at the end of a mapping pass measured in minutes (#1140): every
+    /// [`SPACE_CHECK_INTERVAL`] bytes, the writer probes the target
+    /// filesystem and errors out early when free space falls under
+    /// [`LOW_SPACE_BYTES`]. The counter reset races benignly between workers —
+    /// it paces the probe, it does not gate correctness.
+    bytes_since_space_check: std::sync::atomic::AtomicU64,
 }
+
+/// Probe the target filesystem's free space every this many appended bytes.
+const SPACE_CHECK_INTERVAL: u64 = 256 * 1024 * 1024;
+/// Fail the run when the target filesystem's free space falls below this while
+/// chunks are still being appended.
+const LOW_SPACE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The sibling path a RAD file is written to before it is finalized.
 ///
@@ -141,6 +156,7 @@ impl RadOutputWriter {
             pending_counters: None,
             has_index_prov: provenance.index.is_some(),
             codec,
+            bytes_since_space_check: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -202,7 +218,33 @@ impl RadOutputWriter {
                  the incomplete file has been left there; it is NOT usable as `--rad` input",
                 self.partial_path.display()
             )
-        })
+        })?;
+        use std::sync::atomic::Ordering;
+        let since = self
+            .bytes_since_space_check
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed)
+            + bytes.len() as u64;
+        if since >= SPACE_CHECK_INTERVAL {
+            self.bytes_since_space_check.store(0, Ordering::Relaxed);
+            let dir = self
+                .partial_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            if let Some(free) = salmon_core::free_disk_bytes(dir) {
+                if free < LOW_SPACE_BYTES {
+                    anyhow::bail!(
+                        "running out of disk space while writing {} ({} MiB free in {}); \
+                         stopping now rather than at the end of the pass. \
+                         Consider `--radScratchDir <dir>` to place the intermediate on a \
+                         larger/faster volume, or `--radCompress zstd` (~30% smaller).",
+                        self.partial_path.display(),
+                        free / (1024 * 1024),
+                        dir.display()
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Backpatch any baked FLD / abundances + the `baked_flags` marker, then flush

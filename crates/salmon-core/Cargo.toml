@@ -18,6 +18,12 @@ tracing = { workspace = true }
 # transparent decompression of compressed --geneMap annotations
 niffler = { workspace = true }
 
+# statvfs, for the free-disk-space probe behind the RAD-intermediate
+# preflight/low-space checks (unix only; the probe reports None elsewhere)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+
 [lints]
 workspace = true
 

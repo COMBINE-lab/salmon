@@ -2753,6 +2753,7 @@ name = "salmon-core"
 version = "2.5.1"
 dependencies = [
  "flate2",
+ "libc",
  "niffler",
  "serde",
  "serde_json",
