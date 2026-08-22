@@ -526,6 +526,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                             // recorded; the RAD then omits the tag, so a
                             // requant reports it unknown rather than `false`.
                             keep_duplicates: salmon.info().keep_duplicates,
+                            // The decoy boundary, so a requant can exclude the
+                            // decoy block from quant.sf as this mode does
+                            // (#1140). The header must carry every reference
+                            // (records index into it), so the boundary is the
+                            // only way a reader can tell decoys apart.
+                            first_decoy_index: salmon.info().first_decoy_index.map(|i| i as u64),
+                            num_decoys: (salmon.info().num_decoys > 0)
+                                .then_some(salmon.info().num_decoys as u64),
                         }),
                         // No BAM behind reads; nothing an aligner said to carry.
                         source_programs: Vec::new(),
@@ -1360,7 +1368,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_fragments_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),
         num_alignments_below_threshold_for_mapped_fragments_vm: num_below_threshold_vm
             .load(Ordering::Relaxed),
-        frag_len_source: salmon_model::FragLengthSource::Reads,
+        // A single-end library has no fragment lengths to observe: the FLD is
+        // the --fldMean/--fldSD prior, and saying "reads" would be a
+        // provenance lie in the field that exists for provenance (#1140).
+        frag_len_source: if opts.is_paired() {
+            salmon_model::FragLengthSource::Reads
+        } else {
+            salmon_model::FragLengthSource::Prior
+        },
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
         length_classes: salmon_model::compute_length_quantiles(

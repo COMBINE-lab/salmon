@@ -377,7 +377,14 @@ struct QuantArgs {
     )]
     index: Option<PathBuf>,
     /// Alignment-based mode: a BAM of reads aligned to the transcriptome.
-    #[arg(short = 'a', long = "alignments")]
+    /// Mutually exclusive with the read inputs (-1/-2/-r): quantifying a BAM
+    /// while silently dropping supplied FASTQs was the "wrong mode chosen
+    /// silently" failure the mode dispatch exists to prevent (#1140).
+    #[arg(
+        short = 'a',
+        long = "alignments",
+        conflicts_with_all = ["mates1", "mates2", "unmated"]
+    )]
     alignments: Option<PathBuf>,
     /// RAD-input mode: a RAD file of mappings (from `salmon quant --writeRad` or
     /// `piscem map-bulk`) to quantify directly, in parallel.
@@ -1399,6 +1406,17 @@ fn run_deterministic(
     }
     q.prior_seconds = run_start.elapsed().as_secs_f64();
     q.external_start_time = Some(map_res.start_time.clone());
+    // Phase 1 wrote the true invocation record and named the read files; keep
+    // both instead of letting the requant's RAD-centric view replace them
+    // (#1140).
+    q.preserve_cmd_info = true;
+    q.read_files = map_opts
+        .mates1
+        .iter()
+        .chain(map_opts.mates2.iter())
+        .chain(map_opts.unmated.iter())
+        .map(|p| p.display().to_string())
+        .collect();
     let res = match quantify_rad(&q, &rad_path) {
         Ok(r) => r,
         Err(e) => {
@@ -2403,6 +2421,27 @@ mod tests {
     /// Parse a `quant` command line and return just the two mapping-output paths.
     fn write_flags(extra: &[&str]) -> Result<(Option<PathBuf>, Option<PathBuf>), clap::Error> {
         quant_args(extra).map(|args| (args.write_mappings, args.write_bam))
+    }
+
+    /// `-a` with read inputs must be a parse error, not a silent choice of the
+    /// BAM: the pre-#1140 behavior quantified the alignments and dropped the
+    /// FASTQs without a word.
+    #[test]
+    fn alignments_conflict_with_read_inputs() {
+        for reads in [vec!["-1", "r1.fq", "-2", "r2.fq"], vec!["-r", "r.fq"]] {
+            let mut argv = vec!["salmon", "quant", "-l", "A", "-o", "out", "-a", "aln.bam"];
+            argv.extend(reads.iter());
+            let err = match Cli::try_parse_from(&argv) {
+                Err(e) => e,
+                Ok(_) => panic!("-a plus reads must not parse: {argv:?}"),
+            };
+            assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+        // ...and -a alone still parses.
+        assert!(
+            Cli::try_parse_from(["salmon", "quant", "-l", "A", "-o", "out", "-a", "aln.bam"])
+                .is_ok()
+        );
     }
 
     /// Parse a minimal `salmon quant` invocation plus `extra`.

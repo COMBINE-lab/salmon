@@ -198,6 +198,15 @@ pub struct AlignQuantOptions {
     /// start time (asctime) of that earlier phase; when set, reported as the
     /// run's `start_time` instead of this pass's own
     pub external_start_time: Option<String>,
+    /// keep the `cmd_info.json` an earlier phase already wrote instead of
+    /// overwriting it: reads-mode `--deterministic` phase 1 records the real
+    /// invocation (index, read files, threads); phase 2's own record would
+    /// replace it with a RAD-centric one and lose all of that (#1140)
+    pub preserve_cmd_info: bool,
+    /// the read files behind this RAD, when the driver knows them (reads-mode
+    /// `--deterministic`), for `lib_format_counts.json`'s `read_files` — which
+    /// otherwise reports `[]` because a RAD does not name its reads (#1140)
+    pub read_files: Vec<String>,
     /// `--dumpEq`: write `aux_info/eq_classes.txt.gz`, the equivalence classes
     /// the EM consumed, collapsed by transcript set.
     pub dump_eq: bool,
@@ -283,6 +292,8 @@ impl AlignQuantOptions {
             init_uniform: false,
             prior_seconds: 0.0,
             external_start_time: None,
+            preserve_cmd_info: false,
+            read_files: Vec::new(),
             dump_eq: false,
             dump_eq_weights: false,
             no_length_correction: false,
@@ -2545,13 +2556,34 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     let dir = &opts.output_dir;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating output dirs")?;
 
+    // Which references get output rows: everything except the RAD-recorded
+    // decoy block. A reads-mode RAD's header must carry every reference —
+    // records index into it — so the writer, not the header, is where decoys
+    // are excluded, exactly as reads mode excludes them (#1140). A RAD without
+    // the recorded boundary (piscem, BAM-derived, or written before the
+    // boundary tags existed) has no decoys to exclude and emits every row, as
+    // before.
+    let (first_decoy, num_decoys) = res
+        .provenance
+        .index
+        .as_ref()
+        .map(|ix| {
+            (
+                ix.first_decoy_index.map(|v| v as usize),
+                ix.num_decoys.unwrap_or(0) as usize,
+            )
+        })
+        .unwrap_or((None, 0));
+    let rows: Vec<usize> =
+        salmon_core::quant_row_indices(res.names.len(), first_decoy, num_decoys).collect();
+
     // quant.sf (EffectiveLength + NumReads at --sigDigits decimals; TPM at 6).
     // Skipped under --skipQuant (no abundances), like salmon.
     if !opts.skip_quant {
         let sd = opts.sig_digits as usize;
         let mut w = std::io::BufWriter::new(std::fs::File::create(dir.join("quant.sf"))?);
         writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-        for i in 0..res.names.len() {
+        for &i in &rows {
             writeln!(
                 w,
                 "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
@@ -2698,7 +2730,17 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     }
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),
-        samp_type: "none".to_string(),
+        // What kind of posterior samples were actually produced, so tximport
+        // (which keys off this together with num_bootstraps) loads them
+        // (#1140; previously hardcoded "none").
+        samp_type: if res.bootstraps.is_empty() {
+            "none"
+        } else if opts.num_bootstraps > 0 {
+            "bootstrap"
+        } else {
+            "gibbs"
+        }
+        .to_string(),
         opt_type: if opts.em.use_vbem { "vb" } else { "em" }.to_string(),
         quant_errors: vec![],
         num_libraries: 1,
@@ -2736,10 +2778,10 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         index_name_hash512: index_prov.name_hash512,
         index_decoy_seq_hash: index_prov.decoy_seq_hash,
         index_decoy_name_hash: index_prov.decoy_name_hash,
-        num_valid_targets: res.names.len(),
+        num_valid_targets: rows.len(),
         num_decoy_targets: 0,
         num_eq_classes: res.num_eq_classes,
-        serialized_eq_classes: false,
+        serialized_eq_classes: opts.dump_eq || opts.dump_eq_weights,
         eq_class_properties,
         length_classes: res.length_classes.clone(),
         num_processed: res.num_processed,
@@ -2749,7 +2791,10 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_alignments_below_threshold_for_mapped_fragments_vm: counters
             .map_or(0, |c| c.num_below_threshold_vm),
         percent_mapped: pct,
-        num_decoy_fragments: 0,
+        // From the RAD-baked mapping counters, like its three siblings above;
+        // 0 when the producing pass predates the counter (#1140; previously
+        // hardcoded 0 while the loaded value sat unused).
+        num_decoy_fragments: res.provenance.counters.map_or(0, |c| c.num_decoy_fragments),
         inference_truncated_mass: res.inference_truncated_mass,
         num_bootstraps: res.bootstraps.len() as u32,
         num_orphan: res.num_orphan,
@@ -2800,9 +2845,9 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
                 .unwrap_or_else(|_| opts.lib_type.clone())
         };
         let counts = salmon_core::LibFormatCountsFile::new(
-            // The BAM / RAD is the input; the reads that produced it are not
-            // known here.
-            vec![],
+            // The reads behind the RAD when the driver knows them (reads-mode
+            // --deterministic); a standalone --rad/-a input has none to name.
+            opts.read_files.clone(),
             expected,
             res.num_mapped,
             res.num_compatible_fragments,
@@ -2829,11 +2874,11 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
 
         let f = std::fs::File::create(bdir.join("names.tsv.gz"))?;
         let mut enc = GzEncoder::new(f, Compression::new(6));
-        for (i, name) in res.names.iter().enumerate() {
-            if i > 0 {
+        for (j, &i) in rows.iter().enumerate() {
+            if j > 0 {
                 enc.write_all(b"\t")?;
             }
-            enc.write_all(name.as_bytes())?;
+            enc.write_all(res.names[i].as_bytes())?;
         }
         enc.write_all(b"\n")?;
         enc.finish()?;
@@ -2841,8 +2886,10 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         let f = std::fs::File::create(bdir.join("bootstraps.gz"))?;
         let mut enc = GzEncoder::new(f, Compression::new(6));
         for sample in &res.bootstraps {
-            for v in sample {
-                enc.write_all(&v.to_le_bytes())?;
+            // Restricted to the same rows as quant.sf so the two stay aligned
+            // positionally, which is what tximport assumes.
+            for &i in &rows {
+                enc.write_all(&sample[i].to_le_bytes())?;
             }
         }
         enc.finish()?;
@@ -2881,14 +2928,15 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     std::fs::write(dir.join("logs").join("salmon_quant.log"), log)
         .context("writing salmon_quant.log")?;
 
-    // aux_info/ambig_info.tsv
+    // aux_info/ambig_info.tsv — same row set as quant.sf (decoys excluded), so
+    // the two stay row-aligned as the format spec promises.
     {
         let (uniq, ambig) = &res.ambig;
         let mut w = std::io::BufWriter::new(std::fs::File::create(
             dir.join("aux_info").join("ambig_info.tsv"),
         )?);
         writeln!(w, "UniqueCount\tAmbigCount")?;
-        for i in 0..uniq.len() {
+        for &i in &rows {
             writeln!(w, "{}\t{}", uniq[i], ambig[i])?;
         }
         w.flush()?;
@@ -2918,10 +2966,14 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         output: opts.output_dir.display().to_string(),
         aux_dir: "aux_info".to_string(),
     };
-    std::fs::write(
-        dir.join("cmd_info.json"),
-        serde_json::to_string_pretty(&cmd)?,
-    )?;
+    // Phase 2 of a two-phase driver keeps phase 1's record of the real
+    // invocation rather than replacing it with a RAD-centric one (#1140).
+    if !opts.preserve_cmd_info {
+        std::fs::write(
+            dir.join("cmd_info.json"),
+            serde_json::to_string_pretty(&cmd)?,
+        )?;
+    }
     Ok(())
 }
 

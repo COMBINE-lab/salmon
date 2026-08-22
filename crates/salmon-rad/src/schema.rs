@@ -133,6 +133,12 @@ pub fn build_prelude(
         if let Some(keep) = prov.keep_duplicates {
             file_tag_values.push((crate::KEEP_DUPLICATES_TAG, TagValue::U8(keep as u8)));
         }
+        // The decoy boundary, when the index has one: what lets a requant
+        // exclude the decoy block from quant.sf as reads mode does (#1140).
+        if let (Some(fdi), Some(nd)) = (prov.first_decoy_index, prov.num_decoys) {
+            file_tag_values.push((crate::FIRST_DECOY_INDEX_TAG, TagValue::U64(fdi)));
+            file_tag_values.push((crate::NUM_DECOYS_TAG, TagValue::U64(nd)));
+        }
     }
     if !provenance.source_programs.is_empty() {
         file_tag_values.push((

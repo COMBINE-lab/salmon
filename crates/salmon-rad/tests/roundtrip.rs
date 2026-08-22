@@ -23,6 +23,8 @@ fn test_prov() -> salmon_rad::WriterProvenance {
             name_hash512: "namehash512".into(),
             decoy_seq_hash: String::new(),
             decoy_name_hash: String::new(),
+            first_decoy_index: None,
+            num_decoys: None,
             keep_duplicates: Some(false),
         }),
         source_programs: vec![],
