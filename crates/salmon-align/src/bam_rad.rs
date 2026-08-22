@@ -319,8 +319,14 @@ impl ScoreTagTally {
             ));
         }
         if self.min == self.max {
+            // Legitimately reachable: error-free reads of one length through an
+            // end-to-end aligner all score the same, which simulated data does
+            // routinely. The consequence holds either way, so the wording says
+            // what the column cannot do rather than implying the BAM is broken.
             return Some(format!(
-                "every alignment in this BAM reports the same AS ({}): {advice}",
+                "every alignment in this BAM reports the same AS ({}), which can be legitimate \
+                 for error-free reads of uniform length, but means the scores cannot distinguish \
+                 one placement from another: {advice}",
                 self.min
             ));
         }
