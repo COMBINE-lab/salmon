@@ -1621,7 +1621,7 @@ where
 
 /// Quantify from a RAD file (`salmon quant --rad`).
 pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQuantResult> {
-    let start_time = asctime_now();
+    let start_time = opts.external_start_time.clone().unwrap_or_else(asctime_now);
     let run_timer = std::time::Instant::now();
     let mut timer = PhaseTimer::new();
 
@@ -2233,7 +2233,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         em_iters,
         em_converged,
         detected_library_type,
-        total_seconds: run_timer.elapsed().as_secs_f64(),
+        total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
         diagnostics,
     };

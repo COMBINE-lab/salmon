@@ -239,3 +239,38 @@ fn rad_requant_baked_library_format_is_authoritative() {
     assert_eq!(u64_field(&v, "ISF"), 30);
     assert_eq!(u64_field(&v, "ISR"), 20);
 }
+
+/// A two-phase driver hands its phase-1 timing to the requant, and
+/// `meta_info.json` must report the whole run plus which inference path ran
+/// (#1140): `total_time_seconds` previously covered only the second pass
+/// (0.4s reported against minutes of wall on real data), and nothing recorded
+/// that the deterministic path produced the output.
+#[test]
+fn requant_reports_run_spanning_time_and_inference_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("timed.rad");
+    write_mixed_orientation_rad(&rad, 30, 20);
+    let out = tmp.path().join("timed_out");
+    let mut o = AlignQuantOptions::new(rad.clone(), out.clone());
+    o.lib_type = "IU".to_string();
+    o.fld_mean = 200.0;
+    o.fld_sd = 20.0;
+    o.prior_seconds = 100.0;
+    o.external_start_time = Some("Thu Jan  1 00:00:00 2026".to_string());
+    let res = quantify_rad(&o, &rad).expect("quantify_rad");
+    assert!(
+        res.total_seconds >= 100.0,
+        "total_seconds {} must include the driver's prior phase",
+        res.total_seconds
+    );
+    let meta: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("aux_info").join("meta_info.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(meta["total_time_seconds"].as_f64().unwrap() >= 100.0);
+    assert_eq!(
+        meta["start_time"].as_str().unwrap(),
+        "Thu Jan  1 00:00:00 2026"
+    );
+    assert_eq!(meta["inference_path"].as_str().unwrap(), "deterministic");
+}

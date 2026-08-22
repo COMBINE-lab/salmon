@@ -189,6 +189,14 @@ fn selective_alignment_quantification_tracks_truth() {
     assert!(out.join("quant.sf").exists());
     assert!(out.join("aux_info").join("meta_info.json").exists());
 
+    // The one-pass path labels itself in meta_info (#1140), so the
+    // online-to-deterministic transition is auditable from existing output.
+    let meta: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("aux_info").join("meta_info.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(meta["inference_path"].as_str().unwrap(), "online");
+
     // quant.sf has a header + one row per transcript.
     let sf = std::fs::read_to_string(out.join("quant.sf")).unwrap();
     assert!(sf.starts_with("Name\tLength\tEffectiveLength\tTPM\tNumReads\n"));
