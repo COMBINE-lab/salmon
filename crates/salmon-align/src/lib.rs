@@ -198,6 +198,18 @@ pub struct AlignQuantOptions {
     /// start time (asctime) of that earlier phase; when set, reported as the
     /// run's `start_time` instead of this pass's own
     pub external_start_time: Option<String>,
+    /// `--noLengthCorrection`: use the raw reference length as the effective
+    /// length, instead of the fragment-length-derived one.
+    ///
+    /// For protocols where a fragment does not sample a transcript's interior
+    /// uniformly (3' tagged-end libraries above all), the usual correction
+    /// describes something the data never did, and the raw length is the honest
+    /// divisor. Bias correction is disabled with it, for the same reason: its
+    /// whole job is to adjust an effective length this mode is not computing.
+    pub no_length_correction: bool,
+    /// `--noFragLengthDist`: drop the fragment-length term from a placement's
+    /// weight, leaving score and compatibility to decide it.
+    pub no_frag_length_dist: bool,
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
@@ -265,6 +277,8 @@ impl AlignQuantOptions {
             init_uniform: false,
             prior_seconds: 0.0,
             external_start_time: None,
+            no_length_correction: false,
+            no_frag_length_dist: false,
             sig_digits: 3,
             num_error_bins: 4,
             discard_orphans: false,

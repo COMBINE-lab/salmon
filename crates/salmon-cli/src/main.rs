@@ -1156,6 +1156,11 @@ fn requant_options(
     q.bias_speed_samp = map_opts.bias_speed_samp;
     q.no_bias_length_threshold = map_opts.no_bias_length_threshold;
     q.init_uniform = map_opts.init_uniform;
+    // The RAD path gained these two with #1148; before that they existed only in
+    // reads mode, so `--deterministic` accepted them and quantified as though
+    // they had not been passed.
+    q.no_length_correction = map_opts.no_length_correction;
+    q.no_frag_length_dist = map_opts.no_frag_length_dist;
     q
 }
 
@@ -1742,6 +1747,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
         opts.forgetting_factor = args.forgetting_factor;
         opts.init_uniform = args.init_uniform;
+        opts.no_length_correction = args.no_length_correction;
+        opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.bias_speed_samp = args.bias_speed_samp;
         opts.num_aux_model_samples = args.num_aux_model_samples;
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
@@ -1917,6 +1924,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             max: args.fld_max.is_some(),
         };
         opts.skip_quant = args.skip_quant;
+        opts.no_length_correction = args.no_length_correction;
+        opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
         opts.thinning_factor = args.thinning_factor;
@@ -2412,6 +2421,8 @@ mod tests {
         map_opts.bias_speed_samp = 25;
         map_opts.no_bias_length_threshold = true;
         map_opts.init_uniform = true;
+        map_opts.no_length_correction = true;
+        map_opts.no_frag_length_dist = true;
 
         let q = requant_options(
             &map_opts,
@@ -2443,6 +2454,8 @@ mod tests {
         assert_eq!(q.bias_speed_samp, 25);
         assert!(q.no_bias_length_threshold);
         assert!(q.init_uniform);
+        assert!(q.no_length_correction);
+        assert!(q.no_frag_length_dist);
     }
 
     /// The three knobs #1140 found dropped, checked against a default request
@@ -2460,6 +2473,8 @@ mod tests {
             defaults.no_bias_length_threshold
         );
         assert_eq!(q.init_uniform, defaults.init_uniform);
+        assert_eq!(q.no_length_correction, defaults.no_length_correction);
+        assert_eq!(q.no_frag_length_dist, defaults.no_frag_length_dist);
     }
 
     /// `--writeSam` is a spelling of `--writeMappings`, giving SAM output a
