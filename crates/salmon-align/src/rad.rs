@@ -451,6 +451,8 @@ struct FragCfg<'a> {
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
+    /// `--noFragLengthDist`: leave the fragment-length term out of the weight.
+    no_frag_length_dist: bool,
     range_factorization_bins: u32,
     eq_builder: &'a EquivalenceClassBuilder,
 }
@@ -521,7 +523,12 @@ fn process_rad_fragment(
         let proper = p.status == MateStatus::PairedEndPaired
             && p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED
             && p.frag_len > 0;
-        let log_frag_prob = if proper {
+        let log_frag_prob = if cfg.no_frag_length_dist {
+            // --noFragLengthDist: neither the proper-pair PMF term nor the
+            // orphan ambiguous-length term, matching what the reads path
+            // suppresses (`processor::frag_log_prob`).
+            0.0
+        } else if proper {
             // length-conditioned proper-pair probability. The fixed PMF is
             // normalized by `log P(L ≤ txpLen)` (the CMF at the transcript length)
             // so short transcripts — where only the left tail of insert sizes can
@@ -1269,6 +1276,9 @@ struct BiasCfg<'a> {
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
+    /// `--noFragLengthDist`: leave the fragment-length term out of the posterior
+    /// this bias pass weights its observations by, as the eq-class pass does.
+    no_frag_length_dist: bool,
     /// fixed per-reference abundances (baked or first-EM) for the posterior.
     abundances: &'a [f64],
     ref_bytes: &'a salmon_core::RefSeqs,
@@ -1310,7 +1320,9 @@ fn collect_bias_fragment(
             && p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED
             && p.frag_len > 0;
         let flen = (p.frag_len as i32).min(rl.max(1));
-        let log_frag_prob = if proper {
+        let log_frag_prob = if cfg.no_frag_length_dist {
+            0.0
+        } else if proper {
             at(cfg.pmf, flen as usize) - at(cfg.cmf, rl.max(1) as usize)
         } else if cfg.paired_lib {
             let read_len = if p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED {
@@ -1631,7 +1643,10 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // three over the reference, so `-t` (the transcriptome FASTA) is required for
     // any bias model — as in reads/alignment mode. (Decoy filtering for piscem RAD
     // without `-i` is still a separate follow-up.)
-    let bias_on = opts.seq_bias || opts.gc_bias || opts.pos_bias;
+    // Bias correction adjusts an effective length that --noLengthCorrection is
+    // not computing, so the two cannot both apply; reads mode gates it the same
+    // way (`salmon-quant/src/lib.rs`).
+    let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
     anyhow::ensure!(
         !bias_on || opts.ref_seqs.is_some() || opts.transcripts.is_some(),
         "--seqBias/--gcBias/--posBias with --rad require -t/--targets (the transcriptome FASTA)"
@@ -1798,7 +1813,15 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let cond_means = fld.conditional_means();
     let mut eff_lengths = vec![0f64; num_refs];
     for (tid, &len) in lengths.iter().enumerate() {
-        eff_lengths[tid] = salmon_model::smoothed_effective_length(&cond_means, len as usize);
+        // --noLengthCorrection: the raw reference length is the divisor, as in
+        // reads mode. A 3' tagged-end library does not sample a transcript's
+        // interior uniformly, so the fragment-length-derived length describes
+        // something the data never did.
+        eff_lengths[tid] = if opts.no_length_correction {
+            len as f64
+        } else {
+            salmon_model::smoothed_effective_length(&cond_means, len as usize)
+        };
     }
     // Rough seed abundances from the naive eq-classes gathered during the prepare
     // read (piscem/unbaked + bias) → the up-front abundances that let pass-2 fuse.
@@ -1891,6 +1914,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             ignore_incompat,
             incompat_prior: opts.incompat_prior,
             paired_lib,
+            no_frag_length_dist: opts.no_frag_length_dist,
             range_factorization_bins: opts.range_factorization_bins,
             eq_builder: &eq_builder,
         };
@@ -1907,6 +1931,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 ignore_incompat,
                 incompat_prior: opts.incompat_prior,
                 paired_lib,
+                no_frag_length_dist: opts.no_frag_length_dist,
                 abundances: abund,
                 ref_bytes: &ref_bytes,
                 gc_store: &gc_store,
@@ -2058,6 +2083,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 ignore_incompat,
                 incompat_prior: opts.incompat_prior,
                 paired_lib,
+                no_frag_length_dist: opts.no_frag_length_dist,
                 abundances: &bias_abund,
                 ref_bytes: &ref_bytes,
                 gc_store: &gc_store,
