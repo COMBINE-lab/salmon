@@ -225,6 +225,12 @@ pub struct AlignQuantOptions {
     /// `--noFragLengthDist`: drop the fragment-length term from a placement's
     /// weight, leaving score and compatibility to decide it.
     pub no_frag_length_dist: bool,
+    /// `--hardFilter`: keep only a fragment's best-scoring placement(s) at
+    /// weight 1 instead of soft-weighting the rest by
+    /// `exp(-scoreExp * (best - score))`. The two are halves of one policy, and
+    /// `--scoreExp` was already honoured here, so accepting `--hardFilter` and
+    /// ignoring it left that policy half-implemented (#1140 readiness sweep).
+    pub hard_filter: bool,
     /// `--noSingleFragProb` (inverted): model an orphan's fragment length with
     /// the bounded-CMF ambiguous weight. When false, orphans in a paired
     /// library take a flat `LOG_EPSILON` penalty instead, matching the reads
@@ -316,6 +322,7 @@ impl AlignQuantOptions {
             dump_eq_weights: false,
             no_length_correction: false,
             no_frag_length_dist: false,
+            hard_filter: false,
             model_single_frag_prob: true,
             extra_diagnostics: Vec::new(),
             dump_bias_models: false,
