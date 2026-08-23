@@ -101,11 +101,18 @@ divan = "0.1"
 # TEMPORARY: a republication of paraseq's released 0.5.0 plus the resizable
 # worker pool offered upstream as noamteyssier/paraseq#78 (fixed spawn set with
 # parking; worker count bounded by construction). `ThreadPool` is what lets the
-# mapping thread count change mid-run, which the broker requires. The library
-# target is still named `paraseq`, so `use paraseq::...` is unchanged. `paraseq`
-# is the official crate -- move back once the pool lands there. Must match what
+# mapping thread count change mid-run, which the broker requires. `paraseq` is
+# the official crate -- move back once the pool lands there. Must match what
 # piscem-rs resolves, or two paraseq copies end up either side of its API.
-paraseq = { package = "paraseq-temp", version = "0.5.0-pre.2" }
+#
+# Declared under its real name rather than renamed to `paraseq`: the rename was
+# never needed (the crate's library target is itself named `paraseq`, so
+# `use paraseq::...` works either way) and it made the dependency invisible to
+# tooling. Dependabot's cargo parser skips a renamed manifest entry outright
+# (`next unless name == name_from_declaration(...)`), so this crate reached it
+# only through Cargo.lock, as an indirect dependency no version update would
+# ever be raised for.
+paraseq-temp = "0.5.0-pre.2"
 
 # Workspace-wide lints. Member crates opt in with `[lints] workspace = true`.
 [workspace.lints.rust]
