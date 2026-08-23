@@ -317,3 +317,175 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
         "intact FASTQ must run"
     );
 }
+
+// ---- Group 3: incompatibilities detectable at invocation ------------------
+
+/// Genome projection lives inside the `-a` branch, so `--annotation` with any
+/// other input silently discarded the whole request — annotation, genome and
+/// junction discount — without even checking the paths exist.
+///
+/// clap's `requires` is necessary but not sufficient here, and the test covers
+/// why: clap skips a `requires` when the required argument conflicts with one
+/// already present, and `-1/-2`, `-r` and `--rad` all conflict with `-a`. Those
+/// are exactly the ways a user gets here, so all three are exercised.
+#[test]
+fn annotation_requires_alignment_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let rad = dir.path().join("m.rad");
+    assert!(Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&fx.index)
+        .args(["-l", "IU", "-1"])
+        .arg(&fx.r1)
+        .arg("-2")
+        .arg(&fx.r2)
+        .args(["-p", "2", "--writeRad"])
+        .arg(&rad)
+        .arg("-o")
+        .arg(dir.path().join("seed"))
+        .status()
+        .unwrap()
+        .success());
+
+    let out = dir.path().join("q");
+    let gtf = dir.path().join("a.gtf");
+    std::fs::write(&gtf, "").unwrap();
+    let inputs: Vec<Vec<&std::ffi::OsStr>> = vec![
+        vec![
+            os("-i"),
+            fx.index.as_os_str(),
+            os("-1"),
+            fx.r1.as_os_str(),
+            os("-2"),
+            fx.r2.as_os_str(),
+        ],
+        vec![os("-i"), fx.index.as_os_str(), os("-r"), fx.se.as_os_str()],
+        vec![os("--rad"), rad.as_os_str()],
+    ];
+    for inp in inputs {
+        let mut v: Vec<&std::ffi::OsStr> = vec![os("quant")];
+        v.extend(inp.iter().copied());
+        v.extend([
+            os("-l"),
+            os("IU"),
+            os("--annotation"),
+            gtf.as_os_str(),
+            os("-p"),
+            os("2"),
+            os("-o"),
+            out.as_os_str(),
+        ]);
+        let o = run(&v);
+        assert!(
+            !o.status.success(),
+            "--annotation without -a must be refused, not silently dropped"
+        );
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains("--annotation") && (err.contains("-a") || err.contains("alignments")),
+            "the error must name both flags:\n{err}"
+        );
+    }
+}
+
+/// `--errorModel` and `--noErrorModel` are direct opposites; passing both was
+/// resolved by silent precedence, after which salmon advised passing
+/// `--errorModel` — already on the command line.
+#[test]
+fn error_model_flags_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let sam = dir.path().join("a.sam");
+    std::fs::write(
+        &sam,
+        "@HD\tVN:1.6\tSO:queryname\n@SQ\tSN:txA\tLN:3000\n\
+         r0\t99\ttxA\t1\t60\t100M\t=\t201\t300\t*\t*\tAS:i:200\n\
+         r0\t147\ttxA\t201\t60\t100M\t=\t1\t-300\t*\t*\tAS:i:200\n",
+    )
+    .unwrap();
+    let _ = &fx;
+    let o = run(&[
+        os("quant"),
+        os("-a"),
+        sam.as_os_str(),
+        os("-l"),
+        os("IU"),
+        os("--errorModel"),
+        os("--noErrorModel"),
+        os("-o"),
+        dir.path().join("q").as_os_str(),
+    ]);
+    assert!(!o.status.success(), "opposite flags must conflict");
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("cannot be used with"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+/// Posterior sampling happens inside the pass `--skipQuant` skips, and
+/// `--thinningFactor` thins a Gibbs chain that may not exist. Both were
+/// discarded in silence while their siblings explained themselves.
+#[test]
+fn requests_that_cannot_be_honoured_say_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("q");
+    let base: Vec<&std::ffi::OsStr> = vec![
+        os("quant"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-l"),
+        os("IU"),
+        os("-1"),
+        fx.r1.as_os_str(),
+        os("-2"),
+        fx.r2.as_os_str(),
+        os("-p"),
+        os("2"),
+    ];
+
+    let mut v = base.clone();
+    v.extend([
+        os("--skipQuant"),
+        os("--numBootstraps"),
+        os("4"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    let o = run(&v);
+    assert!(o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("--numBootstraps") && err.contains("--skipQuant run"),
+        "--skipQuant must say it is discarding the posterior request:\n{err}"
+    );
+
+    let mut v = base.clone();
+    v.extend([os("--thinningFactor"), os("8"), os("-o"), out.as_os_str()]);
+    let o = run(&v);
+    assert!(o.status.success());
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("--thinningFactor has no effect"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+
+    // Control: with Gibbs actually running, --thinningFactor is silent.
+    let mut v = base.clone();
+    v.extend([
+        os("--numGibbsSamples"),
+        os("20"),
+        os("--thinningFactor"),
+        os("8"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    let o = run(&v);
+    assert!(o.status.success());
+    assert!(
+        !String::from_utf8_lossy(&o.stderr).contains("--thinningFactor has no effect"),
+        "--thinningFactor must not warn when Gibbs sampling runs"
+    );
+}
