@@ -43,8 +43,10 @@
 //!
 //! v1 scope: no sequence/GC/positional bias correction (RAD carries no read
 //! sequences; bias would need `-t`, the expected-model machinery, and the baked
-//! `initial_abundances`) and no decoy filtering for piscem RAD (salmon RAD already
-//! excludes decoys at write time). These are tracked follow-ups.
+//! `initial_abundances`). Decoys need no filtering here: a salmon RAD excludes
+//! decoy placements at write time *and* names the decoy block in its header, and
+//! a piscem RAD has no decoy references at all (piscem turns decoy sequence into
+//! poison k-mers rather than indexing it). See `num_targets` below.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -1709,6 +1711,26 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let names: Vec<String> = prelude.hdr.ref_names.clone();
     let lengths = ref_lengths_from_tags(&prelude, &file_tag_map)?;
     let num_refs = names.len();
+    // End of the quantification targets. A salmon-written RAD names the decoy
+    // block in its header (`FIRST_DECOY_INDEX_TAG`, written since #1140's
+    // output-contract work); anything else — a piscem RAD in particular — has
+    // no decoy references *by construction*, so every reference is a target.
+    //
+    // ASSUMPTION, recorded deliberately: piscem never emits a decoy hit,
+    // because piscem does not index decoys as references at all. Its
+    // `--decoy-paths` feed `build_poison_table`, which turns decoy sequence
+    // into poison k-mers used to *reject* reads; decoy sequences never enter
+    // the reference table, so no RAD record can point at one. If that ever
+    // changes, the symptom will be mass assigned to references that are then
+    // excluded from `quant.sf` — which `warn_mass_on_unreported_refs` in the
+    // shared writer detects and reports, rather than letting it vanish
+    // silently.
+    let num_targets = provenance
+        .index
+        .as_ref()
+        .and_then(|ix| ix.first_decoy_index)
+        .map(|i| (i as usize).min(num_refs))
+        .unwrap_or(num_refs);
     anyhow::ensure!(num_refs > 0, "RAD file has no reference sequences");
     anyhow::ensure!(
         lengths.len() == num_refs,
@@ -2099,6 +2121,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             .expect("fused bias observations imply up-front abundances");
         bias_dump = crate::apply_bias_correction(
             num_refs,
+            num_targets,
             &ref_bytes,
             &gc_store,
             &lengths,
@@ -2176,6 +2199,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             };
             bias_dump = crate::apply_bias_correction(
                 num_refs,
+                num_targets,
                 &ref_bytes,
                 &gc_store,
                 &lengths,
