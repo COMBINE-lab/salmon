@@ -636,7 +636,22 @@ pub(crate) fn em_step_par(
 /// simply its exponential — so every M-step below is the EM one with `alpha`
 /// replaced by `exp_theta`. In practice VBEM shrinks weakly-supported
 /// transcripts toward zero rather than letting them float on noise.
-fn fill_exp_theta(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f64]) {
+fn fill_exp_theta_seq(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f64]) {
+    let alpha_sum: f64 = alpha_in.iter().zip(prior_alphas).map(|(a, p)| a + p).sum();
+    let log_norm = digamma(alpha_sum);
+    for i in 0..alpha_in.len() {
+        let ap = alpha_in[i] + prior_alphas[i];
+        exp_theta[i] = if ap > DIGAMMA_MIN {
+            (digamma(ap) - log_norm).exp()
+        } else {
+            0.0
+        };
+    }
+}
+
+/// Parallel VBEM expectation fill used by the point estimate. Its sum remains
+/// sequential and therefore pool-independent; the element-wise map is parallel.
+fn fill_exp_theta_par(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f64]) {
     let alpha_sum: f64 = alpha_in.iter().zip(prior_alphas).map(|(a, p)| a + p).sum();
     let log_norm = digamma(alpha_sum);
     exp_theta.par_iter_mut().enumerate().for_each(|(i, et)| {
@@ -659,7 +674,9 @@ pub(crate) fn vbem_step_seq(
     exp_theta: &mut [f64],
     scratch: &mut Vec<f64>,
 ) {
-    fill_exp_theta(alpha_in, prior_alphas, exp_theta);
+    // Bootstrap already parallelizes over replicates. Keeping this entire
+    // per-replicate kernel sequential avoids nested Rayon scheduling.
+    fill_exp_theta_seq(alpha_in, prior_alphas, exp_theta);
     alpha_out.iter_mut().for_each(|a| *a = 0.0);
     for ci in 0..p.num_classes() {
         let count = counts[ci] as f64;
@@ -702,7 +719,7 @@ pub(crate) fn vbem_step_par(
 ) {
     // Computed once, before the parallel region: it depends on a global sum over
     // all transcripts, so it cannot be sharded.
-    fill_exp_theta(alpha_in, prior_alphas, exp_theta);
+    fill_exp_theta_par(alpha_in, prior_alphas, exp_theta);
     // Reborrow as immutable so the closure below can share it across threads.
     let exp_theta: &[f64] = exp_theta;
     shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
@@ -932,7 +949,7 @@ mod shard_plan_determinism {
         plan: &ShardPlan,
     ) -> Vec<f64> {
         let mut exp_theta = vec![0.0; p.num_txps];
-        fill_exp_theta(alpha_in, prior, &mut exp_theta);
+        fill_exp_theta_par(alpha_in, prior, &mut exp_theta);
         let mut shards = vec![vec![0.0; p.num_txps]; plan.num_shards()];
         for (s, buf) in shards.iter_mut().enumerate() {
             let (start, end) = plan.range(s);

@@ -51,7 +51,7 @@
 //! already rayon-parallel — but its parallelism is over a fixed partition, so it
 //! stays reproducible.
 
-use crate::max_rel_diff;
+use crate::max_rel_diff_mode;
 use crate::EmOptions;
 
 /// DAAREM control parameters (the CRAN `daarem` no-objective defaults).
@@ -285,6 +285,8 @@ pub(crate) fn daarem_loop(
     opts: &EmOptions,
     min_iter: u32,
     it: &mut u32,
+    parallel: bool,
+    rel_diff_partials: &mut Vec<f64>,
 ) -> bool {
     let n = num_txps;
     if n == 0 {
@@ -491,7 +493,13 @@ pub(crate) fn daarem_loop(
         // every acceleration mode stops at the same place. `min_iter` prevents an
         // early accidental "no change" from ending the run.
         if *it >= min_iter {
-            let d = max_rel_diff(&xold, &xnew, opts.alpha_check_cutoff);
+            let d = max_rel_diff_mode(
+                &xold,
+                &xnew,
+                opts.alpha_check_cutoff,
+                parallel,
+                rel_diff_partials,
+            );
             if d.is_finite() && d < opts.rel_diff_tol {
                 converged = true;
                 break;
