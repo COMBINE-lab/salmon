@@ -108,6 +108,7 @@ fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
 pub fn bootstrap(
     p: &PackedEqClasses,
     opts: &EmOptions,
+    eff_lens: Option<&[f64]>,
     num_bootstraps: u32,
     seed: u64,
 ) -> Vec<Vec<f64>> {
@@ -122,7 +123,11 @@ pub fn bootstrap(
             let mut rng =
                 Pcg64Mcg::seed_from_u64(seed ^ (bs as u64).wrapping_mul(0x9E3779B97F4A7C15));
             let resampled = multinomial(total, &sample_weights, &mut rng);
-            let (alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, None, None);
+            // Effective lengths reach the replicate EM so `--perNucleotidePrior`
+            // shapes the prior here exactly as it does the point estimate;
+            // passing `None` silently fell back to the flat prior, which made
+            // the flag a no-op inside every replicate (#1140, audit D13).
+            let (alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, eff_lens, None);
             // Finalize like the point estimate: truncate the negligible
             // abundances, then redistribute that mass to eq-class co-members via a
             // masked final M-step over the *resampled* counts (no rescale-up). The
@@ -455,7 +460,7 @@ mod tests {
     fn bootstrap_mean_near_point_estimate() {
         // unique evidence -> every bootstrap recovers ~the same counts
         let p = packed(&[(vec![0], 300), (vec![1], 700)], 2);
-        let bs = bootstrap(&p, &EmOptions::default(), 50, 12345);
+        let bs = bootstrap(&p, &EmOptions::default(), None, 50, 12345);
         assert_eq!(bs.len(), 50);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 50.0;
         let m1: f64 = bs.iter().map(|b| b[1]).sum::<f64>() / 50.0;
@@ -472,7 +477,7 @@ mod tests {
     fn bootstrap_variance_grows_with_ambiguity() {
         // a fully shared class has higher per-transcript bootstrap variance
         let p = packed(&[(vec![0], 10), (vec![1], 10), (vec![0, 1], 980)], 2);
-        let bs = bootstrap(&p, &EmOptions::default(), 100, 7);
+        let bs = bootstrap(&p, &EmOptions::default(), None, 100, 7);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 100.0;
         let var0: f64 = bs.iter().map(|b| (b[0] - m0).powi(2)).sum::<f64>() / 100.0;
         assert!(

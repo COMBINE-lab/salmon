@@ -116,12 +116,22 @@ pub fn write_alignment_rad(
     // Paired unless the library type is explicitly single-end (matches the
     // alignment-mode `paired_lib` derivation in `quantify_alignments`).
     let is_paired = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
+    // Only meaningful for a paired library: with single-end reads every
+    // placement is an "orphan" and the flag would discard the entire run. Same
+    // guard the online path applies (`discard_orphans && paired_lib`).
+    let discard_orphans = opts.discard_orphans && is_paired;
     // The user-fixed expected format (`None` for auto / unstranded), resolved
     // against the FLD-detected format at end of pass.
     let expected_format = match opts.lib_type.as_str() {
         "A" | "IU" | "U" => None,
         s => LibraryFormat::parse(s).ok(),
     };
+    // The `-l A` caveat belongs to alignment *input*, not to the estimator
+    // reading it: this path detects via the FLD pass, so it owes the same
+    // warning the online path gives (#1140, audit C12).
+    if LibraryFormat::is_auto(&opts.lib_type) {
+        crate::warn_auto_detect_from_alignments();
+    }
 
     // Reference sequences for the error model: supplied index sequences take
     // precedence, else load the `-t` FASTA (mirrors `quantify_rad`). Absent ⇒ no
@@ -179,7 +189,7 @@ pub fn write_alignment_rad(
         // written yet; scores aren't final). Per-worker counting models are
         // merged by integer add, so the total is partition-independent.
         let models = stream_grouped(&opts.bam, nthreads, || {
-            TrainWorker::new(error_bins, &fld, naive.as_ref(), ref_bytes)
+            TrainWorker::new(error_bins, &fld, naive.as_ref(), ref_bytes, discard_orphans)
         })?;
         let mut counting = CountingAlignmentModel::new(error_bins);
         for m in &models {
@@ -188,14 +198,14 @@ pub fn write_alignment_rad(
         let fixed = counting.finalize(ERROR_MODEL_ALPHA);
         // Pass B — score each placement against the fixed model and write records.
         let sums = stream_grouped(&opts.bam, nthreads, || {
-            ScoreWriteWorker::new(&writer, ref_bytes, &fixed)
+            ScoreWriteWorker::new(&writer, ref_bytes, &fixed, discard_orphans)
         })?;
         writer.set_score_kind(salmon_rad::SCORE_KIND_LOGWEIGHT);
         reduce_summary(sums)
     } else {
         // One pass — write records carrying the BAM `AS` score + FLD + naive-eq.
         let sums = stream_grouped(&opts.bam, nthreads, || {
-            WriteWorker::new(&writer, &fld, naive.as_ref())
+            WriteWorker::new(&writer, &fld, naive.as_ref(), discard_orphans)
         })?;
         // The scores these records carry are only as good as the tags they came
         // from, and a BAM without them fails silently: say so before the numbers
@@ -395,6 +405,7 @@ fn analyze_group<R: sam::alignment::Record>(
     group: &[R],
     header: &Header,
     need_seq: bool,
+    discard_orphans: bool,
     scratch: &mut Vec<FragRecord>,
 ) -> Option<GroupData> {
     scratch.clear();
@@ -407,7 +418,16 @@ fn analyze_group<R: sam::alignment::Record>(
         return None;
     }
     let frags = std::mem::take(scratch);
-    let placements = pair_records(&frags);
+    let mut placements = pair_records(&frags);
+    // `--discardOrphans`: drop half-mapped fragments before they reach the RAD,
+    // by the same rule the online path applies at weighting time (a placement
+    // backed by fewer than two records is an orphan). Applied here rather than
+    // at requant so both alignment paths answer the flag identically and the
+    // FLD / naive-eq tallies see exactly the placements that get written
+    // (#1140, audit C10 — the flag was silently inert on the 2.6.0 default).
+    if discard_orphans {
+        placements.retain(|pl| pl.idxs.len() >= 2);
+    }
     if placements.is_empty() {
         *scratch = frags;
         return None;
@@ -531,6 +551,8 @@ struct WriteWorker<'a> {
     scratch: Vec<FragRecord>,
     processed: u64,
     mapped: u64,
+    /// `--discardOrphans`: drop half-mapped fragments (see `analyze_group`)
+    discard_orphans: bool,
     /// what this worker saw of the `AS` tags it is scoring by
     tags: ScoreTagTally,
 }
@@ -540,6 +562,7 @@ impl<'a> WriteWorker<'a> {
         writer: &'a RadOutputWriter,
         fld: &'a DiscreteFld,
         naive: Option<&'a NaiveEqBuilder>,
+        discard_orphans: bool,
     ) -> Self {
         Self {
             buf: FragmentChunkBuf::with_capacity_codec(CHUNK_FLUSH_BYTES, writer.codec()),
@@ -549,6 +572,7 @@ impl<'a> WriteWorker<'a> {
             scratch: Vec::new(),
             processed: 0,
             mapped: 0,
+            discard_orphans,
             tags: ScoreTagTally::new(),
         }
     }
@@ -558,7 +582,13 @@ impl GroupWorker for WriteWorker<'_> {
     type Output = (u64, u64, ScoreTagTally);
     fn handle<R: sam::alignment::Record>(&mut self, header: &Header, group: &[R]) -> Result<()> {
         self.processed += 1;
-        let Some(data) = analyze_group(group, header, false, &mut self.scratch) else {
+        let Some(data) = analyze_group(
+            group,
+            header,
+            false,
+            self.discard_orphans,
+            &mut self.scratch,
+        ) else {
             return Ok(());
         };
         // Fragment alignment score = sum of the mates' AS tags.
@@ -596,6 +626,9 @@ struct TrainWorker<'a> {
     naive: Option<&'a NaiveEqBuilder>,
     ref_bytes: &'a salmon_core::RefSeqs,
     scratch: Vec<FragRecord>,
+    /// `--discardOrphans`: must match the write pass, or the model would train
+    /// on placements the RAD never receives.
+    discard_orphans: bool,
 }
 
 impl<'a> TrainWorker<'a> {
@@ -604,6 +637,7 @@ impl<'a> TrainWorker<'a> {
         fld: &'a DiscreteFld,
         naive: Option<&'a NaiveEqBuilder>,
         ref_bytes: &'a salmon_core::RefSeqs,
+        discard_orphans: bool,
     ) -> Self {
         Self {
             model: CountingAlignmentModel::new(error_bins),
@@ -611,6 +645,7 @@ impl<'a> TrainWorker<'a> {
             naive,
             ref_bytes,
             scratch: Vec::new(),
+            discard_orphans,
         }
     }
 }
@@ -618,7 +653,9 @@ impl<'a> TrainWorker<'a> {
 impl GroupWorker for TrainWorker<'_> {
     type Output = CountingAlignmentModel;
     fn handle<R: sam::alignment::Record>(&mut self, header: &Header, group: &[R]) -> Result<()> {
-        let Some(data) = analyze_group(group, header, true, &mut self.scratch) else {
+        let Some(data) =
+            analyze_group(group, header, true, self.discard_orphans, &mut self.scratch)
+        else {
             return Ok(());
         };
         // Uniform per-placement training: one count per placement-mate. Integer
@@ -652,6 +689,8 @@ struct ScoreWriteWorker<'a> {
     scratch: Vec<FragRecord>,
     processed: u64,
     mapped: u64,
+    /// `--discardOrphans`: drop half-mapped fragments (see `analyze_group`)
+    discard_orphans: bool,
 }
 
 impl<'a> ScoreWriteWorker<'a> {
@@ -659,6 +698,7 @@ impl<'a> ScoreWriteWorker<'a> {
         writer: &'a RadOutputWriter,
         ref_bytes: &'a salmon_core::RefSeqs,
         model: &'a AlignmentModel,
+        discard_orphans: bool,
     ) -> Self {
         Self {
             buf: FragmentChunkBuf::with_capacity_codec(CHUNK_FLUSH_BYTES, writer.codec()),
@@ -668,6 +708,7 @@ impl<'a> ScoreWriteWorker<'a> {
             scratch: Vec::new(),
             processed: 0,
             mapped: 0,
+            discard_orphans,
         }
     }
 }
@@ -676,7 +717,9 @@ impl GroupWorker for ScoreWriteWorker<'_> {
     type Output = (u64, u64);
     fn handle<R: sam::alignment::Record>(&mut self, header: &Header, group: &[R]) -> Result<()> {
         self.processed += 1;
-        let Some(data) = analyze_group(group, header, true, &mut self.scratch) else {
+        let Some(data) =
+            analyze_group(group, header, true, self.discard_orphans, &mut self.scratch)
+        else {
             return Ok(());
         };
         // Per placement: Σ(fg−bg) over its mate(s) under the fixed model (0 when

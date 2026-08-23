@@ -1197,6 +1197,10 @@ fn requant_options(
     // the driver clears the flags for phase 1.
     q.dump_eq = map_opts.dump_eq;
     q.dump_eq_weights = map_opts.dump_eq_weights;
+    // Honoured by the RAD quantifier's orphan weighting, so the flag survives
+    // the phase-1/phase-2 split instead of dying with the mapping pass
+    // (#1140, audit D14).
+    q.model_single_frag_prob = map_opts.model_single_frag_prob;
     // Same shape as the eq dumps: phase 2 owns the run's final bias models
     // (phase 1's dump site is gated off by skip_quant), so `--dumpBiasModels`
     // is honoured by the requant's shared writer (#1140: the flag silently
@@ -1948,7 +1952,13 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
         opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
         opts.forgetting_factor = args.forgetting_factor.unwrap_or(0.65);
-        opts.init_uniform = args.init_uniform;
+        // `--meta` promises a uniform start, and this is the one path where
+        // that is a real choice: the online alignment optimizer warm-starts
+        // from its online estimates unless told otherwise. Every other path
+        // starts uniform by construction, which is why the preset's own log
+        // line was true everywhere except here (#1140, audit D15).
+        opts.init_uniform = args.init_uniform || args.meta;
+        opts.model_single_frag_prob = !args.no_single_frag_prob;
         opts.dump_eq = args.dump_eq;
         opts.dump_eq_weights = args.dump_eq_weights;
         opts.dump_bias_models = args.dump_bias_models;
@@ -1966,8 +1976,12 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
         opts.thinning_factor = args.thinning_factor;
-        // --scoreExp is selective-alignment-mode only (it scales the
-        // best-minus-score soft weight); alignment mode has no such term.
+        // --scoreExp scales the best-minus-score soft weight, and the RAD
+        // quantifier applies it to AS-scored placements exactly as it does to
+        // selective-alignment ones — so the deterministic `-a` path honours it.
+        // A previous comment here claimed alignment mode "has no such term",
+        // which was true only of the online path (#1140, audit C11).
+        opts.score_exp = args.score_exp;
 
         // Genome-alignment mode: `-a <genome.bam> --annotation <gtf>` projects the
         // spliced genome alignments into transcriptome coordinates (bramble) and
@@ -2202,6 +2216,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             max: args.fld_max.is_some(),
         };
         opts.skip_quant = args.skip_quant;
+        opts.model_single_frag_prob = !args.no_single_frag_prob;
         opts.dump_eq = args.dump_eq;
         opts.dump_eq_weights = args.dump_eq_weights;
         opts.dump_bias_models = args.dump_bias_models;
@@ -2818,6 +2833,7 @@ mod tests {
         map_opts.dump_eq = true;
         map_opts.dump_eq_weights = true;
         map_opts.dump_bias_models = true;
+        map_opts.model_single_frag_prob = false;
         map_opts.no_length_correction = true;
         map_opts.no_frag_length_dist = true;
 
@@ -2854,6 +2870,7 @@ mod tests {
         assert!(q.dump_eq);
         assert!(q.dump_eq_weights);
         assert!(q.dump_bias_models);
+        assert!(!q.model_single_frag_prob);
         assert!(q.no_length_correction);
         assert!(q.no_frag_length_dist);
     }
