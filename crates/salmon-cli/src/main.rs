@@ -400,7 +400,10 @@ struct QuantArgs {
     #[arg(short = 't', long = "targets")]
     targets: Option<PathBuf>,
     /// Disable the alignment error model (alignment mode).
-    #[arg(long = "noErrorModel")]
+    /// Direct opposite of `--errorModel`; passing both was resolved by silent
+    /// precedence (`--noErrorModel` won) and salmon then advised passing
+    /// `--errorModel`, which was already on the command line (#1140).
+    #[arg(long = "noErrorModel", conflicts_with = "error_model")]
     no_error_model: bool,
     /// Opt in to the order-independent alignment error model in deterministic
     /// mode (`-a --deterministic`, requires `-t`). Off by default: deterministic
@@ -414,7 +417,18 @@ struct QuantArgs {
     /// salmon projects the spliced genome alignments into transcriptome
     /// coordinates (via bramble) and quantifies the projected placements. The
     /// transcript set is taken from the annotation.
-    #[arg(long = "annotation", value_name = "GTF|GFF")]
+    /// Genome projection is reachable only through `-a <genome.bam>`, so
+    /// without it the whole request — annotation, genome and junction discount
+    /// — was dropped without a word, and the paths were never even checked for
+    /// existence. `--genome`/`--juncMissDiscount` already required this flag;
+    /// this closes the chain (#1140).
+    ///
+    /// The `requires` below is necessary but not sufficient: clap skips a
+    /// `requires` when the required argument conflicts with one already
+    /// present, and `-1/-2`, `-r` and `--rad` all conflict with `-a` — which is
+    /// precisely how a user gets here. `run_quant` therefore checks it
+    /// explicitly as well.
+    #[arg(long = "annotation", value_name = "GTF|GFF", requires = "alignments")]
     annotation: Option<PathBuf>,
     // `--genome` / `--juncMissDiscount` are read only by the genome-projection
     // branch, which `--annotation` selects; without it they were silently
@@ -632,8 +646,11 @@ struct QuantArgs {
     )]
     num_gibbs_samples: u32,
     /// Gibbs thinning factor.
-    #[arg(long = "thinningFactor", default_value_t = 16)]
-    thinning_factor: u32,
+    /// Option-typed (default 16 at use) so passing it without Gibbs sampling
+    /// can be reported rather than silently doing nothing — the sibling
+    /// `--bamCompressThreads` without `--writeBam` already hard-errors.
+    #[arg(long = "thinningFactor")]
+    thinning_factor: Option<u32>,
     /// (Long reads) Oxford Nanopore model — not supported; use oarfish instead.
     #[arg(long = "ont")]
     ont: bool,
@@ -2043,6 +2060,17 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             args.decoy_threshold.unwrap_or(1.0)
         );
     }
+    // Genome projection lives inside the `-a` branch, so `--annotation` without
+    // it silently discards the entire request. clap's `requires` does not fire
+    // for the cases that matter (see the flag's doc comment), so check here.
+    if args.annotation.is_some() && args.alignments.is_none() {
+        anyhow::bail!(
+            "--annotation selects genome-projection mode, which reads a genome BAM: pass it \
+             together with `-a <genome.bam>`. With FASTQ or --rad input there is nothing to \
+             project, and the annotation would be ignored."
+        );
+    }
+
     // `--noLengthCorrection` and bias correction cannot both apply: every
     // driver computes `bias_on = (seq||gc||pos) && !no_length_correction`, so
     // the bias request was silently discarded — and `meta_info.json` went on
@@ -2242,7 +2270,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples.unwrap_or(5_000);
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
-        opts.thinning_factor = args.thinning_factor;
+        opts.thinning_factor = args.thinning_factor.unwrap_or(16);
         // --scoreExp scales the best-minus-score soft weight, and the RAD
         // quantifier applies it to AS-scored placements exactly as it does to
         // selective-alignment ones — so the deterministic `-a` path honours it.
@@ -2498,7 +2526,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
-        opts.thinning_factor = args.thinning_factor;
+        opts.thinning_factor = args.thinning_factor.unwrap_or(16);
         let res = quantify_rad(&opts, &rad_path).context("RAD-input quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64
@@ -2590,6 +2618,31 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             ],
         );
     }
+    // Posterior sampling happens inside the quantification pass, so
+    // `--skipQuant` and it cannot both be honoured. The sibling cases
+    // (`--skipQuant --dumpEq`, `--skipQuant -g`) both explain themselves;
+    // these two were discarded in silence (#1140).
+    if args.skip_quant {
+        warn_inert_in_mode(
+            "a --skipQuant run",
+            "posterior sampling happens inside the quantification pass that --skipQuant \
+             skips (quantify the kept RAD with --rad to draw samples from it)",
+            &[
+                ("--numBootstraps", args.num_bootstraps > 0),
+                ("--numGibbsSamples", args.num_gibbs_samples > 0),
+            ],
+        );
+    }
+    // `--thinningFactor` thins a Gibbs chain; with no chain there is nothing to
+    // thin. The analogous `--bamCompressThreads` without `--writeBam` errors,
+    // and this said nothing at all.
+    if args.thinning_factor.is_some() && args.num_gibbs_samples == 0 {
+        warn_inert_in_mode(
+            "a run without Gibbs sampling",
+            "it thins a Gibbs chain, which needs --numGibbsSamples",
+            &[("--thinningFactor", true)],
+        );
+    }
     // Bias sub-knobs tune a model that only exists when bias correction is on.
     if !(args.seq_bias || args.gc_bias || args.pos_bias) {
         warn_inert_in_mode(
@@ -2672,7 +2725,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     };
     opts.num_bootstraps = args.num_bootstraps;
     opts.num_gibbs_samples = args.num_gibbs_samples;
-    opts.thinning_factor = args.thinning_factor;
+    opts.thinning_factor = args.thinning_factor.unwrap_or(16);
     opts.no_length_correction = args.no_length_correction;
     opts.model_single_frag_prob = !args.no_single_frag_prob;
     opts.no_frag_length_dist = args.no_frag_length_dist;
