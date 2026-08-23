@@ -1949,8 +1949,25 @@ fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
 /// abundances differs (online posteriors for BAM; fixed baked/derived abundances
 /// for RAD). The caller runs the subsequent re-EM with the corrected lengths.
 #[allow(clippy::too_many_arguments)]
+/// Bias-correct the effective lengths in place.
+///
+/// `num_targets` is the end of the quantification targets: the decoy block,
+/// when there is one, is the contiguous tail `[num_targets, num_refs)`. Every
+/// expected-bias model and the per-reference effective-length sweep stop
+/// there.
+///
+/// Decoys are never expressed, so an abundance guard already skips them in
+/// practice; bounding the range as well is what makes that a *guarantee*
+/// rather than a consequence — [`salmon_model::build_expected`]'s own contract
+/// says as much, and the reads one-pass path has always passed this bound.
+/// Without it, a decoy that picked up any abundance would drag a whole
+/// genome-scale chromosome (up to ~250 Mb) through an O(refLen) sweep, which
+/// single-threads the dominant phase of the run: issue #1019, fixed for
+/// one-pass by PR #1020 and applied here to every RAD-based path — which, as
+/// of 2.6.0, is the default (#1140 follow-up).
 fn apply_bias_correction(
     num_refs: usize,
+    num_targets: usize,
     ref_bytes: &salmon_core::RefSeqs,
     gc_store: &salmon_model::GcStore<'_>,
     lengths: &[u32],
@@ -1983,7 +2000,7 @@ fn apply_bias_correction(
         of.normalize();
         or.normalize();
         let (ef, er) =
-            salmon_model::build_expected(num_refs, refseq_of, alphas, eff_lengths, &fld_cdf);
+            salmon_model::build_expected(num_targets, refseq_of, alphas, eff_lengths, &fld_cdf);
         (of, or, ef, er)
     });
     if let Some((of, or, ef, er)) = seq.as_ref() {
@@ -2003,7 +2020,7 @@ fn apply_bias_correction(
     });
     let gc_ratio_model = if let Some(mut obs) = gc_obs {
         let mut exp = salmon_model::build_expected_gc(
-            num_refs,
+            num_targets,
             refseq_of,
             |t| gc_store.view(t),
             alphas,
@@ -2033,7 +2050,7 @@ fn apply_bias_correction(
             x.finalize();
         }
         let (ef, er) = salmon_model::build_expected_pos(
-            num_refs,
+            num_targets,
             |t| lengths[t] as usize,
             alphas,
             eff_lengths,
@@ -2061,7 +2078,10 @@ fn apply_bias_correction(
         .par_iter_mut()
         .enumerate()
         .for_each(|(tid, eff_length)| {
-            if alphas[tid] < 1e-8 {
+            // Decoys keep their uncorrected effective length: they are never
+            // reported, so the corrected value would be unused, and computing
+            // it is the #1019 stall. Same guard the one-pass path applies.
+            if tid >= num_targets || alphas[tid] < 1e-8 {
                 return;
             }
             let s = &ref_bytes[tid];
@@ -2437,6 +2457,9 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     if bias_on && !opts.skip_quant {
         bias_dump = apply_bias_correction(
             num_refs,
+            // Alignment input: the @SQ references are the quantification
+            // targets; a BAM carries no decoy block.
+            num_refs,
             &ref_bytes,
             &gc_store,
             &lengths,
@@ -2610,6 +2633,61 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     Ok(result)
 }
 
+/// Guard the assumption that the references we omit from `quant.sf` hold no
+/// abundance.
+///
+/// Every reference excluded here is a decoy, and decoys are supposed to be
+/// unreachable by the estimator: reads mode drops decoy placements before the
+/// RAD is written, and piscem never indexes decoys as references at all (its
+/// `--decoy-paths` build a poison-k-mer table used to reject reads, so no RAD
+/// record can point at a decoy). Both are *upstream* invariants, enforced by
+/// code this function cannot see.
+///
+/// If either is ever violated, the failure is silent and nasty: TPM is
+/// normalized over every reference and the rows are filtered afterward, so mass
+/// landing on an excluded reference simply disappears — `quant.sf`'s TPM stops
+/// summing to 1e6 and its NumReads stops summing to the mapped count, with
+/// nothing in the output saying why. This exists so that shows up as a loud
+/// warning naming the references, instead of as a quiet discrepancy someone
+/// has to reverse-engineer months later (#1140 follow-up; the reasoning is in
+/// `rad.rs`'s `num_targets`).
+fn warn_mass_on_unreported_refs(res: &AlignQuantResult, rows: &[usize]) {
+    if rows.len() == res.names.len() {
+        return; // nothing excluded
+    }
+    let reported: std::collections::HashSet<usize> = rows.iter().copied().collect();
+    let mut held = 0.0f64;
+    let mut worst: Vec<(String, f64)> = Vec::new();
+    for (i, &c) in res.counts.iter().enumerate() {
+        if reported.contains(&i) || c <= 0.0 {
+            continue;
+        }
+        held += c;
+        if worst.len() < 5 {
+            worst.push((res.names[i].clone(), c));
+        }
+    }
+    // A hair of mass can land on a decoy through floating-point redistribution
+    // without meaning the invariant broke; a whole fragment cannot.
+    if held < 1.0 {
+        return;
+    }
+    let shown = worst
+        .iter()
+        .map(|(n, c)| format!("{n} ({c:.2})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    tracing::warn!(
+        "{held:.2} fragments of abundance landed on {} reference(s) that are excluded from \
+         quant.sf (decoys), so the reported NumReads and TPM columns do not account for them \
+         (e.g. {shown}). This should be impossible — decoy placements are dropped before the \
+         RAD is written, and piscem does not index decoys as references — so it means an \
+         upstream invariant changed. Please report this, with the command line, at \
+         https://github.com/COMBINE-lab/salmon/issues",
+        res.names.len() - rows.len()
+    );
+}
+
 fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()> {
     let dir = &opts.output_dir;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating output dirs")?;
@@ -2634,6 +2712,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         .unwrap_or((None, 0));
     let rows: Vec<usize> =
         salmon_core::quant_row_indices(res.names.len(), first_decoy, num_decoys).collect();
+    warn_mass_on_unreported_refs(res, &rows);
 
     // quant.sf (EffectiveLength + NumReads at --sigDigits decimals; TPM at 6).
     // Skipped under --skipQuant (no abundances), like salmon.
