@@ -811,45 +811,63 @@ mod shard_plan_determinism {
         eq.update_eff_lengths(&eff);
         let packed = PackedEqClasses::from_collapsed(&eq, NUM_TXPS);
 
-        let opts = EmOptions {
-            max_iter: 200,
-            ..EmOptions::default()
-        };
+        // Cover every kernel the shard plan feeds, not just the one
+        // `EmOptions::default()` happens to select. The default is plain EM
+        // without acceleration, but production runs VBEM (`opt_type: "vb"`),
+        // and `--emAccel squarem` drives the same M-steps through a different
+        // iterate sequence. A test that exercised only the default would have
+        // left the actual shipping path unguarded — which is how the original
+        // defect survived.
+        let configs = [
+            ("plain EM", false, crate::EmAccel::None),
+            ("VBEM (production default)", true, crate::EmAccel::None),
+            ("plain EM + SQUAREM", false, crate::EmAccel::Squarem),
+            ("VBEM + SQUAREM", true, crate::EmAccel::Squarem),
+        ];
 
-        // Run the same problem inside rayon pools of different sizes. Only the
-        // scheduling differs; the arithmetic must not.
-        let run = |threads: usize| -> Vec<f64> {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .expect("thread pool");
-            pool.install(|| {
-                crate::optimize_packed_with_init(&packed, &opts, true, None, Some(&eff)).alphas
-            })
-        };
+        for (label, use_vbem, accel) in configs {
+            let opts = EmOptions {
+                max_iter: 200,
+                use_vbem,
+                accel,
+                ..EmOptions::default()
+            };
 
-        let base = run(1);
-        for threads in [2usize, 3, 8, 16] {
-            let other = run(threads);
-            assert_eq!(
-                base.len(),
-                other.len(),
-                "thread count changed the result shape"
-            );
-            // Bit-for-bit: "close enough" is exactly the standard this mode
-            // rejects, and a tolerance here would have passed the old code.
-            let diffs = base
-                .iter()
-                .zip(&other)
-                .enumerate()
-                .filter(|(_, (a, b))| a.to_bits() != b.to_bits())
-                .count();
-            assert_eq!(
-                diffs, 0,
-                "EM result differs between 1 and {threads} threads in {diffs} of {} \
-                 transcripts — the shard partition must not depend on the thread count",
-                base.len()
-            );
+            // Run the same problem inside rayon pools of different sizes. Only
+            // the scheduling differs; the arithmetic must not.
+            let run = |threads: usize| -> Vec<f64> {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .expect("thread pool");
+                pool.install(|| {
+                    crate::optimize_packed_with_init(&packed, &opts, true, None, Some(&eff)).alphas
+                })
+            };
+
+            let base = run(1);
+            for threads in [2usize, 3, 8, 16] {
+                let other = run(threads);
+                assert_eq!(
+                    base.len(),
+                    other.len(),
+                    "{label}: thread count changed the result shape"
+                );
+                // Bit-for-bit: "close enough" is exactly the standard this mode
+                // rejects, and a tolerance here would have passed the old code.
+                let diffs = base
+                    .iter()
+                    .zip(&other)
+                    .filter(|(a, b)| a.to_bits() != b.to_bits())
+                    .count();
+                assert_eq!(
+                    diffs,
+                    0,
+                    "{label}: result differs between 1 and {threads} threads in {diffs} of \
+                     {} transcripts — the shard partition must not depend on the thread count",
+                    base.len()
+                );
+            }
         }
     }
 
@@ -858,7 +876,11 @@ mod shard_plan_determinism {
     fn shard_count_ignores_the_thread_pool() {
         let b = EquivalenceClassBuilder::new();
         for c in 0..12_000u32 {
-            b.add_group(TranscriptGroup::new(vec![c % 500, 500 + c % 300]), vec![1.0, 2.0], 3);
+            b.add_group(
+                TranscriptGroup::new(vec![c % 500, 500 + c % 300]),
+                vec![1.0, 2.0],
+                3,
+            );
         }
         let mut eq = b.finish();
         eq.update_eff_lengths(&vec![1000.0; 900]);
