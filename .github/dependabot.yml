@@ -61,18 +61,13 @@ updates:
           - patch
         patterns:
           - piscem-rs
-          # Both `paraseq` spellings are listed, and BOTH ARE INERT TODAY.
-          # `paraseq = { package = "paraseq-temp", ... }` is a rename, and
-          # dependabot-core's cargo parser skips a renamed manifest entry
-          # outright (`next unless name == name_from_declaration(...)` in
-          # cargo/lib/dependabot/cargo/file_parser.rb). Running that parser over
-          # this workspace confirms it: `paraseq` is not parsed at all, and
-          # `paraseq-temp` is seen only through Cargo.lock, with no requirement
-          # attached, which makes it indirect and therefore outside the default
-          # `allow`. So paraseq bumps stay manual, as they have been. The
-          # patterns are kept for the day the temporary republication goes away
-          # and the entry becomes an ordinary direct dependency again.
-          - paraseq
+          # `paraseq-temp`, not `paraseq`: the manifest used to rename it, and
+          # dependabot-core's cargo parser skips a renamed entry outright
+          # (`next unless name == name_from_declaration(...)` in
+          # cargo/lib/dependabot/cargo/file_parser.rb), which left the crate
+          # visible only through Cargo.lock as an indirect dependency no update
+          # would be raised for. The rename is gone, so this pattern matches a
+          # direct dependency; do not reintroduce it.
           - paraseq-temp
           - libradicl
           - cf1-rs
