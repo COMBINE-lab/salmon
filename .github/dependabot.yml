@@ -61,13 +61,20 @@ updates:
           - patch
         patterns:
           - piscem-rs
-          # `paraseq-temp`, not `paraseq`: the manifest used to rename it, and
-          # dependabot-core's cargo parser skips a renamed entry outright
-          # (`next unless name == name_from_declaration(...)` in
-          # cargo/lib/dependabot/cargo/file_parser.rb), which left the crate
-          # visible only through Cargo.lock as an indirect dependency no update
-          # would be raised for. The rename is gone, so this pattern matches a
-          # direct dependency; do not reintroduce it.
+          # `paraseq-temp` is what the manifest declares today, and it has to
+          # stay declared under its real name: dependabot-core's cargo parser
+          # skips a renamed entry outright (`next unless name ==
+          # name_from_declaration(...)` in
+          # cargo/lib/dependabot/cargo/file_parser.rb), which is what once left
+          # this crate visible only through Cargo.lock, as an indirect
+          # dependency no update would be raised for. Do not reintroduce the
+          # rename.
+          #
+          # `paraseq` is listed alongside it for the day the resizable pool
+          # lands in noamteyssier/paraseq and the manifest moves back to the
+          # official crate. The group keeps matching then without anyone having
+          # to remember this file.
+          - paraseq
           - paraseq-temp
           - libradicl
           - cf1-rs
