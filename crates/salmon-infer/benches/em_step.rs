@@ -4,15 +4,17 @@
 //! tail of multi-transcript classes drawn with a Zipf-like bias so a handful of
 //! "hot" transcripts recur — the scatter-contention shape the real M-step guards
 //! against) and times the convergence loop through the public `optimize_packed`
-//! entry point:
-//!   - a single M-step (`min_iter = max_iter = 1`, no truncation): the surgical
-//!     per-iteration throughput measurement,
-//!   - a bounded convergence run (fixed `max_iter`): EM vs VBEM, parallel (rayon)
-//!     vs sequential.
+//! entry point. Every parallel case owns an explicit Rayon pool, so its benchmark
+//! id records the worker count and Criterion compares like with like across
+//! revisions instead of accidentally comparing two different `RAYON_NUM_THREADS`
+//! environments under the same id.
 //!
-//! This is the guard that will quantify the SQUAREM win in Phase 2: re-run with an
-//! acceleration flag and compare wall-clock here, and iterations-to-convergence via
-//! `EmResult::iters` in the `salmon-infer` tests, on this same fixture.
+//! The one-step cases include `ShardPlan` construction and reusable workspace
+//! allocation. The 50-step cases amortize that setup and are the primary M-step
+//! throughput/scaling measurement. Full-convergence cases additionally capture
+//! convergence-check and accelerator costs.
+
+use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
@@ -112,61 +114,90 @@ fn bounded(use_vbem: bool, iters: u32) -> EmOptions {
 }
 
 fn bench_em(c: &mut Criterion) {
-    let sizes = [(20_000u32, 50_000usize), (100_000u32, 300_000usize)];
-    let mut group = c.benchmark_group("em");
-    // Convergence loops are the expensive case; keep the sample count modest so the
-    // whole bench finishes in well under a minute.
-    group.sample_size(20);
+    const THREADS: [usize; 7] = [1, 2, 4, 8, 16, 32, 64];
+    const NUM_TXPS: u32 = 100_000;
+    const NUM_CLASSES: usize = 300_000;
 
-    for &(num_txps, num_classes) in &sizes {
-        let p = synthetic(num_txps, num_classes, 0xDEAD_BEEF);
-        group.throughput(Throughput::Elements(num_classes as u64));
-        let id = format!("{num_txps}txp_{num_classes}cls");
+    let p = synthetic(NUM_TXPS, NUM_CLASSES, 0xDEAD_BEEF);
+    let shape = format!("{NUM_TXPS}txp_{NUM_CLASSES}cls");
+    let step_em = single_step(false);
+    let step_vbem = single_step(true);
+    let loop_em = bounded(false, 50);
+    let loop_vbem = bounded(true, 50);
 
-        // --- single M-step (per-iteration throughput) ---
-        let step_em = single_step(false);
-        group.bench_with_input(BenchmarkId::new("step_em_par", &id), &p, |b, p| {
-            b.iter(|| optimize_packed(p, &step_em, true))
+    let mut group = c.benchmark_group("em_scaling");
+    // Seven pool sizes make a full run intentionally substantial; ten samples is
+    // Criterion's minimum and enough for the paired baseline/candidate comparison.
+    group.sample_size(10);
+
+    // The sequential path is what each outer-parallel bootstrap replicate uses.
+    group.throughput(Throughput::Elements(NUM_CLASSES as u64 * 50));
+    group.bench_with_input(BenchmarkId::new("loop50_vbem_seq", &shape), &p, |b, p| {
+        b.iter(|| black_box(optimize_packed(p, &loop_vbem, false)))
+    });
+
+    for threads in THREADS {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("benchmark Rayon pool");
+        let suffix = format!("t{threads}_{shape}");
+
+        group.throughput(Throughput::Elements(NUM_CLASSES as u64));
+        group.bench_with_input(BenchmarkId::new("step_em_par", &suffix), &p, |b, p| {
+            b.iter(|| pool.install(|| black_box(optimize_packed(p, &step_em, true))))
         });
-        group.bench_with_input(BenchmarkId::new("step_em_seq", &id), &p, |b, p| {
-            b.iter(|| optimize_packed(p, &step_em, false))
-        });
-        let step_vbem = single_step(true);
-        group.bench_with_input(BenchmarkId::new("step_vbem_par", &id), &p, |b, p| {
-            b.iter(|| optimize_packed(p, &step_vbem, true))
+        group.bench_with_input(BenchmarkId::new("step_vbem_par", &suffix), &p, |b, p| {
+            b.iter(|| pool.install(|| black_box(optimize_packed(p, &step_vbem, true))))
         });
 
-        // --- bounded convergence loop (EM vs VBEM, par) ---
-        let loop_em = bounded(false, 50);
-        group.bench_with_input(BenchmarkId::new("loop50_em_par", &id), &p, |b, p| {
-            b.iter(|| optimize_packed(p, &loop_em, true))
+        group.throughput(Throughput::Elements(NUM_CLASSES as u64 * 50));
+        group.bench_with_input(BenchmarkId::new("loop50_em_par", &suffix), &p, |b, p| {
+            b.iter(|| pool.install(|| black_box(optimize_packed(p, &loop_em, true))))
         });
-        let loop_vbem = bounded(true, 50);
-        group.bench_with_input(BenchmarkId::new("loop50_vbem_par", &id), &p, |b, p| {
-            b.iter(|| optimize_packed(p, &loop_vbem, true))
-        });
-
-        // --- full convergence: plain EM vs SQUAREM (the headline comparison) ---
-        let conv_plain = EmOptions::default();
-        group.bench_with_input(BenchmarkId::new("converge_em_plain", &id), &p, |b, p| {
-            b.iter(|| optimize_packed(p, &conv_plain, true))
-        });
-        let conv_sq = EmOptions {
-            accel: EmAccel::Squarem,
-            ..Default::default()
-        };
-        group.bench_with_input(BenchmarkId::new("converge_em_squarem", &id), &p, |b, p| {
-            b.iter(|| optimize_packed(p, &conv_sq, true))
-        });
-        let conv_da = EmOptions {
-            accel: EmAccel::Daarem,
-            ..Default::default()
-        };
-        group.bench_with_input(BenchmarkId::new("converge_em_daarem", &id), &p, |b, p| {
-            b.iter(|| optimize_packed(p, &conv_da, true))
+        group.bench_with_input(BenchmarkId::new("loop50_vbem_par", &suffix), &p, |b, p| {
+            b.iter(|| pool.install(|| black_box(optimize_packed(p, &loop_vbem, true))))
         });
     }
     group.finish();
+
+    // Full convergence is intentionally a separate, smaller fixture so it can be
+    // filtered independently from the scaling sweep.
+    let conv_p = synthetic(20_000, 50_000, 0xC0FF_EE11);
+    let conv_plain = EmOptions {
+        use_vbem: true,
+        ..Default::default()
+    };
+    let conv_sq = EmOptions {
+        use_vbem: true,
+        accel: EmAccel::Squarem,
+        ..Default::default()
+    };
+    let conv_da = EmOptions {
+        use_vbem: true,
+        accel: EmAccel::Daarem,
+        ..Default::default()
+    };
+    let mut convergence = c.benchmark_group("em_convergence");
+    convergence.sample_size(10);
+    for threads in THREADS {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("benchmark Rayon pool");
+        for (name, opts) in [
+            ("vbem_none", &conv_plain),
+            ("vbem_squarem", &conv_sq),
+            ("vbem_daarem", &conv_da),
+        ] {
+            convergence.bench_with_input(
+                BenchmarkId::new(name, format!("t{threads}_20000txp_50000cls")),
+                &conv_p,
+                |b, p| b.iter(|| pool.install(|| black_box(optimize_packed(p, opts, true)))),
+            );
+        }
+    }
+    convergence.finish();
 }
 
 criterion_group!(benches, bench_em);
