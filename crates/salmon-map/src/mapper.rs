@@ -103,8 +103,9 @@ pub fn take_last_map_stats() -> MapStats {
     LAST_MAP_STATS.with(|c| c.take())
 }
 
-/// Collect mapping candidates for one read, using either the sparse-k-mer path
-/// or the extended uni-MEM path per [`MapConfig::use_unimems`].
+/// Collect mapping candidates for one read, using the seeding strategy
+/// [`MapConfig::seed_mode`] selects (unitig-constrained uni-MEMs, sparse
+/// fixed-k anchors, or reference-extended MEMs).
 /// The `is_left` argument piscem's collectors take, which salmon does not use.
 ///
 /// `HitSearcher` keeps two raw-hit buffers, `left_hits` and `right_hits`, so a

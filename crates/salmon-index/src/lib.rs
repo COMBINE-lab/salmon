@@ -292,8 +292,9 @@ pub struct IndexInfo {
 ///   original-case printable sequence), for every record;
 /// - names are the header up to the first space or tab (salmon's `sepStr=" \t"`),
 ///   hashed for every record whose (printable) sequence is non-empty;
-/// - decoy hashers receive nothing here (decoys are not yet supported), so the
-///   decoy digests are the SHA of the empty string, matching salmon's no-decoy case.
+/// - decoy records (named in `decoy_names`) are routed to dedicated decoy
+///   hashers, so a decoy-aware index gets real decoy digests; with no decoys
+///   those hashers stay empty ⇒ SHA of "", matching salmon's no-decoy case.
 ///
 /// Every one of those "before"s matters: hashing the *input* rather than the
 /// processed sequence is what lets the digest identify the FASTA the user
@@ -381,12 +382,6 @@ struct RefHashes {
     decoy_name_hash: String,
 }
 
-/// Stream the input FASTA(s) replacing any base that is not A/C/G/T (case-
-/// insensitive) with a pseudo-random ACGT base, writing one cleaned FASTA to
-/// `out_path` (record order and headers preserved). salmon's `FixFasta` does the
-/// same: cf1-rs/packed-seq cannot index `N`/ambiguous bases. The reference seq/
-/// name HASHES are computed on the *original* input (matching salmon, which
-/// hashes before replacement). Returns the number of bases replaced.
 /// Outcome of [`preprocess_fasta`]: how many bases were randomized and which
 /// transcripts were dropped as exact-sequence duplicates.
 struct PreprocessResult {

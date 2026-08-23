@@ -83,9 +83,8 @@ fn read_replicates(out: &Path, n_txp: usize) -> (Vec<String>, Vec<Vec<f64>>) {
     let reps: Vec<Vec<f64>> = bytes
         .chunks_exact(n_txp * 8)
         .map(|rep| {
-            rep.chunks_exact(8)
-                .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
-                .collect()
+            let (words, _) = rep.as_chunks::<8>();
+            words.iter().copied().map(f64::from_le_bytes).collect()
         })
         .collect();
     (names, reps)

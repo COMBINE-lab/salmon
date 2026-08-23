@@ -88,8 +88,6 @@ pub struct Alignment {
     pub score: i32,
     /// whether `score >= min_score_fraction * perfect_score`
     pub valid: bool,
-    /// absolute reference position where the aligned window began
-    pub ref_window_start: i32,
 }
 
 /// Reverse-complement a DNA base (ACGT, case-insensitive; anything else → N).
@@ -203,11 +201,7 @@ pub fn align_chain(
 
         let valid = score > min_accepted_score(query.len(), cfg);
 
-        Some(Alignment {
-            score,
-            valid,
-            ref_window_start: win_start,
-        })
+        Some(Alignment { score, valid })
     })
 }
 
@@ -845,7 +839,6 @@ mod tests {
         let aln = align_chain(read, &reference, &chain, &cfg).unwrap();
         assert_eq!(aln.score, perfect_score(read.len(), &cfg));
         assert!(aln.valid);
-        assert_eq!(aln.ref_window_start, 50);
     }
 
     #[test]

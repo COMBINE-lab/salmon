@@ -350,10 +350,13 @@ pub struct AlignQuantResult {
     pub num_mapped: u64,
     /// mapped fragments placed as orphans (only one mate mapped).
     ///
-    /// `Some` whenever the records were tallied, which is any RAD input —
-    /// orphan status is in the records themselves, so this works for a piscem
-    /// RAD too, independently of whether the file carries salmon's provenance.
-    /// `None` for a BAM input, which this path does not tally.
+    /// `Some` whenever the records were tallied, which is every path here:
+    /// any RAD input — orphan status is in the records themselves, so this
+    /// works for a piscem RAD too, independently of whether the file carries
+    /// salmon's provenance — and BAM input, which tallies orphans while
+    /// streaming. The `Option` remains because a future producer could leave
+    /// the count unknown, and `meta_info.json` must be able to say so rather
+    /// than report a fabricated 0.
     pub num_orphan: Option<u64>,
     /// fragments judged against a known expected library format that had at
     /// least one strand-compatible placement / had none (#1130). An unstranded
@@ -1428,6 +1431,18 @@ fn process_fragment(
     // Pair records into the placements the aligner reported (proper pairs +
     // orphans), NOT a cross-product of every read1/read2 on a transcript.
     let placements = pair_records(recs);
+    // FLD training on this path diverges from every other, deliberately and
+    // permanently (#1140, audit F17): the observation is every fragment's
+    // longest reported `frag_len` at weight 1, taken *before* strand-
+    // compatibility filtering and with no posterior-acceptance sampling, where
+    // the one-pass reads path samples by mapping posterior and the RAD paths
+    // bake an order-independent distribution. The weighting below likewise uses
+    // a flat `LOG_EPSILON` orphan penalty rather than the CMF length-
+    // conditioning the other paths apply. This is documented, not fixed: the
+    // online alignment path is deprecated (removal planned 2.7.0), and parity
+    // work on a floor being torn out would only risk the estimates it still
+    // produces. `-a` without `--online` takes the deterministic path, which has
+    // none of these divergences.
     let frag_len = recs.iter().map(|r| r.frag_len).max().unwrap_or(0);
     if frag_len > 0 {
         ctx.fld.add_val(frag_len as usize, 0.0);

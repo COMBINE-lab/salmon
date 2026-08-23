@@ -274,10 +274,13 @@ mod tests {
     /// not manufacture structure from uniform data.
     #[test]
     fn uniform_observations_project_near_flat() {
-        // mass spread uniformly across positions -> projected weights ~ constant
+        // mass spread uniformly across positions -> projected weights ~ constant.
+        // `add_mass` takes LINEAR mass, so one observation is 1.0: these tests
+        // passed 0.0 believing it was log-space, which trained the model on
+        // nothing and made both of them vacuous (#1140).
         let mut m = SimplePosBias::new(NUM_POS_BINS);
         for pos in 0..1000 {
-            m.add_mass(pos, 1000, 0.0); // log(1) per observation
+            m.add_mass(pos, 1000, 1.0);
         }
         m.finalize();
         let mut out = vec![0.0; 500];
@@ -298,14 +301,14 @@ mod tests {
     #[test]
     fn enriched_5p_has_higher_early_weight() {
         let mut m = SimplePosBias::new(NUM_POS_BINS);
-        // pile mass at the 5' end
+        // pile mass at the 5' end (linear mass; see the note above)
         for _ in 0..10000 {
-            m.add_mass(5, 1000, 0.0);
+            m.add_mass(5, 1000, 1.0);
         }
         // plus a uniform background, so the model is a bump on a plateau rather
         // than a single spike.
         for pos in 0..1000 {
-            m.add_mass(pos, 1000, 0.0);
+            m.add_mass(pos, 1000, 1.0);
         }
         m.finalize();
         let mut out = vec![0.0; 1000];

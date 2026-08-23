@@ -104,11 +104,6 @@ impl GcFragModel {
         }
     }
 
-    /// salmon's default 3 × 101 model.
-    pub fn default_model() -> Self {
-        Self::new(DEFAULT_COND_BINS, DEFAULT_GC_BINS)
-    }
-
     #[inline]
     fn idx(&self, ctx_frac: i32, gc_frac: i32) -> usize {
         // Clamp-then-LUT is bit-identical to `bin_frac` for every i32 input:
@@ -218,10 +213,7 @@ pub fn gc_ratio(
 // Fragment-GC content (salmon's `Transcript::GCCount_` / `gcFrac` / `gcDesc`)
 // ===========================================================================
 
-use crate::seqbias::{
-    conditional_cdf, log_bias, revcomp_bytes, SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
-    MIN_CDF_MASS,
-};
+use crate::seqbias::{conditional_cdf, MIN_ALPHA, MIN_CDF_MASS};
 
 /// salmon's fragment-length sampling stride for the GC convolution
 /// (`pdfSampFactor` = `biasSpeedSamp`, default 5).
@@ -656,112 +648,6 @@ where
                 a
             },
         )
-}
-
-/// Bias-corrected effective length including fragment-GC bias (and, when
-/// `seq_models` is provided, sequence-specific bias too). Mirrors salmon's
-/// combined `updateEffectiveLengths` convolution: per-position 5'/3' sequence
-/// factors are multiplied by the per-fragment `gcBias.get({fragFrac, contextFrac})`
-/// ratio, convolved with the conditional FLD, and floored at the lower barrier.
-///
-/// `gc_bias` is the normalized observed/expected ratio model ([`gc_ratio`]).
-/// `seq_models` is `(obs_fw, exp_fw, obs_rc, exp_rc)` when `--seqBias` is also on.
-///
-/// This is the GC-specific sibling of [`crate::bias::corrected_effective_length_full`];
-/// see that function for what the convolution and the lower barrier are doing.
-#[allow(clippy::too_many_arguments)]
-pub fn gc_corrected_effective_length(
-    seq: &[u8],
-    prefix: &[u32],
-    cdf: &[f64],
-    fld_low: usize,
-    fld_high: usize,
-    gc_bias: &GcFragModel,
-    seq_models: Option<(&SBModel, &SBModel, &SBModel, &SBModel)>,
-    elen: f64,
-    stride: usize,
-) -> f64 {
-    let k = if seq_models.is_some() {
-        CONTEXT_LENGTH
-    } else {
-        1
-    };
-    let ref_len = seq.len();
-    let unprocessed = (ref_len as i32 - elen as i32).max(0);
-    let cdf_max_arg = (cdf.len() - 1).min(ref_len);
-    let cdf_max_val = cdf[cdf_max_arg];
-    if ref_len < k || unprocessed <= 0 || cdf_max_val < MIN_CDF_MASS {
-        return elen;
-    }
-    let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
-
-    // Per-position sequence-bias factors (1.0 when not seq-correcting).
-    let mut fw = vec![1.0f64; ref_len];
-    let mut rc = vec![1.0f64; ref_len];
-    if let Some((obs_fw, exp_fw, obs_rc, exp_rc)) = seq_models {
-        let cu = CONTEXT_LEFT;
-        let rc_seq = revcomp_bytes(seq);
-        for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
-            let read_start = frag_start + cu;
-            if read_start < ref_len {
-                fw[read_start] = log_bias(
-                    obs_fw,
-                    exp_fw,
-                    &seq[frag_start..frag_start + CONTEXT_LENGTH],
-                    false,
-                )
-                .exp();
-                rc[read_start] = log_bias(
-                    obs_rc,
-                    exp_rc,
-                    &rc_seq[frag_start..frag_start + CONTEXT_LENGTH],
-                    false,
-                )
-                .exp();
-            }
-        }
-        rc.reverse();
-    }
-
-    // Convolve seq×gc fragment factors with the conditional FLD.
-    let ctx = GcContext::build(&GcView::Dense(prefix));
-    let stride = stride.max(1) as i32;
-    let max_len = (ref_len as i32).min(fld_high as i32 + 1);
-    let mut fl = fld_low as i32;
-    let mut done = fl >= max_len;
-    let sp = if fl > 0 { fl - 1 } else { 0 };
-    let mut prev_mass = cond(sp);
-    let mut eff = 0.0f64;
-    while !done {
-        if fl >= max_len {
-            done = true;
-            fl = max_len - 1;
-        }
-        let fl_weight = cond(fl) - prev_mass;
-        prev_mass = cond(fl);
-        let mut mass = 0.0f64;
-        // Hoist the bound: for kstart in [0, kmax) we have
-        // frag_end = kstart+fl-1 <= ref_len-2 < ref_len, so the old per-iteration
-        // `frag_end < ref_len` guard is always true and is dropped (it kept
-        // `ref_len` live in the inner loop, forcing a spill/reload).
-        let kmax = ref_len as i32 - fl;
-        let mut kstart = 0i32;
-        while kstart < kmax {
-            let frag_start = kstart;
-            let frag_end = kstart + fl - 1;
-            let mut frag_factor = fw[frag_start as usize] * rc[frag_end as usize];
-            if let Some((ff, cf)) = ctx.desc(frag_start, frag_end) {
-                frag_factor *= gc_bias.get(ff, cf);
-            }
-            mass += frag_factor;
-            kstart += 1;
-        }
-        eff += fl_weight * mass;
-        fl += stride;
-    }
-
-    let offset = (unprocessed as f64).max(1.0);
-    eff.max(elen.min(offset))
 }
 
 #[cfg(test)]

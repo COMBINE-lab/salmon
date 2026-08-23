@@ -299,7 +299,6 @@ pub fn finalize_mappings_counted_into(
         .filter(|m| !m.is_decoy)
         .map(|m| m.score)
         .max();
-    let had_decoy = best_per_tid.iter().any(|m| m.is_decoy);
     let Some(best_valid) = best_valid else {
         // only decoy mappings -> dropped, dominated by a decoy
         best_per_tid.clear();
@@ -320,8 +319,6 @@ pub fn finalize_mappings_counted_into(
             return (true, 0);
         }
     }
-    let _ = had_decoy;
-
     let mut num_below = 0u32;
     for m in best_per_tid.drain(..).filter(|m| !m.is_decoy) {
         let weight = if cfg.hard_filter {

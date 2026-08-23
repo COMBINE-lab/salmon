@@ -126,8 +126,10 @@ aggregates (no per-fragment cost) and are emitted for every mode — reads,
 
 An array of `{ "code", "severity", "message" }` objects surfacing likely
 bad-input conditions, so pipelines can gate on `code`/`severity` rather than
-scraping the log (the same messages are also written to
-`logs/salmon_quant.log`). `severity` is `"error"` or `"warning"`. Codes:
+scraping the log. This array is the durable record: the same messages are
+written to stderr as the run proceeds, but `logs/salmon_quant.log` carries only
+a fixed run summary (version, times, counts, fragment-length statistics) and
+not these diagnostics. `severity` is `"error"` or `"warning"`. Codes:
 
 | `code` | severity | fires when |
 | --- | --- | --- |

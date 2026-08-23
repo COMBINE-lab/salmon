@@ -1,7 +1,8 @@
 //! Output writers: `quant.sf`, `cmd_info.json`, `lib_format_counts.json`,
 //! `aux_info/meta_info.json`, `libParams/flenDist.txt`, and `logs/salmon_quant.log`.
-//! Functional parity with salmon's column/field layout (the binary aux bias
-//! dumps and the index-hash meta fields are deferred to a later step).
+//! Functional parity with salmon's column/field layout, including the binary
+//! aux dumps (`aux_info/fld.gz` and the observed/expected bias models) and the
+//! index seq/name hash fields in `meta_info.json`.
 //!
 //! # What a salmon output directory contains
 //!
@@ -554,10 +555,8 @@ mod tests {
         assert_eq!(names_tsv, b"t0\tt1\tt2\ts0\n");
 
         let bytes = select_sample_bytes(&sample, &row_indices);
-        let got: Vec<f64> = bytes
-            .chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
-            .collect();
+        let (words, _) = bytes.as_chunks::<8>();
+        let got: Vec<f64> = words.iter().copied().map(f64::from_le_bytes).collect();
         // decoy values 7.0/9.0 excluded; short s0 present at 0.0.
         assert_eq!(got, vec![10.0, 20.0, 30.0, 0.0]);
     }
