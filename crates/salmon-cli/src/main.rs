@@ -414,13 +414,16 @@ struct QuantArgs {
     /// transcript set is taken from the annotation.
     #[arg(long = "annotation", value_name = "GTF|GFF")]
     annotation: Option<PathBuf>,
+    // `--genome` / `--juncMissDiscount` are read only by the genome-projection
+    // branch, which `--annotation` selects; without it they were silently
+    // accepted and dead (#1140), so clap now enforces the dependency.
     /// Genome FASTA (genome-alignment mode) — needed only for bias correction, to
     /// reconstruct transcript sequences from the annotation's exons.
-    #[arg(long = "genome", value_name = "FASTA")]
+    #[arg(long = "genome", value_name = "FASTA", requires = "annotation")]
     genome: Option<PathBuf>,
     /// Genome-alignment projection: penalty multiplier per junction mismatch
     /// (bramble `junc_miss_discount`; default 1.0 = no penalty).
-    #[arg(long = "juncMissDiscount", value_name = "F")]
+    #[arg(long = "juncMissDiscount", value_name = "F", requires = "annotation")]
     junc_miss_discount: Option<f64>,
     /// Library type (e.g. IU, ISR, A for auto).
     #[arg(short = 'l', long = "libType", default_value = "A")]
@@ -601,8 +604,10 @@ struct QuantArgs {
     dump_bias_models: bool,
     /// Compression codec for RAD output (`--writeRad` and the `--deterministic`
     /// intermediate): `lz4` (default), `zstd` (better ratio), or `none`.
-    #[arg(long = "radCompress", default_value = "lz4", value_parser = ["lz4", "zstd", "none"])]
-    rad_compress: String,
+    /// Option-typed (default applied at use: `lz4`) so passing it on a path
+    /// that writes no RAD can warn instead of being silently inert (#1140).
+    #[arg(long = "radCompress", value_parser = ["lz4", "zstd", "none"])]
+    rad_compress: Option<String>,
     /// Write uncompressed RAD chunks (overrides --radCompress).
     #[arg(long = "noCompressRad")]
     no_compress_rad: bool,
@@ -630,14 +635,16 @@ struct QuantArgs {
     /// Disable effective-length correction (use raw reference length).
     #[arg(long = "noLengthCorrection")]
     no_length_correction: bool,
-    /// Minimum alignment score as a fraction of the perfect score.
-    #[arg(long = "minScoreFraction", default_value_t = 0.65)]
-    min_score_fraction: f32,
+    /// Minimum alignment score as a fraction of the perfect score (default 0.65).
+    /// Option-typed so passing it under `--sketch` — which computes no alignment
+    /// scores — can warn instead of being silently inert (#1140).
+    #[arg(long = "minScoreFraction")]
+    min_score_fraction: Option<f32>,
     /// Orphan chain sub-optimality threshold (salmon's `orphanChainSubThresh`).
     /// `0.0` (default) aligns every orphan candidate (more sensitive than salmon's
     /// 0.95, which prunes low-chain-coverage orphans before alignment).
-    #[arg(long = "orphanChainSubThresh", default_value_t = 0.0)]
-    orphan_chain_sub_thresh: f32,
+    #[arg(long = "orphanChainSubThresh")]
+    orphan_chain_sub_thresh: Option<f32>,
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
     full_length_alignment: bool,
@@ -652,18 +659,18 @@ struct QuantArgs {
     /// default; the flag is accepted for explicitness/back-compat.
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
-    /// Match score for selective alignment (reads mode).
-    #[arg(long = "ma", default_value_t = 2)]
-    ma: i32,
-    /// Mismatch penalty for selective alignment (reads mode).
-    #[arg(long = "mp", default_value_t = 4)]
-    mp: i32,
-    /// Gap-open penalty for selective alignment (reads mode).
-    #[arg(long = "go", default_value_t = 6)]
-    go: i32,
-    /// Gap-extend penalty for selective alignment (reads mode).
-    #[arg(long = "ge", default_value_t = 2)]
-    ge: i32,
+    /// Match score for selective alignment (reads mode; default 2).
+    #[arg(long = "ma")]
+    ma: Option<i32>,
+    /// Mismatch penalty for selective alignment (reads mode; default 4).
+    #[arg(long = "mp")]
+    mp: Option<i32>,
+    /// Gap-open penalty for selective alignment (reads mode; default 6).
+    #[arg(long = "go")]
+    go: Option<i32>,
+    /// Gap-extend penalty for selective alignment (reads mode; default 2).
+    #[arg(long = "ge")]
+    ge: Option<i32>,
     /// Consensus slack: a target is kept only if its best chain score is at least
     /// `(1 - slack)` of the max chain score for that mate (salmon default 0.35;
     /// `1.0` keeps every target).
@@ -1186,6 +1193,11 @@ fn requant_options(
     // the driver clears the flags for phase 1.
     q.dump_eq = map_opts.dump_eq;
     q.dump_eq_weights = map_opts.dump_eq_weights;
+    // Same shape as the eq dumps: phase 2 owns the run's final bias models
+    // (phase 1's dump site is gated off by skip_quant), so `--dumpBiasModels`
+    // is honoured by the requant's shared writer (#1140: the flag silently
+    // vanished when deterministic became the default).
+    q.dump_bias_models = map_opts.dump_bias_models;
     // The RAD path gained these two with #1148; before that they existed only in
     // reads mode, so `--deterministic` accepted them and quantified as though
     // they had not been passed.
@@ -1465,7 +1477,15 @@ fn run_deterministic(
         pct2,
         res.num_eq_classes
     );
-    if let Some(gm) = gene_map {
+    // `--skipQuant` estimates no abundances; aggregating the zero rows to
+    // gene level would announce success over an empty result (#1140 — the
+    // deterministic reads driver already skipped it, the others wrote
+    // zeros silently).
+    if map_opts.skip_quant && gene_map.is_some() {
+        tracing::info!(
+            "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
+        );
+    } else if let Some(gm) = gene_map {
         write_gene_level(
             out_dir,
             gm,
@@ -1594,7 +1614,15 @@ fn run_deterministic_align(
         pct2,
         res.num_eq_classes
     );
-    if let Some(gm) = gene_map {
+    // `--skipQuant` estimates no abundances; aggregating the zero rows to
+    // gene level would announce success over an empty result (#1140 — the
+    // deterministic reads driver already skipped it, the others wrote
+    // zeros silently).
+    if opts.skip_quant && gene_map.is_some() {
+        tracing::info!(
+            "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
+        );
+    } else if let Some(gm) = gene_map {
         write_gene_level(
             &out_dir,
             gm,
@@ -1651,9 +1679,25 @@ fn run_genome_project(
     if explicit && scratch_dir.is_some() {
         tracing::warn!("--radScratchDir is ignored when --writeRad names an explicit path");
     }
+    // Deliverable-vs-intermediate rule, same as the reads/alignment drivers
+    // (#1149/#1140): under `--skipQuant` the projected RAD is the run's only
+    // output, so it belongs in the output directory under its stable name —
+    // not pid-suffixed in scratch, where a "successful" run would leave the
+    // output directory empty.
+    let deliverable = q.skip_quant;
+    if deliverable && scratch_dir.is_some() {
+        tracing::info!(
+            "--skipQuant makes the projected RAD this run's output, so it is written to \
+             the output directory rather than to --radScratchDir"
+        );
+    }
     let rad_path = match rad_out {
         Some(p) => p,
-        None => intermediate_rad_path(&out_dir, scratch_dir, "genome_projected")?,
+        None => intermediate_rad_path(
+            &out_dir,
+            if deliverable { None } else { scratch_dir },
+            "genome_projected",
+        )?,
     };
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
@@ -1705,7 +1749,15 @@ fn run_genome_project(
         res.num_mapped,
         res.num_eq_classes
     );
-    if let Some(gm) = gene_map {
+    // `--skipQuant` estimates no abundances; aggregating the zero rows to
+    // gene level would announce success over an empty result (#1140 — the
+    // deterministic reads driver already skipped it, the others wrote
+    // zeros silently).
+    if q.skip_quant && gene_map.is_some() {
+        tracing::info!(
+            "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
+        );
+    } else if let Some(gm) = gene_map {
         write_gene_level(
             &out_dir,
             gm,
@@ -1716,7 +1768,7 @@ fn run_genome_project(
             &res.counts,
         )?;
     }
-    if explicit || keep_rad {
+    if explicit || keep_rad || deliverable {
         tracing::info!("kept projected RAD at {}", rad_path.display());
     } else if let Err(e) = std::fs::remove_file(&rad_path) {
         tracing::warn!("could not remove projected RAD {}: {e}", rad_path.display());
@@ -1794,7 +1846,19 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // that only exist on the online path warn when passed without it, rather
     // than being silently inert under the new default — silent inertness is
     // the exact failure mode #1140's audit spent a release hunting down.
-    if args.online {
+    // In RAD-input mode there is no online path at all — a RAD is always
+    // quantified with the offline estimator — so `--online` there must not
+    // claim the one-pass path will run, and must not suppress the inert-knob
+    // warnings below (`--rad X --online -f 0.9` used to drop `-f` silently
+    // behind a misleading deprecation notice, #1140).
+    let online_path_exists = args.rad.is_none();
+    if args.online && !online_path_exists {
+        tracing::warn!(
+            "--online has no effect in RAD-input mode (--rad): a RAD is always quantified \
+             with the offline (deterministic) estimator"
+        );
+    }
+    if args.online && online_path_exists {
         tracing::warn!(
             "--online selects the deprecated one-pass quantification path (removal planned \
              for 2.7.0). Its results depend on the thread count; the default deterministic \
@@ -1845,6 +1909,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                  quantified directly and the index is never consulted"
             );
         }
+        if args.write_unmapped_names {
+            // Only the reads-mode mapper tracks per-read mapping failures; an
+            // alignment/RAD input carries only the records that aligned.
+            tracing::warn!(
+                "--writeUnmappedNames is ignored in alignment mode (-a): unmapped-read \
+                 tracking exists only in reads mode"
+            );
+        }
         warn_unsupported_mapping_output(
             &args.write_mappings,
             &args.write_bam,
@@ -1875,6 +1947,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.init_uniform = args.init_uniform;
         opts.dump_eq = args.dump_eq;
         opts.dump_eq_weights = args.dump_eq_weights;
+        opts.dump_bias_models = args.dump_bias_models;
         opts.no_length_correction = args.no_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.bias_speed_samp = args.bias_speed_samp;
@@ -1911,7 +1984,10 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                      projection scores by bramble similarity, not an alignment error model"
                 );
             }
-            let codec = rad_codec_from_args(args.no_compress_rad, &args.rad_compress)?;
+            let codec = rad_codec_from_args(
+                args.no_compress_rad,
+                args.rad_compress.as_deref().unwrap_or("lz4"),
+            )?;
             let gp = GenomeProjectOptions {
                 bam: opts.bam.clone(),
                 annotation,
@@ -1944,7 +2020,10 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // one-pass path below, which is the only place the online error model
         // still lives.
         if !args.online {
-            let codec = rad_codec_from_args(args.no_compress_rad, &args.rad_compress)?;
+            let codec = rad_codec_from_args(
+                args.no_compress_rad,
+                args.rad_compress.as_deref().unwrap_or("lz4"),
+            )?;
             return run_deterministic_align(
                 opts,
                 args.write_rad.clone(),
@@ -1963,6 +2042,26 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             tracing::warn!(
                 "--noLengthCorrection/--noFragLengthDist are not supported on the deprecated \
                  online alignment path: ignored. The default (deterministic) mode honours them."
+            );
+        }
+        // The online alignment path writes no RAD, so the flags that place or
+        // shape one are inert here; the deterministic default honours them
+        // (#1140: a flag that does nothing must say so).
+        let inert_rad: Vec<&str> = [
+            ("--writeRad", args.write_rad.is_some()),
+            ("--keepRad", args.keep_rad),
+            ("--radScratchDir", args.rad_scratch_dir.is_some()),
+            ("--radCompress", args.rad_compress.is_some()),
+            ("--noCompressRad", args.no_compress_rad),
+        ]
+        .iter()
+        .filter_map(|&(name, passed)| passed.then_some(name))
+        .collect();
+        if !inert_rad.is_empty() {
+            tracing::warn!(
+                "{} shape the intermediate RAD, which the deprecated online alignment path \
+                 never writes: ignored. The default (deterministic) mode honours them.",
+                inert_rad.join(", ")
             );
         }
         // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
@@ -2005,7 +2104,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         }
         // The truncated-mass warning now fires in the shared output writer,
         // covering this path and every quantify_rad driver alike (#1140).
-        if let Some(gm) = &gene_map {
+        // `--skipQuant` estimates no abundances; aggregating the zero rows to
+        // gene level would announce success over an empty result (#1140 — the
+        // deterministic reads driver already skipped it, the others wrote
+        // zeros silently).
+        if args.skip_quant && gene_map.is_some() {
+            tracing::info!(
+                "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
+            );
+        } else if let Some(gm) = &gene_map {
             write_gene_level(
                 &out_dir,
                 gm,
@@ -2026,6 +2133,31 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             tracing::warn!(
                 "-i/--index is ignored in RAD-input mode (--rad): the RAD's own reference \
                  table is used and the index is never consulted"
+            );
+        }
+        if args.write_unmapped_names {
+            tracing::warn!(
+                "--writeUnmappedNames is ignored in RAD-input mode (--rad): a RAD carries \
+                 only the fragments that mapped, and no read names"
+            );
+        }
+        // The input *is* the RAD; the flags that would place or shape a new
+        // one have nothing to act on (#1140).
+        let inert_rad: Vec<&str> = [
+            ("--writeRad", args.write_rad.is_some()),
+            ("--keepRad", args.keep_rad),
+            ("--radScratchDir", args.rad_scratch_dir.is_some()),
+            ("--radCompress", args.rad_compress.is_some()),
+            ("--noCompressRad", args.no_compress_rad),
+        ]
+        .iter()
+        .filter_map(|&(name, passed)| passed.then_some(name))
+        .collect();
+        if !inert_rad.is_empty() {
+            tracing::warn!(
+                "{} shape an intermediate RAD, which RAD-input mode does not write \
+                 (the --rad file is the input): ignored",
+                inert_rad.join(", ")
             );
         }
         warn_unsupported_mapping_output(
@@ -2068,6 +2200,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.skip_quant = args.skip_quant;
         opts.dump_eq = args.dump_eq;
         opts.dump_eq_weights = args.dump_eq_weights;
+        opts.dump_bias_models = args.dump_bias_models;
+        // The GC/bias shape knobs quantify_rad honours everywhere else; these
+        // four were the exact requant_options omission recurring in this block
+        // (#1140): --gcBias was wired while its tuning flags silently stayed
+        // at defaults.
+        opts.gc_bins = args.num_gc_bins;
+        opts.cond_gc_bins = args.conditional_gc_bins;
+        opts.bias_speed_samp = args.bias_speed_samp;
+        opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.no_length_correction = args.no_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.num_bootstraps = args.num_bootstraps;
@@ -2086,7 +2227,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             pct,
             res.num_eq_classes
         );
-        if let Some(gm) = &gene_map {
+        // `--skipQuant` estimates no abundances; aggregating the zero rows to
+        // gene level would announce success over an empty result (#1140 — the
+        // deterministic reads driver already skipped it, the others wrote
+        // zeros silently).
+        if args.skip_quant && gene_map.is_some() {
+            tracing::info!(
+                "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
+            );
+        } else if let Some(gm) = &gene_map {
             write_gene_level(
                 &out_dir,
                 gm,
@@ -2153,7 +2302,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.rad_codec = if args.no_compress_rad {
         ChunkCodec::None
     } else {
-        match args.rad_compress.as_str() {
+        match args.rad_compress.as_deref().unwrap_or("lz4") {
             "none" => ChunkCodec::None,
             "lz4" => ChunkCodec::Lz4,
             "zstd" => ChunkCodec::Zstd,
@@ -2168,8 +2317,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.no_length_correction = args.no_length_correction;
     opts.model_single_frag_prob = !args.no_single_frag_prob;
     opts.no_frag_length_dist = args.no_frag_length_dist;
-    opts.map_config.align.min_score_fraction = args.min_score_fraction;
-    opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh;
+    opts.map_config.align.min_score_fraction = args.min_score_fraction.unwrap_or(0.65);
+    opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh.unwrap_or(0.0);
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.align.bandwidth = args.bandwidth;
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
@@ -2199,10 +2348,55 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples.unwrap_or(5_000);
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
-    opts.map_config.align.match_score = args.ma as i8;
-    opts.map_config.align.mismatch_pen = args.mp as i8;
-    opts.map_config.align.gap_open_pen = args.go as i8;
-    opts.map_config.align.gap_extend_pen = args.ge as i8;
+    opts.map_config.align.match_score = args.ma.unwrap_or(2) as i8;
+    opts.map_config.align.mismatch_pen = args.mp.unwrap_or(4) as i8;
+    opts.map_config.align.gap_open_pen = args.go.unwrap_or(6) as i8;
+    opts.map_config.align.gap_extend_pen = args.ge.unwrap_or(2) as i8;
+
+    // The sketch (pseudoalignment) path computes no alignment scores, uses its
+    // own hardcoded seeding, and governs orphans solely through
+    // `--sketchStrictOrphans` — so every selective-alignment knob below is
+    // inert under `--sketch`. A flag that does nothing must say so (#1140);
+    // this is the mode×flag applicability check for the sketch/SA split.
+    if args.sketch {
+        let inert: Vec<&str> = [
+            ("--ma", args.ma.is_some()),
+            ("--mp", args.mp.is_some()),
+            ("--go", args.go.is_some()),
+            ("--ge", args.ge.is_some()),
+            ("--minScoreFraction", args.min_score_fraction.is_some()),
+            ("--fullLengthAlignment", args.full_length_alignment),
+            (
+                "--orphanChainSubThresh",
+                args.orphan_chain_sub_thresh.is_some(),
+            ),
+            ("--discardOrphansQuasi", args.discard_orphans_quasi),
+            (
+                "--orphansRequireUnmappedMate",
+                args.orphans_require_unmapped_mate,
+            ),
+            ("--sparseSeeds", args.sparse_seeds),
+            ("--refMEMs", args.refmems),
+            ("--uniMEMs", args.unimems),
+        ]
+        .iter()
+        .filter_map(|&(name, passed)| passed.then_some(name))
+        .collect();
+        if !inert.is_empty() {
+            tracing::warn!(
+                "{} {} no effect under --sketch: pseudoalignment computes no alignment \
+                 scores, seeds with its own fixed sketch parameters, and controls orphans \
+                 only via --sketchStrictOrphans",
+                inert.join(", "),
+                if inert.len() == 1 { "has" } else { "have" }
+            );
+        }
+    } else if args.sketch_strict_orphans {
+        tracing::warn!(
+            "--sketchStrictOrphans has no effect without --sketch: selective alignment \
+             governs orphans via --discardOrphansQuasi / --orphansRequireUnmappedMate"
+        );
+    }
     // chaining consensus + repetitive-hit guard
     opts.map_config.collect.consensus_fraction = 1.0 - args.consensus_slack;
     opts.map_config.collect.max_hit_occ = args.max_occs_per_hit;
@@ -2288,7 +2482,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             res.inference_truncated_mass
         );
     }
-    if let Some(gm) = &gene_map {
+    // `--skipQuant` estimates no abundances; aggregating the zero rows to
+    // gene level would announce success over an empty result (#1140 — the
+    // deterministic reads driver already skipped it, the others wrote
+    // zeros silently).
+    if args.skip_quant && gene_map.is_some() {
+        tracing::info!(
+            "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
+        );
+    } else if let Some(gm) = &gene_map {
         write_gene_level(
             &out_dir,
             gm,
@@ -2611,6 +2813,7 @@ mod tests {
         map_opts.init_uniform = true;
         map_opts.dump_eq = true;
         map_opts.dump_eq_weights = true;
+        map_opts.dump_bias_models = true;
         map_opts.no_length_correction = true;
         map_opts.no_frag_length_dist = true;
 
@@ -2646,6 +2849,7 @@ mod tests {
         assert!(q.init_uniform);
         assert!(q.dump_eq);
         assert!(q.dump_eq_weights);
+        assert!(q.dump_bias_models);
         assert!(q.no_length_correction);
         assert!(q.no_frag_length_dist);
     }
