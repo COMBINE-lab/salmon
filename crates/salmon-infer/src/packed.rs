@@ -360,12 +360,6 @@ pub(crate) fn em_step_seq(
     }
 }
 
-/// Reduce per-shard dense accumulators into `alpha_out` (one writer per `tid`,
-/// no contention). Parallelized over transcripts.
-///
-/// Parallelizing over *transcripts* rather than shards is what removes the
-/// contention: each output slot is written by exactly one task, which reads that
-/// slot from every shard.
 /// The fixed work partition for the parallel M-step, plus the set of
 /// transcripts each shard can touch.
 ///
@@ -384,9 +378,10 @@ pub(crate) fn em_step_seq(
 /// **Scaling.** Clearing and reducing dense `num_txps` buffers cost
 /// `O(nshards × num_txps)` per iteration no matter how much real work there
 /// was — 30M operations per iteration at 64 shards over 238k transcripts,
-/// against ~1.3M eq-class entries of actual work. That overhead grew with the
-/// thread count while the useful work stayed fixed, which is why the EM phase
-/// stopped scaling past ~32 threads and then regressed. Since the class labels
+/// against 6.9M eq-class entries of actual work on the measured workload. That
+/// overhead grew with the thread count while the useful work stayed fixed,
+/// which is why the EM phase stopped scaling past ~32 threads and then
+/// regressed. Since the class labels
 /// never change between iterations, each shard's reachable transcript set can
 /// be computed once, and the per-iteration cost falls to `O(entries)`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -993,9 +988,9 @@ mod shard_plan_determinism {
     ///
     /// The existing suite missed it because its fixtures were far too small:
     /// with a handful of classes every partition is the same partition. This
-    /// builds enough classes to cross `MIN_CLASSES_PER_SHARD` several times, so
-    /// the plan really does shard, and enough transcript overlap that the
-    /// per-shard partial sums genuinely differ in grouping.
+    /// builds enough incidences to cross `MIN_INCIDENCES_PER_SHARD` several
+    /// times, so the plan really does shard, and enough transcript overlap that
+    /// the per-shard partial sums genuinely differ in grouping.
     #[test]
     fn em_result_is_independent_of_thread_count() {
         const NUM_TXPS: usize = 5_000;

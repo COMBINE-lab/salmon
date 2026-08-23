@@ -438,8 +438,10 @@ pub(crate) fn run_em_counts(
     // once here, not per-task per-iteration). Each shard processes a contiguous
     // slice of the classes with plain adds, then they are summed into `alpha_out`
     // — avoiding the cross-thread CAS contention of a single shared atomic array.
-    // Capped at 256 logical shards after measuring 64/128/256: compressed buffers
-    // make that extra scheduling parallelism affordable at high thread counts.
+    // Capped at 128 logical shards after measuring class-balanced 64 and
+    // incidence-balanced 64/128/256 on both benchmark hosts. Although 256 was
+    // 0.61% faster in the combined high-thread geometric mean, the predeclared
+    // 2% tie rule selects the smaller plan.
     // The partition is derived from incidence counts alone, never from the
     // thread count: the shard boundaries fix the order of the floating-point
     // sums, so deriving them from `-p` made `quant.sf` depend on the thread
