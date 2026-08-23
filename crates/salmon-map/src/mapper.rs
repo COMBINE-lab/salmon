@@ -576,17 +576,32 @@ fn push_orphan_or_recovered<R: RefProvider>(
         if let Some((partner_score, frag_len)) =
             recover_mate(partner_read, refseq, anchor, cfg, revcomp_buf)
         {
+            // Which physical mate is which. `anchor_is_left` says the anchor is
+            // mate 1; otherwise the *rescued* read is mate 1. The rescue searches
+            // inward geometry, so the two mates are on opposite strands by
+            // construction. Every strand-bearing field below is stated in terms
+            // of these, matching the proper-pair convention built by
+            // `join_reads_and_filter` (`is_fw` = mate 1, `r2_fw` = mate 2) —
+            // taking them from the anchor instead inverted the fragment whenever
+            // mate 2 anchored, which a stranded `-l` then judged backwards.
+            let mate1_fw = if anchor_is_left {
+                anchor.is_fw
+            } else {
+                !anchor.is_fw
+            };
+            let mate2_fw = !mate1_fw;
             raw.push(RawMapping {
                 tid,
-                is_fw: anchor.is_fw,
+                is_fw: mate1_fw,
                 status: MateStatus::PairedEndPaired,
                 score: anchor_aln.score + partner_score,
                 fragment_len: frag_len,
                 read_len: 0, // recovered proper pair: fragment_len carries the length signal
                 is_decoy,
                 ref_pos: anchor.chain.ref_start(),
-                // orientation not re-derived for recovered pairs; attribute the
-                // anchor's position to its own strand for positional bias.
+                // Positional bias attributes the anchor's coordinate to the
+                // anchor's own strand — that placement is directly observed,
+                // independently of which mate the anchor turned out to be.
                 fw_pos: if anchor.is_fw {
                     anchor.chain.ref_start()
                 } else {
@@ -599,16 +614,12 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 },
                 // The recovered pair's orientation IS observed: the anchor's
                 // strand is real evidence and the rescued mate is opposite by
-                // construction (the rescue searches inward geometry). Filling
-                // it lets the one-pass strand filter judge recovered pairs the
-                // way the deterministic path always has — the RAD stores both
-                // strand bits, so a requant judged these while one-pass waved
-                // them through on `format: None` (#1140, the #1136 pattern
-                // surviving on this one site).
-                format: Some(salmon_core::observed_paired_format(
-                    anchor.is_fw,
-                    !anchor.is_fw,
-                )),
+                // construction. Filling it lets the one-pass strand filter judge
+                // recovered pairs the way the deterministic path always has —
+                // the RAD stores both strand bits, so a requant judged these
+                // while one-pass waved them through on `format: None` (#1140,
+                // the #1136 pattern surviving on this one site).
+                format: Some(salmon_core::observed_paired_format(mate1_fw, mate2_fw)),
                 // SAM: the partner's leftmost is estimated from the fragment length.
                 r1_pos: if anchor_is_left {
                     anchor.chain.ref_start()
@@ -620,7 +631,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 } else {
                     anchor.chain.ref_start()
                 },
-                r2_fw: !anchor.is_fw,
+                r2_fw: mate2_fw,
                 r1_score: if anchor_is_left {
                     anchor_aln.score
                 } else {
