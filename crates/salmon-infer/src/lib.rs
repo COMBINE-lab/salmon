@@ -389,19 +389,19 @@ pub(crate) fn run_em_counts(
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
-    // Per-shard dense accumulators reused across all parallel M-steps (allocated
+    // Per-shard compressed accumulators reused across all parallel M-steps (allocated
     // once here, not per-task per-iteration). Each shard processes a contiguous
     // slice of the classes with plain adds, then they are summed into `alpha_out`
     // — avoiding the cross-thread CAS contention of a single shared atomic array.
-    // Capped at 64 shards: beyond that, the per-iteration zero/reduce overhead
-    // outweighs the extra accumulation parallelism.
-    // The partition is derived from the class count alone, never from the
+    // Capped at 256 logical shards after measuring 64/128/256: compressed buffers
+    // make that extra scheduling parallelism affordable at high thread counts.
+    // The partition is derived from incidence counts alone, never from the
     // thread count: the shard boundaries fix the order of the floating-point
     // sums, so deriving them from `-p` made `quant.sf` depend on the thread
     // count — the one thing this mode exists to prevent. See `ShardPlan`.
     let plan = parallel.then(|| packed::ShardPlan::new(p));
     let mut shards: Vec<Vec<f64>> = match &plan {
-        Some(pl) => vec![vec![0.0f64; num_txps]; pl.num_shards()],
+        Some(pl) => pl.allocate_buffers(),
         None => Vec::new(),
     };
 

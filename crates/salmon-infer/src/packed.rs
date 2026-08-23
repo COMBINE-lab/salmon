@@ -389,94 +389,166 @@ pub(crate) fn em_step_seq(
 /// stopped scaling past ~32 threads and then regressed. Since the class labels
 /// never change between iterations, each shard's reachable transcript set can
 /// be computed once, and the per-iteration cost falls to `O(entries)`.
+#[derive(Clone, Copy, Debug, Default)]
+struct Contributor {
+    /// Logical shard id. `MAX_SHARDS` is deliberately below `u16::MAX`.
+    shard: u16,
+    /// Position of this transcript in that shard's compressed accumulator.
+    local: u32,
+}
+
 pub(crate) struct ShardPlan {
-    /// classes per shard (the last shard is the short one)
-    chunk: usize,
-    /// `touched[s]`: sorted, deduplicated transcript ids reachable from shard
-    /// `s`'s class range. Iterated in this fixed order, so the clear below is
-    /// order-stable.
-    touched: Vec<Vec<u32>>,
-    /// Inverted index of the above, CSR-packed: the shards that can write
-    /// transcript `tid` are `contrib[contrib_start[tid]..contrib_start[tid+1]]`,
-    /// in ascending shard order.
-    ///
-    /// This is what lets the reduction be both parallel and deterministic. A
-    /// sequential scatter-add over `touched` is deterministic but serializes
-    /// ~1.3M adds per iteration; summing per transcript over *all* shards is
-    /// parallel but costs `nshards × num_txps`, the very thing this plan
-    /// exists to avoid. Inverting once gives each output element an
-    /// independent, fixed-order sum over only the shards that contribute.
-    contrib_start: Vec<u32>,
-    contrib: Vec<u16>,
+    /// Contiguous class boundaries, length `num_shards + 1`.
+    boundaries: Vec<usize>,
+    /// Number of reachable transcripts in each shard; also its buffer length.
+    local_lens: Vec<usize>,
+    /// Local accumulator index for every packed incidence, aligned with
+    /// `PackedEqClasses::labels` and `combined`.
+    entry_local: Vec<u32>,
+    /// CSR offsets into `contributors`, one range per transcript. `u64` is
+    /// deliberate: the packed layout supports more than 4G incidences and its
+    /// auxiliary indices must not silently reintroduce that old ceiling.
+    contrib_start: Vec<u64>,
+    /// Contributing shards in ascending shard order, with the local buffer index
+    /// needed to read each compressed accumulator directly.
+    contributors: Vec<Contributor>,
 }
 
 impl ShardPlan {
-    /// Shards are sized from the class count alone — never from the thread
-    /// count, which is what broke determinism. The cap keeps the fixed cost
-    /// bounded; the floor keeps small inputs from over-partitioning.
-    const MAX_SHARDS: usize = 64;
-    const MIN_CLASSES_PER_SHARD: usize = 4096;
+    /// Logical parallelism is derived only from the packed data, never the Rayon
+    /// pool. Several logical shards per high-core worker leave enough tasks for
+    /// work stealing without making `-p` part of the arithmetic.
+    const MAX_SHARDS: usize = 256;
+    const MIN_INCIDENCES_PER_SHARD: usize = 4096;
 
     pub(crate) fn new(p: &PackedEqClasses) -> Self {
         let nclasses = p.num_classes();
-        let nshards = nclasses
-            .div_ceil(Self::MIN_CLASSES_PER_SHARD)
-            .clamp(1, Self::MAX_SHARDS);
-        let chunk = nclasses.div_ceil(nshards);
-        let touched: Vec<Vec<u32>> = (0..nshards)
+        let total_incidences = p.labels.len();
+        let max_shards = Self::MAX_SHARDS.min(nclasses.max(1));
+        let nshards = total_incidences
+            .div_ceil(Self::MIN_INCIDENCES_PER_SHARD)
+            .clamp(1, max_shards);
+
+        // Place deterministic boundaries at equal cumulative-incidence targets.
+        // Classes stay intact, so a single exceptionally large class may still
+        // dominate one shard, but ordinary class-size skew no longer creates a
+        // long tail merely because every shard received the same class count.
+        let mut boundaries = Vec::with_capacity(nshards + 1);
+        boundaries.push(0);
+        for s in 1..nshards {
+            let target = ((total_incidences as u128 * s as u128).div_ceil(nshards as u128)) as u64;
+            let min_ci = boundaries[s - 1] + 1;
+            let max_ci = nclasses - (nshards - s);
+            let rel = p.starts[min_ci..=max_ci].partition_point(|&offset| offset < target);
+            let upper = (min_ci + rel).min(max_ci);
+            let lower = upper.saturating_sub(1).max(min_ci);
+            let lower_distance = p.starts[lower].abs_diff(target);
+            let upper_distance = p.starts[upper].abs_diff(target);
+            boundaries.push(if lower_distance <= upper_distance {
+                lower
+            } else {
+                upper
+            });
+        }
+        boundaries.push(nclasses);
+
+        // Build the sorted touched set and the incidence->local-index map
+        // together. The latter removes every binary search/hash lookup from the
+        // thousands of repeated M-steps; the binary searches happen only here.
+        let shard_maps: Vec<(Vec<u32>, Vec<u32>)> = (0..nshards)
             .into_par_iter()
             .map(|s| {
-                let start = s * chunk;
-                let end = ((s + 1) * chunk).min(nclasses);
-                let mut v: Vec<u32> = Vec::new();
-                for ci in start..end {
-                    let (tids, _) = p.class(ci);
-                    v.extend_from_slice(tids);
-                }
-                v.sort_unstable();
-                v.dedup();
-                v
+                let entry_start = p.starts[boundaries[s]] as usize;
+                let entry_end = p.starts[boundaries[s + 1]] as usize;
+                let labels = &p.labels[entry_start..entry_end];
+                let mut touched = labels.to_vec();
+                touched.sort_unstable();
+                touched.dedup();
+                let locals = labels
+                    .iter()
+                    .map(|tid| {
+                        u32::try_from(
+                            touched
+                                .binary_search(tid)
+                                .expect("a shard's touched set came from these labels"),
+                        )
+                        .expect("a shard cannot touch more than u32::MAX transcripts")
+                    })
+                    .collect();
+                (touched, locals)
             })
             .collect();
+        let local_lens = shard_maps
+            .iter()
+            .map(|(touched, _)| touched.len())
+            .collect();
+        let entry_local = shard_maps
+            .iter()
+            .flat_map(|(_, locals)| locals.iter().copied())
+            .collect();
 
-        // Invert `touched` into CSR. Counting pass, prefix sum, fill pass —
+        // Invert the touched sets into CSR. Counting pass, prefix sum, fill pass —
         // the shards are visited in ascending order in the fill, so each
         // transcript's contributor list is ascending too.
         let num_txps = p.num_txps;
-        let mut counts = vec![0u32; num_txps + 1];
-        for tv in &touched {
-            for &tid in tv {
-                counts[tid as usize + 1] += 1;
+        let mut counts = vec![0u64; num_txps + 1];
+        for (touched, _) in &shard_maps {
+            for &tid in touched {
+                counts[tid as usize + 1] = counts[tid as usize + 1]
+                    .checked_add(1)
+                    .expect("contributor count exceeds u64");
             }
         }
         for i in 0..num_txps {
-            counts[i + 1] += counts[i];
+            counts[i + 1] = counts[i + 1]
+                .checked_add(counts[i])
+                .expect("contributor CSR offset exceeds u64");
         }
         let contrib_start = counts;
         let mut cursor = contrib_start.clone();
-        let mut contrib = vec![0u16; contrib_start[num_txps] as usize];
-        for (s, tv) in touched.iter().enumerate() {
-            for &tid in tv {
+        let contributor_len = usize::try_from(contrib_start[num_txps])
+            .expect("contributor array must fit in address space");
+        let mut contributors = vec![Contributor::default(); contributor_len];
+        for (s, (touched, _)) in shard_maps.iter().enumerate() {
+            let shard = u16::try_from(s).expect("MAX_SHARDS fits in u16");
+            for (local, &tid) in touched.iter().enumerate() {
                 let at = &mut cursor[tid as usize];
-                contrib[*at as usize] = s as u16;
-                *at += 1;
+                contributors[*at as usize] = Contributor {
+                    shard,
+                    local: u32::try_from(local)
+                        .expect("a shard cannot touch more than u32::MAX transcripts"),
+                };
+                *at = at.checked_add(1).expect("contributor cursor exceeds u64");
             }
         }
 
         Self {
-            chunk,
-            touched,
+            boundaries,
+            local_lens,
+            entry_local,
             contrib_start,
-            contrib,
+            contributors,
         }
     }
 
     pub(crate) fn num_shards(&self) -> usize {
-        self.touched.len()
+        self.local_lens.len()
     }
 
-    fn range(&self, s: usize, nclasses: usize) -> (usize, usize) {
-        (s * self.chunk, ((s + 1) * self.chunk).min(nclasses))
+    pub(crate) fn allocate_buffers(&self) -> Vec<Vec<f64>> {
+        let mut buffers = Vec::with_capacity(self.num_shards());
+        buffers.extend(self.local_lens.iter().map(|&len| vec![0.0; len]));
+        buffers
+    }
+
+    fn range(&self, s: usize) -> (usize, usize) {
+        (self.boundaries[s], self.boundaries[s + 1])
+    }
+
+    fn entry_locals(&self, p: &PackedEqClasses, ci: usize) -> &[u32] {
+        let lo = p.starts[ci] as usize;
+        let hi = p.starts[ci + 1] as usize;
+        &self.entry_local[lo..hi]
     }
 }
 
@@ -493,24 +565,25 @@ fn reduce_shards_sparse(shards: &[Vec<f64>], plan: &ShardPlan, alpha_out: &mut [
         let lo = plan.contrib_start[tid] as usize;
         let hi = plan.contrib_start[tid + 1] as usize;
         let mut s = 0.0;
-        for &sh in &plan.contrib[lo..hi] {
-            s += shards[sh as usize][tid];
+        for contributor in &plan.contributors[lo..hi] {
+            s += shards[contributor.shard as usize][contributor.local as usize];
         }
         *out = s;
     });
 }
 
-/// Parallel EM M-step. Each shard owns a private dense `num_txps` buffer and
-/// processes a contiguous slice of the classes with plain (non-atomic) adds;
+/// Parallel EM M-step. Each shard owns a private compressed buffer containing
+/// only the transcripts reachable from its class range. A precomputed local
+/// index aligned with every packed incidence makes accumulation a direct add;
+/// there is no lookup in the repeated hot path. Each shard processes a
+/// contiguous slice of the classes with plain (non-atomic) adds;
 /// the shards are then summed into `alpha_out`. This avoids both the per-task
 /// allocation of a naive fold/reduce and the cross-thread CAS contention of a
 /// single shared `AtomicF64` array (which, on hot transcripts, dominated the
 /// M-step). The buffers are allocated once in [`run_em_counts`] and reused.
 ///
-/// The trade is memory for speed: one dense `num_txps` buffer per shard, in
-/// exchange for every add being an ordinary non-atomic one. A fixed shard count
-/// and a fixed class partition also keep the summation order stable, so the
-/// parallel result reproduces run to run.
+/// Fixed data-derived shard boundaries and an ascending contributor reduction
+/// keep the floating-point order stable regardless of how Rayon schedules work.
 pub(crate) fn em_step_par(
     p: &PackedEqClasses,
     counts: &[u64],
@@ -519,45 +592,37 @@ pub(crate) fn em_step_par(
     shards: &mut [Vec<f64>],
     plan: &ShardPlan,
 ) {
-    let nclasses = p.num_classes();
-    shards
-        .par_iter_mut()
-        .zip(plan.touched.par_iter())
-        .enumerate()
-        .for_each(|(s, (buf, touched))| {
-            // Buffers are reused across iterations, so clear before
-            // accumulating — but only the entries this shard can write, which
-            // is what keeps the cost proportional to the work rather than to
-            // `num_txps × nshards`.
-            for &tid in touched {
-                buf[tid as usize] = 0.0;
-            }
-            let (start, end) = plan.range(s, nclasses);
-            for ci in start..end {
-                let count = counts[ci] as f64;
-                let (tids, ws) = p.class(ci);
-                if tids.len() > 1 {
-                    let mut denom = 0.0;
-                    for (&tid, &w) in tids.iter().zip(ws) {
-                        denom += alpha_in[tid as usize] * w;
-                    }
-                    if denom > MIN_EQ_CLASS_WEIGHT {
-                        let inv = count / denom;
-                        // Recomputes `alpha_in[tid] * w` rather than keeping a scratch
-                        // vector: the multiply is cheaper than the extra memory
-                        // traffic inside a parallel closure.
-                        for (&tid, &w) in tids.iter().zip(ws) {
-                            let v = alpha_in[tid as usize] * w;
-                            if !v.is_nan() {
-                                buf[tid as usize] += v * inv;
-                            }
+    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
+        // The whole compressed buffer was touched in the previous iteration;
+        // clearing it contiguously is both complete and cache-friendly.
+        buf.fill(0.0);
+        let (start, end) = plan.range(s);
+        for ci in start..end {
+            let count = counts[ci] as f64;
+            let (tids, ws) = p.class(ci);
+            let locals = plan.entry_locals(p, ci);
+            if tids.len() > 1 {
+                let mut denom = 0.0;
+                for (&tid, &w) in tids.iter().zip(ws) {
+                    denom += alpha_in[tid as usize] * w;
+                }
+                if denom > MIN_EQ_CLASS_WEIGHT {
+                    let inv = count / denom;
+                    // Recomputes `alpha_in[tid] * w` rather than keeping a scratch
+                    // vector: the multiply is cheaper than the extra memory
+                    // traffic inside a parallel closure.
+                    for i in 0..tids.len() {
+                        let v = alpha_in[tids[i] as usize] * ws[i];
+                        if !v.is_nan() {
+                            buf[locals[i] as usize] += v * inv;
                         }
                     }
-                } else {
-                    buf[tids[0] as usize] += count;
                 }
+            } else {
+                buf[locals[0] as usize] += count;
             }
-        });
+        }
+    });
     reduce_shards_sparse(shards, plan, alpha_out);
 }
 
@@ -638,43 +703,37 @@ pub(crate) fn vbem_step_par(
     // Computed once, before the parallel region: it depends on a global sum over
     // all transcripts, so it cannot be sharded.
     fill_exp_theta(alpha_in, prior_alphas, exp_theta);
-    let nclasses = p.num_classes();
     // Reborrow as immutable so the closure below can share it across threads.
     let exp_theta: &[f64] = exp_theta;
-    shards
-        .par_iter_mut()
-        .zip(plan.touched.par_iter())
-        .enumerate()
-        .for_each(|(s, (buf, touched))| {
-            for &tid in touched {
-                buf[tid as usize] = 0.0;
-            }
-            let (start, end) = plan.range(s, nclasses);
-            for ci in start..end {
-                let count = counts[ci] as f64;
-                let (tids, ws) = p.class(ci);
-                if tids.len() > 1 {
-                    let mut denom = 0.0;
-                    for (&tid, &w) in tids.iter().zip(ws) {
-                        let et = exp_theta[tid as usize];
-                        if et > 0.0 {
-                            denom += et * w;
-                        }
+    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
+        buf.fill(0.0);
+        let (start, end) = plan.range(s);
+        for ci in start..end {
+            let count = counts[ci] as f64;
+            let (tids, ws) = p.class(ci);
+            let locals = plan.entry_locals(p, ci);
+            if tids.len() > 1 {
+                let mut denom = 0.0;
+                for (&tid, &w) in tids.iter().zip(ws) {
+                    let et = exp_theta[tid as usize];
+                    if et > 0.0 {
+                        denom += et * w;
                     }
-                    if denom > MIN_EQ_CLASS_WEIGHT {
-                        let inv = count / denom;
-                        for (&tid, &w) in tids.iter().zip(ws) {
-                            let et = exp_theta[tid as usize];
-                            if et > 0.0 {
-                                buf[tid as usize] += et * w * inv;
-                            }
-                        }
-                    }
-                } else {
-                    buf[tids[0] as usize] += count;
                 }
+                if denom > MIN_EQ_CLASS_WEIGHT {
+                    let inv = count / denom;
+                    for i in 0..tids.len() {
+                        let et = exp_theta[tids[i] as usize];
+                        if et > 0.0 {
+                            buf[locals[i] as usize] += et * ws[i] * inv;
+                        }
+                    }
+                }
+            } else {
+                buf[locals[0] as usize] += count;
             }
-        });
+        }
+    });
     reduce_shards_sparse(shards, plan, alpha_out);
 }
 
@@ -763,8 +822,149 @@ mod tests {
 #[cfg(test)]
 mod shard_plan_determinism {
     use super::*;
-    use crate::EmOptions;
+    use crate::{EmOptions, EmResult};
     use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
+
+    fn fixture(num_txps: usize, num_classes: usize) -> (PackedEqClasses, Vec<f64>) {
+        let b = EquivalenceClassBuilder::new();
+        // Values chosen so the sums are not exactly representable: with tidy
+        // powers of two, every grouping agrees and the test cannot fail.
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for c in 0..num_classes {
+            let n = 2 + (c % 4);
+            let mut tids: Vec<u32> = (0..n).map(|_| (rnd() % num_txps as u64) as u32).collect();
+            tids.sort_unstable();
+            tids.dedup();
+            let ws: Vec<f64> = (0..tids.len())
+                .map(|i| 0.1 + ((rnd() % 1000) as f64) / 997.0 + i as f64 * 1e-3)
+                .collect();
+            b.add_group(TranscriptGroup::new(tids), ws, 1 + (rnd() % 50));
+        }
+        let mut eq = b.finish();
+        let eff: Vec<f64> = (0..num_txps)
+            .map(|i| 500.0 + (i % 997) as f64 * 1.7)
+            .collect();
+        eq.update_eff_lengths(&eff);
+        (PackedEqClasses::from_collapsed(&eq, num_txps), eff)
+    }
+
+    fn assert_same_result(label: &str, threads: usize, base: &EmResult, other: &EmResult) {
+        assert_eq!(
+            base.iters, other.iters,
+            "{label}: iteration count at t{threads}"
+        );
+        assert_eq!(
+            base.converged, other.converged,
+            "{label}: convergence flag at t{threads}"
+        );
+        assert_eq!(
+            base.dropped_mass.to_bits(),
+            other.dropped_mass.to_bits(),
+            "{label}: dropped mass at t{threads}"
+        );
+        assert_eq!(
+            base.alphas.len(),
+            other.alphas.len(),
+            "{label}: thread count changed the result shape"
+        );
+        let diffs = base
+            .alphas
+            .iter()
+            .zip(&other.alphas)
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        assert_eq!(
+            diffs,
+            0,
+            "{label}: result differs between 1 and {threads} threads in {diffs} of {} \
+             transcripts",
+            base.alphas.len()
+        );
+    }
+
+    fn dense_em_reference(
+        p: &PackedEqClasses,
+        counts: &[u64],
+        alpha_in: &[f64],
+        plan: &ShardPlan,
+    ) -> Vec<f64> {
+        let mut shards = vec![vec![0.0; p.num_txps]; plan.num_shards()];
+        for (s, buf) in shards.iter_mut().enumerate() {
+            let (start, end) = plan.range(s);
+            for ci in start..end {
+                let count = counts[ci] as f64;
+                let (tids, ws) = p.class(ci);
+                if tids.len() > 1 {
+                    let mut denom = 0.0;
+                    for (&tid, &w) in tids.iter().zip(ws) {
+                        denom += alpha_in[tid as usize] * w;
+                    }
+                    if denom > MIN_EQ_CLASS_WEIGHT {
+                        let inv = count / denom;
+                        for (&tid, &w) in tids.iter().zip(ws) {
+                            let v = alpha_in[tid as usize] * w;
+                            if !v.is_nan() {
+                                buf[tid as usize] += v * inv;
+                            }
+                        }
+                    }
+                } else {
+                    buf[tids[0] as usize] += count;
+                }
+            }
+        }
+        (0..p.num_txps)
+            .map(|tid| shards.iter().fold(0.0, |sum, buf| sum + buf[tid]))
+            .collect()
+    }
+
+    fn dense_vbem_reference(
+        p: &PackedEqClasses,
+        counts: &[u64],
+        prior: &[f64],
+        alpha_in: &[f64],
+        plan: &ShardPlan,
+    ) -> Vec<f64> {
+        let mut exp_theta = vec![0.0; p.num_txps];
+        fill_exp_theta(alpha_in, prior, &mut exp_theta);
+        let mut shards = vec![vec![0.0; p.num_txps]; plan.num_shards()];
+        for (s, buf) in shards.iter_mut().enumerate() {
+            let (start, end) = plan.range(s);
+            for ci in start..end {
+                let count = counts[ci] as f64;
+                let (tids, ws) = p.class(ci);
+                if tids.len() > 1 {
+                    let mut denom = 0.0;
+                    for (&tid, &w) in tids.iter().zip(ws) {
+                        let et = exp_theta[tid as usize];
+                        if et > 0.0 {
+                            denom += et * w;
+                        }
+                    }
+                    if denom > MIN_EQ_CLASS_WEIGHT {
+                        let inv = count / denom;
+                        for (&tid, &w) in tids.iter().zip(ws) {
+                            let et = exp_theta[tid as usize];
+                            if et > 0.0 {
+                                buf[tid as usize] += et * w * inv;
+                            }
+                        }
+                    }
+                } else {
+                    buf[tids[0] as usize] += count;
+                }
+            }
+        }
+        (0..p.num_txps)
+            .map(|tid| shards.iter().fold(0.0, |sum, buf| sum + buf[tid]))
+            .collect()
+    }
 
     /// The EM result must not depend on the thread count.
     ///
@@ -782,34 +982,8 @@ mod shard_plan_determinism {
     #[test]
     fn em_result_is_independent_of_thread_count() {
         const NUM_TXPS: usize = 5_000;
-        const NUM_CLASSES: usize = 20_000; // > 4 * MIN_CLASSES_PER_SHARD
-
-        let b = EquivalenceClassBuilder::new();
-        // Values chosen so the sums are not exactly representable: with tidy
-        // powers of two, every grouping agrees and the test cannot fail.
-        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
-        let mut rnd = || {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            seed
-        };
-        for c in 0..NUM_CLASSES {
-            let n = 2 + (c % 4);
-            let mut tids: Vec<u32> = (0..n).map(|_| (rnd() % NUM_TXPS as u64) as u32).collect();
-            tids.sort_unstable();
-            tids.dedup();
-            let ws: Vec<f64> = (0..tids.len())
-                .map(|i| 0.1 + ((rnd() % 1000) as f64) / 997.0 + i as f64 * 1e-3)
-                .collect();
-            b.add_group(TranscriptGroup::new(tids), ws, 1 + (rnd() % 50));
-        }
-        let mut eq = b.finish();
-        let eff: Vec<f64> = (0..NUM_TXPS)
-            .map(|i| 500.0 + (i % 997) as f64 * 1.7)
-            .collect();
-        eq.update_eff_lengths(&eff);
-        let packed = PackedEqClasses::from_collapsed(&eq, NUM_TXPS);
+        const NUM_CLASSES: usize = 20_000;
+        let (packed, eff) = fixture(NUM_TXPS, NUM_CLASSES);
 
         // Cover every kernel the shard plan feeds, not just the one
         // `EmOptions::default()` happens to select. The default is plain EM
@@ -819,23 +993,37 @@ mod shard_plan_determinism {
         // left the actual shipping path unguarded — which is how the original
         // defect survived.
         let configs = [
-            ("plain EM", false, crate::EmAccel::None),
-            ("VBEM (production default)", true, crate::EmAccel::None),
-            ("plain EM + SQUAREM", false, crate::EmAccel::Squarem),
-            ("VBEM + SQUAREM", true, crate::EmAccel::Squarem),
+            ("plain EM", false, false, crate::EmAccel::None),
+            (
+                "VBEM (production default)",
+                true,
+                false,
+                crate::EmAccel::None,
+            ),
+            (
+                "VBEM per-nucleotide prior",
+                true,
+                true,
+                crate::EmAccel::None,
+            ),
+            ("plain EM + SQUAREM", false, false, crate::EmAccel::Squarem),
+            ("VBEM + SQUAREM", true, false, crate::EmAccel::Squarem),
+            ("plain EM + DAAREM", false, false, crate::EmAccel::Daarem),
+            ("VBEM + DAAREM", true, false, crate::EmAccel::Daarem),
         ];
 
-        for (label, use_vbem, accel) in configs {
+        for (label, use_vbem, per_nucleotide_prior, accel) in configs {
             let opts = EmOptions {
                 max_iter: 200,
                 use_vbem,
+                per_nucleotide_prior,
                 accel,
                 ..EmOptions::default()
             };
 
             // Run the same problem inside rayon pools of different sizes. Only
             // the scheduling differs; the arithmetic must not.
-            let run = |threads: usize| -> Vec<f64> {
+            let run = |threads: usize| -> EmResult {
                 let pool = rayon::ThreadPoolBuilder::new()
                     .num_threads(threads)
                     .build()
@@ -848,34 +1036,111 @@ mod shard_plan_determinism {
                         crate::InitAlphas::NONE,
                         crate::EffLens::new(&eff),
                     )
-                    .alphas
                 })
             };
 
             let base = run(1);
             for threads in [2usize, 3, 8, 16] {
                 let other = run(threads);
-                assert_eq!(
-                    base.len(),
-                    other.len(),
-                    "{label}: thread count changed the result shape"
-                );
-                // Bit-for-bit: "close enough" is exactly the standard this mode
-                // rejects, and a tolerance here would have passed the old code.
-                let diffs = base
-                    .iter()
-                    .zip(&other)
-                    .filter(|(a, b)| a.to_bits() != b.to_bits())
-                    .count();
-                assert_eq!(
-                    diffs,
-                    0,
-                    "{label}: result differs between 1 and {threads} threads in {diffs} of \
-                     {} transcripts — the shard partition must not depend on the thread count",
-                    base.len()
-                );
+                assert_same_result(label, threads, &base, &other);
             }
         }
+    }
+
+    #[test]
+    fn compressed_plan_indices_and_ranges_are_consistent() {
+        let (packed, _) = fixture(3_000, 12_000);
+        let plan = ShardPlan::new(&packed);
+        assert_eq!(plan.boundaries[0], 0);
+        assert_eq!(*plan.boundaries.last().unwrap(), packed.num_classes());
+        assert!(plan.boundaries.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(plan.entry_local.len(), packed.labels.len());
+
+        // Invert contributor metadata back to (shard, local)->tid, then verify
+        // every incidence's precomputed local index reaches its original tid.
+        let mut local_tid: Vec<Vec<Option<u32>>> =
+            plan.local_lens.iter().map(|&len| vec![None; len]).collect();
+        for tid in 0..packed.num_txps {
+            let lo = plan.contrib_start[tid] as usize;
+            let hi = plan.contrib_start[tid + 1] as usize;
+            let contributors = &plan.contributors[lo..hi];
+            assert!(contributors.windows(2).all(|w| w[0].shard < w[1].shard));
+            for contributor in contributors {
+                local_tid[contributor.shard as usize][contributor.local as usize] =
+                    Some(tid as u32);
+            }
+        }
+        for s in 0..plan.num_shards() {
+            let (start, end) = plan.range(s);
+            for ci in start..end {
+                let (tids, _) = packed.class(ci);
+                let locals = plan.entry_locals(&packed, ci);
+                for (&tid, &local) in tids.iter().zip(locals) {
+                    assert_eq!(local_tid[s][local as usize], Some(tid));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compressed_steps_match_dense_reference_for_the_same_plan() {
+        let (packed, _) = fixture(3_000, 12_000);
+        let plan = ShardPlan::new(&packed);
+        let alpha: Vec<f64> = (0..packed.num_txps)
+            .map(|i| 0.25 + (i % 31) as f64 / 17.0)
+            .collect();
+        let prior: Vec<f64> = (0..packed.num_txps)
+            .map(|i| 0.01 + (i % 7) as f64 * 1e-4)
+            .collect();
+
+        let em_reference = dense_em_reference(&packed, &packed.counts, &alpha, &plan);
+        let mut em_out = vec![0.0; packed.num_txps];
+        let mut em_shards = plan.allocate_buffers();
+        em_step_par(
+            &packed,
+            &packed.counts,
+            &alpha,
+            &mut em_out,
+            &mut em_shards,
+            &plan,
+        );
+        assert!(em_reference
+            .iter()
+            .zip(&em_out)
+            .all(|(a, b)| a.to_bits() == b.to_bits()));
+
+        let vb_reference = dense_vbem_reference(&packed, &packed.counts, &prior, &alpha, &plan);
+        let mut vb_out = vec![0.0; packed.num_txps];
+        let mut exp_theta = vec![0.0; packed.num_txps];
+        let mut vb_shards = plan.allocate_buffers();
+        vbem_step_par(
+            &packed,
+            &packed.counts,
+            &prior,
+            &alpha,
+            &mut vb_out,
+            &mut exp_theta,
+            &mut vb_shards,
+            &plan,
+        );
+        assert!(vb_reference
+            .iter()
+            .zip(&vb_out)
+            .all(|(a, b)| a.to_bits() == b.to_bits()));
+    }
+
+    #[test]
+    fn empty_plan_has_one_empty_shard() {
+        let b = EquivalenceClassBuilder::new();
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[1.0; 4]);
+        let packed = PackedEqClasses::from_collapsed(&eq, 4);
+        let plan = ShardPlan::new(&packed);
+        assert_eq!(plan.boundaries, [0, 0]);
+        assert_eq!(plan.local_lens, [0]);
+        assert!(plan.entry_local.is_empty());
+        assert!(plan.contributors.is_empty());
+        assert_eq!(plan.contrib_start, [0; 5]);
     }
 
     /// The plan's shard count must come from the data, never from the pool.
