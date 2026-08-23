@@ -54,7 +54,7 @@ lscpu > "$OUT/lscpu.txt"
   printf 'extra='; printf ' %q' "${EXTRA[@]}"; echo
 } > "$OUT/config.txt"
 
-printf 'arm\tthreads\trepeat\torder\tem_s\trad_read_s\twall_s\tuser_s\tsys_s\tmax_rss_kb\tem_iters\tconverged\tquant_sha256\n' > "$OUT/results.tsv"
+printf 'arm\tthreads\trepeat\torder\tem_s\tposterior_s\trad_read_s\twall_s\tuser_s\tsys_s\tmax_rss_kb\tem_iters\tconverged\tquant_sha256\n' > "$OUT/results.tsv"
 
 affinity_for() {
   local n="$1"
@@ -70,7 +70,7 @@ affinity_for() {
 phase_seconds() {
   local phase="$1" log="$2"
   sed 's/\x1b\[[0-9;]*m//g' "$log" \
-    | grep -oE "phase=\"${phase}\" elapsed_s=[0-9.]+" \
+    | grep -oE "phase=\"${phase}\" elapsed_s=[0-9.eE+-]+" \
     | tail -n 1 \
     | sed 's/.*elapsed_s=//'
 }
@@ -94,15 +94,16 @@ run_one() {
     "$binary" quant --rad "$RAD" -l A -p "$threads" --sigDigits 9 \
     -o "$run_out" "${EXTRA[@]}" 2> "$log"
 
-  local wall user sys rss em rad_read iters converged hash
+  local wall user sys rss em posterior rad_read iters converged hash
   IFS=$'\t' read -r wall user sys rss < "$timing"
   em="$(phase_seconds em_bias "$log")"
+  posterior="$(phase_seconds posterior "$log")"
   rad_read="$(phase_seconds rad_read "$log")"
   iters="$(json_scalar num_em_iterations "$run_out/aux_info/meta_info.json")"
   converged="$(json_scalar em_converged "$run_out/aux_info/meta_info.json")"
   hash="$(sha256sum "$run_out/quant.sf" | awk '{print $1}')"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$arm" "$threads" "$repeat" "$order" "$em" "$rad_read" "$wall" "$user" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$arm" "$threads" "$repeat" "$order" "$em" "$posterior" "$rad_read" "$wall" "$user" \
     "$sys" "$rss" "$iters" "$converged" "$hash" >> "$OUT/results.tsv"
 }
 
