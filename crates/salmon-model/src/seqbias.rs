@@ -139,8 +139,6 @@ pub struct SBModel {
     /// BIAS_WEIGHT_SCALE`, truncated), summed order-independently across worker
     /// threads and materialized into `probs` (plus the `PRIOR`) at `normalize`.
     probs_fp: Vec<u64>,
-    /// per-position base marginals: `marginals[pos * 4 + base]`
-    marginals: Vec<f64>,
     shifts: [u32; CONTEXT_LENGTH],
     masks: [u32; CONTEXT_LENGTH],
     trained: bool,
@@ -165,7 +163,6 @@ impl SBModel {
         Self {
             probs: vec![PRIOR; ROWS * CONTEXT_LENGTH],
             probs_fp: vec![0u64; ROWS * CONTEXT_LENGTH],
-            marginals: vec![PRIOR; 4 * CONTEXT_LENGTH],
             shifts,
             masks,
             trained: false,
@@ -241,12 +238,8 @@ impl SBModel {
                 if tot > 0.0 {
                     for j in 0..4 {
                         self.probs[base + j] /= tot;
-                        self.marginals[pos * 4 + j] += self.probs[base + j];
                     }
                 }
-            }
-            for j in 0..4 {
-                self.marginals[pos * 4 + j] /= num_states as f64;
             }
         }
         for p in &mut self.probs {

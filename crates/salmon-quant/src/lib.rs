@@ -175,7 +175,7 @@ pub struct QuantOptions {
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
     /// discard a fragment that maps to more than this many places (salmon's
-    /// `--maxReadOcc`, default 200)
+    /// `--maxReadOcc`, default 250)
     pub max_read_occ: usize,
     /// fragment-length sampling stride for the GC bias convolution (salmon's
     /// `--biasSpeedSamp`, default 5)
@@ -586,9 +586,18 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     };
     let ignore_incompat = opts.incompat_prior <= 0.0;
 
+    // Observed-bias models exist to feed the post-EM bias correction, whose
+    // sole consumer block below is gated `bias_on && !skip_quant`. Match that
+    // gate at construction: a skip-quant pass (--skipQuant, and every
+    // deterministic phase 1 — the requant re-derives observation from the RAD
+    // plus the reference) and a --noLengthCorrection run otherwise paid for
+    // the full GcRank bitvector over the reference concatenation and
+    // per-fragment model updates on the mapping hot path, all discarded
+    // (#1140, computed-but-unused).
+    let observe_bias = !opts.skip_quant && !opts.no_length_correction;
+
     // Shared observed sequence-bias models (merged per-thread) for `--seqBias`.
-    let seqbias_obs = opts
-        .seq_bias
+    let seqbias_obs = (opts.seq_bias && observe_bias)
         .then(|| std::sync::Mutex::new((SBModel::new(), SBModel::new())));
 
     // For `--gcBias`: per-transcript cumulative G+C counts via a single rank
@@ -597,15 +606,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // `Vec<Vec<u32>>` (4 bytes/base) with effectively identical results, so it
     // is now the default; `--reduceGCMemory` is accepted as a no-op. `gc_store`
     // presents per-transcript [`GcView`]s.
-    let gc_rank: Option<salmon_model::GcRank> = opts
-        .gc_bias
+    let gc_rank: Option<salmon_model::GcRank> = (opts.gc_bias && observe_bias)
         .then(|| salmon_model::GcRank::new(salmon.refseq_concat()));
     let gc_store: Option<salmon_model::GcStore> =
         gc_rank.as_ref().map(|r| salmon_model::GcStore::Rank {
             rank: r,
             offsets: salmon.ref_offsets(),
         });
-    let gcbias_obs = opts.gc_bias.then(|| {
+    let gcbias_obs = (opts.gc_bias && observe_bias).then(|| {
         std::sync::Mutex::new(salmon_model::GcFragModel::new(
             opts.cond_gc_bins,
             opts.gc_bins,
@@ -614,7 +622,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
     // For `--posBias`: transcript length-class quantiles + per-transcript class,
     // and the shared observed (5', 3') positional-bias models per length class.
-    let length_quantiles: Option<Vec<u32>> = opts.pos_bias.then(|| {
+    let length_quantiles: Option<Vec<u32>> = (opts.pos_bias && observe_bias).then(|| {
         let lens: Vec<u32> = (0..num_refs).map(|t| salmon.ref_len(t) as u32).collect();
         salmon_model::compute_length_quantiles(&lens, salmon_model::NUM_LENGTH_CLASSES)
     });
@@ -623,7 +631,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .map(|t| salmon_model::length_class_index(q, salmon.ref_len(t) as u32))
             .collect()
     });
-    let posbias_obs = opts.pos_bias.then(|| {
+    let posbias_obs = (opts.pos_bias && observe_bias).then(|| {
         let mk = || {
             (0..salmon_model::NUM_LENGTH_CLASSES)
                 .map(|_| salmon_model::SimplePosBias::default())

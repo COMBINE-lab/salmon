@@ -77,7 +77,10 @@ pub(crate) struct Shared<'a> {
     pub salmon: &'a SalmonIndex,
     pub eq: &'a EquivalenceClassBuilder,
     pub fld: &'a FragmentLengthDistribution,
-    /// library-type detector when auto-detecting (`-l A`); else `None`
+    /// library-type detector. `quantify()` always constructs one — not just
+    /// under `-l A`: with an explicit `-l` it still observes the orientation
+    /// distribution (sampled pre-strand-filter) to power the
+    /// `library_type_mismatch` diagnostic, without ever overriding the choice.
     pub detector: Option<&'a LibraryTypeDetector>,
     pub map_cfg: &'a MapConfig,
     pub sketch: bool,
@@ -147,8 +150,10 @@ pub(crate) struct Shared<'a> {
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
     /// mapped fragments whose representative mapping is an orphan (only one mate
-    /// of a paired-end fragment mapped); feeds `lib_format_counts.json`'s
-    /// `num_frags_with_inconsistent_or_orphan_mappings`.
+    /// of a paired-end fragment mapped); feeds `meta_info.json`'s `num_orphan`.
+    /// (`lib_format_counts.json`'s
+    /// `num_frags_with_inconsistent_or_orphan_mappings` is NOT built from this —
+    /// it is derived purely from the observed-format histogram below.)
     pub num_orphan: &'a AtomicU64,
     /// fragments with at least one mapping that is strand-compatible with the
     /// expected library format, and fragments with mappings of which *none* is.

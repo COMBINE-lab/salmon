@@ -1,8 +1,7 @@
 //! `salmon-core`: shared foundational types for the Rust port of salmon.
 //!
 //! This crate holds the vocabulary types used across the mapping, alignment,
-//! modeling, and inference crates: library formats, mate status, the
-//! [`Transcript`] record with its concurrent count/mass state, log-space math
+//! modeling, and inference crates: library formats, mate status, log-space math
 //! helpers, and the shared error type. It deliberately has no heavy
 //! dependencies so every other crate can depend on it cheaply.
 //!
@@ -42,11 +41,10 @@ pub mod progress;
 pub mod quantmerge;
 pub mod refprovider;
 pub mod timing;
-pub mod transcript;
 
 // Re-exports: the modules above are the real homes of these items, but naming
-// them here lets other crates write `salmon_core::Transcript` instead of
-// `salmon_core::transcript::Transcript`. It also lets a type move between
+// them here lets other crates write `salmon_core::MateStatus` instead of
+// `salmon_core::mate::MateStatus`. It also lets a type move between
 // modules later without breaking every caller.
 pub use atomic::AtomicF64;
 pub use diagnostics::{
@@ -64,7 +62,6 @@ pub use timing::PhaseTimer;
 pub use error::{Result, SalmonError};
 pub use libtype::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 pub use mate::MateStatus;
-pub use transcript::Transcript;
 
 /// The output-row indices for a reference table laid out as
 /// `[transcripts][decoys][shorts]`: quantified transcripts `[0, first_decoy)`,

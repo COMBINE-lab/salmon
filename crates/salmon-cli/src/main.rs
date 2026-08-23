@@ -20,9 +20,10 @@
 //! Provides the two most-used subcommands so far: `index` (build a salmon
 //! index over a transcriptome) and `quant` (quantify from FASTQ reads, via
 //! selective alignment or the pseudoalignment-only `--sketch` path). Flag
-//! names mirror C++ salmon where they overlap. Alignment-based `quant -a` and
-//! `quantmerge` are stubbed for later phases; `alevin` is a permanent redirect
-//! to the alevin-fry ecosystem.
+//! names mirror C++ salmon where they overlap. Alignment-based `quant -a`
+//! (online and deterministic, including genome-BAM projection via
+//! `--annotation`) and `quantmerge` are fully implemented; `alevin` is a
+//! permanent redirect to the alevin-fry ecosystem.
 
 use std::path::PathBuf;
 
@@ -339,7 +340,8 @@ struct IndexArgs {
     /// Directory for sshash's external minimizer-sort scratch. Defaults to a
     /// `sshash_tmp` subdirectory of --tmpdir (or the index dir when --tmpdir is
     /// unset). Override to place the sort scratch on a separate/fast disk; the
-    /// directory is created before the build and removed afterwards.
+    /// directory is created before the build and removed afterwards unless
+    /// --keepIntermediate is set.
     #[arg(long = "sshashTmpDir")]
     sshash_tmp_dir: Option<PathBuf>,
     /// RAM ceiling, in GiB, for sshash's external minimizer sort (the main
@@ -867,12 +869,14 @@ struct QuantArgs {
     /// deterministic mode.
     #[arg(long = "numPreAuxModelSamples")]
     num_pre_aux_model_samples: Option<u64>,
-    /// [accepted; not yet implemented] disable fragment-length-distribution
-    /// concordance in the per-fragment probability.
+    /// Disable fragment-length-distribution concordance in the per-fragment
+    /// probability. Honoured on every quantification path except the deprecated
+    /// online alignment path (--online -a), which warns that it lacks it.
     #[arg(long = "noFragLengthDist")]
     no_frag_length_dist: bool,
-    /// [accepted; not yet implemented] disable the single-end/orphan
-    /// fragment-length probability estimate.
+    /// Disable the single-end/orphan fragment-length probability estimate.
+    /// Effective only on the deprecated --online reads path; no effect under
+    /// the default deterministic mode or RAD input.
     #[arg(long = "noSingleFragProb")]
     no_single_frag_prob: bool,
     /// [accepted; not yet implemented] write a BAM of posterior-sampled
