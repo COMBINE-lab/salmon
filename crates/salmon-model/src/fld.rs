@@ -34,7 +34,7 @@ use salmon_core::atomic::AtomicF64;
 use salmon_core::math::{log_add, LOG_0, LOG_EPSILON};
 use salmon_core::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 use statrs::distribution::{Binomial, ContinuousCDF, Discrete, Normal};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 /// Tracks the observed distribution of fragment lengths.
@@ -51,8 +51,6 @@ pub struct FragmentLengthDistribution {
     /// Maintained incrementally so the mean is a subtraction rather than a sweep
     /// over every bin.
     sum: AtomicF64,
-    /// minimum observed length (bin units)
-    min: AtomicUsize,
     /// internal bin size
     bin_size: usize,
 
@@ -174,8 +172,6 @@ impl FragmentLengthDistribution {
             hist,
             tot_mass: AtomicF64::new(tot_mass),
             sum: AtomicF64::new(sum),
-            // Seeded at the maximum so the first `fetch_min` wins.
-            min: AtomicUsize::new(max_val),
             bin_size,
             cached_pmf: Vec::new(),
             cached_cmf: Vec::new(),
@@ -185,29 +181,9 @@ impl FragmentLengthDistribution {
         }
     }
 
-    /// salmon's default fragment-length distribution: pseudo-count 1.0, max
-    /// length 1000, no Gaussian prior (uniform), kernel `n=4, p=0.5`.
-    ///
-    /// A uniform prior for paired-end data because the observations will supply
-    /// the shape; the prior only has to avoid ruling anything out.
-    pub fn default_for_paired() -> Self {
-        Self::new(1.0, 1000, 0.0, 0.0, 4, 0.5, 1)
-    }
-
     /// Largest representable raw length.
     pub fn max_val(&self) -> usize {
         (self.hist.len() - 1) * self.bin_size
-    }
-
-    /// Smallest observed length; 1 when nothing has been observed (the sentinel
-    /// initial value is the last bin).
-    pub fn min_val(&self) -> usize {
-        let m = self.min.load(Ordering::Relaxed);
-        if m == self.hist.len() - 1 {
-            1
-        } else {
-            m
-        }
     }
 
     /// Add `mass` (log space) for an observed fragment of length `len`,
@@ -220,8 +196,6 @@ impl FragmentLengthDistribution {
         if len > max_v {
             len = max_v;
         }
-        self.min.fetch_min(len, Ordering::Relaxed);
-
         let half = self.kernel.len() / 2;
         // offset can go negative conceptually; use isize math then bound-check.
         // Centring the kernel on `len` means the observation contributes most to
@@ -437,7 +411,6 @@ impl FragmentLengthDistribution {
         }
         d.tot_mass.store(tot);
         d.sum.store(sm);
-        d.min.store(0, Ordering::Relaxed);
         d.cache();
         d
     }
@@ -732,16 +705,6 @@ impl FragLengthSource {
             Self::RadDerived => "rad_derived",
             Self::Prior => "prior",
         }
-    }
-
-    /// Whether `--fldMean`/`--fldSD`/`--fldMax` were consulted at all. False
-    /// only for the baked variants, which take the distribution verbatim from
-    /// the RAD header.
-    ///
-    /// Used to warn when a user supplies those flags in a mode that ignores them,
-    /// rather than silently discarding the request.
-    pub fn uses_fld_prior_args(self) -> bool {
-        !matches!(self, Self::RadBaked | Self::RadBakedPrior)
     }
 }
 

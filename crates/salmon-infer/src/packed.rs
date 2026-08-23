@@ -147,12 +147,7 @@ impl PackedEqClasses {
         // reallocation plus a full copy at every doubling, and leaves a transient
         // peak of ~1.5x the final size while both buffers are live. The exact
         // total is one cheap pass over the class list (it only reads `Vec::len`).
-        let total_labels: usize = eq
-            .classes
-            .iter()
-            .filter(|(g, _)| g.valid)
-            .map(|(g, _)| g.txps.len())
-            .sum();
+        let total_labels: usize = eq.classes.iter().map(|(g, _)| g.txps.len()).sum();
         let mut labels = Vec::with_capacity(total_labels);
         let mut starts = Vec::with_capacity(n + 1);
         let mut combined = Vec::with_capacity(total_labels);
@@ -164,10 +159,6 @@ impl PackedEqClasses {
         starts.push(0u64);
         let mut total = 0u64;
         for (group, value) in &eq.classes {
-            // Classes the optimizer marked degenerate are simply not carried over.
-            if !group.valid {
-                continue;
-            }
             labels.extend_from_slice(&group.txps);
             combined.extend_from_slice(&value.combined_weights);
             if keep_weights {
@@ -197,15 +188,12 @@ impl PackedEqClasses {
     /// re-copies the labels and counts too — hundreds of MB on a human-scale run
     /// — for arrays bit-identical to the ones already held.
     ///
-    /// `eq` must be the class set the layout was built from. Classes are never
-    /// invalidated after construction (nothing clears `TranscriptGroup::valid`),
-    /// so the filter below matches the original build; the assertion pins that.
+    /// `eq` must be the class set the layout was built from: this walks the
+    /// classes in the same order the build did, so the offsets line up. The
+    /// assertion pins that.
     pub fn refresh_combined(&mut self, eq: &CollapsedEqClasses) {
         let mut at = 0usize;
-        for (group, value) in &eq.classes {
-            if !group.valid {
-                continue;
-            }
+        for (_group, value) in &eq.classes {
             let n = value.combined_weights.len();
             self.combined[at..at + n].copy_from_slice(&value.combined_weights);
             at += n;

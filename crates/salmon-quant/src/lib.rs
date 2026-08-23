@@ -606,8 +606,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // `Vec<Vec<u32>>` (4 bytes/base) with effectively identical results, so it
     // is now the default; `--reduceGCMemory` is accepted as a no-op. `gc_store`
     // presents per-transcript [`GcView`]s.
-    let gc_rank: Option<salmon_model::GcRank> = (opts.gc_bias && observe_bias)
-        .then(|| salmon_model::GcRank::new(salmon.refseq_concat()));
+    let gc_rank: Option<salmon_model::GcRank> =
+        (opts.gc_bias && observe_bias).then(|| salmon_model::GcRank::new(salmon.refseq_concat()));
     let gc_store: Option<salmon_model::GcStore> =
         gc_rank.as_ref().map(|r| salmon_model::GcStore::Rank {
             rank: r,

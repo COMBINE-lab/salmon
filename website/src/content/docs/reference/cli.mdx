@@ -88,9 +88,16 @@ so decoding is worth dedicated slots much later:
 
 | mode | engages when `-p` ≥ (per gzip input) |
 | --- | --- |
-| selective alignment (± `--deterministic`) | 50 |
-| sketch | 10 |
-| sketch `--deterministic` | 9 |
+| selective alignment (default or `--online`) | 50 |
+| sketch, paired-end — the 2.6.0 default | 9 |
+| sketch with `--online`, or single-end reads | 10 |
+
+The deterministic mapping pass does less work per fragment (no online
+inference, eq-class assembly, bias collection or prefix library-type
+detection), so decoding is worth dedicated slots sooner. Since 2.6.0 that is
+the default, which is why a plain `--sketch` run engages at 9; the 10 now
+applies only under the deprecated `--online` path, or to single-end input,
+where the cheap pass does not apply.
 
 Below the threshold the serial decoder inflates inline on the mapping threads,
 which measured faster at every budget tested under it. Override with

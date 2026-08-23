@@ -79,9 +79,6 @@ pub struct TranscriptGroup {
     /// group can hold hundreds of ids, and rehashing that vector on each of
     /// hundreds of millions of lookups would dominate the runtime.
     hash: u64,
-    /// The EM may mark a degenerate class (one that cannot contribute) invalid
-    /// rather than deleting it, so class indices stay stable.
-    pub valid: bool,
 }
 
 impl TranscriptGroup {
@@ -101,7 +98,6 @@ impl TranscriptGroup {
             txps,
             bins: Vec::new(),
             hash,
-            valid: true,
         }
     }
 
@@ -124,7 +120,6 @@ impl TranscriptGroup {
             txps,
             bins: Vec::new(),
             hash,
-            valid: true,
         }
     }
 
@@ -137,12 +132,7 @@ impl TranscriptGroup {
         );
         debug_assert_eq!(txps.len(), bins.len(), "bins must align with txps");
         let hash = Self::hash_label(&txps, &bins);
-        Self {
-            txps,
-            bins,
-            hash,
-            valid: true,
-        }
+        Self { txps, bins, hash }
     }
 
     /// Hash the full label into a single 64-bit digest.

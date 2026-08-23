@@ -193,10 +193,6 @@ impl RadOutputWriter {
         self.pending_libfmt = Some(format_id);
     }
 
-    /// Bake the per-hit score interpretation (see [`crate::SCORE_KIND_TAG`]) into
-    /// the header at finalize. Only valid on the scored (selective-alignment)
-    /// profile, whose prelude reserves the slot; a no-op-worthy default
-    /// ([`crate::SCORE_KIND_AS`]) need not be set (absent ⇒ that default).
     /// Record what the mapping pass observed, to be baked at finalize.
     ///
     /// Without this a requant cannot report a mapping rate: the file holds only
@@ -205,6 +201,10 @@ impl RadOutputWriter {
         self.pending_counters = Some(counters);
     }
 
+    /// Bake the per-hit score interpretation (see [`crate::SCORE_KIND_TAG`]) into
+    /// the header at finalize. Only valid on the scored (selective-alignment)
+    /// profile, whose prelude reserves the slot; the default
+    /// ([`crate::SCORE_KIND_AS`]) need not be set (absent ⇒ that default).
     pub fn set_score_kind(&mut self, score_kind: u8) {
         self.pending_score_kind = Some(score_kind);
     }
