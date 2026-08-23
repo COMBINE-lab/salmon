@@ -436,7 +436,15 @@ impl EquivalenceClassBuilder {
         let num_classes = self.map.len();
         let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::with_capacity(num_classes);
         classes.extend(self.map);
-        classes.sort_by(|a, b| a.0.txps.cmp(&b.0.txps));
+        // `bins` is part of class identity, so it must also break ties between
+        // groups with the same transcript ids. Sorting only `txps` left those
+        // ties in DashMap iteration order; the resulting class permutation
+        // changed deterministic EM shard boundaries across thread counts.
+        classes.sort_by(|a, b| {
+            a.0.txps
+                .cmp(&b.0.txps)
+                .then_with(|| a.0.bins.cmp(&b.0.bins))
+        });
         // Materialize f64 weights from each class's order-independent fixed-point
         // accumulator (the sort above already makes the class *order* stable).
         for (_, v) in &mut classes {
@@ -842,6 +850,30 @@ mod tests {
         let g3 = TranscriptGroup::with_bins(txps, range_factorize_bins(&[0.92, 0.08], 4));
         b.add_group(g3, vec![0.92, 0.08], 1);
         assert_eq!(b.len(), 2, "expected 2 factorized classes");
+    }
+
+    #[test]
+    fn finish_orders_the_complete_range_factorized_label() {
+        let b = EquivalenceClassBuilder::new();
+        for bins in [vec![4, 1], vec![1, 4], vec![2, 3], vec![0, 5]] {
+            b.add_group(
+                TranscriptGroup::with_bins(vec![7, 11], bins),
+                vec![0.5, 0.5],
+                1,
+            );
+        }
+        b.add_group(
+            TranscriptGroup::with_bins(vec![3, 19], vec![5, 0]),
+            vec![0.5, 0.5],
+            1,
+        );
+
+        let collapsed = b.finish();
+        assert!(collapsed.classes.windows(2).all(|pair| {
+            let a = &pair[0].0;
+            let b = &pair[1].0;
+            (a.txps.as_slice(), a.bins.as_slice()) < (b.txps.as_slice(), b.bins.as_slice())
+        }));
     }
 
     /// Effective-length division must favour the shorter transcript in exact
