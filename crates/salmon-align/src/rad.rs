@@ -1968,7 +1968,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         ro.min_iter = opts.bias_seed_em_iters;
         ro.max_iter = opts.bias_seed_em_iters;
         ro.min_alpha = 0.0;
-        salmon_infer::optimize(&c, num_refs, &ro, Some(&eff_lengths)).alphas
+        salmon_infer::optimize(&c, num_refs, &ro, salmon_infer::EffLens::new(&eff_lengths)).alphas
     });
 
     // Reference-derived inputs for bias correction (built only when a bias model
@@ -2211,14 +2211,20 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         );
         collapsed.update_eff_lengths(&eff_lengths);
         packed.refresh_combined(&collapsed);
-        salmon_infer::optimize_packed_with_init(&packed, &opts.em, true, None, Some(&eff_lengths))
+        salmon_infer::optimize_packed_with_init(
+            &packed,
+            &opts.em,
+            true,
+            salmon_infer::InitAlphas::NONE,
+            salmon_infer::EffLens::new(&eff_lengths),
+        )
     } else {
         let mut em = salmon_infer::optimize_packed_with_init(
             &packed,
             &opts.em,
             true,
-            None,
-            Some(&eff_lengths),
+            salmon_infer::InitAlphas::NONE,
+            salmon_infer::EffLens::new(&eff_lengths),
         );
         if bias_on {
             // Abundances weighting bias collection: baked prior if present, else
@@ -2295,8 +2301,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 &packed,
                 &opts.em,
                 true,
-                None,
-                Some(&eff_lengths),
+                salmon_infer::InitAlphas::NONE,
+                salmon_infer::EffLens::new(&eff_lengths),
             );
         }
         em
@@ -2338,7 +2344,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         salmon_infer::bootstrap(
             &packed,
             &opts.em,
-            Some(&eff_lengths),
+            salmon_infer::EffLens::new(&eff_lengths),
             opts.num_bootstraps,
             0x5A13_0000,
         )

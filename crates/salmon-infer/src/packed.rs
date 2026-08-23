@@ -841,7 +841,14 @@ mod shard_plan_determinism {
                     .build()
                     .expect("thread pool");
                 pool.install(|| {
-                    crate::optimize_packed_with_init(&packed, &opts, true, None, Some(&eff)).alphas
+                    crate::optimize_packed_with_init(
+                        &packed,
+                        &opts,
+                        true,
+                        crate::InitAlphas::NONE,
+                        crate::EffLens::new(&eff),
+                    )
+                    .alphas
                 })
             };
 

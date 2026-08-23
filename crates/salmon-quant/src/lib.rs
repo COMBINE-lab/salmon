@@ -1017,7 +1017,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         ro.min_iter = opts.bias_seed_em_iters;
         ro.max_iter = opts.bias_seed_em_iters;
         ro.min_alpha = 0.0;
-        salmon_infer::optimize(&naive_collapsed, num_refs, &ro, Some(&eff_lengths))
+        salmon_infer::optimize(
+            &naive_collapsed,
+            num_refs,
+            &ro,
+            salmon_infer::EffLens::new(&eff_lengths),
+        )
     } else if opts.skip_quant {
         // `--skipQuant`: emit equivalence classes + library type + metadata but
         // skip the optimizer (and Gibbs/bootstrap below, and quant.sf). Leave
@@ -1036,9 +1041,21 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // EM, and a zeroed alpha can never recover under the multiplicative
         // update (salmon keeps one continuous, untruncated vector).
         pre.min_alpha = 0.0;
-        optimize_packed_with_init(&packed, &pre, true, None, Some(&eff_lengths))
+        optimize_packed_with_init(
+            &packed,
+            &pre,
+            true,
+            salmon_infer::InitAlphas::NONE,
+            salmon_infer::EffLens::new(&eff_lengths),
+        )
     } else {
-        optimize_packed_with_init(&packed, &opts.em, true, None, Some(&eff_lengths))
+        optimize_packed_with_init(
+            &packed,
+            &opts.em,
+            true,
+            salmon_infer::InitAlphas::NONE,
+            salmon_infer::EffLens::new(&eff_lengths),
+        )
     };
 
     // ---- bias correction: re-estimate effective lengths --------------------
@@ -1246,7 +1263,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // Warm-start the single full convergence from the burn-in alphas, as
         // salmon continues the same vector after its in-loop correction.
         let warm = std::mem::take(&mut em.alphas);
-        em = optimize_packed_with_init(&packed, &opts.em, true, Some(&warm), Some(&eff_lengths));
+        em = optimize_packed_with_init(
+            &packed,
+            &opts.em,
+            true,
+            salmon_infer::InitAlphas::new(&warm),
+            salmon_infer::EffLens::new(&eff_lengths),
+        );
     }
     // The min-alpha truncation is applied inside the EM as a mass-preserving
     // redistribution (see `redistribute_truncated`): the truncated mass flows to
@@ -1310,7 +1333,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         salmon_infer::PosteriorMethod::Bootstrap { replicates } => salmon_infer::bootstrap(
             &packed,
             &opts.em,
-            Some(&eff_lengths),
+            salmon_infer::EffLens::new(&eff_lengths),
             replicates,
             0x5A13_0000,
         ),

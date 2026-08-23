@@ -37,7 +37,7 @@ use rand_pcg::Pcg64Mcg;
 use rayon::prelude::*;
 
 use crate::packed::PackedEqClasses;
-use crate::{run_em_counts, EmOptions};
+use crate::{run_em_counts, EffLens, EmOptions, InitAlphas};
 
 /// Smallest class denominator below which mass is redistributed evenly (Gibbs).
 const MIN_EQ_CLASS_WEIGHT: f64 = f64::MIN_POSITIVE;
@@ -108,7 +108,7 @@ fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
 pub fn bootstrap(
     p: &PackedEqClasses,
     opts: &EmOptions,
-    eff_lens: Option<&[f64]>,
+    eff_lens: EffLens<'_>,
     num_bootstraps: u32,
     seed: u64,
 ) -> Vec<Vec<f64>> {
@@ -133,7 +133,8 @@ pub fn bootstrap(
             // first attempt at this fix did exactly that — the prior stayed
             // flat AND every replicate warm-started from the effective-length
             // vector. Keep `None` explicit for the uniform start.
-            let (alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, None, eff_lens);
+            let (alphas, _, _) =
+                run_em_counts(p, &resampled, opts, false, 50, InitAlphas::NONE, eff_lens);
             // Finalize like the point estimate: truncate the negligible
             // abundances, then redistribute that mass to eq-class co-members via a
             // masked final M-step over the *resampled* counts (no rescale-up). The
@@ -466,7 +467,7 @@ mod tests {
     fn bootstrap_mean_near_point_estimate() {
         // unique evidence -> every bootstrap recovers ~the same counts
         let p = packed(&[(vec![0], 300), (vec![1], 700)], 2);
-        let bs = bootstrap(&p, &EmOptions::default(), None, 50, 12345);
+        let bs = bootstrap(&p, &EmOptions::default(), EffLens::NONE, 50, 12345);
         assert_eq!(bs.len(), 50);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 50.0;
         let m1: f64 = bs.iter().map(|b| b[1]).sum::<f64>() / 50.0;
@@ -483,7 +484,7 @@ mod tests {
     fn bootstrap_variance_grows_with_ambiguity() {
         // a fully shared class has higher per-transcript bootstrap variance
         let p = packed(&[(vec![0], 10), (vec![1], 10), (vec![0, 1], 980)], 2);
-        let bs = bootstrap(&p, &EmOptions::default(), None, 100, 7);
+        let bs = bootstrap(&p, &EmOptions::default(), EffLens::NONE, 100, 7);
         let m0: f64 = bs.iter().map(|b| b[0]).sum::<f64>() / 100.0;
         let var0: f64 = bs.iter().map(|b| (b[0] - m0).powi(2)).sum::<f64>() / 100.0;
         assert!(
@@ -561,9 +562,9 @@ mod per_nucleotide_prior_reaches_replicates {
         };
 
         opts.per_nucleotide_prior = false;
-        let flat = bootstrap(&packed, &opts, Some(&eff_lens), 16, 0xC0FFEE);
+        let flat = bootstrap(&packed, &opts, EffLens::new(&eff_lens), 16, 0xC0FFEE);
         opts.per_nucleotide_prior = true;
-        let per_nt = bootstrap(&packed, &opts, Some(&eff_lens), 16, 0xC0FFEE);
+        let per_nt = bootstrap(&packed, &opts, EffLens::new(&eff_lens), 16, 0xC0FFEE);
 
         assert_eq!(flat.len(), 16);
         assert_eq!(per_nt.len(), 16);

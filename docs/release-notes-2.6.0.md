@@ -8,16 +8,29 @@ counts** — in every input mode: selective alignment, sketch, and alignment
 
 The decision is evidence-backed rather than aspirational (#1140):
 
-- **Speed**: deterministic is as fast or faster in every measured cell — on 10M
-  real read pairs, sketch is 13% faster wall / 20% less CPU at `-p 16` and 11%
-  faster at `-p 4`; selective alignment ties at `-p 16` and is ~7% faster at
-  `-p 4` — *including* the cost of writing and re-reading the intermediate.
-  Independently replicated on a hostile high-multimapping synthetic fixture.
+- **Speed**: hardware-dependent, and the honest summary is that deterministic
+  wins decisively where it matters most and costs a little elsewhere. On a
+  modern many-core machine (EPYC, NVMe) it is as fast or faster in every
+  measured cell: on 10M real read pairs, sketch is 13% faster wall / 20% less
+  CPU at `-p 16` and 11% faster at `-p 4`; selective alignment ties at `-p 16`
+  and is ~7% faster at `-p 4` — *including* the cost of writing and re-reading
+  the intermediate.
+
+  On an older CPU (Xeon E5-2699 v4, 26M real fragments) the picture is mixed:
+  deterministic is ~4% slower at `-p 16` and ~12% slower at `-p 32`, then
+  **twice as fast at `-p 64`**, where the online path's lock contention takes
+  over. It is also far more *predictable* there — across four repeats at
+  `-p 64` the online path ranged 55–105 s (bimodal), while deterministic held
+  39–42 s. When sizing a pipeline, that stability is usually worth more than
+  the mean.
 - **Accuracy**: statistically indistinguishable from the online path against
   ground truth (fourth-decimal differences, direction inconsistent, across two
   simulated samples and two multimapping regimes).
-- **Reproducibility**: `quant.sf` md5-identical at `-p 1/4/16`; the online path
-  produces a different file at every thread count.
+- **Reproducibility**: `quant.sf` byte-identical at every thread count, on real
+  data (26M fragments, 238k transcripts, verified at full `--sigDigits 9`
+  precision); the online path produces a different file at every thread count.
+  Enforced by a test that compares bit-for-bit across rayon pools of 1–16
+  threads, over plain EM, VBEM and SQUAREM.
 
 ## The deprecation path
 
@@ -57,9 +70,19 @@ The decision is evidence-backed rather than aspirational (#1140):
 
 ## Disk behavior of the intermediate
 
-The intermediate RAD is lz4-compressed (~110 MB per 1M read pairs on GENCODE
-v49; grows with the multimapping rate) and deleted on success. New in this
-release cycle:
+The intermediate RAD is lz4-compressed and deleted on success. Measured on
+GENCODE v49 with 26.1M real fragments: **~45 MB per 1M fragments in sketch mode
+and ~55 MB in selective alignment** (it grows with the multimapping rate).
+
+**Disk speed is not a factor.** Validated on rotational storage (measured
+105 MB/s): writing the RAD is entirely hidden behind mapping compute — the
+mapping phase takes 30.55 s with the RAD on a spinning disk versus 30.92 s with
+it in `/dev/shm` — and reading it back is bound by decompression rather than
+I/O. (Uncompressed, the RAD is 5× larger and still reads 2.7× *faster* than
+zstd.) Selective alignment is completely insensitive to disk speed. Fast
+scratch storage is not needed for the deterministic default.
+
+New in this release cycle:
 
 - **`--radScratchDir <dir>`** places it on node-local or memory-backed storage
   (e.g. `/dev/shm`), pid-suffixed so concurrent runs can share a scratch
@@ -67,7 +90,7 @@ release cycle:
 - A **startup preflight** warns when the target volume has less free space than
   the total compressed input, and the writer **checks free space during the
   pass**, so a filling disk fails in seconds with actionable advice
-  (`--radScratchDir`, `--radCompress zstd` for ~30% more shrink at ~11% wall)
+  (`--radScratchDir`, `--radCompress zstd` for ~53% more shrink at ~5.5% wall)
   instead of at the end of mapping. On failure, salmon-owned intermediates
   (including `.partial-*` files) are cleaned up; explicit `--writeRad` paths
   are never touched.

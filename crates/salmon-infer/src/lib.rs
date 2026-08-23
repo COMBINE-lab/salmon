@@ -66,6 +66,87 @@ pub enum EmAccel {
     Daarem,
 }
 
+/// Effective lengths, one per transcript, or their absence.
+///
+/// A newtype rather than a bare `Option<&[f64]>` because it sits directly beside
+/// [`InitAlphas`] in several signatures and the two are structurally identical:
+/// swapping them type-checks and compiles silently. That is not hypothetical —
+/// it shipped. The bootstrap path passed effective lengths into the
+/// `init_alphas` slot, which left `--perNucleotidePrior` inert inside every
+/// replicate (the prior stayed flat) *and* warm-started each replicate from the
+/// effective-length vector, which no caller intended. Reported spread was then
+/// drawn under a different prior than the point estimate it quantified.
+///
+/// Distinct types make that mistake a compile error. Zero-overhead: a newtype
+/// over `Option<&[f64]>` has identical layout and the accessor inlines away.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EffLens<'a>(Option<&'a [f64]>);
+
+impl<'a> EffLens<'a> {
+    /// No effective lengths supplied — priors stay flat, weights are used as-is.
+    pub const NONE: Self = Self(None);
+
+    pub fn new(v: &'a [f64]) -> Self {
+        Self(Some(v))
+    }
+
+    /// Borrow the slice, if any. Deliberately not `Deref`/`Into<Option<..>>`:
+    /// an implicit conversion back to the bare type would reopen the hole.
+    pub(crate) fn get(self) -> Option<&'a [f64]> {
+        self.0
+    }
+}
+
+impl<'a> From<&'a [f64]> for EffLens<'a> {
+    fn from(v: &'a [f64]) -> Self {
+        Self::new(v)
+    }
+}
+
+/// An initial abundance vector to warm-start the optimizer from, or its absence
+/// (in which case the optimizer starts uniform).
+///
+/// See [`EffLens`] for why this is a newtype. The swap that motivated it no
+/// longer compiles:
+///
+/// ```compile_fail
+/// use salmon_infer::{EffLens, InitAlphas};
+/// fn takes(_init: InitAlphas<'_>, _eff: EffLens<'_>) {}
+/// let v = [1.0f64, 2.0];
+/// // Arguments in the wrong order — a type error now, silent before.
+/// takes(EffLens::new(&v), InitAlphas::new(&v));
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InitAlphas<'a>(Option<&'a [f64]>);
+
+impl<'a> InitAlphas<'a> {
+    /// Start uniform — the least presumptuous initialization, and the default
+    /// on every reads-mode path.
+    pub const NONE: Self = Self(None);
+
+    pub fn new(v: &'a [f64]) -> Self {
+        Self(Some(v))
+    }
+
+    pub(crate) fn get(self) -> Option<&'a [f64]> {
+        self.0
+    }
+}
+
+impl<'a> From<&'a [f64]> for InitAlphas<'a> {
+    fn from(v: &'a [f64]) -> Self {
+        Self::new(v)
+    }
+}
+
+// The "zero-overhead" in the two types above is a claim, so it is checked: a
+// newtype over `Option<&[f64]>` must have identical layout, or the wrappers are
+// costing something at every call.
+const _: () = assert!(
+    core::mem::size_of::<EffLens<'_>>() == core::mem::size_of::<Option<&[f64]>>()
+        && core::mem::size_of::<InitAlphas<'_>>() == core::mem::size_of::<Option<&[f64]>>()
+);
+
 /// Optimizer configuration. Defaults mirror salmon's command-line defaults.
 #[derive(Debug, Clone)]
 pub struct EmOptions {
@@ -164,10 +245,10 @@ pub fn optimize(
     eq: &CollapsedEqClasses,
     num_txps: usize,
     opts: &EmOptions,
-    eff_lens: Option<&[f64]>,
+    eff_lens: EffLens<'_>,
 ) -> EmResult {
     let packed = PackedEqClasses::from_collapsed(eq, num_txps);
-    optimize_packed_with_init(&packed, opts, true, None, eff_lens)
+    optimize_packed_with_init(&packed, opts, true, InitAlphas::NONE, eff_lens)
 }
 
 /// As [`optimize`], but warm-starts the abundances from `init_alphas` (per
@@ -181,8 +262,8 @@ pub fn optimize_with_init(
     eq: &CollapsedEqClasses,
     num_txps: usize,
     opts: &EmOptions,
-    init_alphas: Option<&[f64]>,
-    eff_lens: Option<&[f64]>,
+    init_alphas: InitAlphas<'_>,
+    eff_lens: EffLens<'_>,
 ) -> EmResult {
     let packed = PackedEqClasses::from_collapsed(eq, num_txps);
     optimize_packed_with_init(&packed, opts, true, init_alphas, eff_lens)
@@ -197,7 +278,7 @@ pub fn optimize_with_init(
 /// Parallelizing at only one level is deliberate: nesting a parallel M-step
 /// inside parallel replicates would oversubscribe the machine and slow both down.
 pub fn optimize_packed(p: &PackedEqClasses, opts: &EmOptions, parallel: bool) -> EmResult {
-    optimize_packed_with_init(p, opts, parallel, None, None)
+    optimize_packed_with_init(p, opts, parallel, InitAlphas::NONE, EffLens::NONE)
 }
 
 /// As [`optimize_packed`], but seeds the abundances from `init_alphas` (a warm
@@ -207,8 +288,8 @@ pub fn optimize_packed_with_init(
     p: &PackedEqClasses,
     opts: &EmOptions,
     parallel: bool,
-    init_alphas: Option<&[f64]>,
-    eff_lens: Option<&[f64]>,
+    init_alphas: InitAlphas<'_>,
+    eff_lens: EffLens<'_>,
 ) -> EmResult {
     let (alphas, iters, converged) = run_em_counts(
         p,
@@ -240,10 +321,10 @@ pub fn optimize_packed_with_init(
 /// transcript offers, so a flat prior does not dominate short transcripts.
 pub(crate) fn prior_alphas_vec(
     opts: &EmOptions,
-    eff_lens: Option<&[f64]>,
+    eff_lens: EffLens<'_>,
     num_txps: usize,
 ) -> Vec<f64> {
-    match (opts.per_nucleotide_prior, eff_lens) {
+    match (opts.per_nucleotide_prior, eff_lens.get()) {
         // Only usable when effective lengths were supplied and line up; the
         // catch-all arm below falls back to the flat prior otherwise.
         (true, Some(el)) if el.len() == num_txps => {
@@ -263,7 +344,7 @@ pub(crate) fn finalize_truncate_redistribute(
     counts: &[u64],
     alphas: Vec<f64>,
     opts: &EmOptions,
-    eff_lens: Option<&[f64]>,
+    eff_lens: EffLens<'_>,
 ) -> (Vec<f64>, f64) {
     if opts.min_alpha <= 0.0 {
         return (alphas, 0.0);
@@ -282,8 +363,8 @@ pub(crate) fn run_em_counts(
     opts: &EmOptions,
     parallel: bool,
     min_iter: u32,
-    init_alphas: Option<&[f64]>,
-    eff_lens: Option<&[f64]>,
+    init_alphas: InitAlphas<'_>,
+    eff_lens: EffLens<'_>,
 ) -> (Vec<f64>, u32, bool) {
     let num_txps = p.num_txps;
     let total: u64 = counts.iter().sum();
@@ -297,7 +378,7 @@ pub(crate) fn run_em_counts(
     // Warm start from a supplied initialization (e.g. the online-phase abundance
     // estimates blended with uniform, matching salmon's count-blended init) when
     // its length matches; otherwise start uniform over the total fragment count.
-    let mut alphas = match init_alphas {
+    let mut alphas = match init_alphas.get() {
         Some(a) if a.len() == num_txps => a.to_vec(),
         _ => vec![init; num_txps],
     };
@@ -559,7 +640,7 @@ mod tests {
     fn unique_classes_recover_exact_counts() {
         // Two transcripts, only unique evidence: EM must return those counts.
         let eq = build(&[(vec![0], 30), (vec![1], 70)], 2);
-        let res = optimize(&eq, 2, &EmOptions::default(), None);
+        let res = optimize(&eq, 2, &EmOptions::default(), EffLens::NONE);
         assert!((res.alphas[0] - 30.0).abs() < 1e-6);
         assert!((res.alphas[1] - 70.0).abs() < 1e-6);
     }
@@ -573,7 +654,7 @@ mod tests {
         // current abundances; with equal eff lengths the stable split tracks
         // the unique ratio, so totals converge to 0.1*200=20 and 0.9*200=180.
         let eq = build(&[(vec![0], 10), (vec![1], 90), (vec![0, 1], 100)], 2);
-        let res = optimize(&eq, 2, &EmOptions::default(), None);
+        let res = optimize(&eq, 2, &EmOptions::default(), EffLens::NONE);
         let total = res.alphas[0] + res.alphas[1];
         assert!((total - 200.0).abs() < 1e-6, "total={total}");
         assert!((res.alphas[0] - 20.0).abs() < 1e-2, "a0={}", res.alphas[0]);
@@ -585,7 +666,7 @@ mod tests {
     #[test]
     fn conserves_total_count() {
         let eq = build(&[(vec![0, 1, 2], 50), (vec![1, 2], 30), (vec![2], 20)], 3);
-        let res = optimize(&eq, 3, &EmOptions::default(), None);
+        let res = optimize(&eq, 3, &EmOptions::default(), EffLens::NONE);
         let total: f64 = res.alphas.iter().sum();
         assert!((total - 100.0).abs() < 1e-6, "total={total}");
     }
@@ -599,7 +680,7 @@ mod tests {
             use_vbem: true,
             ..Default::default()
         };
-        let res = optimize(&eq, 2, &opts, None);
+        let res = optimize(&eq, 2, &opts, EffLens::NONE);
         let total: f64 = res.alphas.iter().sum();
         // VBEM with a tiny prior stays very close to the EM total.
         assert!((total - 200.0).abs() < 1.0, "total={total}");
@@ -629,7 +710,7 @@ mod tests {
     #[test]
     fn squarem_matches_plain_em_fixpoint() {
         let eq = ambiguous();
-        let plain = optimize(&eq, 3, &EmOptions::default(), None);
+        let plain = optimize(&eq, 3, &EmOptions::default(), EffLens::NONE);
         let sq = optimize(
             &eq,
             3,
@@ -637,7 +718,7 @@ mod tests {
                 accel: EmAccel::Squarem,
                 ..Default::default()
             },
-            None,
+            EffLens::NONE,
         );
         for t in 0..3 {
             let rel = (sq.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
@@ -668,7 +749,7 @@ mod tests {
             use_vbem: true,
             ..Default::default()
         };
-        let plain = optimize(&eq, 3, &base, None);
+        let plain = optimize(&eq, 3, &base, EffLens::NONE);
         let sq = optimize(
             &eq,
             3,
@@ -676,7 +757,7 @@ mod tests {
                 accel: EmAccel::Squarem,
                 ..base.clone()
             },
-            None,
+            EffLens::NONE,
         );
         for t in 0..3 {
             let rel = (sq.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
@@ -701,7 +782,7 @@ mod tests {
                 accel: EmAccel::Squarem,
                 ..Default::default()
             },
-            None,
+            EffLens::NONE,
         );
         let total: f64 = res.alphas.iter().sum();
         // total input count = 40+35+25+300+260+180+500 = 1340
@@ -725,7 +806,7 @@ mod tests {
             alpha_check_cutoff: 1e-8,
             ..Default::default()
         };
-        let plain = optimize(&eq, ntxp, &tight, None);
+        let plain = optimize(&eq, ntxp, &tight, EffLens::NONE);
         let sq = optimize(
             &eq,
             ntxp,
@@ -733,7 +814,7 @@ mod tests {
                 accel: EmAccel::Squarem,
                 ..tight.clone()
             },
-            None,
+            EffLens::NONE,
         );
         println!(
             "squarem_reduces_iters: plain M-steps={} (converged={}) squarem M-steps={} (converged={})",
@@ -760,7 +841,7 @@ mod tests {
     #[test]
     fn daarem_matches_plain_em_fixpoint() {
         let eq = ambiguous();
-        let plain = optimize(&eq, 3, &EmOptions::default(), None);
+        let plain = optimize(&eq, 3, &EmOptions::default(), EffLens::NONE);
         let da = optimize(
             &eq,
             3,
@@ -768,7 +849,7 @@ mod tests {
                 accel: EmAccel::Daarem,
                 ..Default::default()
             },
-            None,
+            EffLens::NONE,
         );
         for t in 0..3 {
             let rel = (da.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
@@ -798,7 +879,7 @@ mod tests {
             use_vbem: true,
             ..Default::default()
         };
-        let plain = optimize(&eq, 3, &base, None);
+        let plain = optimize(&eq, 3, &base, EffLens::NONE);
         let da = optimize(
             &eq,
             3,
@@ -806,7 +887,7 @@ mod tests {
                 accel: EmAccel::Daarem,
                 ..base.clone()
             },
-            None,
+            EffLens::NONE,
         );
         for t in 0..3 {
             let rel = (da.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
@@ -830,7 +911,7 @@ mod tests {
                 accel: EmAccel::Daarem,
                 ..Default::default()
             },
-            None,
+            EffLens::NONE,
         );
         let total: f64 = res.alphas.iter().sum();
         assert!((total - 1340.0).abs() < 1e-6, "total={total}");
@@ -850,7 +931,7 @@ mod tests {
             alpha_check_cutoff: 1e-8,
             ..Default::default()
         };
-        let plain = optimize(&eq, ntxp, &tight, None);
+        let plain = optimize(&eq, ntxp, &tight, EffLens::NONE);
         let da = optimize(
             &eq,
             ntxp,
@@ -858,7 +939,7 @@ mod tests {
                 accel: EmAccel::Daarem,
                 ..tight.clone()
             },
-            None,
+            EffLens::NONE,
         );
         println!(
             "daarem_reduces_iters: plain M-steps={} (converged={}) daarem M-steps={} (converged={})",
@@ -886,7 +967,7 @@ mod tests {
         b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 100);
         let mut eq = b.finish();
         eq.update_eff_lengths(&[300.0, 100.0]);
-        let res = optimize(&eq, 2, &EmOptions::default(), None);
+        let res = optimize(&eq, 2, &EmOptions::default(), EffLens::NONE);
         assert!(res.alphas[1] > res.alphas[0], "{:?}", res.alphas);
     }
 }
