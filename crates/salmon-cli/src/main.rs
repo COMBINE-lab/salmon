@@ -436,8 +436,11 @@ struct QuantArgs {
     /// Mate-2 FASTQ file(s) for paired-end reads.
     #[arg(short = '2', long = "mates2", num_args = 1..)]
     mates2: Vec<PathBuf>,
-    /// Single-end FASTQ file(s).
-    #[arg(short = 'r', long = "unmatedReads", num_args = 1..)]
+    /// Single-end FASTQ file(s). Mutually exclusive with the paired inputs:
+    /// supplying both silently quantified only the pairs while `cmd_info.json`
+    /// still recorded the single-end files, which is the same "wrong mode
+    /// chosen silently" failure `-a`'s conflict exists to prevent (#1140).
+    #[arg(short = 'r', long = "unmatedReads", num_args = 1.., conflicts_with_all = ["mates1", "mates2"])]
     unmated: Vec<PathBuf>,
     /// Output directory.
     #[arg(short = 'o', long = "output", required = true)]
@@ -1787,9 +1790,131 @@ fn run_genome_project(
 // or deterministic), validating that the combination makes sense, and reporting
 // clearly when it does not — a wrong mode chosen silently would be far worse
 // than an error.
+/// Reject an obviously incomplete uncompressed FASTQ before mapping it.
+///
+/// A truncated FASTQ — interrupted download, aborted rsync, full disk — was
+/// read up to its last complete record and quantified silently: 8 KB of an
+/// 84 KB file produced a clean `quant.sf` over 38 of 400 reads, exit 0, with
+/// nothing said. That is a wrong answer presented as a right one, and salmon
+/// already rejects the equivalent for its other inputs (a truncated RAD says
+/// "the RAD file may be truncated" and exits 1).
+///
+/// Only uncompressed inputs need this. A truncated gzip/zstd/bzip2 stream
+/// already fails in the decompressor ("unexpected end of file"), which covers
+/// the form real sequencing data almost always arrives in. A truncated *plain*
+/// file has no such envelope, so the completeness has to be checked here.
+///
+/// The check is exact rather than heuristic: a valid FASTQ is a whole number of
+/// 4-line records, so a line count that is not a multiple of 4 is incomplete,
+/// full stop. It cannot reject a valid file — in particular a final record with
+/// no trailing newline still counts as a line. The cost is one sequential pass
+/// over uncompressed input; large FASTQ is essentially always compressed, and
+/// mapping will read the file again anyway.
+fn preflight_fastq_complete(paths: &[PathBuf]) -> Result<()> {
+    use std::io::Read;
+    for path in paths {
+        let mut f = match std::fs::File::open(path) {
+            Ok(f) => f,
+            // Missing/unreadable inputs are reported by the reader, with its
+            // own wording; do not pre-empt it with a worse message.
+            Err(_) => continue,
+        };
+        let mut magic = [0u8; 4];
+        let n = f.read(&mut magic).unwrap_or(0);
+        // Compressed: the decompressor owns this check (see above).
+        let compressed = (n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b)          // gzip
+            || (n >= 4 && magic[..4] == [0x28, 0xb5, 0x2f, 0xfd])                  // zstd
+            || (n >= 3 && &magic[..3] == b"BZh")                                   // bzip2
+            || (n >= 4 && magic[..4] == [0xfd, 0x37, 0x7a, 0x58]); // xz
+        if compressed || n == 0 {
+            continue;
+        }
+        use std::io::{BufReader, Seek, SeekFrom};
+        f.seek(SeekFrom::Start(0))?;
+        let mut reader = BufReader::with_capacity(1 << 20, f);
+        let mut buf = vec![0u8; 1 << 20];
+        let (mut lines, mut last) = (0u64, 0u8);
+        loop {
+            let got = reader.read(&mut buf)?;
+            if got == 0 {
+                break;
+            }
+            lines += bytecount_newlines(&buf[..got]);
+            last = buf[got - 1];
+        }
+        // A final record with no trailing newline is still a line.
+        if last != b'\n' {
+            lines += 1;
+        }
+        if !lines.is_multiple_of(4) {
+            anyhow::bail!(
+                "{} looks truncated: it holds {lines} lines, which is not a whole number of \
+                 4-line FASTQ records. Quantifying it would silently report results for only \
+                 the part that survived. Re-transfer or re-generate the file.",
+                path.display()
+            );
+        }
+
+        // The line count alone is not enough: a byte-level cut can land such
+        // that the surviving lines still number a multiple of 4, with the last
+        // one a partial quality string. So check the final record's shape,
+        // which is exact and does not depend on a trailing newline (some valid
+        // files have none): the separator line starts with `+`, and the
+        // sequence and quality lines are the same length.
+        let tail_len = 1 << 20;
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let mut f = std::fs::File::open(path)?;
+        f.seek(SeekFrom::Start(size.saturating_sub(tail_len)))?;
+        let mut tail = Vec::new();
+        f.take(tail_len).read_to_end(&mut tail)?;
+        let tail_lines: Vec<&[u8]> = tail
+            .split(|&c| c == b'\n')
+            .filter(|l| !l.is_empty())
+            .collect();
+        if tail_lines.len() >= 4 {
+            let n = tail_lines.len();
+            let (seq, sep, qual) = (tail_lines[n - 3], tail_lines[n - 2], tail_lines[n - 1]);
+            if !sep.starts_with(b"+") || seq.len() != qual.len() {
+                anyhow::bail!(
+                    "{} looks truncated: its final record is incomplete (the sequence and \
+                     quality lines disagree in length, or the `+` separator is missing). \
+                     Quantifying it would silently report results for only the part that \
+                     survived. Re-transfer or re-generate the file.",
+                    path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Count `b'\n'` in a slice. Split out so the hot loop above stays readable.
+#[inline]
+fn bytecount_newlines(b: &[u8]) -> u64 {
+    b.iter().filter(|&&c| c == b'\n').count() as u64
+}
+
 fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.ont {
         long_read_redirect();
+    }
+    // Validate `-l` here, before any mode dispatch, so every path rejects a
+    // bad library type identically. Reads mode parsed it with `?` deep inside
+    // `quantify`, while every alignment/RAD call site discarded the error with
+    // `.ok()` and quantified as though unstranded — so `-l XYZ` was a hard
+    // error on one path and a silent wrong answer on the others (#1140
+    // readiness sweep). One check up front is also the only way genome
+    // projection gets the same treatment.
+    if !salmon_core::LibraryFormat::is_auto(&args.lib_type)
+        && salmon_core::LibraryFormat::parse(&args.lib_type).is_err()
+    {
+        anyhow::bail!(
+            "invalid library type '{}'. Expected `A` (auto-detect) or a format string: \
+             an optional relative orientation `I`/`O`/`M` (inward/outward/matching), then \
+             strandedness `S`/`U` (stranded/unstranded), then for stranded libraries the \
+             read-1 strand `F`/`R` (forward/reverse) — e.g. `IU`, `ISF`, `ISR`, `U`, `SF`, `SR`.",
+            args.lib_type
+        );
     }
     // Accepted-for-compatibility flags that have no effect in the Rust port.
     if args.mapping_cache_memory_limit.is_some() {
@@ -1832,6 +1957,28 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             args.decoy_threshold
         );
     }
+    // `--noLengthCorrection` and bias correction cannot both apply: every
+    // driver computes `bias_on = (seq||gc||pos) && !no_length_correction`, so
+    // the bias request was silently discarded — and `meta_info.json` went on
+    // reporting `gc_bias_correct: true` for a run that did no such thing. The
+    // conflict is fully known at invocation, so say so instead (#1140).
+    if args.no_length_correction && (args.seq_bias || args.gc_bias || args.pos_bias) {
+        let asked: Vec<&str> = [
+            ("--seqBias", args.seq_bias),
+            ("--gcBias", args.gc_bias),
+            ("--posBias", args.pos_bias),
+        ]
+        .iter()
+        .filter_map(|&(n, on)| on.then_some(n))
+        .collect();
+        anyhow::bail!(
+            "--noLengthCorrection cannot be combined with {}: bias correction works by \
+             adjusting effective lengths, which is exactly what --noLengthCorrection turns \
+             off. Drop whichever you did not mean.",
+            asked.join(" / ")
+        );
+    }
+
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
     let nthreads = if args.threads == 0 {
@@ -2295,6 +2442,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         !args.mates1.is_empty() || !args.unmated.is_empty(),
         "no reads provided: pass -1/-2 (paired), -r (single-end), -a (BAM), or --rad (RAD)"
     );
+    preflight_fastq_complete(&args.mates1)?;
+    preflight_fastq_complete(&args.mates2)?;
+    preflight_fastq_complete(&args.unmated)?;
     anyhow::ensure!(
         args.mates1.len() == args.mates2.len(),
         "the number of -1 and -2 files must match"
