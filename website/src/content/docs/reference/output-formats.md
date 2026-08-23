@@ -79,7 +79,7 @@ Pretty-printed JSON. tximport keys off several fields (`num_bootstraps`,
 | `samp_type` | string | `"bootstrap"`, `"gibbs"`, or `"none"` |
 | `opt_type` | string | `"em"` or `"vb"` |
 | `num_libraries` | int | currently `1` |
-| `library_types` | string[] | detected/declared library type(s) |
+| `library_types` | string[] | the library format that was **applied** — the one you gave with `-l`, or the detected one under `-l A`. For what the detector observed, read `detected_library_type` below. |
 | `frag_dist_length` | int | number of FLD length bins |
 | `frag_length_mean` / `frag_length_sd` | float | fragment length stats |
 | `frag_length_source` | string | where the distribution above came from: `reads`, `alignments`, `rad_baked`, `rad_baked_prior`, `rad_derived`, or `prior` |

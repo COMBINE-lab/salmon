@@ -59,7 +59,7 @@ misbehaves.
 | `--numBootstraps`, `--numGibbsSamples`, `--thinningFactor` | ✅ | |
 | `--vbPrior`, `--perTranscriptPrior`, `--perNucleotidePrior` | ✅ | |
 | `--rangeFactorizationBins`, `--incompatPrior`, `--sigDigits` | ✅ | |
-| `--dumpEq`, `--dumpEqWeights`, `--writeUnmappedNames` | ✅ | |
+| `--dumpEq`, `--dumpEqWeights`, `--writeUnmappedNames` | ✅ | The eq dumps come from the pass that builds the classes, so they work in every RAD-based mode (including the 2.6.0 default and `--rad`) as well as `--online`. `--writeUnmappedNames` is reads-mode only: it warns and is ignored under `-a`/`--rad`, where salmon never sees the unmapped reads. |
 | `--initUniform` | ✅ | |
 | `--skipQuant` | ✅ | Skips EM + Gibbs/bootstrap + quant.sf; still emits eq-classes/metadata. |
 | `-g/--geneMap`, `--genes` | ✅ | Gene-level aggregation. Rust also adds `--ignoreTxVersion` (no C++ equivalent) for Ensembl cDNA + GTF identifier mismatches. |
@@ -76,15 +76,16 @@ misbehaves.
 | `--seqBias`, `--gcBias`, `--posBias` | ✅ | |
 | `--fldMean`, `--fldSD`, `--fldMax` | ✅ | Priors. With `--rad` they are ignored unless `--fldPolicy` says otherwise (a salmon RAD bakes its FLD); salmon warns when an explicitly-supplied value is ignored. |
 | `--fldPolicy` | ✅ | `baked` (default) / `derive` / `prior`: where a RAD requant's fragment-length distribution comes from. Rust-port feature; not in this salmon build. |
-| `-f/--forgettingFactor` | ✅ | |
-| `--numAuxModelSamples` | ✅ | Online-phase model-training window. |
+| `-f/--forgettingFactor` | ✅ | Online-path only: since 2.6.0 the deterministic default runs no online phase, so it warns and is ignored without `--online`. |
+| `--numAuxModelSamples` | ✅ | Online-phase model-training window; same `--online`-only caveat as `--forgettingFactor`. |
 | `--biasSpeedSamp` | ✅ | GC convolution fragment-length stride. |
 | `--numGCBins`, `--conditionalGCBins` | ✅ | |
 | `--noBiasLengthThreshold` | ✅ | |
 | `--reduceGCMemory` | 🟰 | The rank-bitvector GC representation it selects is now the default (faster + ~2× leaner, identical results). |
 | `--numBiasSamples` | ⛔ | No separate seq-bias sample cap (collected within the aux window). |
-| `--numPreAuxModelSamples` | ✅ | Pre-aux burn-in window (port default 5000; salmon 1,000,000). |
-| `--noFragLengthDist`, `--noSingleFragProb` | ⚠️ | FLD-in-fragment-probability toggles (experimental upstream); accepted, not yet implemented. |
+| `--numPreAuxModelSamples` | ✅ | Pre-aux burn-in window (port default 5000; salmon 1,000,000); same `--online`-only caveat as `--forgettingFactor`. |
+| `--noFragLengthDist` | ✅ | Drops the fragment-length term from a placement's probability (the proper-pair PMF term and the orphan ambiguous-length term alike). Honoured on every quantification path — reads, `-a`, `--rad`, deterministic and online — except the deprecated `--online -a`, which warns that it lacks it. |
+| `--noSingleFragProb` | ✅ | Replaces an orphan's bounded-CMF fragment-length estimate with salmon's flat `LOG_EPSILON` penalty. Honoured on the default deterministic / RAD paths as well as `--online`; it changes point estimates wherever orphans are contested. |
 
 ## `salmon quant` — mapping / selective alignment (reads mode)
 
@@ -115,7 +116,8 @@ misbehaves.
 |------|--------|-------|
 | `-a/--alignments`, `-t/--targets` | ✅ | BAM/SAM input. |
 | `--noErrorModel`, `--numErrorBins` | ✅ | |
-| `--discardOrphans` | ✅ | Alignment-mode orphan discard. |
+| `--discardOrphans` | ✅ | Alignment-mode orphan discard; also honoured when requantifying a RAD (`--rad`), so a requant agrees with the run that wrote the file. |
+| `--hardFilter`, `--scoreExp` | ✅ | Also honoured on `-a`/`--rad`, not just in reads mode: the requant applies them to the RAD's `AS`-derived scores exactly as it does to selective-alignment ones. |
 | `--ont` | ✅ | Redirect (long-read mode is out of scope, as upstream). |
 | `--mappingCacheMemoryLimit` | ⚠️ | Rust streams with bounded buffers; no mass-banking cache. |
 | `--sampleOut`/`-s`, `--sampleUnaligned`/`-u`, `--writeQualities` | ⚠️ | Posterior-sampled BAM output; accepted, not yet implemented. |

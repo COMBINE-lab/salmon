@@ -417,6 +417,23 @@ fn write_meta_info(
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
         pos_bias_correct: opts.pos_bias,
+        // Not the seq/GC/pos bin count, despite the name. C++ salmon writes
+        // `bcounts.size()` here (`GZipWriter.cpp:532`), where `bcounts` is the
+        // *legacy* k-mer read-bias histogram `ReadKmerDist<6>` — a compile-time
+        // 4^6, identical on every run, describing the length of
+        // `observed_bias.gz` and nothing else. This port dropped that model in
+        // favour of SBModel/GC/positional and emits `observed_bias.gz` only as a
+        // neutral one-element stub (`salmon_model::dumps::write_aux_bias_dumps`),
+        // so the quantity the field names has no value here to report.
+        //
+        // The real bin counts *are* in scope — `res.bias_dump.obs_gc.len()` is
+        // `cond_gc_bins * gc_bins`, `res.bias_dump.obs5_pos` gives the positional
+        // shape — but they measure different models, so putting either one here
+        // would hand a C++-schema reader a number in the wrong unit, which is
+        // worse than the placeholder. Left at 0 (the same value C++ itself writes
+        // in its empty-meta path) until the field is redefined or dropped;
+        // tracked as a known `meta_info.json` gap, and deliberately NOT surfaced
+        // via `MissingMetaField`, which reports what an *input* could not supply.
         num_bias_bins: 0,
         mapping_type: if opts.sketch { "pseudo" } else { "mapping" }.to_string(),
         keep_duplicates: res.keep_duplicates,

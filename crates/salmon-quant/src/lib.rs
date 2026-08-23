@@ -819,7 +819,36 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 }
             }
         }
-        mapped.map_err(|e| anyhow::anyhow!("mapping failed: {e}"))?;
+        // Name the inputs on the way out. A FASTQ parse failure arrives here as
+        // paraseq's bare content string ("FASTX error: Invalid FASTQ separator:
+        // N, expected '+'") with no idea which file produced it: `ProcessError`
+        // carries no path, and paraseq drains every reader concurrently on
+        // threads it owns, so the identity is gone before the Result crosses
+        // back. `-1/-2/-r` each take many files, so that message on its own
+        // names nothing the user can act on — this was the only input-error
+        // class in the tree that did not chain a path. This is the last place
+        // that still holds the paths, and it runs once per run (not per record),
+        // so the context is free. With one input we can name it outright; with
+        // several we say plainly that the list is the candidate set and not the
+        // culprit, rather than implying we know which.
+        mapped
+            .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))
+            .with_context(|| {
+                let files: Vec<String> = groups
+                    .iter()
+                    .flatten()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                match files.as_slice() {
+                    [one] => format!("while reading {one}"),
+                    many => format!(
+                        "while reading one of the {} read files (the FASTX reader does not \
+                         report which): {}",
+                        many.len(),
+                        many.join(", ")
+                    ),
+                }
+            })?;
         if let Some(err) = &diagnostics.failure {
             tracing::warn!(
                 "thread broker stopped early ({err:?}); mapping completed with the \

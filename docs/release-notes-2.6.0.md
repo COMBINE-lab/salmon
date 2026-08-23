@@ -122,8 +122,27 @@ Most of it is invisible from outside; these are the parts that are not.
   posterior that actually ran (tximport keys off it together with
   `num_bootstraps`), `serialized_eq_classes` reflects whether classes were
   dumped, `num_decoy_fragments` reads the counter baked in the RAD instead of a
-  hardcoded `0`, and `frag_length_source` distinguishes an observed
-  distribution from the `--fldMean`/`--fldSD` prior a single-end run keeps.
+  hardcoded `0`, `num_decoy_targets` reports the real decoy count instead of a
+  hardcoded `0` (it contradicted `num_decoy_fragments` in the same file), and
+  `frag_length_source` distinguishes an observed distribution from the
+  `--fldMean`/`--fldSD` prior a single-end run keeps — and no longer answers
+  `rad_baked` for a plain `-a` run, which leaked the internal intermediate RAD
+  into the run's own record. Alignment input reports `alignments`; the
+  `rad_baked*` spellings are for a RAD you supplied yourself.
+- **`library_types` reports the library format that was *applied*, not the one
+  the detector observed.** With an explicit `-l` it reported the detected
+  format, contradicting `cmd_info.json` and `lib_format_counts.json` in the same
+  output directory: `-l ISR` on ISF-looking data reported `["ISF"]`, while the
+  run really did filter as ISR and map nothing. The inferred format keeps its
+  own field, so metadata now reports **both** — what was applied
+  (`library_types`) and what was observed (`detected_library_type`). **If you
+  parse `library_types` to learn what salmon detected, read
+  `detected_library_type` instead.**
+- **`logs/salmon_quant.log` describes the run you asked for.** The log is
+  written by the pass that quantifies, which the default reads path now shares
+  with `-a`, so a plain reads run was headed "alignment mode" and reported its
+  unmapped fragments as strand-incompatible. Reads runs are labelled and
+  counted as reads runs again.
 - **`cmd_info.json` records your invocation**, not phase 2's view of it. The
   requant used to overwrite it with the alignment-mode schema, so `index`,
   `mates1`/`mates2`, `threads` and `sketch` vanished from the run's own record
