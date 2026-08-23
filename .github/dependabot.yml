@@ -9,6 +9,14 @@
 # Everything below is grouped rather than per-dependency. A Rust workspace this
 # size produces a dozen individual bumps a week otherwise, and a wall of PRs is
 # reviewed by nobody, which is worse than no updates at all.
+#
+# NONE OF THIS APPLIES TO SECURITY UPDATES. GitHub only uses a `dependabot.yml`
+# entry for security updates when it sets no `target-branch`, and every entry
+# here sets one. So a security bump keeps arriving the way it does today:
+# against the default branch (`master`), ungrouped, without these commit
+# prefixes. That is deliberate (a security fix belongs on the release branch
+# directly, not queued behind `develop`), but it is worth knowing before
+# wondering why one showed up looking nothing like the PRs described below.
 version: 2
 updates:
   # ---- Rust workspace ------------------------------------------------------
@@ -45,6 +53,12 @@ updates:
       # and paraseq-temp 0.5.0-pre.2 commits). Kept in their own PR so such a
       # bump is never buried in a batch of unrelated ones.
       combine-lab-upstream:
+        # Minor and patch only, so a major from one of these lands on its own
+        # like every other major. Grouping a piscem-rs 1.0 with unrelated
+        # bumps is exactly what the separate group exists to prevent.
+        update-types:
+          - minor
+          - patch
         patterns:
           - piscem-rs
           # `paraseq` in the manifest is the `paraseq-temp` republication, so
