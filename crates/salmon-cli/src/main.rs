@@ -1485,15 +1485,13 @@ fn run_deterministic(
         pct2,
         res.num_eq_classes
     );
-    // `--skipQuant` estimates no abundances; aggregating the zero rows to
-    // gene level would announce success over an empty result (#1140 — the
-    // deterministic reads driver already skipped it, the others wrote
-    // zeros silently).
-    if map_opts.skip_quant && gene_map.is_some() {
-        tracing::info!(
-            "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
-        );
-    } else if let Some(gm) = gene_map {
+    // No `--skipQuant` guard here, deliberately: this driver returns early for
+    // that case (see `stop_after_mapping` above), so reaching this point means
+    // phase 2 ran and produced real abundances. Guarding on
+    // `map_opts.skip_quant` instead — which phase 1 forces true regardless of
+    // what the user asked — made `-g` a silent no-op in the DEFAULT reads mode
+    // and printed a "--skipQuant" explanation on runs that never passed it.
+    if let Some(gm) = gene_map {
         write_gene_level(
             out_dir,
             gm,
@@ -1843,9 +1841,33 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     } else {
         args.threads
     };
-    let _ = rayon::ThreadPoolBuilder::new()
+    // Clamp to what the machine can actually give. An unsatisfiable `-p` is an
+    // ordinary user error — an unset `$SLURM_CPUS_PER_TASK`, a typo'd digit —
+    // and rayon's failure for it is not a diagnosis: the thread pool aborts the
+    // process with a raw panic (exit 134) whose message asserts the global pool
+    // both was and was not initialized, and names neither `-p` nor the cause.
+    // The threshold scales with the machine, so a small node trips far below a
+    // big one. Say what happened and continue with a workable value.
+    let available = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let nthreads = if nthreads > available {
+        tracing::warn!(
+            "-p {nthreads} exceeds the {available} hardware thread(s) this machine reports; \
+             using {available}. (If this came from a scheduler variable, it was probably unset.)"
+        );
+        available
+    } else {
+        nthreads
+    };
+    // Propagate the failure rather than discarding it: a swallowed error here
+    // resurfaces much later as SIGABRT from an unrelated-looking place.
+    if let Err(e) = rayon::ThreadPoolBuilder::new()
         .num_threads(nthreads)
-        .build_global();
+        .build_global()
+    {
+        anyhow::bail!("could not create a thread pool of {nthreads} thread(s): {e}");
+    }
     let out_dir = args.output.clone();
     let gene_map = load_gene_map(args.gene_map.clone(), args.ignore_tx_version)?;
 

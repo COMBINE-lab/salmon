@@ -127,7 +127,13 @@ pub fn bootstrap(
             // shapes the prior here exactly as it does the point estimate;
             // passing `None` silently fell back to the flat prior, which made
             // the flag a no-op inside every replicate (#1140, audit D13).
-            let (alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, eff_lens, None);
+            //
+            // NOTE the argument order: `init_alphas` precedes `eff_lens` and
+            // both are `Option<&[f64]>`, so swapping them type-checks. The
+            // first attempt at this fix did exactly that — the prior stayed
+            // flat AND every replicate warm-started from the effective-length
+            // vector. Keep `None` explicit for the uniform start.
+            let (alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, None, eff_lens);
             // Finalize like the point estimate: truncate the negligible
             // abundances, then redistribute that mass to eq-class co-members via a
             // masked final M-step over the *resampled* counts (no rescale-up). The
@@ -138,7 +144,7 @@ pub fn bootstrap(
             // spread interpretable: any systematic difference in post-processing
             // would show up as bias, not variance.
             let (alphas, _dropped) =
-                crate::finalize_truncate_redistribute(p, &resampled, alphas, opts, None);
+                crate::finalize_truncate_redistribute(p, &resampled, alphas, opts, eff_lens);
             alphas
         })
         .collect()
@@ -515,5 +521,62 @@ mod tests {
         let (uniq, amb) = ambiguity_counts(&p);
         assert_eq!(uniq, vec![30, 70]);
         assert_eq!(amb, vec![100, 100]);
+    }
+}
+
+#[cfg(test)]
+mod per_nucleotide_prior_reaches_replicates {
+    use super::*;
+    use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
+
+    /// `--perNucleotidePrior` must shape the prior inside every bootstrap
+    /// replicate, not only the point estimate.
+    ///
+    /// The bug this pins was invisible to the type system: `run_em_counts`
+    /// takes `init_alphas: Option<&[f64]>` immediately before
+    /// `eff_lens: Option<&[f64]>`, so passing the effective lengths one slot
+    /// early compiled, silently left the prior flat, AND warm-started every
+    /// replicate from the effective-length vector. The reported posterior
+    /// spread was then drawn under a different prior than the estimate it was
+    /// supposed to quantify.
+    ///
+    /// The transcripts differ in effective length, which is the only thing that
+    /// makes a per-nucleotide prior (`prior * effLen`) distinguishable from a
+    /// per-transcript one (`prior`), and the class is contested so the prior
+    /// actually moves the split.
+    #[test]
+    fn bootstrap_replicates_follow_the_per_nucleotide_prior() {
+        let eff_lens = [1000.0f64, 50.0];
+        let b = EquivalenceClassBuilder::new();
+        b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 800);
+        b.add_group(TranscriptGroup::new(vec![0]), vec![1.0], 200);
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&eff_lens);
+        let packed = PackedEqClasses::from_collapsed(&eq, 2);
+
+        let mut opts = EmOptions {
+            use_vbem: true,
+            vb_prior: 10.0,
+            ..EmOptions::default()
+        };
+
+        opts.per_nucleotide_prior = false;
+        let flat = bootstrap(&packed, &opts, Some(&eff_lens), 16, 0xC0FFEE);
+        opts.per_nucleotide_prior = true;
+        let per_nt = bootstrap(&packed, &opts, Some(&eff_lens), 16, 0xC0FFEE);
+
+        assert_eq!(flat.len(), 16);
+        assert_eq!(per_nt.len(), 16);
+        let mean = |r: &[Vec<f64>], t: usize| -> f64 {
+            r.iter().map(|v| v[t]).sum::<f64>() / r.len() as f64
+        };
+        let (a, b) = (mean(&flat, 0), mean(&per_nt, 0));
+        // Same seed, same data, same resampling — only the prior differs, so
+        // any difference at all is the prior reaching the replicates.
+        assert!(
+            (a - b).abs() > 1e-6,
+            "--perNucleotidePrior must change the replicates: flat mean {a}, \
+             per-nucleotide mean {b}"
+        );
     }
 }
