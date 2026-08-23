@@ -289,6 +289,15 @@ fn write_lib_counts(
 
 /// `aux_info/meta_info.json`: everything a downstream tool or a human needs to
 /// judge the run — provenance, settings, counters, timing and diagnostics.
+/// Shape of the positional-bias model: one model per transcript length class,
+/// each binned over the transcript's relative position. Reported as both
+/// numbers because either alone is ambiguous.
+#[derive(Serialize)]
+struct PosBiasShape {
+    length_classes: usize,
+    bins_per_class: usize,
+}
+
 #[derive(Serialize)]
 struct MetaInfo {
     salmon_version: String,
@@ -307,6 +316,18 @@ struct MetaInfo {
     gc_bias_correct: bool,
     pos_bias_correct: bool,
     num_bias_bins: usize,
+    /// salmon-rs extensions: the shapes of the bias models that actually ran.
+    /// `num_bias_bins` above cannot carry these (see its fill site), so without
+    /// them a reader had no way to learn what the running models looked like.
+    /// `None` when that correction was not requested, which is how a consumer
+    /// tells "off" from "on with N bins" (#1140 follow-up). Mirrored in the
+    /// shared alignment/RAD writer so every driver reports the same set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seq_bias_context_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gc_bias_bins: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pos_bias_bins: Option<PosBiasShape>,
     mapping_type: String,
     /// how the index was built; omitted when the index predates recording it,
     /// rather than reported as a `false` the run cannot actually vouch for
@@ -426,15 +447,22 @@ fn write_meta_info(
         // neutral one-element stub (`salmon_model::dumps::write_aux_bias_dumps`),
         // so the quantity the field names has no value here to report.
         //
-        // The real bin counts *are* in scope — `res.bias_dump.obs_gc.len()` is
-        // `cond_gc_bins * gc_bins`, `res.bias_dump.obs5_pos` gives the positional
-        // shape — but they measure different models, so putting either one here
-        // would hand a C++-schema reader a number in the wrong unit, which is
-        // worse than the placeholder. Left at 0 (the same value C++ itself writes
-        // in its empty-meta path) until the field is redefined or dropped;
-        // tracked as a known `meta_info.json` gap, and deliberately NOT surfaced
-        // via `MissingMetaField`, which reports what an *input* could not supply.
+        // Putting a seq/GC/positional count here would hand a C++-schema reader
+        // a number in the wrong unit, so this stays 0 (the value C++ itself
+        // writes in its empty-meta path) and the real shapes are reported
+        // beside it in the salmon-rs fields below. Deliberately NOT surfaced
+        // via `MissingMetaField`, which reports what an *input* could not
+        // supply, not a field whose C++ meaning no longer applies.
         num_bias_bins: 0,
+        // The counts the field above cannot carry, measured from the models
+        // this run produced rather than from the requested options.
+        seq_bias_context_length: (!res.bias_dump.obs5_seq.is_empty())
+            .then_some(salmon_model::seqbias::CONTEXT_LENGTH),
+        gc_bias_bins: (!res.bias_dump.obs_gc.is_empty()).then_some(res.bias_dump.obs_gc.len()),
+        pos_bias_bins: res.bias_dump.obs5_pos.first().map(|first| PosBiasShape {
+            length_classes: res.bias_dump.obs5_pos.len(),
+            bins_per_class: first.len(),
+        }),
         mapping_type: if opts.sketch { "pseudo" } else { "mapping" }.to_string(),
         keep_duplicates: res.keep_duplicates,
         index_seq_hash: res.index_seq_hash.clone(),

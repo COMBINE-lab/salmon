@@ -343,3 +343,66 @@ fn the_sketch_decoy_threshold_warning_only_fires_in_reads_mode() {
         "it must still fire where sketch really runs"
     );
 }
+
+/// `num_bias_bins` names C++'s legacy 4096-bin k-mer counter, which this port
+/// replaced — so it cannot describe the seq/GC/positional models that actually
+/// run, and stays 0. Nothing recorded their shapes, so these fields do.
+///
+/// They are measured from the produced models rather than the requested
+/// options, and are absent when the correction was not requested — that is how
+/// a consumer distinguishes "off" from "on with N bins".
+#[test]
+fn bias_model_shapes_are_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let (index, r1, r2) = fixture(dir.path());
+    let run = |extra: &[&str], out: &Path| {
+        let mut c = Command::new(SALMON);
+        c.args(["quant", "-i"])
+            .arg(&index)
+            .args(["-l", "IU", "-1"])
+            .arg(&r1)
+            .arg("-2")
+            .arg(&r2)
+            .args(["-p", "2"])
+            .args(extra)
+            .arg("-o")
+            .arg(out);
+        assert!(c.status().unwrap().success());
+    };
+
+    // Off: the fields are absent, not zero — a zero would read as a real model
+    // with no bins.
+    let off = dir.path().join("off");
+    run(&[], &off);
+    let m = meta(&off);
+    assert!(m.get("seq_bias_context_length").is_none(), "{m}");
+    assert!(m.get("gc_bias_bins").is_none(), "{m}");
+    assert!(m.get("pos_bias_bins").is_none(), "{m}");
+
+    // All three on.
+    let on = dir.path().join("on");
+    run(&["--seqBias", "--gcBias", "--posBias"], &on);
+    let m = meta(&on);
+    assert_eq!(m["seq_bias_context_length"], 9);
+    assert_eq!(m["gc_bias_bins"], 75, "default 25 GC x 3 conditional bins");
+    assert_eq!(m["pos_bias_bins"]["length_classes"], 5);
+    assert_eq!(m["pos_bias_bins"]["bins_per_class"], 20);
+    // num_bias_bins keeps its C++ meaning and stays 0 alongside them.
+    assert_eq!(m["num_bias_bins"], 0);
+
+    // Each field tracks only its own model.
+    let gc = dir.path().join("gc");
+    run(&["--gcBias"], &gc);
+    let m = meta(&gc);
+    assert_eq!(m["gc_bias_bins"], 75);
+    assert!(m.get("seq_bias_context_length").is_none(), "{m}");
+    assert!(m.get("pos_bias_bins").is_none(), "{m}");
+
+    // And follows the knobs, rather than reporting a constant.
+    let tuned = dir.path().join("tuned");
+    run(
+        &["--gcBias", "--numGCBins", "30", "--conditionalGCBins", "4"],
+        &tuned,
+    );
+    assert_eq!(meta(&tuned)["gc_bias_bins"], 120, "30 GC x 4 conditional");
+}

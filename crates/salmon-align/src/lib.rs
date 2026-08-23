@@ -2668,6 +2668,15 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         w.flush()?;
     }
 
+    /// Shape of the positional-bias model: one model per transcript length
+    /// class, each binned over the transcript's relative position. Reported as
+    /// both numbers because either alone is ambiguous.
+    #[derive(Serialize)]
+    struct PosBiasShape {
+        length_classes: usize,
+        bins_per_class: usize,
+    }
+
     // aux_info/meta_info.json — full field set, matching salmon's alignment mode
     // (no index hashes since there is no index; no keep_duplicates).
     #[derive(Serialize)]
@@ -2688,6 +2697,18 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         gc_bias_correct: bool,
         pos_bias_correct: bool,
         num_bias_bins: usize,
+        // salmon-rs extensions: the shapes of the bias models that actually
+        // ran. `num_bias_bins` above cannot carry these — it names C++'s legacy
+        // 4096-bin k-mer counter, which this port replaced — so a reader had no
+        // way to learn what the running models looked like. `None` when that
+        // correction was not requested, which is how a consumer tells "off"
+        // from "on with N bins" (#1140 follow-up).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq_bias_context_length: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gc_bias_bins: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pos_bias_bins: Option<PosBiasShape>,
         mapping_type: String,
         /// how the index was built; known only from a salmon RAD's provenance,
         /// omitted (rather than guessed) for a BAM input
@@ -2935,6 +2956,17 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         // run publish their own sizes in their dumps, so 0 stands (matching the
         // reads writer) rather than a number of a different model's bins.
         num_bias_bins: 0,
+        // Measured from the models this run produced, not from the requested
+        // options: a model's own array length is the truth, where a
+        // configured-but-unbuilt model would otherwise be described as though
+        // it had run.
+        seq_bias_context_length: (!res.bias_dump.obs5_seq.is_empty())
+            .then_some(salmon_model::seqbias::CONTEXT_LENGTH),
+        gc_bias_bins: (!res.bias_dump.obs_gc.is_empty()).then_some(res.bias_dump.obs_gc.len()),
+        pos_bias_bins: res.bias_dump.obs5_pos.first().map(|first| PosBiasShape {
+            length_classes: res.bias_dump.obs5_pos.len(),
+            bins_per_class: first.len(),
+        }),
         // What the RAD says its producer was; a BAM input has no RAD to ask, and
         // an older or foreign RAD does not record it, so both fall back to the
         // value this path has always reported.

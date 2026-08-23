@@ -138,6 +138,13 @@ Most of it is invisible from outside; these are the parts that are not.
   (`library_types`) and what was observed (`detected_library_type`). **If you
   parse `library_types` to learn what salmon detected, read
   `detected_library_type` instead.**
+- **New: the bias models' shapes are recorded.** `meta_info.json` gains
+  `seq_bias_context_length`, `gc_bias_bins` and `pos_bias_bins`, each present
+  only when that correction ran. `num_bias_bins` keeps its C++ meaning — the
+  size of a legacy k-mer histogram this port replaced — and so stays `0`;
+  nothing previously recorded what the sequence, GC and positional models
+  actually looked like.
+
 - **`logs/salmon_quant.log` describes the run you asked for.** The log is
   written by the pass that quantifies, which the default reads path now shares
   with `-a`, so a plain reads run was headed "alignment mode" and reported its

@@ -100,6 +100,12 @@ Pretty-printed JSON. tximport keys off several fields (`num_bootstraps`,
 | `num_bootstraps` | int | inferential-replicate count (0 if none) |
 | `start_time` / `end_time` | string | asctime |
 
+`num_bias_bins` is retained for C++ compatibility and is always `0`. In C++
+salmon it reports the size of the legacy 4096-bin k-mer read-bias histogram
+behind `observed_bias.gz`; this port replaced that model with the sequence, GC
+and positional models, so the quantity it names does not exist here. The shapes
+of the models that *do* run are reported in the three salmon-rs fields above.
+
 (Plus `quant_errors`, `num_bias_bins`, `serialized_eq_classes`,
 `num_dovetail_fragments`, `num_fragments_filtered_vm`,
 `num_alignments_below_threshold_for_mapped_fragments_vm`, and `call`.)
@@ -118,6 +124,9 @@ aggregates (no per-fragment cost) and are emitted for every mode — reads,
 | `num_em_iterations` | int | EM/VBEM iterations actually run |
 | `em_converged` | bool | whether the relative-difference criterion was met before the iteration cap |
 | `detected_library_type` | string \| null | library format observed by the auto-detector (reads / `--rad`); `null` if not observed (e.g. `-a` transcriptomic BAM) |
+| `seq_bias_context_length` | int | sequence-bias model context length, in nucleotides; omitted when `--seqBias` was not requested |
+| `gc_bias_bins` | int | total GC-bias bins, i.e. `--numGCBins` × `--conditionalGCBins`; omitted when `--gcBias` was not requested |
+| `pos_bias_bins` | object | positional-bias shape, `{ "length_classes", "bins_per_class" }`; omitted when `--posBias` was not requested |
 | `total_time_seconds` | float | wall-clock seconds for the quantification call |
 | `peak_rss_kb` | int | peak resident set size in KiB (Linux `VmHWM`; 0 elsewhere) |
 | `diagnostics` | object[] | structured run diagnostics (see below) |
