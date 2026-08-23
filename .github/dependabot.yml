@@ -61,9 +61,17 @@ updates:
           - patch
         patterns:
           - piscem-rs
-          # `paraseq` in the manifest is the `paraseq-temp` republication, so
-          # both spellings are listed rather than guessing which one Dependabot
-          # reports for a renamed package.
+          # Both `paraseq` spellings are listed, and BOTH ARE INERT TODAY.
+          # `paraseq = { package = "paraseq-temp", ... }` is a rename, and
+          # dependabot-core's cargo parser skips a renamed manifest entry
+          # outright (`next unless name == name_from_declaration(...)` in
+          # cargo/lib/dependabot/cargo/file_parser.rb). Running that parser over
+          # this workspace confirms it: `paraseq` is not parsed at all, and
+          # `paraseq-temp` is seen only through Cargo.lock, with no requirement
+          # attached, which makes it indirect and therefore outside the default
+          # `allow`. So paraseq bumps stay manual, as they have been. The
+          # patterns are kept for the day the temporary republication goes away
+          # and the entry becomes an ordinary direct dependency again.
           - paraseq
           - paraseq-temp
           - libradicl
