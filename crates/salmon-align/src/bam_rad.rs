@@ -108,7 +108,11 @@ pub fn write_alignment_rad(
     let num_refs = names.len();
     anyhow::ensure!(num_refs > 0, "BAM header has no reference sequences");
 
-    let bias_on = opts.seq_bias || opts.gc_bias || opts.pos_bias;
+    // Gated on `!no_length_correction` like the reads-mode twin: without
+    // length correction the requant disables bias, so baking bias seeds here
+    // would spend a naive eq-class pass + seed EM on abundances nothing can
+    // ever consume (#1140).
+    let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
     // Paired unless the library type is explicitly single-end (matches the
     // alignment-mode `paired_lib` derivation in `quantify_alignments`).
     let is_paired = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
@@ -214,10 +218,17 @@ pub fn write_alignment_rad(
     // ---- end-of-pass bake (single quant pass) ----------------------------
     let (frag_dist, det_fmt) = fld.finish(opts.fld_mean, opts.fld_sd);
     writer.set_frag_length_dist(frag_dist.log_pmf());
-    let resolved_fmt = expected_format.or(det_fmt);
-    if let Some(f) = resolved_fmt {
+    // Two different questions, two different precedences (#1140). The baked
+    // library-format tag answers "what did the pass observe?" — detected wins,
+    // matching the reads-mode writer — so `quantify_rad` can compare it against
+    // an explicit `-l` and fire `library_type_mismatch`; baking the user's
+    // assertion instead silenced that diagnostic on this path and echoed the
+    // assertion back as `detected_library_type`. Filtering below answers "what
+    // did the user ask for?" — expected wins, like every strand filter.
+    if let Some(f) = det_fmt.or(expected_format) {
         writer.set_library_format(f.format_id());
     }
+    let resolved_fmt = expected_format.or(det_fmt);
 
     if let Some(nb) = naive.as_ref() {
         // Rough seed EM on the naive (uniform-weight) eq-classes, with

@@ -2237,17 +2237,18 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let requested_lib = LibraryFormat::parse(&opts.lib_type)
         .map(|f| f.canonical().to_string())
         .unwrap_or_else(|_| opts.lib_type.clone());
-    let mut diagnostics = salmon_core::input_diagnostics(
+    let diagnostics = salmon_core::input_diagnostics(
         num_processed,
         num_mapped,
         auto_detect,
         &requested_lib,
         detected_library_type.as_deref(),
     );
-    // Phase-1 diagnostics the driver handed in, merged before logging so they
-    // are both spoken and recorded like this pass's own.
-    diagnostics.extend(opts.extra_diagnostics.iter().cloned());
-    for d in &diagnostics {
+    // Phase-1 diagnostics the driver handed in are *spoken* here alongside
+    // this pass's own; *recording* into meta_info.json happens once, in the
+    // shared output writer, so the alignment path honours the field too
+    // (#1140 — do not extend `diagnostics` with them here or they double).
+    for d in diagnostics.iter().chain(opts.extra_diagnostics.iter()) {
         if d.severity == "error" {
             tracing::error!("{}", d.message);
         } else {

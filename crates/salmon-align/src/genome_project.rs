@@ -201,10 +201,13 @@ pub fn project_genome_bam_to_rad(
         "A" | "IU" | "U" => None,
         s => LibraryFormat::parse(s).ok(),
     };
-    let resolved_fmt = expected_format.or(det_fmt);
-    if let Some(f) = resolved_fmt {
+    // Tag bake: detected wins, matching the reads-mode writer, so an explicit
+    // `-l` can still fire `library_type_mismatch` downstream; the filter below
+    // keeps expected-wins (see the same split in `bam_rad.rs`, #1140).
+    if let Some(f) = det_fmt.or(expected_format) {
         writer.set_library_format(f.format_id());
     }
+    let resolved_fmt = expected_format.or(det_fmt);
     if let Some(nb) = naive.as_ref() {
         let cond_means = frag_dist.conditional_means();
         let eff_lengths: Vec<f64> = lengths
