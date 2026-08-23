@@ -418,7 +418,7 @@ impl ShardPlan {
     /// Logical parallelism is derived only from the packed data, never the Rayon
     /// pool. Several logical shards per high-core worker leave enough tasks for
     /// work stealing without making `-p` part of the arithmetic.
-    const MAX_SHARDS: usize = 256;
+    const MAX_SHARDS: usize = 128;
     const MIN_INCIDENCES_PER_SHARD: usize = 4096;
 
     pub(crate) fn new(p: &PackedEqClasses) -> Self {
