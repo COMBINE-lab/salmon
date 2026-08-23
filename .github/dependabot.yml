@@ -1,0 +1,110 @@
+# Dependency updates.
+#
+# Security updates already run without this file; what it adds is *version*
+# updates, and the reason to want them here is that the repository has drifted
+# in the one place drift is invisible: the workflows pin `actions/checkout` at
+# v4 in three files and v6 in a fourth, and `actions/upload-artifact` at v4 and
+# v7. Nobody chose that.
+#
+# Everything below is grouped rather than per-dependency. A Rust workspace this
+# size produces a dozen individual bumps a week otherwise, and a wall of PRs is
+# reviewed by nobody, which is worse than no updates at all.
+version: 2
+updates:
+  # ---- Rust workspace ------------------------------------------------------
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Against `develop`, not the default branch: `master` carries releases and
+    # every change lands through `develop` first.
+    target-branch: develop
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      # One PR a week for the routine movement. Patch and minor bumps of
+      # well-behaved crates are reviewed as a batch or not at all.
+      cargo-minor:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - piscem-rs
+          - paraseq
+          - paraseq-temp
+          - libradicl
+          - cf1-rs
+          - sshash-lib
+          - ksw2rs
+        update-types:
+          - minor
+          - patch
+      # The lab's own upstream crates move with work happening in those repos,
+      # and their bumps have carried deliberate floors (see the piscem-rs 0.9.2
+      # and paraseq-temp 0.5.0-pre.2 commits). Kept in their own PR so such a
+      # bump is never buried in a batch of unrelated ones.
+      combine-lab-upstream:
+        patterns:
+          - piscem-rs
+          # `paraseq` in the manifest is the `paraseq-temp` republication, so
+          # both spellings are listed rather than guessing which one Dependabot
+          # reports for a renamed package.
+          - paraseq
+          - paraseq-temp
+          - libradicl
+          - cf1-rs
+          - sshash-lib
+          - ksw2rs
+    # Majors stay ungrouped: each one is a decision, and each one deserves its
+    # own diff and its own CI run.
+
+  # ---- documentation site --------------------------------------------------
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+      day: monday
+    target-branch: develop
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      website-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # ---- GitHub Actions ------------------------------------------------------
+  #
+  # The reason this file exists. One weekly PR that keeps every workflow on the
+  # same action versions, including the majors: an action major is a workflow
+  # change, visible in the diff, and CI is its own test.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    target-branch: develop
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # ---- container base image ------------------------------------------------
+  #
+  # Monthly, because the Dockerfile pins a Rust toolchain image (`rust:1.91-*`)
+  # and moving it is a toolchain decision rather than a dependency refresh.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    target-branch: develop
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: build(deps)
