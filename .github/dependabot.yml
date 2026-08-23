@@ -53,11 +53,17 @@ updates:
       # and paraseq-temp 0.5.0-pre.2 commits). Kept in their own PR so such a
       # bump is never buried in a batch of unrelated ones.
       combine-lab-upstream:
-        # Minor and patch only, so a major from one of these lands on its own
-        # like every other major. Grouping a piscem-rs 1.0 with unrelated
-        # bumps is exactly what the separate group exists to prevent.
+        # Patch only, because all six are 0.x and Cargo's compatibility
+        # boundary there is the MINOR component: ^0.9.2 is >=0.9.2 <0.10.0, so
+        # 0.9.2 -> 0.9.3 is compatible and 0.9.2 -> 0.10.0 is breaking.
+        # Dependabot classifies by moved field, not by that boundary, which
+        # makes the breaking one `minor` to the grouping logic. Verified against
+        # dependabot-core rather than inferred: for a dependency at 0.9.2, the
+        # patch level covers `> 0.9.3, < 0.10` and the minor level starts at
+        # `>= 0.10.a`, with no 0.x special case anywhere. Allowing `minor` here
+        # would therefore batch a breaking upgrade of our own upstream crates
+        # into a routine PR, which is the case this group exists to isolate.
         update-types:
-          - minor
           - patch
         patterns:
           - piscem-rs
