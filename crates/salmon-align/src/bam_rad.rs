@@ -256,7 +256,12 @@ pub fn write_alignment_rad(
         ro.min_iter = opts.bias_seed_em_iters;
         ro.max_iter = opts.bias_seed_em_iters;
         ro.min_alpha = 0.0;
-        let em = salmon_infer::optimize(&collapsed, num_refs, &ro, Some(&eff_lengths));
+        let em = salmon_infer::optimize(
+            &collapsed,
+            num_refs,
+            &ro,
+            salmon_infer::EffLens::new(&eff_lengths),
+        );
         writer.set_initial_abundances(&em.alphas);
     }
 

@@ -2458,14 +2458,23 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
-        salmon_infer::optimize_packed_with_init(&packed, &opts.em, true, None, Some(&eff_lengths))
+        salmon_infer::optimize_packed_with_init(
+            &packed,
+            &opts.em,
+            true,
+            salmon_infer::InitAlphas::NONE,
+            salmon_infer::EffLens::new(&eff_lengths),
+        )
     } else {
         salmon_infer::optimize_packed_with_init(
             &packed,
             &opts.em,
             true,
-            init_alphas.as_deref(),
-            Some(&eff_lengths),
+            init_alphas.as_deref().map_or(
+                salmon_infer::InitAlphas::NONE,
+                salmon_infer::InitAlphas::new,
+            ),
+            salmon_infer::EffLens::new(&eff_lengths),
         )
     };
 
@@ -2501,8 +2510,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             &packed,
             &opts.em,
             true,
-            None,
-            Some(&eff_lengths),
+            salmon_infer::InitAlphas::NONE,
+            salmon_infer::EffLens::new(&eff_lengths),
         );
     }
     let inference_truncated_mass = em.dropped_mass;
@@ -2583,7 +2592,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         salmon_infer::bootstrap(
             &packed,
             &opts.em,
-            Some(&eff_lengths),
+            salmon_infer::EffLens::new(&eff_lengths),
             opts.num_bootstraps,
             0x5A13_0000,
         )

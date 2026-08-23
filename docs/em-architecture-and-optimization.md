@@ -44,10 +44,34 @@ Both funnel into **`run_em_counts(p, counts, opts, parallel, min_iter, init_alph
 (`lib.rs:279`), which owns the buffers, builds the shard plan, selects the
 M-step kernel, and drives one of three convergence loops.
 
-Note the argument order: `init_alphas` precedes `eff_lens` and both are
-`Option<&[f64]>`, so swapping them type-checks silently. That has bitten us
-once already (the bootstrap path passed effective lengths as the initial
-abundance vector; `uncertainty.rs:136` now has a comment about it).
+These two arguments used to be a live footgun: `init_alphas` precedes
+`eff_lens`, both were `Option<&[f64]>`, and swapping them type-checked
+silently. It shipped that way once — the bootstrap path passed effective
+lengths into the `init_alphas` slot, which left `--perNucleotidePrior` inert
+inside every replicate *and* warm-started each replicate from the
+effective-length vector, so the reported spread was drawn under a different
+prior than the point estimate it quantified.
+
+**That is now a compile error.** They are distinct newtypes,
+`InitAlphas<'a>` and `EffLens<'a>`, each wrapping `Option<&'a [f64]>`:
+
+```rust
+run_em_counts(p, counts, opts, parallel, min_iter,
+              InitAlphas::NONE,            // or InitAlphas::new(&warm)
+              EffLens::new(&eff_lengths))  // or EffLens::NONE
+```
+
+Three properties are worth preserving if you touch them:
+
+- **Zero overhead is asserted, not assumed** — a `const _: () = assert!(...)`
+  in `lib.rs` checks that both newtypes have the same layout as
+  `Option<&[f64]>` (16 bytes). If a future change makes them fatter, the crate
+  stops compiling.
+- **The swap is proven impossible** by a `compile_fail` doctest on
+  `InitAlphas`, which runs under `cargo test --doc` and doubles as API
+  documentation. Weakening the types breaks that test.
+- **No `Deref`, no `Into<Option<..>>`** — deliberately. An implicit conversion
+  back to the bare type would reopen the hole. The accessor is `pub(crate)`.
 
 ### Callers with different needs
 
@@ -255,6 +279,7 @@ non-positive `min_alpha` makes it a no-op (used by the bias warm-up).
 | Per-shard dense accumulators replacing a shared `AtomicF64` array | removed CAS contention on hot transcripts | `packed.rs` |
 | `u64` CSR offsets | correctness past 4G incidences (#1097) | `packed.rs` |
 | SQUAREM, DAAREM | opt-in, far fewer M-steps | `lib.rs`, `daarem.rs` |
+| `InitAlphas` / `EffLens` newtypes | made the argument-swap bug a compile error | `lib.rs` |
 | **Data-derived shard count** (#1167) | **fixed cross-`-p` reproducibility** | `packed.rs` |
 | **Sparse clear via `touched`** (#1167) | see below | `packed.rs` |
 | **Parallel sparse reduce via CSR inversion** (#1167) | see below | `packed.rs` |
