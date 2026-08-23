@@ -230,6 +230,12 @@ pub struct AlignQuantOptions {
     /// pass's own in `meta_info.json` — so a pipeline that only keeps the
     /// output directory sees them, not just whoever read the log (#1140)
     pub extra_diagnostics: Vec<salmon_core::Diagnostic>,
+    /// `--dumpBiasModels` (hidden): write the observed+expected seq/GC/pos
+    /// bias models to `bias_models.txt` for debugging / C++-parity comparison.
+    /// Written by the shared output writer from the pass's [`BiasDump`], so it
+    /// works on every path that runs bias correction (#1140: it used to exist
+    /// only on the deprecated one-pass reads path).
+    pub dump_bias_models: bool,
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
@@ -304,6 +310,7 @@ impl AlignQuantOptions {
             no_length_correction: false,
             no_frag_length_dist: false,
             extra_diagnostics: Vec::new(),
+            dump_bias_models: false,
             sig_digits: 3,
             num_error_bins: 4,
             discard_orphans: false,
@@ -2953,6 +2960,14 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         .context("writing fld.gz")?;
     salmon_model::dumps::write_aux_bias_dumps(&dir.join("aux_info"), &res.bias_dump)
         .context("writing aux bias dumps")?;
+    // `--dumpBiasModels`: the same dump the one-pass reads path writes, from
+    // this pass's own models — the shared writer makes it work on every
+    // RAD/alignment driver (#1140: it silently vanished when deterministic
+    // became the default, because only salmon-quant had a write site).
+    if opts.dump_bias_models {
+        salmon_model::dumps::dump_bias_models_to_file(&dir.join("bias_models.txt"), &res.bias_dump)
+            .context("writing bias_models.txt")?;
+    }
     std::fs::create_dir_all(dir.join("logs")).context("creating logs")?;
     // In alignment mode the input records are already aligned, so `num_processed`
     // is the count of aligned fragments and `num_mapped` is those with a strand-
