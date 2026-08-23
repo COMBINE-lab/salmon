@@ -366,11 +366,135 @@ pub(crate) fn em_step_seq(
 /// Parallelizing over *transcripts* rather than shards is what removes the
 /// contention: each output slot is written by exactly one task, which reads that
 /// slot from every shard.
-fn reduce_shards(shards: &[Vec<f64>], alpha_out: &mut [f64]) {
+/// The fixed work partition for the parallel M-step, plus the set of
+/// transcripts each shard can touch.
+///
+/// Two problems live here, and they share one solution.
+///
+/// **Determinism.** The shard count used to be `rayon::current_num_threads()`,
+/// so `-p` changed the class partition and therefore the order of the
+/// floating-point sums. Different thread counts produced different `quant.sf`
+/// files — on 26M real fragments across 238k transcripts, four rows disagreed
+/// between `-p 4` and `-p 32`, while `-p 64` and `-p 80` (both clamped to 64)
+/// agreed exactly. That directly contradicts the guarantee 2.6.0 is built on.
+/// The partition is now a function of the *data* alone, so the result is
+/// identical at any `-p`; rayon schedules these shards onto whatever threads
+/// exist, which is a scheduling decision and cannot change the arithmetic.
+///
+/// **Scaling.** Clearing and reducing dense `num_txps` buffers cost
+/// `O(nshards × num_txps)` per iteration no matter how much real work there
+/// was — 30M operations per iteration at 64 shards over 238k transcripts,
+/// against ~1.3M eq-class entries of actual work. That overhead grew with the
+/// thread count while the useful work stayed fixed, which is why the EM phase
+/// stopped scaling past ~32 threads and then regressed. Since the class labels
+/// never change between iterations, each shard's reachable transcript set can
+/// be computed once, and the per-iteration cost falls to `O(entries)`.
+pub(crate) struct ShardPlan {
+    /// classes per shard (the last shard is the short one)
+    chunk: usize,
+    /// `touched[s]`: sorted, deduplicated transcript ids reachable from shard
+    /// `s`'s class range. Iterated in this fixed order, so the clear below is
+    /// order-stable.
+    touched: Vec<Vec<u32>>,
+    /// Inverted index of the above, CSR-packed: the shards that can write
+    /// transcript `tid` are `contrib[contrib_start[tid]..contrib_start[tid+1]]`,
+    /// in ascending shard order.
+    ///
+    /// This is what lets the reduction be both parallel and deterministic. A
+    /// sequential scatter-add over `touched` is deterministic but serializes
+    /// ~1.3M adds per iteration; summing per transcript over *all* shards is
+    /// parallel but costs `nshards × num_txps`, the very thing this plan
+    /// exists to avoid. Inverting once gives each output element an
+    /// independent, fixed-order sum over only the shards that contribute.
+    contrib_start: Vec<u32>,
+    contrib: Vec<u16>,
+}
+
+impl ShardPlan {
+    /// Shards are sized from the class count alone — never from the thread
+    /// count, which is what broke determinism. The cap keeps the fixed cost
+    /// bounded; the floor keeps small inputs from over-partitioning.
+    const MAX_SHARDS: usize = 64;
+    const MIN_CLASSES_PER_SHARD: usize = 4096;
+
+    pub(crate) fn new(p: &PackedEqClasses) -> Self {
+        let nclasses = p.num_classes();
+        let nshards = nclasses
+            .div_ceil(Self::MIN_CLASSES_PER_SHARD)
+            .clamp(1, Self::MAX_SHARDS);
+        let chunk = nclasses.div_ceil(nshards);
+        let touched: Vec<Vec<u32>> = (0..nshards)
+            .into_par_iter()
+            .map(|s| {
+                let start = s * chunk;
+                let end = ((s + 1) * chunk).min(nclasses);
+                let mut v: Vec<u32> = Vec::new();
+                for ci in start..end {
+                    let (tids, _) = p.class(ci);
+                    v.extend_from_slice(tids);
+                }
+                v.sort_unstable();
+                v.dedup();
+                v
+            })
+            .collect();
+
+        // Invert `touched` into CSR. Counting pass, prefix sum, fill pass —
+        // the shards are visited in ascending order in the fill, so each
+        // transcript's contributor list is ascending too.
+        let num_txps = p.num_txps;
+        let mut counts = vec![0u32; num_txps + 1];
+        for tv in &touched {
+            for &tid in tv {
+                counts[tid as usize + 1] += 1;
+            }
+        }
+        for i in 0..num_txps {
+            counts[i + 1] += counts[i];
+        }
+        let contrib_start = counts;
+        let mut cursor = contrib_start.clone();
+        let mut contrib = vec![0u16; contrib_start[num_txps] as usize];
+        for (s, tv) in touched.iter().enumerate() {
+            for &tid in tv {
+                let at = &mut cursor[tid as usize];
+                contrib[*at as usize] = s as u16;
+                *at += 1;
+            }
+        }
+
+        Self {
+            chunk,
+            touched,
+            contrib_start,
+            contrib,
+        }
+    }
+
+    pub(crate) fn num_shards(&self) -> usize {
+        self.touched.len()
+    }
+
+    fn range(&self, s: usize, nclasses: usize) -> (usize, usize) {
+        (s * self.chunk, ((s + 1) * self.chunk).min(nclasses))
+    }
+}
+
+/// Sum the shard accumulators into `alpha_out`, reading only the entries the
+/// shards actually wrote.
+///
+/// Parallel over transcripts and deterministic: each output element is an
+/// independent sum over that transcript's contributing shards, taken in
+/// ascending shard order from the plan's inverted index. Total work is
+/// `Σ|touched|` — on the order of the eq-class entry count — where the previous
+/// dense reduction cost `nshards × num_txps` regardless of the data.
+fn reduce_shards_sparse(shards: &[Vec<f64>], plan: &ShardPlan, alpha_out: &mut [f64]) {
     alpha_out.par_iter_mut().enumerate().for_each(|(tid, out)| {
+        let lo = plan.contrib_start[tid] as usize;
+        let hi = plan.contrib_start[tid + 1] as usize;
         let mut s = 0.0;
-        for buf in shards {
-            s += buf[tid];
+        for &sh in &plan.contrib[lo..hi] {
+            s += shards[sh as usize][tid];
         }
         *out = s;
     });
@@ -393,41 +517,48 @@ pub(crate) fn em_step_par(
     alpha_in: &[f64],
     alpha_out: &mut [f64],
     shards: &mut [Vec<f64>],
+    plan: &ShardPlan,
 ) {
     let nclasses = p.num_classes();
-    // Contiguous slices: `div_ceil` makes the last shard the short one.
-    let chunk = nclasses.div_ceil(shards.len().max(1));
-    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
-        // Buffers are reused across iterations, so clear before accumulating.
-        buf.iter_mut().for_each(|x| *x = 0.0);
-        let start = s * chunk;
-        let end = ((s + 1) * chunk).min(nclasses);
-        for ci in start..end {
-            let count = counts[ci] as f64;
-            let (tids, ws) = p.class(ci);
-            if tids.len() > 1 {
-                let mut denom = 0.0;
-                for (&tid, &w) in tids.iter().zip(ws) {
-                    denom += alpha_in[tid as usize] * w;
-                }
-                if denom > MIN_EQ_CLASS_WEIGHT {
-                    let inv = count / denom;
-                    // Recomputes `alpha_in[tid] * w` rather than keeping a scratch
-                    // vector: the multiply is cheaper than the extra memory
-                    // traffic inside a parallel closure.
+    shards
+        .par_iter_mut()
+        .zip(plan.touched.par_iter())
+        .enumerate()
+        .for_each(|(s, (buf, touched))| {
+            // Buffers are reused across iterations, so clear before
+            // accumulating — but only the entries this shard can write, which
+            // is what keeps the cost proportional to the work rather than to
+            // `num_txps × nshards`.
+            for &tid in touched {
+                buf[tid as usize] = 0.0;
+            }
+            let (start, end) = plan.range(s, nclasses);
+            for ci in start..end {
+                let count = counts[ci] as f64;
+                let (tids, ws) = p.class(ci);
+                if tids.len() > 1 {
+                    let mut denom = 0.0;
                     for (&tid, &w) in tids.iter().zip(ws) {
-                        let v = alpha_in[tid as usize] * w;
-                        if !v.is_nan() {
-                            buf[tid as usize] += v * inv;
+                        denom += alpha_in[tid as usize] * w;
+                    }
+                    if denom > MIN_EQ_CLASS_WEIGHT {
+                        let inv = count / denom;
+                        // Recomputes `alpha_in[tid] * w` rather than keeping a scratch
+                        // vector: the multiply is cheaper than the extra memory
+                        // traffic inside a parallel closure.
+                        for (&tid, &w) in tids.iter().zip(ws) {
+                            let v = alpha_in[tid as usize] * w;
+                            if !v.is_nan() {
+                                buf[tid as usize] += v * inv;
+                            }
                         }
                     }
+                } else {
+                    buf[tids[0] as usize] += count;
                 }
-            } else {
-                buf[tids[0] as usize] += count;
             }
-        }
-    });
-    reduce_shards(shards, alpha_out);
+        });
+    reduce_shards_sparse(shards, plan, alpha_out);
 }
 
 /// `exp_theta[i] = exp(digamma(alpha_in[i]+prior_i) - digamma(Σ_j alpha_in[j]+prior_j))`,
@@ -502,44 +633,49 @@ pub(crate) fn vbem_step_par(
     alpha_out: &mut [f64],
     exp_theta: &mut [f64],
     shards: &mut [Vec<f64>],
+    plan: &ShardPlan,
 ) {
     // Computed once, before the parallel region: it depends on a global sum over
     // all transcripts, so it cannot be sharded.
     fill_exp_theta(alpha_in, prior_alphas, exp_theta);
     let nclasses = p.num_classes();
-    let chunk = nclasses.div_ceil(shards.len().max(1));
     // Reborrow as immutable so the closure below can share it across threads.
     let exp_theta: &[f64] = exp_theta;
-    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
-        buf.iter_mut().for_each(|x| *x = 0.0);
-        let start = s * chunk;
-        let end = ((s + 1) * chunk).min(nclasses);
-        for ci in start..end {
-            let count = counts[ci] as f64;
-            let (tids, ws) = p.class(ci);
-            if tids.len() > 1 {
-                let mut denom = 0.0;
-                for (&tid, &w) in tids.iter().zip(ws) {
-                    let et = exp_theta[tid as usize];
-                    if et > 0.0 {
-                        denom += et * w;
-                    }
-                }
-                if denom > MIN_EQ_CLASS_WEIGHT {
-                    let inv = count / denom;
+    shards
+        .par_iter_mut()
+        .zip(plan.touched.par_iter())
+        .enumerate()
+        .for_each(|(s, (buf, touched))| {
+            for &tid in touched {
+                buf[tid as usize] = 0.0;
+            }
+            let (start, end) = plan.range(s, nclasses);
+            for ci in start..end {
+                let count = counts[ci] as f64;
+                let (tids, ws) = p.class(ci);
+                if tids.len() > 1 {
+                    let mut denom = 0.0;
                     for (&tid, &w) in tids.iter().zip(ws) {
                         let et = exp_theta[tid as usize];
                         if et > 0.0 {
-                            buf[tid as usize] += et * w * inv;
+                            denom += et * w;
                         }
                     }
+                    if denom > MIN_EQ_CLASS_WEIGHT {
+                        let inv = count / denom;
+                        for (&tid, &w) in tids.iter().zip(ws) {
+                            let et = exp_theta[tid as usize];
+                            if et > 0.0 {
+                                buf[tid as usize] += et * w * inv;
+                            }
+                        }
+                    }
+                } else {
+                    buf[tids[0] as usize] += count;
                 }
-            } else {
-                buf[tids[0] as usize] += count;
             }
-        }
-    });
-    reduce_shards(shards, alpha_out);
+        });
+    reduce_shards_sparse(shards, plan, alpha_out);
 }
 
 #[cfg(test)]
@@ -621,5 +757,123 @@ mod tests {
             (out[0] - 100.0).abs() < 1e-9,
             "all mass to the surviving co-member"
         );
+    }
+}
+
+#[cfg(test)]
+mod shard_plan_determinism {
+    use super::*;
+    use crate::EmOptions;
+    use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
+
+    /// The EM result must not depend on the thread count.
+    ///
+    /// It used to: the shard count was `rayon::current_num_threads()`, so `-p`
+    /// changed the class partition and therefore the grouping of the
+    /// floating-point sums. On 26M real fragments this produced different
+    /// `quant.sf` files at `-p 4` and `-p 32` — the guarantee the deterministic
+    /// mode exists to provide.
+    ///
+    /// The existing suite missed it because its fixtures were far too small:
+    /// with a handful of classes every partition is the same partition. This
+    /// builds enough classes to cross `MIN_CLASSES_PER_SHARD` several times, so
+    /// the plan really does shard, and enough transcript overlap that the
+    /// per-shard partial sums genuinely differ in grouping.
+    #[test]
+    fn em_result_is_independent_of_thread_count() {
+        const NUM_TXPS: usize = 5_000;
+        const NUM_CLASSES: usize = 20_000; // > 4 * MIN_CLASSES_PER_SHARD
+
+        let b = EquivalenceClassBuilder::new();
+        // Values chosen so the sums are not exactly representable: with tidy
+        // powers of two, every grouping agrees and the test cannot fail.
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for c in 0..NUM_CLASSES {
+            let n = 2 + (c % 4);
+            let mut tids: Vec<u32> = (0..n).map(|_| (rnd() % NUM_TXPS as u64) as u32).collect();
+            tids.sort_unstable();
+            tids.dedup();
+            let ws: Vec<f64> = (0..tids.len())
+                .map(|i| 0.1 + ((rnd() % 1000) as f64) / 997.0 + i as f64 * 1e-3)
+                .collect();
+            b.add_group(TranscriptGroup::new(tids), ws, 1 + (rnd() % 50));
+        }
+        let mut eq = b.finish();
+        let eff: Vec<f64> = (0..NUM_TXPS)
+            .map(|i| 500.0 + (i % 997) as f64 * 1.7)
+            .collect();
+        eq.update_eff_lengths(&eff);
+        let packed = PackedEqClasses::from_collapsed(&eq, NUM_TXPS);
+
+        let opts = EmOptions {
+            max_iter: 200,
+            ..EmOptions::default()
+        };
+
+        // Run the same problem inside rayon pools of different sizes. Only the
+        // scheduling differs; the arithmetic must not.
+        let run = |threads: usize| -> Vec<f64> {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("thread pool");
+            pool.install(|| {
+                crate::optimize_packed_with_init(&packed, &opts, true, None, Some(&eff)).alphas
+            })
+        };
+
+        let base = run(1);
+        for threads in [2usize, 3, 8, 16] {
+            let other = run(threads);
+            assert_eq!(
+                base.len(),
+                other.len(),
+                "thread count changed the result shape"
+            );
+            // Bit-for-bit: "close enough" is exactly the standard this mode
+            // rejects, and a tolerance here would have passed the old code.
+            let diffs = base
+                .iter()
+                .zip(&other)
+                .enumerate()
+                .filter(|(_, (a, b))| a.to_bits() != b.to_bits())
+                .count();
+            assert_eq!(
+                diffs, 0,
+                "EM result differs between 1 and {threads} threads in {diffs} of {} \
+                 transcripts — the shard partition must not depend on the thread count",
+                base.len()
+            );
+        }
+    }
+
+    /// The plan's shard count must come from the data, never from the pool.
+    #[test]
+    fn shard_count_ignores_the_thread_pool() {
+        let b = EquivalenceClassBuilder::new();
+        for c in 0..12_000u32 {
+            b.add_group(TranscriptGroup::new(vec![c % 500, 500 + c % 300]), vec![1.0, 2.0], 3);
+        }
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&vec![1000.0; 900]);
+        let packed = PackedEqClasses::from_collapsed(&eq, 900);
+
+        let n = |threads: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| ShardPlan::new(&packed).num_shards())
+        };
+        let base = n(1);
+        for t in [2usize, 7, 32] {
+            assert_eq!(n(t), base, "shard count changed with a {t}-thread pool");
+        }
     }
 }

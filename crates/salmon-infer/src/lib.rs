@@ -314,11 +314,14 @@ pub(crate) fn run_em_counts(
     // — avoiding the cross-thread CAS contention of a single shared atomic array.
     // Capped at 64 shards: beyond that, the per-iteration zero/reduce overhead
     // outweighs the extra accumulation parallelism.
-    let mut shards: Vec<Vec<f64>> = if parallel {
-        let nshards = rayon::current_num_threads().clamp(1, 64);
-        vec![vec![0.0f64; num_txps]; nshards]
-    } else {
-        Vec::new()
+    // The partition is derived from the class count alone, never from the
+    // thread count: the shard boundaries fix the order of the floating-point
+    // sums, so deriving them from `-p` made `quant.sf` depend on the thread
+    // count — the one thing this mode exists to prevent. See `ShardPlan`.
+    let plan = parallel.then(|| packed::ShardPlan::new(p));
+    let mut shards: Vec<Vec<f64>> = match &plan {
+        Some(pl) => vec![vec![0.0f64; num_txps]; pl.num_shards()],
+        None => Vec::new(),
     };
 
     // One fixed-point M-step `dst = F(src)`, dispatched by (VBEM?, parallel?) and
@@ -330,7 +333,14 @@ pub(crate) fn run_em_counts(
     // strategies below be written once against an abstract `F`, with no knowledge
     // of EM vs VBEM or of the threading model.
     let mut f = |src: &[f64], dst: &mut [f64]| match (opts.use_vbem, parallel) {
-        (false, true) => packed::em_step_par(p, counts, src, dst, &mut shards),
+        (false, true) => packed::em_step_par(
+            p,
+            counts,
+            src,
+            dst,
+            &mut shards,
+            plan.as_ref().expect("parallel implies a shard plan"),
+        ),
         (false, false) => packed::em_step_seq(p, counts, src, dst, &mut scratch),
         (true, true) => packed::vbem_step_par(
             p,
@@ -340,6 +350,7 @@ pub(crate) fn run_em_counts(
             dst,
             &mut exp_theta,
             &mut shards,
+            plan.as_ref().expect("parallel implies a shard plan"),
         ),
         (true, false) => packed::vbem_step_seq(
             p,
