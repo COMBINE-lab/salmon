@@ -455,6 +455,10 @@ struct FragCfg<'a> {
     no_frag_length_dist: bool,
     /// `--noSingleFragProb` (inverted): model an orphan's fragment length.
     model_single_frag_prob: bool,
+    /// `--hardFilter`: keep only best-scoring placements, at weight 1.
+    hard_filter: bool,
+    /// `--discardOrphans`: drop half-mapped fragments in a paired library.
+    discard_orphans: bool,
     range_factorization_bins: u32,
     eq_builder: &'a EquivalenceClassBuilder,
 }
@@ -527,8 +531,25 @@ fn process_rad_fragment(
 
     scratch.core.clear();
     for p in placements {
+        // `--discardOrphans`: a half-mapped fragment in a paired library is
+        // dropped outright, the same rule the alignment writer applies when it
+        // builds the RAD — so requantifying a RAD agrees with the run that
+        // wrote it (#1140).
+        if cfg.discard_orphans && cfg.paired_lib && p.status != MateStatus::PairedEndPaired {
+            continue;
+        }
+        // `--hardFilter`: keep only the best-scoring placement(s), at weight 1,
+        // instead of soft-weighting the rest. Mirrors `score.rs`'s reads-mode
+        // rule so the same flag means the same thing on every path.
+        if cfg.hard_filter && cfg.scored && p.score != best {
+            continue;
+        }
         // eq-class log-weight basis: soft-weight by score (SA) or uniform (sketch).
-        let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
+        let basis = if cfg.hard_filter && cfg.scored {
+            0.0
+        } else {
+            score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score)
+        };
         let rl = cfg.lengths.get(p.tid as usize).copied().unwrap_or(0) as i32;
         let proper = p.status == MateStatus::PairedEndPaired
             && p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED
@@ -1315,6 +1336,12 @@ struct BiasCfg<'a> {
     /// `--noSingleFragProb` (inverted): as the eq-class pass, so the bias
     /// posterior weights orphans the same way the weights it explains do.
     model_single_frag_prob: bool,
+    /// `--hardFilter` / `--discardOrphans`, as the eq-class pass: the bias
+    /// posterior must be built over the same placements the weights it explains
+    /// were built over, or the model is trained on fragments that contributed
+    /// nothing.
+    hard_filter: bool,
+    discard_orphans: bool,
     /// fixed per-reference abundances (baked or first-EM) for the posterior.
     abundances: &'a [f64],
     ref_bytes: &'a salmon_core::RefSeqs,
@@ -1351,6 +1378,13 @@ fn collect_bias_fragment(
     scratch.bias.clear();
     for p in placements {
         let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
+        // Same placement set as the eq-class pass (see there).
+        if cfg.discard_orphans && cfg.paired_lib && p.status != MateStatus::PairedEndPaired {
+            continue;
+        }
+        if cfg.hard_filter && cfg.scored && p.score != best {
+            continue;
+        }
         let rl = cfg.lengths.get(p.tid as usize).copied().unwrap_or(0) as i32;
         let proper = p.status == MateStatus::PairedEndPaired
             && p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED
@@ -1962,6 +1996,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             paired_lib,
             no_frag_length_dist: opts.no_frag_length_dist,
             model_single_frag_prob: opts.model_single_frag_prob,
+            hard_filter: opts.hard_filter,
+            discard_orphans: opts.discard_orphans,
             range_factorization_bins: opts.range_factorization_bins,
             eq_builder: &eq_builder,
         };
@@ -1980,6 +2016,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 paired_lib,
                 no_frag_length_dist: opts.no_frag_length_dist,
                 model_single_frag_prob: opts.model_single_frag_prob,
+                hard_filter: opts.hard_filter,
+                discard_orphans: opts.discard_orphans,
                 abundances: abund,
                 ref_bytes: &ref_bytes,
                 gc_store: &gc_store,
@@ -2147,6 +2185,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 paired_lib,
                 no_frag_length_dist: opts.no_frag_length_dist,
                 model_single_frag_prob: opts.model_single_frag_prob,
+                hard_filter: opts.hard_filter,
+                discard_orphans: opts.discard_orphans,
                 abundances: &bias_abund,
                 ref_bytes: &ref_bytes,
                 gc_store: &gc_store,

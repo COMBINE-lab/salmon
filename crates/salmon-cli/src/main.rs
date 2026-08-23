@@ -472,8 +472,8 @@ struct QuantArgs {
     /// rather than merely move threads around -- a threshold that is higher in
     /// selective-alignment mode than in sketch, because more work per fragment
     /// means a smaller share of the budget should be decoding.
-    #[arg(long = "decoder", default_value = "auto")]
-    decoder: String,
+    #[arg(long = "decoder", value_parser = ["auto", "serial", "parallel", "libz", "libdeflate", "rapidgzip"])]
+    decoder: Option<String>,
     /// JSON file overriding thread and decoder policy.
     ///
     /// Every field is optional and an unknown field is an error rather than a
@@ -679,12 +679,12 @@ struct QuantArgs {
     /// Consensus slack: a target is kept only if its best chain score is at least
     /// `(1 - slack)` of the max chain score for that mate (salmon default 0.35;
     /// `1.0` keeps every target).
-    #[arg(long = "consensusSlack", default_value_t = 0.35)]
-    consensus_slack: f32,
+    #[arg(long = "consensusSlack")]
+    consensus_slack: Option<f32>,
     /// Skip k-mers whose unitig occurs in more than this many references
     /// (repetitive-hit guard; salmon's `maxOccsPerHit`).
-    #[arg(long = "maxOccsPerHit", default_value_t = 1000)]
-    max_occs_per_hit: usize,
+    #[arg(long = "maxOccsPerHit")]
+    max_occs_per_hit: Option<usize>,
     /// VBEM per-feature Dirichlet prior weight.
     #[arg(long = "vbPrior", default_value_t = 1e-2)]
     vb_prior: f64,
@@ -744,8 +744,8 @@ struct QuantArgs {
     sig_digits: u32,
     /// Discard a read/fragment that maps to more than this many places — counting
     /// the total set of distinct mappings (concordant + orphan union) (reads mode).
-    #[arg(short = 'w', long = "maxReadOcc", default_value_t = 250)]
-    max_read_occ: usize,
+    #[arg(short = 'w', long = "maxReadOcc")]
+    max_read_occ: Option<usize>,
     /// Only emit a single-mate (orphan) mapping when the read's mate is entirely
     /// unmapped. By default, when a pair has no concordant mapping, orphans are
     /// reported for both mates (their union); with this flag a read that maps only
@@ -756,8 +756,8 @@ struct QuantArgs {
     #[arg(long = "allowDovetail")]
     allow_dovetail: bool,
     /// ksw2 DP bandwidth for selective alignment (reads mode).
-    #[arg(long = "bandwidth", default_value_t = 15)]
-    bandwidth: i32,
+    #[arg(long = "bandwidth")]
+    bandwidth: Option<i32>,
     /// Attempt to recover the mate of an orphaned read near its mapped partner
     /// (selective-alignment mode). Off by default.
     #[arg(long = "recoverOrphans")]
@@ -768,17 +768,17 @@ struct QuantArgs {
     discard_orphans_quasi: bool,
     /// An alignment to an annotated transcript is invalid if its score is
     /// `< decoyThreshold * bestDecoyScore` (selective-alignment mode).
-    #[arg(long = "decoyThreshold", default_value_t = 1.0)]
-    decoy_threshold: f64,
+    #[arg(long = "decoyThreshold")]
+    decoy_threshold: Option<f64>,
     /// Drop any mapping whose alignment probability
     /// `exp(-scoreExp * (best - score))` is below this (selective-alignment mode).
-    #[arg(long = "minAlnProb", default_value_t = 1e-5)]
-    min_aln_prob: f64,
+    #[arg(long = "minAlnProb")]
+    min_aln_prob: Option<f64>,
     /// Soft-weight decay: a mapping's probability is proportional to
     /// `exp(-scoreExp * (bestScore - score))`. Larger downweights sub-optimal
     /// mappings more steeply. (salmon's --scoreExp; default 1.0)
-    #[arg(long = "scoreExp", default_value_t = 1.0)]
-    score_exp: f64,
+    #[arg(long = "scoreExp")]
+    score_exp: Option<f64>,
     /// Instead of soft-weighting multimapping locations by alignment score, keep
     /// only the best-scoring mapping(s), each with equal weight.
     #[arg(long = "hardFilter")]
@@ -802,18 +802,18 @@ struct QuantArgs {
     /// Per-target pre-merge chain sub-optimality threshold: keep chains scoring
     /// `>= best_chain_score * thresh` (selective-alignment mode). Range [0,1].
     /// Rust default 0.8 (salmon's default is 0.75).
-    #[arg(long = "preMergeChainSubThresh", default_value_t = 0.8)]
-    pre_merge_chain_sub_thresh: f32,
+    #[arg(long = "preMergeChainSubThresh")]
+    pre_merge_chain_sub_thresh: Option<f32>,
     /// Post-merge concordant chain-pair sub-optimality threshold: after pairing,
     /// keep pairs whose read-coverage is `>= best_pair_coverage * thresh`
     /// (paired-end, selective-alignment mode). Range [0,1]. Default 0.0 (off);
     /// salmon's default is 0.9, thresholded on chain score rather than coverage.
-    #[arg(long = "postMergeChainSubThresh", default_value_t = 0.0)]
-    post_merge_chain_sub_thresh: f32,
+    #[arg(long = "postMergeChainSubThresh")]
+    post_merge_chain_sub_thresh: Option<f32>,
     /// Fragment-length sampling stride for the GC bias eff-length convolution.
     /// Larger = faster bias correction, coarser. (salmon's --biasSpeedSamp)
-    #[arg(long = "biasSpeedSamp", default_value_t = 5)]
-    bias_speed_samp: usize,
+    #[arg(long = "biasSpeedSamp")]
+    bias_speed_samp: Option<usize>,
     /// Number of leading fragments used to train the auxiliary models
     /// (fragment-length / bias / error); they are fixed afterward; default
     /// 5000000. Online-path only (--online, deprecated): ignored with a
@@ -826,15 +826,15 @@ struct QuantArgs {
     no_bias_length_threshold: bool,
     /// Number of read-position bins in the alignment error model
     /// (alignment mode only). (salmon's --numErrorBins)
-    #[arg(long = "numErrorBins", default_value_t = 4)]
-    num_error_bins: usize,
+    #[arg(long = "numErrorBins")]
+    num_error_bins: Option<usize>,
     /// Number of fragment-GC bins for the GC bias model. (salmon's --numGCBins)
-    #[arg(long = "numGCBins", default_value_t = 25)]
-    num_gc_bins: usize,
+    #[arg(long = "numGCBins")]
+    num_gc_bins: Option<usize>,
     /// Number of conditioning (context) bins for the GC bias model.
     /// (salmon's --conditionalGCBins)
-    #[arg(long = "conditionalGCBins", default_value_t = 3)]
-    conditional_gc_bins: usize,
+    #[arg(long = "conditionalGCBins")]
+    conditional_gc_bins: Option<usize>,
     /// Discard orphan (single-mate) alignments in a paired library
     /// (alignment mode). Reads mode uses --discardOrphansQuasi.
     #[arg(long = "discardOrphans")]
@@ -1204,6 +1204,10 @@ fn requant_options(
     // the phase-1/phase-2 split instead of dying with the mapping pass
     // (#1140, audit D14).
     q.model_single_frag_prob = map_opts.model_single_frag_prob;
+    // Phase 1's mapper already applied the hard filter when choosing what to
+    // write; phase 2 applies it again over the RAD's per-hit scores, which is
+    // where the eq-class weights are actually formed.
+    q.hard_filter = map_opts.map_config.score.hard_filter;
     // Same shape as the eq dumps: phase 2 owns the run's final bias models
     // (phase 1's dump site is gated off by skip_quant), so `--dumpBiasModels`
     // is honoured by the requant's shared writer (#1140: the flag silently
@@ -1894,6 +1898,88 @@ fn bytecount_newlines(b: &[u8]) -> u64 {
     b.iter().filter(|&&c| c == b'\n').count() as u64
 }
 
+/// Warn, by name, about flags the selected mode cannot act on.
+///
+/// The rule this serves: a flag that does nothing must say so. Salmon already
+/// applied it for sketch-vs-selective-alignment and for the online-only knobs;
+/// the readiness sweep found it had never been written for reads-vs-`-a`/`--rad`,
+/// where ~30 mapping flags were accepted in total silence (#1140).
+///
+/// `mode` names the selected mode as the user would recognise it, and `why`
+/// explains in one clause why the flags cannot apply — a warning that only says
+/// "ignored" leaves the user unsure whether they typed the wrong flag or chose
+/// the wrong mode. Singular and plural are handled so a single flag does not
+/// read as "`--writeRad` shape an intermediate RAD".
+fn warn_inert_in_mode(mode: &str, why: &str, flags: &[(&str, bool)]) {
+    let named: Vec<&str> = flags
+        .iter()
+        .filter_map(|&(name, passed)| passed.then_some(name))
+        .collect();
+    if named.is_empty() {
+        return;
+    }
+    let (subject, verb) = if named.len() == 1 {
+        (named[0].to_string(), "has")
+    } else {
+        (named.join(", "), "have")
+    };
+    tracing::warn!("{subject} {verb} no effect in {mode}: {why}. Ignored.");
+}
+
+/// The reads-mode mapping/scoring/seeding knobs, paired with whether the user
+/// passed each. Every one of these configures salmon's own mapper, so none can
+/// apply to input that arrives already aligned (`-a`) or already mapped
+/// (`--rad`). Kept in one place so the `-a` and `--rad` branches cannot drift.
+fn reads_only_mapping_flags(args: &QuantArgs) -> Vec<(&'static str, bool)> {
+    vec![
+        ("--sketch", args.sketch),
+        ("--sketchStrictOrphans", args.sketch_strict_orphans),
+        ("--ma", args.ma.is_some()),
+        ("--mp", args.mp.is_some()),
+        ("--go", args.go.is_some()),
+        ("--ge", args.ge.is_some()),
+        ("--minScoreFraction", args.min_score_fraction.is_some()),
+        ("--fullLengthAlignment", args.full_length_alignment),
+        ("--bandwidth", args.bandwidth.is_some()),
+        ("--consensusSlack", args.consensus_slack.is_some()),
+        ("--maxOccsPerHit", args.max_occs_per_hit.is_some()),
+        ("--maxReadOcc", args.max_read_occ.is_some()),
+        ("--minAlnProb", args.min_aln_prob.is_some()),
+        ("--softclip", args.softclip),
+        ("--softclipOverhangs", args.softclip_overhangs),
+        ("--sparseSeeds", args.sparse_seeds),
+        ("--refMEMs", args.refmems),
+        ("--uniMEMs", args.unimems),
+        ("--mismatchSeedSkip", args.mismatch_seed_skip.is_some()),
+        ("--recoverOrphans", args.recover_orphans),
+        ("--allowDovetail", args.allow_dovetail),
+        ("--discardOrphansQuasi", args.discard_orphans_quasi),
+        (
+            "--orphansRequireUnmappedMate",
+            args.orphans_require_unmapped_mate,
+        ),
+        (
+            "--preMergeChainSubThresh",
+            args.pre_merge_chain_sub_thresh.is_some(),
+        ),
+        (
+            "--postMergeChainSubThresh",
+            args.post_merge_chain_sub_thresh.is_some(),
+        ),
+        (
+            "--orphanChainSubThresh",
+            args.orphan_chain_sub_thresh.is_some(),
+        ),
+        ("--decoyThreshold", args.decoy_threshold.is_some()),
+        // NB --hardFilter and --discardOrphans are deliberately absent: both
+        // are honoured on these paths (see the -a/--rad option blocks).
+        ("--allowDecoyOrphans", args.allow_decoy_orphans),
+        ("--decoder", args.decoder.is_some()),
+        ("--threadPolicy", args.thread_policy.is_some()),
+        ("--writeUnmappedNames", args.write_unmapped_names),
+    ]
+}
+
 fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.ont {
         long_read_redirect();
@@ -1946,7 +2032,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.validate_mappings {
         tracing::warn!("--validateMappings has no effect (deprecated in salmon too): selective alignment is the default mapping mode; pass --sketch for pseudoalignment.");
     }
-    if args.sketch && args.decoy_threshold != 1.0 {
+    if args.sketch && args.decoy_threshold.unwrap_or(1.0) != 1.0 {
         tracing::warn!(
             "--decoyThreshold {} has no effect in --sketch mode: sketch (pseudoalignment) \
              returns only equally-best mappings, so the decoy-domination comparison \
@@ -1954,7 +2040,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
              treated as decoy-dominated only when it maps to decoys *and no transcript*; \
              otherwise decoy hits are dropped and transcript hits kept (use --allowDecoyOrphans \
              to keep transcript hits even when a decoy also matches).",
-            args.decoy_threshold
+            args.decoy_threshold.unwrap_or(1.0)
         );
     }
     // `--noLengthCorrection` and bias correction cannot both apply: every
@@ -2077,7 +2163,16 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         );
     }
     // Alignment-based mode: quantify directly from a BAM.
+    // Snapshot before the mode branches move fields out of `args`; both `-a`
+    // and `--rad` report the same set.
+    let reads_only_flags = reads_only_mapping_flags(&args);
     if let Some(bam) = args.alignments {
+        warn_inert_in_mode(
+            "alignment mode (-a)",
+            "they configure salmon's read mapper, and these alignments were produced by \
+             another aligner",
+            &reads_only_flags,
+        );
         if args.index.is_some() {
             // Accepted-but-inert flags must say so (#1140): the BAM is
             // quantified as given; no index is consulted in this mode.
@@ -2128,18 +2223,21 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // line was true everywhere except here (#1140, audit D15).
         opts.init_uniform = args.init_uniform || args.meta;
         opts.model_single_frag_prob = !args.no_single_frag_prob;
+        // The other half of the --scoreExp policy, which this path already
+        // honours; accepting one and ignoring the other left it half-applied.
+        opts.hard_filter = args.hard_filter;
         opts.dump_eq = args.dump_eq;
         opts.dump_eq_weights = args.dump_eq_weights;
         opts.dump_bias_models = args.dump_bias_models;
         opts.no_length_correction = args.no_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
-        opts.bias_speed_samp = args.bias_speed_samp;
+        opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
         opts.num_aux_model_samples = args.num_aux_model_samples.unwrap_or(5_000_000);
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
-        opts.num_error_bins = args.num_error_bins;
+        opts.num_error_bins = args.num_error_bins.unwrap_or(4);
         opts.discard_orphans = args.discard_orphans;
-        opts.gc_bins = args.num_gc_bins;
-        opts.cond_gc_bins = args.conditional_gc_bins;
+        opts.gc_bins = args.num_gc_bins.unwrap_or(25);
+        opts.cond_gc_bins = args.conditional_gc_bins.unwrap_or(3);
         opts.skip_quant = args.skip_quant;
         opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples.unwrap_or(5_000);
         opts.num_bootstraps = args.num_bootstraps;
@@ -2150,7 +2248,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // selective-alignment ones — so the deterministic `-a` path honours it.
         // A previous comment here claimed alignment mode "has no such term",
         // which was true only of the online path (#1140, audit C11).
-        opts.score_exp = args.score_exp;
+        opts.score_exp = args.score_exp.unwrap_or(1.0);
 
         // Genome-alignment mode: `-a <genome.bam> --annotation <gtf>` projects the
         // spliced genome alignments into transcriptome coordinates (bramble) and
@@ -2234,23 +2332,18 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // The online alignment path writes no RAD, so the flags that place or
         // shape one are inert here; the deterministic default honours them
         // (#1140: a flag that does nothing must say so).
-        let inert_rad: Vec<&str> = [
-            ("--writeRad", args.write_rad.is_some()),
-            ("--keepRad", args.keep_rad),
-            ("--radScratchDir", args.rad_scratch_dir.is_some()),
-            ("--radCompress", args.rad_compress.is_some()),
-            ("--noCompressRad", args.no_compress_rad),
-        ]
-        .iter()
-        .filter_map(|&(name, passed)| passed.then_some(name))
-        .collect();
-        if !inert_rad.is_empty() {
-            tracing::warn!(
-                "{} shape the intermediate RAD, which the deprecated online alignment path \
-                 never writes: ignored. The default (deterministic) mode honours them.",
-                inert_rad.join(", ")
-            );
-        }
+        warn_inert_in_mode(
+            "the deprecated online alignment path (--online -a)",
+            "they shape the intermediate RAD, which that path never writes (the default \
+             deterministic mode honours them)",
+            &[
+                ("--writeRad", args.write_rad.is_some()),
+                ("--keepRad", args.keep_rad),
+                ("--radScratchDir", args.rad_scratch_dir.is_some()),
+                ("--radCompress", args.rad_compress.is_some()),
+                ("--noCompressRad", args.no_compress_rad),
+            ],
+        );
         // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
         let progress = Arc::new(ProgressCounters::default());
         let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
@@ -2315,6 +2408,11 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
 
     // RAD-input mode: quantify directly from a RAD file of mappings, in parallel.
     if let Some(rad_path) = args.rad {
+        warn_inert_in_mode(
+            "RAD-input mode (--rad)",
+            "they configure salmon's read mapper, and a RAD already holds the mappings",
+            &reads_only_flags,
+        );
         if args.index.is_some() {
             // Accepted-but-inert flags must say so (#1140), same as `-a` above.
             tracing::warn!(
@@ -2330,23 +2428,17 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         }
         // The input *is* the RAD; the flags that would place or shape a new
         // one have nothing to act on (#1140).
-        let inert_rad: Vec<&str> = [
-            ("--writeRad", args.write_rad.is_some()),
-            ("--keepRad", args.keep_rad),
-            ("--radScratchDir", args.rad_scratch_dir.is_some()),
-            ("--radCompress", args.rad_compress.is_some()),
-            ("--noCompressRad", args.no_compress_rad),
-        ]
-        .iter()
-        .filter_map(|&(name, passed)| passed.then_some(name))
-        .collect();
-        if !inert_rad.is_empty() {
-            tracing::warn!(
-                "{} shape an intermediate RAD, which RAD-input mode does not write \
-                 (the --rad file is the input): ignored",
-                inert_rad.join(", ")
-            );
-        }
+        warn_inert_in_mode(
+            "RAD-input mode (--rad)",
+            "they shape an intermediate RAD, and the --rad file is the input",
+            &[
+                ("--writeRad", args.write_rad.is_some()),
+                ("--keepRad", args.keep_rad),
+                ("--radScratchDir", args.rad_scratch_dir.is_some()),
+                ("--radCompress", args.rad_compress.is_some()),
+                ("--noCompressRad", args.no_compress_rad),
+            ],
+        );
         warn_unsupported_mapping_output(
             &args.write_mappings,
             &args.write_bam,
@@ -2367,7 +2459,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.gc_bias = args.gc_bias;
         opts.pos_bias = args.pos_bias;
         opts.bias_seed_em_iters = args.bias_seed_em_iters;
-        opts.score_exp = args.score_exp;
+        opts.score_exp = args.score_exp.unwrap_or(1.0);
         opts.incompat_prior = args.incompat_prior;
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
@@ -2386,6 +2478,11 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         };
         opts.skip_quant = args.skip_quant;
         opts.model_single_frag_prob = !args.no_single_frag_prob;
+        opts.hard_filter = args.hard_filter;
+        // A RAD records orphan placements, so the flag that governs them means
+        // something here — without this, requantifying a RAD contradicted the
+        // `-a` run that wrote it (#1140).
+        opts.discard_orphans = args.discard_orphans;
         opts.dump_eq = args.dump_eq;
         opts.dump_eq_weights = args.dump_eq_weights;
         opts.dump_bias_models = args.dump_bias_models;
@@ -2393,9 +2490,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // four were the exact requant_options omission recurring in this block
         // (#1140): --gcBias was wired while its tuning flags silently stayed
         // at defaults.
-        opts.gc_bins = args.num_gc_bins;
-        opts.cond_gc_bins = args.conditional_gc_bins;
-        opts.bias_speed_samp = args.bias_speed_samp;
+        opts.gc_bins = args.num_gc_bins.unwrap_or(25);
+        opts.cond_gc_bins = args.conditional_gc_bins.unwrap_or(3);
+        opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.no_length_correction = args.no_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
@@ -2442,6 +2539,70 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         !args.mates1.is_empty() || !args.unmated.is_empty(),
         "no reads provided: pass -1/-2 (paired), -r (single-end), -a (BAM), or --rad (RAD)"
     );
+    // Alignment-input knobs have nothing to act on when salmon does its own
+    // mapping. Their help text says "alignment mode", but saying it only in the
+    // help means a user who passes one here learns nothing.
+    warn_inert_in_mode(
+        "reads mode",
+        "they configure how salmon reads *existing* alignments, and reads mode produces its \
+         own (reads mode uses --discardOrphansQuasi for the orphan policy)",
+        &[
+            ("--errorModel", args.error_model),
+            ("--noErrorModel", args.no_error_model),
+            ("--numErrorBins", args.num_error_bins.is_some()),
+            ("--discardOrphans", args.discard_orphans),
+        ],
+    );
+    // Orphans exist only relative to a mate, and dovetailing and post-merge
+    // pairing describe two mates' geometry, so none of these mean anything for
+    // single-end input.
+    if !args.unmated.is_empty() {
+        warn_inert_in_mode(
+            "single-end mode (-r)",
+            "they describe how two mates relate, and single-end reads have no mate",
+            &[
+                ("--recoverOrphans", args.recover_orphans),
+                ("--allowDovetail", args.allow_dovetail),
+                ("--discardOrphansQuasi", args.discard_orphans_quasi),
+                (
+                    "--orphansRequireUnmappedMate",
+                    args.orphans_require_unmapped_mate,
+                ),
+                (
+                    "--postMergeChainSubThresh",
+                    args.post_merge_chain_sub_thresh.is_some(),
+                ),
+            ],
+        );
+    }
+    // The one-pass reads path writes no intermediate RAD, so the flags that
+    // place or shape one are inert — `-a --online` and `--rad` already say so.
+    if args.online {
+        warn_inert_in_mode(
+            "the deprecated one-pass reads path (--online)",
+            "it writes no intermediate RAD",
+            &[
+                ("--writeRad", args.write_rad.is_some()),
+                ("--keepRad", args.keep_rad),
+                ("--radScratchDir", args.rad_scratch_dir.is_some()),
+                ("--radCompress", args.rad_compress.is_some()),
+                ("--noCompressRad", args.no_compress_rad),
+            ],
+        );
+    }
+    // Bias sub-knobs tune a model that only exists when bias correction is on.
+    if !(args.seq_bias || args.gc_bias || args.pos_bias) {
+        warn_inert_in_mode(
+            "a run without bias correction",
+            "they tune the bias model, which needs --seqBias, --gcBias or --posBias",
+            &[
+                ("--numGCBins", args.num_gc_bins.is_some()),
+                ("--conditionalGCBins", args.conditional_gc_bins.is_some()),
+                ("--biasSpeedSamp", args.bias_speed_samp.is_some()),
+                ("--noBiasLengthThreshold", args.no_bias_length_threshold),
+            ],
+        );
+    }
     preflight_fastq_complete(&args.mates1)?;
     preflight_fastq_complete(&args.mates2)?;
     preflight_fastq_complete(&args.unmated)?;
@@ -2467,8 +2628,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.unmated = args.unmated;
     opts.lib_type = args.lib_type;
     opts.num_threads = args.threads;
-    opts.decoder = piscem_rs::io::calibrate::DecoderPreference::parse(&args.decoder)
-        .map_err(|e| anyhow::anyhow!("--decoder {}: {e}", args.decoder))?;
+    opts.decoder = piscem_rs::io::calibrate::DecoderPreference::parse(
+        args.decoder.as_deref().unwrap_or("auto"),
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "--decoder {}: {e}",
+            args.decoder.as_deref().unwrap_or("auto")
+        )
+    })?;
     opts.thread_policy = args.thread_policy.clone();
     opts.sketch = args.sketch;
     opts.sketch_strict_orphan = args.sketch_strict_orphans;
@@ -2511,30 +2679,32 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.align.min_score_fraction = args.min_score_fraction.unwrap_or(0.65);
     opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh.unwrap_or(0.0);
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
-    opts.map_config.align.bandwidth = args.bandwidth;
+    opts.map_config.align.bandwidth = args.bandwidth.unwrap_or(15);
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
     opts.map_config.pair.orphans_require_unmapped_mate = args.orphans_require_unmapped_mate;
     opts.map_config.align.softclip = args.softclip;
     opts.map_config.align.softclip_overhangs = args.softclip_overhangs;
-    opts.map_config.score.score_exp = args.score_exp;
+    opts.map_config.score.score_exp = args.score_exp.unwrap_or(1.0);
     // mapping policy (Tier 2): all default to the prior hardcoded behavior
     opts.map_config.recover_orphans = args.recover_orphans;
     if args.discard_orphans_quasi {
         opts.map_config.pair.allow_orphans = false;
     }
-    opts.map_config.score.decoy_thresh = args.decoy_threshold;
-    opts.map_config.score.min_aln_prob = args.min_aln_prob;
+    opts.map_config.score.decoy_thresh = args.decoy_threshold.unwrap_or(1.0);
+    opts.map_config.score.min_aln_prob = args.min_aln_prob.unwrap_or(1e-5);
     opts.map_config.score.hard_filter = args.hard_filter;
     opts.map_config.score.allow_decoy_orphans = args.allow_decoy_orphans;
     // chaining sub-optimality thresholds (Tier 2)
-    opts.map_config.collect.chain.chain_subopt_thresh = args.pre_merge_chain_sub_thresh;
-    opts.map_config.pair.post_merge_chain_sub_thresh = args.post_merge_chain_sub_thresh;
+    opts.map_config.collect.chain.chain_subopt_thresh =
+        args.pre_merge_chain_sub_thresh.unwrap_or(0.8);
+    opts.map_config.pair.post_merge_chain_sub_thresh =
+        args.post_merge_chain_sub_thresh.unwrap_or(0.0);
     // model toggles (Tier 2)
-    opts.bias_speed_samp = args.bias_speed_samp;
+    opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
     opts.num_aux_model_samples = args.num_aux_model_samples.unwrap_or(5_000_000);
     opts.no_bias_length_threshold = args.no_bias_length_threshold;
-    opts.gc_bins = args.num_gc_bins;
-    opts.cond_gc_bins = args.conditional_gc_bins;
+    opts.gc_bins = args.num_gc_bins.unwrap_or(25);
+    opts.cond_gc_bins = args.conditional_gc_bins.unwrap_or(3);
     opts.skip_quant = args.skip_quant;
     opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples.unwrap_or(5_000);
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
@@ -2569,6 +2739,26 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             ("--sparseSeeds", args.sparse_seeds),
             ("--refMEMs", args.refmems),
             ("--uniMEMs", args.unimems),
+            // The ten below are equally inert under --sketch — the sketch entry
+            // point takes only strict_orphan/allow_dovetail/strat — but were
+            // missing from this list, so they were silently accepted while
+            // their neighbours warned (#1140 readiness sweep).
+            ("--recoverOrphans", args.recover_orphans),
+            ("--softclip", args.softclip),
+            ("--softclipOverhangs", args.softclip_overhangs),
+            ("--hardFilter", args.hard_filter),
+            ("--minAlnProb", args.min_aln_prob.is_some()),
+            ("--scoreExp", args.score_exp.is_some()),
+            ("--bandwidth", args.bandwidth.is_some()),
+            ("--consensusSlack", args.consensus_slack.is_some()),
+            (
+                "--preMergeChainSubThresh",
+                args.pre_merge_chain_sub_thresh.is_some(),
+            ),
+            (
+                "--postMergeChainSubThresh",
+                args.post_merge_chain_sub_thresh.is_some(),
+            ),
         ]
         .iter()
         .filter_map(|&(name, passed)| passed.then_some(name))
@@ -2589,14 +2779,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         );
     }
     // chaining consensus + repetitive-hit guard
-    opts.map_config.collect.consensus_fraction = 1.0 - args.consensus_slack;
-    opts.map_config.collect.max_hit_occ = args.max_occs_per_hit;
+    opts.map_config.collect.consensus_fraction = 1.0 - args.consensus_slack.unwrap_or(0.35);
+    opts.map_config.collect.max_hit_occ = args.max_occs_per_hit.unwrap_or(1000);
     // inference + fragment-length-distribution knobs
     opts.em.vb_prior = args.vb_prior;
     opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
     opts.em.accel = args.em_accel.into();
     opts.sig_digits = args.sig_digits;
-    opts.max_read_occ = args.max_read_occ;
+    opts.max_read_occ = args.max_read_occ.unwrap_or(250);
     opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
     opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
     opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
