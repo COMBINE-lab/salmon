@@ -429,3 +429,149 @@ fn driver_diagnostics_reach_meta_on_the_alignment_path() {
         "driver-supplied diagnostics must reach meta_info.json on the online -a path: {meta}"
     );
 }
+
+// ---- flags that were inert on this path (#1140, audit batches C and D) -----
+
+/// A SAM with proper pairs on txA plus half-mapped fragments on txB, so
+/// `--discardOrphans` has something to discard and something to keep.
+fn write_sam_with_orphans(dir: &Path) -> PathBuf {
+    let path = dir.join("orphans.sam");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:5000").unwrap();
+    let mut pos = 1usize;
+    for i in 0..40 {
+        let (l, r) = (pos + 1, pos + 201);
+        writeln!(f, "p{i}\t99\ttxA\t{l}\t60\t100M\t=\t{r}\t300\t*\t*").unwrap();
+        writeln!(f, "p{i}\t147\ttxA\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*").unwrap();
+        pos += 400;
+    }
+    // Half-mapped: only read 1 is placed (0x1 paired, 0x8 mate unmapped).
+    let mut opos = 1usize;
+    for i in 0..25 {
+        let l = opos + 1;
+        writeln!(f, "o{i}\t73\ttxB\t{l}\t60\t100M\t*\t0\t0\t*\t*").unwrap();
+        opos += 400;
+    }
+    path
+}
+
+#[test]
+/// `--discardOrphans` was read only by the online path, so on the 2.6.0
+/// default (`-a` deterministic) it was accepted and silently did nothing
+/// (#1140, audit C10). Dropping the half-mapped fragments before they reach
+/// the RAD makes both alignment paths answer the flag the same way.
+fn discard_orphans_is_honoured_on_the_deterministic_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_sam_with_orphans(dir.path());
+
+    let run = |tag: &str, discard: bool| -> (u64, Vec<(String, f64)>) {
+        let out = dir.path().join(tag);
+        std::fs::create_dir_all(&out).unwrap();
+        let mut opts = opts_for(&sam, &out);
+        opts.discard_orphans = discard;
+        let rad = dir.path().join(format!("{tag}.rad"));
+        let summary = write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+        quantify_rad(&opts, &rad).unwrap();
+        let mut counts = quant_counts(&out);
+        counts.sort_by(|a, b| a.0.cmp(&b.0));
+        (summary.num_mapped, counts)
+    };
+
+    let (kept_mapped, kept) = run("keep", false);
+    let (dropped_mapped, dropped) = run("drop", true);
+
+    assert_eq!(kept_mapped, 65, "40 proper pairs + 25 orphans");
+    assert_eq!(
+        dropped_mapped, 40,
+        "--discardOrphans must leave only the proper pairs"
+    );
+
+    let txb_kept = kept.iter().find(|(n, _)| n == "txB").unwrap().1;
+    let txb_dropped = dropped.iter().find(|(n, _)| n == "txB").unwrap().1;
+    assert!(
+        txb_kept > 1.0,
+        "the orphan-only transcript must carry mass when orphans are kept: {txb_kept}"
+    );
+    assert!(
+        txb_dropped < 1e-6,
+        "and none when they are discarded: {txb_dropped}"
+    );
+}
+
+/// Proper pairs on txC (which train the FLD) plus orphan-only fragments
+/// contested between a long transcript and the 3' end of a short one.
+///
+/// The contest has to be built this way. The RAD carries one map type per
+/// *fragment*, so a fragment cannot be a proper pair on one transcript and an
+/// orphan on another; and an orphan's modelled weight only differs between
+/// transcripts when the length it bounds falls inside the FLD's support — at
+/// position 1050 of a 1200-base transcript only ~150 bases remain, which
+/// cannot host a ~300-base fragment, while the long transcript is unbounded.
+fn write_sam_contested_orphans(dir: &Path) -> PathBuf {
+    let path = dir.join("contested.sam");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:1200").unwrap();
+    writeln!(f, "@SQ\tSN:txC\tLN:5000").unwrap();
+    let mut pos = 1usize;
+    for i in 0..60 {
+        let (l, r) = (pos + 1, pos + 201);
+        writeln!(f, "p{i}\t99\ttxC\t{l}\t60\t100M\t=\t{r}\t300\t*\t*").unwrap();
+        writeln!(f, "p{i}\t147\ttxC\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*").unwrap();
+        pos += 400;
+    }
+    for i in 0..60 {
+        // flag 73 / 329: paired, mate unmapped, first segment (329 adds
+        // secondary) — a genuine orphan placement on each transcript.
+        let a = (i * 13) % 500 + 1;
+        let b = 1050 + (i % 40);
+        writeln!(f, "o{i}\t73\ttxA\t{a}\t60\t100M\t*\t0\t0\t*\t*").unwrap();
+        writeln!(f, "o{i}\t329\ttxB\t{b}\t60\t100M\t*\t0\t0\t*\t*").unwrap();
+    }
+    path
+}
+
+#[test]
+/// `--noSingleFragProb` stopped at the mapping pass, so it was inert on every
+/// RAD path — including the 2.6.0 default (#1140, audit D14).
+///
+/// Modelled, an orphan's bounded-CMF weight knows that txB's remaining ~150
+/// bases cannot hold this library's ~300-base fragments, so the contested mass
+/// goes to txA. With the flag, both placements take the same flat penalty and
+/// the split falls back to effective length, which favours the shorter txB.
+/// The flag flipping the answer this completely is the point: it was silently
+/// doing nothing.
+fn no_single_frag_prob_changes_orphan_weighting_on_the_rad_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_sam_contested_orphans(dir.path());
+    let rad = dir.path().join("shared.rad");
+    let base = opts_for(&sam, &dir.path().join("unused"));
+    write_alignment_rad(&base, &rad, ChunkCodec::None).unwrap();
+
+    let quant = |tag: &str, model: bool| -> Vec<(String, f64)> {
+        let out = dir.path().join(tag);
+        std::fs::create_dir_all(&out).unwrap();
+        let mut opts = opts_for(&sam, &out);
+        opts.model_single_frag_prob = model;
+        quantify_rad(&opts, &rad).unwrap();
+        let mut c = quant_counts(&out);
+        c.sort_by(|a, b| a.0.cmp(&b.0));
+        c
+    };
+    let get = |v: &[(String, f64)], name: &str| v.iter().find(|(n, _)| n == name).unwrap().1;
+
+    let modelled = quant("modelled", true);
+    let flat = quant("flat", false);
+
+    assert!(
+        get(&modelled, "txA") > 59.0 && get(&modelled, "txB") < 1.0,
+        "modelled: the bounded-CMF weight must reject the 3'-end placement: {modelled:?}"
+    );
+    assert!(
+        get(&flat, "txB") > 59.0 && get(&flat, "txA") < 1.0,
+        "flat: equal orphan weights leave effective length to decide: {flat:?}"
+    );
+}

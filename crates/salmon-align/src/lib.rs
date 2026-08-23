@@ -225,6 +225,13 @@ pub struct AlignQuantOptions {
     /// `--noFragLengthDist`: drop the fragment-length term from a placement's
     /// weight, leaving score and compatibility to decide it.
     pub no_frag_length_dist: bool,
+    /// `--noSingleFragProb` (inverted): model an orphan's fragment length with
+    /// the bounded-CMF ambiguous weight. When false, orphans in a paired
+    /// library take a flat `LOG_EPSILON` penalty instead, matching the reads
+    /// path. The deprecated online alignment path always behaves as though
+    /// this were false (see the FLD note in `weigh_fragment`), so this reaches
+    /// only the RAD quantifier — which is every default path (#1140, D14).
+    pub model_single_frag_prob: bool,
     /// diagnostics born in an earlier phase the driver ran (e.g. the
     /// deterministic alignment pass's unusable-`AS` verdict), appended to this
     /// pass's own in `meta_info.json` — so a pipeline that only keeps the
@@ -309,6 +316,7 @@ impl AlignQuantOptions {
             dump_eq_weights: false,
             no_length_correction: false,
             no_frag_length_dist: false,
+            model_single_frag_prob: true,
             extra_diagnostics: Vec::new(),
             dump_bias_models: false,
             sig_digits: 3,
@@ -2094,6 +2102,32 @@ fn apply_bias_correction(
 }
 
 /// Run alignment-based quantification end-to-end.
+/// Warn that `-l A` over alignment input can only sample what the aligner
+/// chose to report.
+///
+/// Detection can only see the reported alignments. In reads mode salmon maps
+/// everything itself, so the sampled orientations are the library's; here they
+/// are whatever survived the aligner's own settings, and an upstream
+/// orientation/strand filter skews the sample in a way detection cannot
+/// recover from.
+///
+/// Every alignment-input producer that detects a library type calls this — the
+/// online path, the deterministic RAD writer, and genome projection — because
+/// the caveat is a property of the input, not of which estimator reads it. It
+/// used to live only on the online path, so the 2.6.0 default detected and said
+/// nothing (COMBINE-lab/salmon#1140, audit C12).
+pub(crate) fn warn_auto_detect_from_alignments() {
+    tracing::warn!(
+        "`-l A` with alignment input infers the library type from the alignments \
+         the aligner reported, treating them as an unfiltered sample. If the \
+         aligner was configured to report only one orientation or strand, \
+         detection will mirror that filter rather than the library — e.g. it \
+         cannot conclude `IU` when wrong-strand alignments were already excluded \
+         upstream. If the input BAM/SAM is filtered this way, pass the library \
+         type explicitly instead."
+    );
+}
+
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
     let start_time = opts.external_start_time.clone().unwrap_or_else(asctime_now);
     let run_timer = std::time::Instant::now();
@@ -2213,20 +2247,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         None
     };
     let detector = auto_detect.then(|| {
-        // Detection can only see what the aligner chose to report. In reads
-        // mode salmon maps everything itself, so the sampled orientations are
-        // the library's; here they are whatever survived the aligner's own
-        // settings, and an upstream orientation/strand filter skews the sample
-        // in a way detection cannot recover from.
-        tracing::warn!(
-            "`-l A` with alignment input infers the library type from the alignments \
-             the aligner reported, treating them as an unfiltered sample. If the \
-             aligner was configured to report only one orientation or strand, \
-             detection will mirror that filter rather than the library — e.g. it \
-             cannot conclude `IU` when wrong-strand alignments were already excluded \
-             upstream. If the input BAM/SAM is filtered this way, pass the library \
-             type explicitly instead."
-        );
+        warn_auto_detect_from_alignments();
         salmon_model::LibraryTypeDetector::new(if peeked_paired.unwrap_or(true) {
             salmon_core::ReadType::PairedEnd
         } else {
@@ -2519,7 +2540,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()
     } else if opts.num_bootstraps > 0 {
-        salmon_infer::bootstrap(&packed, &opts.em, opts.num_bootstraps, 0x5A13_0000)
+        salmon_infer::bootstrap(
+            &packed,
+            &opts.em,
+            Some(&eff_lengths),
+            opts.num_bootstraps,
+            0x5A13_0000,
+        )
     } else if opts.num_gibbs_samples > 0 {
         let prior = if opts.em.use_vbem {
             opts.em.vb_prior.max(1.0)
@@ -2530,7 +2557,10 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             num_samples: opts.num_gibbs_samples,
             thinning: opts.thinning_factor,
             prior,
-            per_transcript_prior: true,
+            // Honour --perNucleotidePrior here as the EM does; hardcoding a
+            // per-transcript prior made the flag a no-op for Gibbs on every
+            // path (#1140, audit D13).
+            per_transcript_prior: !opts.em.per_nucleotide_prior,
         };
         salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
     } else {

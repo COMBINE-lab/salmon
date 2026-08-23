@@ -1278,9 +1278,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // it needs Gibbs after the weights it reads were skipped.
     let bootstraps: Vec<Vec<f64>> = match posterior {
         salmon_infer::PosteriorMethod::None => Vec::new(),
-        salmon_infer::PosteriorMethod::Bootstrap { replicates } => {
-            salmon_infer::bootstrap(&packed, &opts.em, replicates, 0x5A13_0000)
-        }
+        salmon_infer::PosteriorMethod::Bootstrap { replicates } => salmon_infer::bootstrap(
+            &packed,
+            &opts.em,
+            Some(&eff_lengths),
+            replicates,
+            0x5A13_0000,
+        ),
         salmon_infer::PosteriorMethod::Gibbs { samples } => {
             // Gibbs prior follows the main optimizer (salmon): with VBEM and a
             // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
@@ -1294,7 +1298,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 num_samples: samples,
                 thinning: opts.thinning_factor,
                 prior,
-                per_transcript_prior: true,
+                // Honour --perNucleotidePrior here as the EM does; hardcoding a
+                // per-transcript prior made the flag a no-op for Gibbs on every
+                // path (#1140, audit D13).
+                per_transcript_prior: !opts.em.per_nucleotide_prior,
             };
             salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
         }

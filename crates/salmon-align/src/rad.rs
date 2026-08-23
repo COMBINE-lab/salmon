@@ -453,9 +453,19 @@ struct FragCfg<'a> {
     paired_lib: bool,
     /// `--noFragLengthDist`: leave the fragment-length term out of the weight.
     no_frag_length_dist: bool,
+    /// `--noSingleFragProb` (inverted): model an orphan's fragment length.
+    model_single_frag_prob: bool,
     range_factorization_bins: u32,
     eq_builder: &'a EquivalenceClassBuilder,
 }
+
+/// salmon's `LOG_EPSILON` = `log(0.375e-10)`: the flat penalty an orphan takes
+/// under `--noSingleFragProb`, when its fragment length is deliberately not
+/// modelled. Deliberately NOT `salmon_core::math::LOG_EPSILON`, which is
+/// `-1e10` — a log-zero sentinel that would annihilate the placement rather
+/// than merely disfavour it. Same value the reads path uses
+/// (`salmon_quant::processor::LOG_EPSILON`).
+const ORPHAN_LOG_EPSILON: f64 = -23.998_158_637_57;
 
 /// The eq-class log-weight basis for one hit, given the file's score
 /// interpretation. Uniform (`0`) when the profile is unscored; for a raw AS
@@ -536,6 +546,21 @@ fn process_rad_fragment(
             // support. Matches the direct/reads path the round-trip is compared to.
             let flen = (p.frag_len as i32).min(rl.max(1));
             at(cfg.pmf, flen as usize) - at(cfg.cmf, rl.max(1) as usize)
+        } else if cfg.paired_lib && !cfg.model_single_frag_prob {
+            // `--noSingleFragProb`: do not model an orphan's fragment length —
+            // a flat penalty for an unexpected orphan, nothing for a
+            // single-end read, exactly as `processor::frag_log_prob` does on
+            // the reads path. The flag used to stop at the mapping pass, so it
+            // was inert on every RAD path including the 2.6.0 default (#1140,
+            // audit D14).
+            if matches!(
+                p.status,
+                MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+            ) {
+                ORPHAN_LOG_EPSILON
+            } else {
+                0.0
+            }
         } else if cfg.paired_lib {
             // Orphan / single-end in a paired library: bounded-CMF ambiguous
             // fragment-length probability (salmon's `getAmbigFragLengthProb`), the
@@ -1287,6 +1312,9 @@ struct BiasCfg<'a> {
     /// `--noFragLengthDist`: leave the fragment-length term out of the posterior
     /// this bias pass weights its observations by, as the eq-class pass does.
     no_frag_length_dist: bool,
+    /// `--noSingleFragProb` (inverted): as the eq-class pass, so the bias
+    /// posterior weights orphans the same way the weights it explains do.
+    model_single_frag_prob: bool,
     /// fixed per-reference abundances (baked or first-EM) for the posterior.
     abundances: &'a [f64],
     ref_bytes: &'a salmon_core::RefSeqs,
@@ -1332,6 +1360,16 @@ fn collect_bias_fragment(
             0.0
         } else if proper {
             at(cfg.pmf, flen as usize) - at(cfg.cmf, rl.max(1) as usize)
+        } else if cfg.paired_lib && !cfg.model_single_frag_prob {
+            // `--noSingleFragProb`, as in the eq-class pass above.
+            if matches!(
+                p.status,
+                MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+            ) {
+                ORPHAN_LOG_EPSILON
+            } else {
+                0.0
+            }
         } else if cfg.paired_lib {
             let read_len = if p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED {
                 p.frag_len as i32
@@ -1923,6 +1961,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             incompat_prior: opts.incompat_prior,
             paired_lib,
             no_frag_length_dist: opts.no_frag_length_dist,
+            model_single_frag_prob: opts.model_single_frag_prob,
             range_factorization_bins: opts.range_factorization_bins,
             eq_builder: &eq_builder,
         };
@@ -1940,6 +1979,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 incompat_prior: opts.incompat_prior,
                 paired_lib,
                 no_frag_length_dist: opts.no_frag_length_dist,
+                model_single_frag_prob: opts.model_single_frag_prob,
                 abundances: abund,
                 ref_bytes: &ref_bytes,
                 gc_store: &gc_store,
@@ -2106,6 +2146,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 incompat_prior: opts.incompat_prior,
                 paired_lib,
                 no_frag_length_dist: opts.no_frag_length_dist,
+                model_single_frag_prob: opts.model_single_frag_prob,
                 abundances: &bias_abund,
                 ref_bytes: &ref_bytes,
                 gc_store: &gc_store,
@@ -2198,7 +2239,13 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()
     } else if opts.num_bootstraps > 0 {
-        salmon_infer::bootstrap(&packed, &opts.em, opts.num_bootstraps, 0x5A13_0000)
+        salmon_infer::bootstrap(
+            &packed,
+            &opts.em,
+            Some(&eff_lengths),
+            opts.num_bootstraps,
+            0x5A13_0000,
+        )
     } else if opts.num_gibbs_samples > 0 {
         let prior = if opts.em.use_vbem {
             opts.em.vb_prior.max(1.0)
@@ -2209,7 +2256,10 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             num_samples: opts.num_gibbs_samples,
             thinning: opts.thinning_factor,
             prior,
-            per_transcript_prior: true,
+            // Honour --perNucleotidePrior here as the EM does; hardcoding a
+            // per-transcript prior made the flag a no-op for Gibbs on every
+            // path (#1140, audit D13).
+            per_transcript_prior: !opts.em.per_nucleotide_prior,
         };
         salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
     } else {

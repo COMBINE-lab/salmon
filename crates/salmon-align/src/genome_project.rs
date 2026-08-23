@@ -201,6 +201,12 @@ pub fn project_genome_bam_to_rad(
         "A" | "IU" | "U" => None,
         s => LibraryFormat::parse(s).ok(),
     };
+    // The `-l A` caveat belongs to alignment *input*, not to the estimator
+    // reading it: this path detects via the FLD pass, so it owes the same
+    // warning the online path gives (#1140, audit C12).
+    if LibraryFormat::is_auto(&opts.lib_type) {
+        crate::warn_auto_detect_from_alignments();
+    }
     // Tag bake: detected wins, matching the reads-mode writer, so an explicit
     // `-l` can still fire `library_type_mismatch` downstream; the filter below
     // keeps expected-wins (see the same split in `bam_rad.rs`, #1140).
