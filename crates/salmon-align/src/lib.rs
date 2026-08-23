@@ -203,6 +203,15 @@ pub struct AlignQuantOptions {
     /// invocation (index, read files, threads); phase 2's own record would
     /// replace it with a RAD-centric one and lose all of that (#1140)
     pub preserve_cmd_info: bool,
+    /// this run converted alignments into the RAD it is quantifying (`-a`
+    /// `--deterministic`, genome projection) rather than being handed one.
+    /// Only metadata depends on it: `frag_length_source` must say `alignments`
+    /// — the distribution came from the input alignments — instead of leaking
+    /// `rad_baked`, which names an intermediate the user never asked for. It
+    /// cannot be inferred: `preserve_cmd_info` marks the *reads* driver, and a
+    /// standalone `--rad` (where `rad_baked` is correct) looks identical here
+    /// otherwise. Left false by anything reading a user-supplied RAD.
+    pub input_is_alignments: bool,
     /// the read files behind this RAD, when the driver knows them (reads-mode
     /// `--deterministic`), for `lib_format_counts.json`'s `read_files` — which
     /// otherwise reports `[]` because a RAD does not name its reads (#1140)
@@ -317,6 +326,7 @@ impl AlignQuantOptions {
             prior_seconds: 0.0,
             external_start_time: None,
             preserve_cmd_info: false,
+            input_is_alignments: false,
             read_files: Vec::new(),
             dump_eq: false,
             dump_eq_weights: false,
@@ -2737,6 +2747,15 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         w.flush()?;
     }
 
+    /// Shape of the positional-bias model: one model per transcript length
+    /// class, each binned over the transcript's relative position. Reported as
+    /// both numbers because either alone is ambiguous.
+    #[derive(Serialize)]
+    struct PosBiasShape {
+        length_classes: usize,
+        bins_per_class: usize,
+    }
+
     // aux_info/meta_info.json — full field set, matching salmon's alignment mode
     // (no index hashes since there is no index; no keep_duplicates).
     #[derive(Serialize)]
@@ -2757,6 +2776,18 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         gc_bias_correct: bool,
         pos_bias_correct: bool,
         num_bias_bins: usize,
+        // salmon-rs extensions: the shapes of the bias models that actually
+        // ran. `num_bias_bins` above cannot carry these — it names C++'s legacy
+        // 4096-bin k-mer counter, which this port replaced — so a reader had no
+        // way to learn what the running models looked like. `None` when that
+        // correction was not requested, which is how a consumer tells "off"
+        // from "on with N bins" (#1140 follow-up).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq_bias_context_length: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gc_bias_bins: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pos_bias_bins: Option<PosBiasShape>,
         mapping_type: String,
         /// how the index was built; known only from a salmon RAD's provenance,
         /// omitted (rather than guessed) for a BAM input
@@ -2942,37 +2973,79 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         opt_type: if opts.em.use_vbem { "vb" } else { "em" }.to_string(),
         quant_errors: vec![],
         num_libraries: 1,
-        // The format actually applied, not the `-l A` that requested detection:
-        // reads mode reports the resolved one, and a RAD carries it baked, so a
-        // requant can report it too.
-        library_types: vec![res
-            .detected_library_type
-            .clone()
-            .unwrap_or_else(|| opts.lib_type.clone())],
+        // The format the strand filter actually applied — same rule as
+        // `lib_format_counts.json`'s `expected` above, and for the same reason.
+        // The trap: detection now runs under an explicit `-l` too (it powers the
+        // `library_type_mismatch` diagnostic), so `detected_library_type` is
+        // always populated; taking it unconditionally made `-l ISR` on ISF data
+        // report ISF here while `cmd_info.json`, `lib_format_counts.json`, and
+        // the (zero) `num_mapped` all said ISR. Metadata reports *both* formats
+        // deliberately: the applied one here, the inferred one in
+        // `detected_library_type` below — neither is redundant, do not collapse
+        // them into one field.
+        library_types: vec![if LibraryFormat::is_auto(&opts.lib_type) {
+            res.detected_library_type
+                .clone()
+                .unwrap_or_else(|| opts.lib_type.clone())
+        } else {
+            LibraryFormat::parse(&opts.lib_type)
+                .map(|f| f.canonical().to_string())
+                .unwrap_or_else(|_| opts.lib_type.clone())
+        }],
         frag_dist_length: res.frag_len_dist.len(),
         frag_length_mean: res.frag_len_mean,
         frag_length_sd: res.frag_len_sd,
-        // In the integrated `--deterministic` flow (`preserve_cmd_info`, like
-        // the invocation record above) provenance describes the user's run,
-        // not the internal RAD handoff: phase 1 of this same run observed the
-        // FLD (paired) or defaulted it (single-end, no lengths to observe);
-        // the intermediate RAD merely carried it. The rad_baked* spellings
-        // stay for standalone `--rad` input, where the RAD really is the
-        // source (#1140).
-        frag_length_source: match (opts.preserve_cmd_info, res.frag_len_source) {
-            (true, salmon_model::FragLengthSource::RadBaked) => {
+        // In the integrated two-phase flows provenance describes the user's
+        // run, not the internal RAD handoff: phase 1 of this same run observed
+        // the FLD (paired) or defaulted it (single-end, no lengths to observe);
+        // the intermediate RAD merely carried it, and the user never asked for
+        // that RAD. Which input phase 1 read decides the spelling —
+        // `preserve_cmd_info` marks the reads driver, `input_is_alignments` the
+        // `-a`/genome-projection drivers. The rad_baked* spellings stay for
+        // standalone `--rad`, where the RAD really is the source and neither
+        // flag is set (#1140).
+        frag_length_source: match (
+            opts.preserve_cmd_info,
+            opts.input_is_alignments,
+            res.frag_len_source,
+        ) {
+            (true, _, salmon_model::FragLengthSource::RadBaked) => {
                 salmon_model::FragLengthSource::Reads
             }
-            (true, salmon_model::FragLengthSource::RadBakedPrior) => {
+            (_, true, salmon_model::FragLengthSource::RadBaked) => {
+                salmon_model::FragLengthSource::Alignments
+            }
+            // Single-end either way: no fragment lengths existed to observe, so
+            // what the RAD carries is this run's own `--fldMean`/`--fldSD`.
+            (true, _, salmon_model::FragLengthSource::RadBakedPrior)
+            | (_, true, salmon_model::FragLengthSource::RadBakedPrior) => {
                 salmon_model::FragLengthSource::Prior
             }
-            (_, s) => s,
+            (_, _, s) => s,
         }
         .as_str(),
         seq_bias_correct: opts.seq_bias,
         gc_bias_correct: opts.gc_bias,
         pos_bias_correct: opts.pos_bias,
+        // Not the running bias models' bin counts: C++ writes
+        // `readBias(FORWARD).counts.size()` (GZipWriter.cpp), the legacy fixed
+        // 4096-bin k-mer counter behind `observed_bias.gz`, which this port
+        // replaced with SBModel/GC/pos models and stubs out in the aux dumps.
+        // There is no such bin count to report here, and the models that did
+        // run publish their own sizes in their dumps, so 0 stands (matching the
+        // reads writer) rather than a number of a different model's bins.
         num_bias_bins: 0,
+        // Measured from the models this run produced, not from the requested
+        // options: a model's own array length is the truth, where a
+        // configured-but-unbuilt model would otherwise be described as though
+        // it had run.
+        seq_bias_context_length: (!res.bias_dump.obs5_seq.is_empty())
+            .then_some(salmon_model::seqbias::CONTEXT_LENGTH),
+        gc_bias_bins: (!res.bias_dump.obs_gc.is_empty()).then_some(res.bias_dump.obs_gc.len()),
+        pos_bias_bins: res.bias_dump.obs5_pos.first().map(|first| PosBiasShape {
+            length_classes: res.bias_dump.obs5_pos.len(),
+            bins_per_class: first.len(),
+        }),
         // What the RAD says its producer was; a BAM input has no RAD to ask, and
         // an older or foreign RAD does not record it, so both fall back to the
         // value this path has always reported.
@@ -2993,7 +3066,16 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         index_decoy_seq_hash: index_prov.decoy_seq_hash,
         index_decoy_name_hash: index_prov.decoy_name_hash,
         num_valid_targets: rows.len(),
-        num_decoy_targets: 0,
+        // The decoy block this writer actually held back, derived from the same
+        // `rows` split so the two counts always partition the references
+        // instead of contradicting each other (previously hardcoded 0 even for
+        // a decoy-aware index, while `num_decoy_fragments` reported the real
+        // tally). A RAD without the recorded boundary (BAM input, piscem, or
+        // written before the tags existed) excludes nothing, so 0 there is this
+        // output's true decoy count, not a placeholder — any decoys it does
+        // carry are indistinguishable and are counted in `num_valid_targets`,
+        // exactly as they appear in `quant.sf`.
+        num_decoy_targets: res.names.len() - rows.len(),
         num_eq_classes: res.num_eq_classes,
         serialized_eq_classes: opts.dump_eq || opts.dump_eq_weights,
         eq_class_properties,
@@ -3104,14 +3186,43 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     // is the count of aligned fragments and `num_mapped` is those with a strand-
     // compatible placement that were quantified; label them accordingly so a
     // <100% rate on a stranded library is not read as lost alignments.
+    // This writer serves every RAD-based driver, so the log must describe the run
+    // the *user* asked for. It used to hard-code "alignment mode" and alignment
+    // wording, so a default reads run — the 2.6.0 default — was labelled as
+    // something it was not, and its unmapped fragments were reported as
+    // "strand-incompatible" even with num_incompatible_fragments = 0. The
+    // machine-readable meta_info.json was always right; only this human-facing
+    // summary lied (#1140 readiness sweep).
+    //
+    // `preserve_cmd_info` marks the integrated reads flow, the same signal the
+    // invocation record and the fragment-length provenance use.
+    let reads_run = opts.preserve_cmd_info;
+    let mode = if reads_run {
+        "reads mode"
+    } else {
+        "alignment mode"
+    };
+    let mapping_type = if reads_run { "mapping" } else { "alignment" };
+    // In reads mode a fragment that did not map simply did not map; only
+    // alignment input can distinguish "aligned but strand-incompatible".
+    let (observed_label, mapped_label, rate_label) = if reads_run {
+        ("observed fragments", "mapped fragments", "mapping rate")
+    } else {
+        (
+            "aligned fragments",
+            "strand-compatible (quantified)",
+            "compatible rate",
+        )
+    };
     let log = format!(
-        "salmon (rust port, alignment mode) v{SALMON_VERSION}\nstart: {}\nend:   {}\n\
-         library type: {}\naligned fragments: {}\nstrand-compatible (quantified): {}\n\
-         compatible rate: {pct:.4}%\n\
+        "salmon (rust port, {mode}) v{SALMON_VERSION}\nstart: {}\nend:   {}\n\
+         library type: {}\nmapping type: {}\n{observed_label}: {}\n{mapped_label}: {}\n\
+         {rate_label}: {pct:.4}%\n\
          number of equivalence classes: {}\nfragment length mean (sd): {:.2} ({:.2})\n",
         res.start_time,
         asctime_now(),
         opts.lib_type,
+        mapping_type,
         res.num_processed,
         res.num_mapped,
         res.num_eq_classes,

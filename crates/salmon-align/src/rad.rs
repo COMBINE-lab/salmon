@@ -1,4 +1,11 @@
-//! Parallel RAD-format input quantification (`salmon quant --rad`).
+//! Parallel RAD-format input quantification.
+//!
+//! This is the quantification engine behind four user-facing modes: the default
+//! deterministic reads path (`-i`/`-1`/`-2`), the default deterministic alignment
+//! path (`-a`), genuine RAD input (`--rad`), and genome projection (`-a` with
+//! `--annotation`). The first, second and fourth reach it via a RAD their phase 1
+//! wrote. Diagnostics raised here must therefore not name an input flag: the user
+//! may not have typed the one being blamed.
 //!
 //! # Why quantify from a RAD file
 //!
@@ -805,8 +812,8 @@ impl RadProvenance {
             None if !index_applicable => {}
             None => {
                 const REASON: &str = "the RAD does not identify the index its mappings \
-                                      were made against, and the `--rad` path loads no \
-                                      index of its own";
+                                      were made against, and this quantification pass \
+                                      loads no index of its own";
                 missing.extend(
                     [
                         "keep_duplicates",
@@ -1713,7 +1720,10 @@ where
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Quantify from a RAD file (`salmon quant --rad`).
+/// Quantify from a RAD file.
+///
+/// Phase 2 of every default path, not just `salmon quant --rad` — see the module
+/// docs before writing a diagnostic that names an input flag.
 pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQuantResult> {
     let start_time = opts.external_start_time.clone().unwrap_or_else(asctime_now);
     let run_timer = std::time::Instant::now();
@@ -1728,11 +1738,33 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // Bias correction adjusts an effective length that --noLengthCorrection is
     // not computing, so the two cannot both apply; reads mode gates it the same
     // way (`salmon-quant/src/lib.rs`).
+    //
+    // The message must not name the input flag: this is the quantification engine
+    // for four user-facing modes (reads, `-a`, `--rad`, genome projection), so
+    // telling a `-a` user to fix `--rad` would send them after a flag they never
+    // typed. Name what the user did ask for (the bias flags) and what to add.
     let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
-    anyhow::ensure!(
-        !bias_on || opts.ref_seqs.is_some() || opts.transcripts.is_some(),
-        "--seqBias/--gcBias/--posBias with --rad require -t/--targets (the transcriptome FASTA)"
-    );
+    if bias_on && opts.ref_seqs.is_none() && opts.transcripts.is_none() {
+        let mut requested = Vec::new();
+        if opts.seq_bias {
+            requested.push("--seqBias");
+        }
+        if opts.gc_bias {
+            requested.push("--gcBias");
+        }
+        if opts.pos_bias {
+            requested.push("--posBias");
+        }
+        // "Bias correction (...)" rather than the bare flag list keeps the verb
+        // agreeing whether one bias flag was given or three.
+        anyhow::bail!(
+            "bias correction ({}) needs the reference sequences to model bias against, \
+             and this run has none loaded. Pass `-t/--targets <transcripts.fasta>` (the \
+             transcriptome the fragments were mapped or aligned to), or re-run without \
+             bias correction.",
+            requested.join(", ")
+        );
+    }
 
     // Header: profile, reference names + lengths (from the RAD file tags).
     let (_reader, prelude, file_tag_map) = open_prelude(rad_path)?;

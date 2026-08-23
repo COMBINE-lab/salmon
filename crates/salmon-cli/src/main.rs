@@ -873,9 +873,12 @@ struct QuantArgs {
     /// ~2x leaner than the dense representation with identical results.
     #[arg(long = "reduceGCMemory")]
     reduce_gc_memory: bool,
-    /// Skip transcript quantification (EM + Gibbs/bootstrap) and quant.sf, while
-    /// still mapping, building equivalence classes (use with --dumpEq), detecting
-    /// library type, and writing metadata. (salmon's --skipQuant)
+    /// Skip transcript quantification (EM + Gibbs/bootstrap) and quant.sf: map
+    /// (or read the alignments), detect the library type, and write metadata.
+    /// The run's deliverable is the RAD of the mappings, kept in the output
+    /// directory; requantify it later with `--rad <file>`. On the default reads
+    /// path the run stops after mapping, so equivalence classes come from that
+    /// requant (`--rad <file> --dumpEq`), not from this run. (salmon's --skipQuant)
     #[arg(long = "skipQuant")]
     skip_quant: bool,
     /// [not yet implemented] quantify from a previously-written equivalence-class
@@ -894,9 +897,12 @@ struct QuantArgs {
     /// online alignment path (--online -a), which warns that it lacks it.
     #[arg(long = "noFragLengthDist")]
     no_frag_length_dist: bool,
-    /// Disable the single-end/orphan fragment-length probability estimate.
-    /// Effective only on the deprecated --online reads path; no effect under
-    /// the default deterministic mode or RAD input.
+    /// Disable the single-end/orphan fragment-length probability estimate:
+    /// orphans take a flat penalty instead of the bounded-CMF ambiguous weight,
+    /// which can change which transcript wins a contested orphan. Honoured on
+    /// the reads paths and on every RAD-based path (deterministic reads phase 2,
+    /// -a, --rad). Redundant on the deprecated online alignment path
+    /// (--online -a), which weights every orphan flat by construction.
     #[arg(long = "noSingleFragProb")]
     no_single_frag_prob: bool,
     /// [accepted; not yet implemented] write a BAM of posterior-sampled
@@ -1557,6 +1563,11 @@ fn run_deterministic_align(
     // Both phases count toward the reported run time (see run_deterministic).
     let run_start = std::time::Instant::now();
     let start_time = salmon_align::asctime_now();
+    // This driver converts the user's BAM into the intermediate RAD itself, so
+    // the fragment-length distribution really was derived from alignments —
+    // phase 2 must not report the internal handoff (`rad_baked`), which is the
+    // right answer only for a RAD the user supplied (#1140).
+    opts.input_is_alignments = true;
     let out_dir = opts.output_dir.clone();
     // An explicit `--writeRad PATH` is honoured and kept; otherwise a temp under
     // the output dir, removed on success unless `--keepRad` (or `--skipQuant`,
@@ -1759,6 +1770,10 @@ fn run_genome_project(
     // Phase 2 — quantify from the projected RAD (single baked pass). Hand the
     // reconstructed transcript sequences to bias correction (no `-t` needed).
     let mut q = q;
+    // Genome projection is alignment input too: the FLD is observed while
+    // projecting the genome BAM, not carried in from a user-supplied RAD, so
+    // `frag_length_source` must say `alignments` rather than `rad_baked`.
+    q.input_is_alignments = true;
     if q.ref_seqs.is_none() {
         q.ref_seqs = art.ref_seqs;
     }
@@ -1897,10 +1912,12 @@ fn preflight_fastq_complete(paths: &[PathBuf]) -> Result<()> {
             let (seq, sep, qual) = (tail_lines[n - 3], tail_lines[n - 2], tail_lines[n - 1]);
             if !sep.starts_with(b"+") || seq.len() != qual.len() {
                 anyhow::bail!(
-                    "{} looks truncated: its final record is incomplete (the sequence and \
-                     quality lines disagree in length, or the `+` separator is missing). \
-                     Quantifying it would silently report results for only the part that \
-                     survived. Re-transfer or re-generate the file.",
+                    "{}: its final FASTQ record is incomplete — the `+` separator is \
+                     missing, or the sequence and quality lines differ in length. That is \
+                     what a truncated transfer looks like, but a corrupted or mis-generated \
+                     file looks the same from here, so check the file rather than assuming \
+                     either. Quantifying it would silently report results for only the part \
+                     that parsed.",
                     path.display()
                 );
             }
@@ -2049,17 +2066,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.validate_mappings {
         tracing::warn!("--validateMappings has no effect (deprecated in salmon too): selective alignment is the default mapping mode; pass --sketch for pseudoalignment.");
     }
-    if args.sketch && args.decoy_threshold.unwrap_or(1.0) != 1.0 {
-        tracing::warn!(
-            "--decoyThreshold {} has no effect in --sketch mode: sketch (pseudoalignment) \
-             returns only equally-best mappings, so the decoy-domination comparison \
-             (bestTxpScore < decoyThreshold * bestDecoyScore) never triggers. A fragment is \
-             treated as decoy-dominated only when it maps to decoys *and no transcript*; \
-             otherwise decoy hits are dropped and transcript hits kept (use --allowDecoyOrphans \
-             to keep transcript hits even when a decoy also matches).",
-            args.decoy_threshold.unwrap_or(1.0)
-        );
-    }
     // Genome projection lives inside the `-a` branch, so `--annotation` without
     // it silently discards the entire request. clap's `requires` does not fire
     // for the cases that matter (see the flag's doc comment), so check here.
@@ -2089,6 +2095,37 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             "--noLengthCorrection cannot be combined with {}: bias correction works by \
              adjusting effective lengths, which is exactly what --noLengthCorrection turns \
              off. Drop whichever you did not mean.",
+            asked.join(" / ")
+        );
+    }
+
+    // Bias correction reads the reference sequence at each alignment's position,
+    // and a BAM carries only reference names and lengths — so alignment input
+    // needs `-t`. The default (deterministic) `-a` path only discovered this
+    // inside `quantify_rad`, i.e. after the whole BAM had been read and written
+    // to an intermediate RAD (hours on real data), and raised `--rad`'s wording
+    // for an invocation containing no `--rad`. The precondition is fully known
+    // at invocation, so check it before any work (#1140).
+    // Genome projection (`-a --annotation`) is exempt: it reconstructs the
+    // transcript sequences from `--genome` plus the annotation and never reads `-t`.
+    if args.alignments.is_some()
+        && args.annotation.is_none()
+        && args.targets.is_none()
+        && (args.seq_bias || args.gc_bias || args.pos_bias)
+    {
+        let asked: Vec<&str> = [
+            ("--seqBias", args.seq_bias),
+            ("--gcBias", args.gc_bias),
+            ("--posBias", args.pos_bias),
+        ]
+        .iter()
+        .filter_map(|&(n, on)| on.then_some(n))
+        .collect();
+        anyhow::bail!(
+            "{} with alignment input (-a) requires -t/--targets: bias correction is computed \
+             from the reference sequence at each alignment's position, and a BAM carries only \
+             reference names and lengths. Pass the transcriptome FASTA the alignments were \
+             produced against.",
             asked.join(" / ")
         );
     }
@@ -2563,6 +2600,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     }
 
     // Reads (selective-alignment / pseudoalignment) mode.
+    // `-2` alone is reads input with a missing half, not "no reads": the generic
+    // message below sent users hunting for an input they had already typed. The
+    // count-mismatch check further down only fires once `-1` is present, so this
+    // case had no message of its own.
+    anyhow::ensure!(
+        args.mates2.is_empty() || !args.mates1.is_empty(),
+        "-2 given without -1: mates must be supplied as a pair (-1 <mates_1> -2 <mates_2>). \
+         For single-end reads use -r."
+    );
     anyhow::ensure!(
         !args.mates1.is_empty() || !args.unmated.is_empty(),
         "no reads provided: pass -1/-2 (paired), -r (single-end), -a (BAM), or --rad (RAD)"
@@ -2601,6 +2647,22 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                     args.post_merge_chain_sub_thresh.is_some(),
                 ),
             ],
+        );
+    }
+    // Sketch mode returns only equally-best mappings, so the decoy-domination
+    // comparison never runs and --decoyThreshold is inert. This lives here, not
+    // before mode dispatch: with `-a`/`--rad` input `--sketch` is itself inert
+    // (both are reported by `reads_only_mapping_flags`), so warning up front
+    // told a user that sketch was running on a run that never mapped anything.
+    if args.sketch && args.decoy_threshold.unwrap_or(1.0) != 1.0 {
+        tracing::warn!(
+            "--decoyThreshold {} has no effect in --sketch mode: sketch (pseudoalignment) \
+             returns only equally-best mappings, so the decoy-domination comparison \
+             (bestTxpScore < decoyThreshold * bestDecoyScore) never triggers. A fragment is \
+             treated as decoy-dominated only when it maps to decoys *and no transcript*; \
+             otherwise decoy hits are dropped and transcript hits kept (use --allowDecoyOrphans \
+             to keep transcript hits even when a decoy also matches).",
+            args.decoy_threshold.unwrap_or(1.0)
         );
     }
     // The one-pass reads path writes no intermediate RAD, so the flags that

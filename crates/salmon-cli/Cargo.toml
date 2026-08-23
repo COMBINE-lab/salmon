@@ -34,6 +34,9 @@ sysalloc = []
 [dev-dependencies]
 tempfile = { workspace = true }
 flate2 = { workspace = true }
+# meta_info.json assertions in the metadata-truth tests: parse the field set
+# rather than substring-matching it, so a renamed field fails loudly.
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

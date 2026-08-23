@@ -290,10 +290,18 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
         !o.status.success(),
         "a byte-truncated FASTQ must be refused"
     );
+    // Two wordings are correct here and which one fires depends on where the
+    // cut landed: a short file reports its line count, a file whose final
+    // record is malformed reports that instead (salmon cannot tell a truncated
+    // transfer from a corrupted one, and says so rather than guessing).
+    let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        String::from_utf8_lossy(&o.stderr).contains("looks truncated"),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
+        err.contains("looks truncated") || err.contains("final FASTQ record is incomplete"),
+        "{err}"
+    );
+    assert!(
+        err.contains("mid.fq"),
+        "the error must name the file:\n{err}"
     );
 
     // Line-boundary truncation: 1, 2 and 3 orphaned lines must all be refused,
