@@ -97,6 +97,103 @@ release cycle:
 - The deterministic mapping pass has a **live progress spinner**, like the
   one-pass path.
 
+## The pre-release behavior audit (#1140)
+
+Before tagging, every quant flag was traced per path and the tree swept for
+computed-but-unused bookkeeping, docs contradicting code, and paths that
+diverged without a reason. 111 findings survived verification and were
+addressed across #1153–#1158 — most by fixing the code, some by correcting
+documentation that described behavior the code never had, and one by
+documenting a divergence deliberately left alone (the deprecated `--online -a`
+fragment-length model, which is leaving in 2.7.0 and gets no parity work).
+Most of it is invisible from outside; these are the parts that are not.
+
+### Output that changes shape
+
+- **Decoy references no longer appear in `quant.sf`** on any RAD-based path —
+  which, after the flip, is the default. Phase 1 writes the full reference
+  table (decoys included) into the RAD, and the writer had no decoy boundary to
+  filter on, so a decoy-aware index produced decoy rows that `--online` never
+  emitted. The boundary is now baked into the RAD header. The same fix applies
+  to `aux_info/bootstrap/names.tsv.gz`, the bootstrap matrix, `ambig_info.tsv`,
+  and `num_valid_targets`. **If you parse `quant.sf` by row index, the row set
+  changes** — back to what the docs always promised.
+- **`meta_info.json` stops reporting placeholders**: `samp_type` names the
+  posterior that actually ran (tximport keys off it together with
+  `num_bootstraps`), `serialized_eq_classes` reflects whether classes were
+  dumped, `num_decoy_fragments` reads the counter baked in the RAD instead of a
+  hardcoded `0`, and `frag_length_source` distinguishes an observed
+  distribution from the `--fldMean`/`--fldSD` prior a single-end run keeps.
+- **`cmd_info.json` records your invocation**, not phase 2's view of it. The
+  requant used to overwrite it with the alignment-mode schema, so `index`,
+  `mates1`/`mates2`, `threads` and `sketch` vanished from the run's own record
+  and `lib_format_counts.json` reported `read_files: []`.
+- **`MAPQ` follows STAR's placement-count scale** (255 unique, then 3 / 1 / 0)
+  instead of a constant `1`, so `samtools view -q 255` means "uniquely placed"
+  as downstream RNA-seq tooling expects. Previously that filter discarded the
+  entire file.
+
+### Estimates that change
+
+Each of these was a flag that was accepted, documented, and silently did
+nothing on the default path while working under `--online`. Runs that passed
+them will now get different numbers — the intended ones.
+
+- **`--perNucleotidePrior`** was ignored by Gibbs sampling on every path (all
+  three call sites hardcoded a per-transcript prior) and inside bootstrap
+  replicates (effective lengths never reached the replicate EM, which silently
+  falls back to the flat prior). Posterior samples change.
+- **`--noSingleFragProb`** stopped at the mapping pass, so it was inert on
+  every RAD path. Point estimates change where orphans are contested.
+- **`--discardOrphans`** was read only by the online alignment path; the
+  deterministic writer now drops half-mapped fragments before they reach the
+  RAD.
+- **`--scoreExp`** was never forwarded to deterministic `-a`, though phase 2
+  applies a score exponent to `AS`-scored placements exactly as it does to
+  selective-alignment ones.
+- **`--recoverOrphans` pairs are strand-judged.** The rescue site left the
+  pair's orientation unset, and the one-pass filter accepts an unset format
+  unconditionally, so recovered wrong-strand pairs were counted compatible
+  under a stranded `-l`. The deterministic path always judged them. Mapped
+  counts drop for the affected fragments, which is the correct answer.
+- **`--meta`** promises a uniform optimizer start in its own log line; under
+  `--online -a` — the one path with a warm start — it never set it.
+
+### Flags that now say when they do nothing
+
+Roughly twenty accepted-but-inert flag×mode combinations now warn by name
+rather than being silently ignored: the selective-alignment scoring and seeding
+knobs under `--sketch`, `--sketchStrictOrphans` without `--sketch`,
+`-i`/`--index` alongside `-a` or `--rad`, `-t`/`--targets` in reads mode (the
+index carries the sequences), `--writeUnmappedNames` outside reads mode, and
+the RAD-shaping flags on the two paths that write no RAD. `--genome` and
+`--juncMissDiscount` without `--annotation` are now errors rather than dead
+flags, and `--online` under `--rad` says it has no effect instead of promising
+the one-pass path — it also no longer suppresses the inert-knob warnings it
+used to mask.
+
+Two flags were repaired rather than warned about: **`--dumpBiasModels`** works
+again on every path (it silently stopped writing `bias_models.txt` when
+deterministic became the default, because only the one-pass writer had a dump
+site), and **`--rad` now forwards `--numGCBins`, `--conditionalGCBins`,
+`--biasSpeedSamp` and `--noBiasLengthThreshold`**, which it accepted while
+`--gcBias` itself was wired.
+
+Gene-level output is also consistent now: under `--skipQuant`, `-g` no longer
+writes a `quant.genes.sf` full of zeros while announcing success, and in
+genome-projection mode a `--skipQuant` run keeps its projected RAD as the
+deliverable instead of deleting it and producing nothing at all.
+
+### Faster, same answer
+
+Deterministic phase 1 with `--seqBias`/`--gcBias`/`--posBias` was building the
+full observed-bias apparatus — including a rank bitvector over the entire
+reference concatenation — and per-fragment model updates on the mapping hot
+path, none of which any consumer could read: the requant re-derives observation
+from the RAD and the reference. Construction now matches its consumer's gate.
+Bias-corrected runs use less memory and less mapping-thread time; estimates are
+unchanged.
+
 ## Also
 
 - The divan-based alignment-kernel benchmark harness (#1128).
