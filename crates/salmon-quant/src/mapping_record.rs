@@ -183,7 +183,14 @@ pub fn complement(base: u8) -> u8 {
 /// #1141).
 pub fn mapping_quality(nh: usize) -> u8 {
     match nh {
-        0 | 1 => 255,
+        // No placements is not a case a mapped record can reach (the writer
+        // skips a fragment with none), so this arm exists for the record kinds
+        // that have no placement by construction: an unmapped read, once such
+        // records are written. 255 there would claim certainty about a
+        // placement that does not exist; 0 is what samtools convention expects
+        // on an unmapped record.
+        0 => 0,
+        1 => 255,
         2 => 3,
         3..=4 => 1,
         _ => 0,
@@ -438,6 +445,7 @@ mod tests {
         assert_eq!(mapping_quality(3), 1);
         assert_eq!(mapping_quality(4), 1);
         assert_eq!(mapping_quality(5), 0);
-        assert_eq!(mapping_quality(0), 255);
+        // An unmapped record has no placement to be confident about.
+        assert_eq!(mapping_quality(0), 0);
     }
 }

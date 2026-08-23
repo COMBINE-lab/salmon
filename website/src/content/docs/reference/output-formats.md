@@ -491,6 +491,7 @@ is what STAR reports, so `MAPQ` follows STAR's mapping:
 | 2 | 3 |
 | 3 or 4 | 1 |
 | 5 or more | 0 |
+| none (a record with no placement) | 0 |
 
 Matching STAR matters because the tools downstream of a salmon BAM are tuned to
 it: `samtools view -q 255` means "uniquely placed" to all of them. Before this,
