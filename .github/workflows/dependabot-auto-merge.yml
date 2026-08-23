@@ -1,0 +1,70 @@
+# Auto-merge the Dependabot updates that are not decisions.
+#
+# The grouping in .github/dependabot.yml exists so the routine movement arrives
+# as a few PRs a week rather than a dozen. This finishes that thought: a grouped
+# patch/minor bump with green CI does not need a human to press the button, and
+# a queue of them waiting for one is how a dependency policy quietly stops
+# working.
+#
+# What is deliberately NOT auto-merged, and why:
+#
+#   * majors, in any ecosystem. `update-type` on a grouped PR is the highest
+#     semver change in the group (dependabot/fetch-metadata resolves it against
+#     `['major', 'minor', 'patch']` in priority order), so one major anywhere in
+#     a group holds the whole group for review.
+#   * the `combine-lab-upstream` group. piscem-rs, paraseq-temp, libradicl and
+#     friends move with work happening in those repositories, and their bumps
+#     have carried deliberate floors. Those are decisions.
+#   * anything targeting a branch other than `develop`. Security updates land on
+#     the default branch (a `target-branch` in dependabot.yml excludes an entry
+#     from security updates), and a security fix going straight to the release
+#     branch unread is not something a workflow should decide.
+#   * the container base image, which is a toolchain choice.
+name: Dependabot auto-merge
+
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    # `pull_request_target` runs in the base repository's context with a
+    # writable token, which is what Dependabot's own documentation prescribes
+    # for this: a workflow triggered by Dependabot gets a read-only token
+    # otherwise. Nothing here checks out or executes the PR's code, which is the
+    # condition that makes `pull_request_target` safe.
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.base.ref == 'develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read what Dependabot is proposing
+        id: metadata
+        uses: dependabot/fetch-metadata@v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for routine updates
+        if: >-
+          steps.metadata.outputs.update-type != 'version-update:semver-major'
+          && steps.metadata.outputs.dependency-group != 'combine-lab-upstream'
+          && steps.metadata.outputs.package-ecosystem != 'docker'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Say why this one waits for a human
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-major'
+          || steps.metadata.outputs.dependency-group == 'combine-lab-upstream'
+          || steps.metadata.outputs.package-ecosystem == 'docker'
+        run: |
+          gh pr comment "$PR_URL" --body "Not auto-merged: ${REASON}. Merge it by hand once you have looked at it."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REASON: >-
+            ${{ steps.metadata.outputs.update-type == 'version-update:semver-major' && 'the group contains a major version change'
+            || steps.metadata.outputs.dependency-group == 'combine-lab-upstream' && 'these crates move with work upstream and their bumps have carried deliberate floors'
+            || 'the container base image is a toolchain choice' }}
