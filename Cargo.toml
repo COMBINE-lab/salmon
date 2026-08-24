@@ -50,7 +50,7 @@ dashmap = "6"
 ahash = "0.8"
 # raw hash table, for caches that must probe with a borrowed key (no key
 # allocation on a lookup that hits)
-hashbrown = "0.15"
+hashbrown = "0.17"
 # numerics
 statrs = "0.19"
 # rng (PCG, matching salmon's pcg usage)
@@ -89,7 +89,7 @@ thread-broker = "0.1.0"
 rapidgzip-core = "0.3"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
-libradicl = { version = "0.17", features = ["zstd"] }
+libradicl = { version = "0.18", features = ["zstd"] }
 
 # dev / test helpers
 tempfile = "3"
