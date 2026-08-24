@@ -181,6 +181,13 @@ Most of it is invisible from outside; these are the parts that are not.
   instead of a constant `1`, so `samtools view -q 255` means "uniquely placed"
   as downstream RNA-seq tooling expects. Previously that filter discarded the
   entire file.
+- **Right-orphan records carry their real alignment score.** In
+  `--writeMappings`/`--writeBam` output, every record for an orphan whose mapped
+  mate is read 2 reported `AS:i:0` for an alignment that actually scored ~180–300;
+  it now reports the true score, in both SAM and BAM. Left orphans and proper
+  pairs were already correct. This is output-only — `quant.sf` is unaffected.
+  (In sketch mode `AS` remains `0` for all records by design: pseudoalignment
+  computes no per-placement score, so every mapping is a co-equal best mapping.)
 
 ### Estimates that change
 
