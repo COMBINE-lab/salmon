@@ -10,13 +10,21 @@
 # size produces a dozen individual bumps a week otherwise, and a wall of PRs is
 # reviewed by nobody, which is worse than no updates at all.
 #
-# NONE OF THIS APPLIES TO SECURITY UPDATES. GitHub only uses a `dependabot.yml`
-# entry for security updates when it sets no `target-branch`, and every entry
-# here sets one. So a security bump keeps arriving the way it does today:
-# against the default branch (`master`), ungrouped, without these commit
-# prefixes. That is deliberate (a security fix belongs on the release branch
-# directly, not queued behind `develop`), but it is worth knowing before
-# wondering why one showed up looking nothing like the PRs described below.
+# Every entry targets `develop`. Nothing here should ever open a PR against
+# `master`, which carries releases.
+#
+# NONE OF THIS APPLIES TO SECURITY UPDATES, and that is a constraint rather
+# than a preference. GitHub only uses a `dependabot.yml` entry for security
+# updates when it sets no `target-branch`, and every entry here sets one. So a
+# security bump keeps arriving against the *default* branch (`master`),
+# ungrouped and without these commit prefixes. The two settings cannot both be
+# satisfied from this file: dropping `target-branch` would bring security
+# updates under this config but send every version update to `master` too,
+# which is worse.
+#
+# The only way to get security PRs onto `develop` is to make `develop` the
+# repository's default branch. That is a repository setting, not a config
+# change, and it is deliberately not assumed here.
 version: 2
 updates:
   # ---- Rust workspace ------------------------------------------------------
@@ -32,9 +40,23 @@ updates:
     commit-message:
       prefix: chore(deps)
     groups:
-      # One PR a week for the routine movement. Patch and minor bumps of
-      # well-behaved crates are reviewed as a batch or not at all.
-      cargo-minor:
+      # One PR a week for the routine movement: patch level only, which is the
+      # tier that is mergeable on a glance.
+      #
+      # Minor is deliberately NOT batched here, for the same reason it is not
+      # batched in `combine-lab-upstream` below: 34 of this workspace's 55
+      # direct dependencies are 0.x, and for a 0.x requirement Cargo's
+      # compatibility boundary is the MINOR component, so `noodles-*`,
+      # `rapidgzip-core`, `sux`, `hashbrown`, `jiff`, `rand*`, `crossbeam*` and
+      # friends all break at a bump Dependabot classifies as `minor`. Batching
+      # those would hide a breaking upgrade inside a routine PR.
+      #
+      # Unmatched updates are not suppressed — they simply arrive ungrouped,
+      # one PR each, with their own diff and their own CI run. That is the
+      # point: a minor is a change to explain, and a major is a decision to
+      # make, neither of which is served by a batch. `open-pull-requests-limit`
+      # above bounds how many can be open at once, so the queue cannot run away.
+      cargo-patch:
         patterns:
           - "*"
         exclude-patterns:
@@ -46,7 +68,6 @@ updates:
           - sshash-lib
           - ksw2rs
         update-types:
-          - minor
           - patch
       # The lab's own upstream crates move with work happening in those repos,
       # and their bumps have carried deliberate floors (see the piscem-rs 0.9.2
@@ -100,6 +121,10 @@ updates:
     commit-message:
       prefix: chore(deps)
     groups:
+      # Minor IS batched here, unlike the cargo groups, and that is a choice
+      # rather than an oversight: this is the documentation site, so nothing it
+      # depends on can affect quantification results. Tightening it to patch
+      # would buy noise instead of safety.
       website-minor:
         patterns:
           - "*"
@@ -109,9 +134,15 @@ updates:
 
   # ---- GitHub Actions ------------------------------------------------------
   #
-  # The reason this file exists. One weekly PR that keeps every workflow on the
-  # same action versions, including the majors: an action major is a workflow
-  # change, visible in the diff, and CI is its own test.
+  # The reason this file exists: the workflows had drifted to three different
+  # `actions/checkout` majors with nothing to surface it. One weekly PR keeps
+  # every workflow on the same minor/patch versions.
+  #
+  # Majors are excluded from the group on purpose. An action major is a
+  # breaking workflow change — v4 to v5 of `checkout` or `upload-artifact` has
+  # changed defaults and outputs before — and "the diff is visible and CI is
+  # green" is not the standard we want for adopting one. Each arrives as its
+  # own PR, to be taken deliberately or closed.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -125,6 +156,9 @@ updates:
       actions:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
 
   # ---- container base image ------------------------------------------------
   #
