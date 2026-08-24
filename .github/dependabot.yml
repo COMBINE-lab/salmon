@@ -1,0 +1,174 @@
+# Dependency updates.
+#
+# Security updates already run without this file; what it adds is *version*
+# updates, and the reason to want them here is that the repository has drifted
+# in the one place drift is invisible: the workflows pin `actions/checkout` at
+# v4 in three files and v6 in a fourth, and `actions/upload-artifact` at v4 and
+# v7. Nobody chose that.
+#
+# Everything below is grouped rather than per-dependency. A Rust workspace this
+# size produces a dozen individual bumps a week otherwise, and a wall of PRs is
+# reviewed by nobody, which is worse than no updates at all.
+#
+# Every entry targets `develop`. Nothing here should ever open a PR against
+# `master`, which carries releases.
+#
+# NONE OF THIS APPLIES TO SECURITY UPDATES, and that is a constraint rather
+# than a preference. GitHub only uses a `dependabot.yml` entry for security
+# updates when it sets no `target-branch`, and every entry here sets one. So a
+# security bump keeps arriving against the *default* branch (`master`),
+# ungrouped and without these commit prefixes. The two settings cannot both be
+# satisfied from this file: dropping `target-branch` would bring security
+# updates under this config but send every version update to `master` too,
+# which is worse.
+#
+# The only way to get security PRs onto `develop` is to make `develop` the
+# repository's default branch. That is a repository setting, not a config
+# change, and it is deliberately not assumed here.
+version: 2
+updates:
+  # ---- Rust workspace ------------------------------------------------------
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Against `develop`, not the default branch: `master` carries releases and
+    # every change lands through `develop` first.
+    target-branch: develop
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      # One PR a week for the routine movement: patch level only, which is the
+      # tier that is mergeable on a glance.
+      #
+      # Minor is deliberately NOT batched here, for the same reason it is not
+      # batched in `combine-lab-upstream` below: 34 of this workspace's 55
+      # direct dependencies are 0.x, and for a 0.x requirement Cargo's
+      # compatibility boundary is the MINOR component, so `noodles-*`,
+      # `rapidgzip-core`, `sux`, `hashbrown`, `jiff`, `rand*`, `crossbeam*` and
+      # friends all break at a bump Dependabot classifies as `minor`. Batching
+      # those would hide a breaking upgrade inside a routine PR.
+      #
+      # Unmatched updates are not suppressed — they simply arrive ungrouped,
+      # one PR each, with their own diff and their own CI run. That is the
+      # point: a minor is a change to explain, and a major is a decision to
+      # make, neither of which is served by a batch. `open-pull-requests-limit`
+      # above bounds how many can be open at once, so the queue cannot run away.
+      cargo-patch:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - piscem-rs
+          - paraseq
+          - paraseq-temp
+          - libradicl
+          - cf1-rs
+          - sshash-lib
+          - ksw2rs
+        update-types:
+          - patch
+      # The lab's own upstream crates move with work happening in those repos,
+      # and their bumps have carried deliberate floors (see the piscem-rs 0.9.2
+      # and paraseq-temp 0.5.0-pre.2 commits). Kept in their own PR so such a
+      # bump is never buried in a batch of unrelated ones.
+      combine-lab-upstream:
+        # Patch only, because all six are 0.x and Cargo's compatibility
+        # boundary there is the MINOR component: ^0.9.2 is >=0.9.2 <0.10.0, so
+        # 0.9.2 -> 0.9.3 is compatible and 0.9.2 -> 0.10.0 is breaking.
+        # Dependabot classifies by moved field, not by that boundary, which
+        # makes the breaking one `minor` to the grouping logic. Verified against
+        # dependabot-core rather than inferred: for a dependency at 0.9.2, the
+        # patch level covers `> 0.9.3, < 0.10` and the minor level starts at
+        # `>= 0.10.a`, with no 0.x special case anywhere. Allowing `minor` here
+        # would therefore batch a breaking upgrade of our own upstream crates
+        # into a routine PR, which is the case this group exists to isolate.
+        update-types:
+          - patch
+        patterns:
+          - piscem-rs
+          # `paraseq-temp` is what the manifest declares today, and it has to
+          # stay declared under its real name: dependabot-core's cargo parser
+          # skips a renamed entry outright (`next unless name ==
+          # name_from_declaration(...)` in
+          # cargo/lib/dependabot/cargo/file_parser.rb), which is what once left
+          # this crate visible only through Cargo.lock, as an indirect
+          # dependency no update would be raised for. Do not reintroduce the
+          # rename.
+          #
+          # `paraseq` is listed alongside it for the day the resizable pool
+          # lands in noamteyssier/paraseq and the manifest moves back to the
+          # official crate. The group keeps matching then without anyone having
+          # to remember this file.
+          - paraseq
+          - paraseq-temp
+          - libradicl
+          - cf1-rs
+          - sshash-lib
+          - ksw2rs
+    # Majors stay ungrouped: each one is a decision, and each one deserves its
+    # own diff and its own CI run.
+
+  # ---- documentation site --------------------------------------------------
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+      day: monday
+    target-branch: develop
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      # Minor IS batched here, unlike the cargo groups, and that is a choice
+      # rather than an oversight: this is the documentation site, so nothing it
+      # depends on can affect quantification results. Tightening it to patch
+      # would buy noise instead of safety.
+      website-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # ---- GitHub Actions ------------------------------------------------------
+  #
+  # The reason this file exists: the workflows had drifted to three different
+  # `actions/checkout` majors with nothing to surface it. One weekly PR keeps
+  # every workflow on the same minor/patch versions.
+  #
+  # Majors are excluded from the group on purpose. An action major is a
+  # breaking workflow change — v4 to v5 of `checkout` or `upload-artifact` has
+  # changed defaults and outputs before — and "the diff is visible and CI is
+  # green" is not the standard we want for adopting one. Each arrives as its
+  # own PR, to be taken deliberately or closed.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    target-branch: develop
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # ---- container base image ------------------------------------------------
+  #
+  # Monthly, because the Dockerfile pins a Rust toolchain image (`rust:1.91-*`)
+  # and moving it is a toolchain decision rather than a dependency refresh.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    target-branch: develop
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: build(deps)
