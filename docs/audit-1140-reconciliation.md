@@ -123,11 +123,34 @@ resolution merged in a reviewed PR and not independently re-run here.
 
 ## Unresolved
 
-All three are open and none blocks the determinism flip. They are collected in
-the tracking issue filed alongside this document.
+All three are tracked in #1179, and **all three are officially deferred to
+post-2.6.0** (decided 2026-08-24). None blocks the determinism flip. One slice of
+U2 was carved out and taken *into* 2.6.0 as its own fix — see the note below.
 
-| # | Item | State | Why it is still open |
+| # | Item | State | Disposition |
 |---|---|---|---|
-| U1 | **EM parallel scaling ceiling.** #1172 removed the large per-iteration constant and the anti-scaling regression (EM was slower at `-p 64` than `-p 16`), but the phase still does not scale meaningfully past ~16 threads — it is memory-bandwidth-bound on the per-shard accumulators. | Open, post-tag | Never a correctness bug. Triaged post-tag from the moment it was found ("Post-tag, in my view" — slow-disk validation comment). #1172 was the optimization pass and closed the regression; the residual ceiling is genuinely harder and was scoped as follow-up. Independently confirmed in the #1172 review: bit-identical across `-p`, ~4% slower than online at `-p 16`, ~2× faster at `-p 64`. |
-| U2 | **#1141 — mapping-record self-consistency.** `--writeMappings`/`--writeBam` records where the CIGAR is synthesized from the read length and the `AS` describes a different alignment than the CIGAR beside it (2.4% of records self-contradict on an `AS`-vs-`NM` audit). | Open PR #1141 | Only the MAPQ slice of #1141 landed (#1151 derives MAPQ from the placement count; #1171 sets MAPQ 0 not 255 for unplaced records). The rest was split out before the audit on a "demonstrated need" question, re-raised for 2.6.0 inclusion in the thread, and left as an open scoping decision ("2.7.0 or #1141 only") that was never made. Opt-in output only — does not touch the default `quant.sf` contract. |
-| U3 | **#1142 — mapping-output completeness.** `QUAL`, `M5`/`UR`, `MC`/`MQ`, `ZW`, `@RG`, unaligned records — fields SAM permits to be absent. Their value is checkability: with qualities and `M5` the file round-trips through `samtools fastq` and names its reference. | Open PR #1142 | Explicitly optional per the thread ("optional and I am not claiming otherwise"). Stacked behind #1141's decision. |
+| U1 | **EM parallel scaling ceiling.** #1172 removed the large per-iteration constant and the anti-scaling regression (EM was slower at `-p 64` than `-p 16`), but the phase still does not scale meaningfully past ~16 threads — it is memory-bandwidth-bound on the per-shard accumulators. | Deferred, post-2.6.0 | Never a correctness bug. Triaged post-tag from the moment it was found ("Post-tag, in my view" — slow-disk validation comment). #1172 closed the regression; the residual ceiling is genuinely harder and was scoped as follow-up. Independently confirmed in the #1172 review: bit-identical across `-p`, ~4% slower than online at `-p 16`, ~2× faster at `-p 64`. |
+| U2 | **#1141 — mapping-record self-consistency.** `--writeMappings`/`--writeBam` records where the CIGAR is synthesized from the read length and the `AS` describes a different alignment than the CIGAR beside it (2.4% of records self-contradict on an `AS`-vs-`NM` audit). | Deferred, post-2.6.0 (one slice taken into 2.6.0 — see below) | The CIGAR-synthesis and `AS`-vs-`NM` self-consistency work needs design and is deferred. The MAPQ slice already landed (#1151, #1171). The right-orphan `AS:i:0` slice — surgical, provably `quant.sf`-neutral — was carved out to **#1180** and taken into 2.6.0. Opt-in output only; does not touch the default `quant.sf` contract. |
+| U3 | **#1142 — mapping-output completeness.** `QUAL`, `M5`/`UR`, `MC`/`MQ`, `ZW`, `@RG`, unaligned records — fields SAM permits to be absent. Their value is checkability: with qualities and `M5` the file round-trips through `samtools fastq` and names its reference. | Deferred, post-2.6.0 | Explicitly optional per the thread ("optional and I am not claiming otherwise"). Stacked behind #1141's remaining work. |
+
+### Carved out of U2 and taken into 2.6.0
+
+**#1180 — right-orphan records reported `AS:i:0`.** Every right-orphan
+`--writeMappings`/`--writeBam` record reported `AS:i:0` for an alignment that
+really scored ~180–300, because both orphan constructors set `r1_score` to the
+anchor score unconditionally and the writer emits read2 as `score - r1_score`
+(→ 0). Confirmed on 2M real fragments: 717,526 right-orphan records, 100% at
+`AS:i:0` before, 100% at their real score after, in **both** SAM and BAM. Fix is
+SAM/BAM-output-only (`r1_score` never reaches the RAD or inference; `quant.sf`
+byte-identical before/after). Taken into 2.6.0 because it is the same class as
+the merged output-contract fixes and the release newly emphasizes output
+correctness. The rest of U2 stays deferred.
+
+### Also noted, separate from U2/U3
+
+**Sketch-mode `AS` is degenerate.** Under `--sketch`, right orphans *and* every
+proper-pair mate report `AS:i:0` (46.5M records on the 2M-fragment set), because
+pseudoalignment computes no per-base alignment score. Whether sketch should emit
+a meaningful `AS` or omit it is a separate semantic question, not part of U2/U3;
+worth its own issue if `--writeMappings` output under `--sketch` needs a defined
+`AS`.
