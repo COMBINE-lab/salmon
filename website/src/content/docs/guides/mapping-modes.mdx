@@ -34,6 +34,11 @@ k-mer/equivalence-class hits without computing per-placement alignment scores.
 This is **faster** and is a good fit when you want throughput and your reference
 is high-quality.
 
+Because no per-placement score is computed, sketch mode reports every mapping
+for a read as a co-equal best mapping. In `--writeMappings`/`--writeBam` output
+the `AS` tag is therefore `0` for all records; a meaningful `AS` requires
+selective alignment (see [the pseudoalignment output contract](../../reference/output-formats/#the-pseudoalignment-output-contract)).
+
 ```sh
 salmon quant -i salmon_index -l A --sketch \
   -1 r1.fq.gz -2 r2.fq.gz -p 16 -o out
