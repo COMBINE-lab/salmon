@@ -8,7 +8,7 @@ not against the PR descriptions that claimed to fix it.
 
 **The union of the two tables below is exactly every item the thread raised.**
 Resolved: 44. Unresolved: 3, plus 2 closed by decision. The unresolved three are
-collected in the tracking issue filed for them; none blocks the determinism flip.
+collected in tracking issue #1179; none blocks the determinism flip.
 
 Legend for "verified": **code** = confirmed by reading the code path on
 `develop`; **behaviour** = confirmed by running the 2.6.0 binary; **PR** =
