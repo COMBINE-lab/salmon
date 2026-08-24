@@ -497,3 +497,60 @@ fn requests_that_cannot_be_honoured_say_so() {
         "--thinningFactor must not warn when Gibbs sampling runs"
     );
 }
+
+/// `--rad` with an unwritable `-o` must fail at invocation, naming the path.
+///
+/// It used to read the whole RAD and run the entire EM first, then fail with a
+/// message carrying no path at all: on the 26M-fragment benchmark the failure
+/// arrived at 12.74 s against a 12.81 s successful run. The reads, alignment and
+/// genome-projection drivers all checked up front; only the RAD driver did not
+/// (#1162).
+///
+/// The RAD here is deliberately not a real one. The check must precede reading
+/// it, so an invalid RAD proves the ordering: if the directory check ever moved
+/// after the read, this would fail with a RAD parse error instead.
+#[test]
+fn rad_input_refuses_an_unwritable_output_directory_before_reading_the_rad() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rad = tmp.path().join("not-really.rad");
+    std::fs::write(&rad, b"this is not a RAD").unwrap();
+
+    let readonly = tmp.path().join("readonly");
+    std::fs::create_dir(&readonly).unwrap();
+    let mut perms = std::fs::metadata(&readonly).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&readonly, perms).unwrap();
+
+    let out = readonly.join("out");
+    let o = run(&[
+        os("quant"),
+        os("--rad"),
+        rad.as_os_str(),
+        os("-l"),
+        os("A"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(!o.status.success(), "an unwritable -o must fail");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("creating output directory") && err.contains(&*out.to_string_lossy()),
+        "the failure must name the directory it could not create: {err}"
+    );
+    assert!(
+        !err.contains("RAD-input quantification failed"),
+        "the check must run before the RAD is read, not after: {err}"
+    );
+
+    // Leave the directory removable by the tempdir guard.
+    let mut perms = std::fs::metadata(&readonly).unwrap().permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+    }
+    #[cfg(not(unix))]
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&readonly, perms).unwrap();
+}

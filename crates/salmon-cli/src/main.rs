@@ -1939,25 +1939,76 @@ fn bytecount_newlines(b: &[u8]) -> u64 {
 /// the readiness sweep found it had never been written for reads-vs-`-a`/`--rad`,
 /// where ~30 mapping flags were accepted in total silence (#1140).
 ///
-/// `mode` names the selected mode as the user would recognise it, and `why`
-/// explains in one clause why the flags cannot apply — a warning that only says
-/// "ignored" leaves the user unsure whether they typed the wrong flag or chose
-/// the wrong mode. Singular and plural are handled so a single flag does not
-/// read as "`--writeRad` shape an intermediate RAD".
-fn warn_inert_in_mode(mode: &str, why: &str, flags: &[(&str, bool)]) {
+/// `mode` names the selected mode as the user would recognise it, and the `why_*`
+/// pair explains in one clause why the flags cannot apply — a warning that only
+/// says "ignored" leaves the user unsure whether they typed the wrong flag or
+/// chose the wrong mode.
+///
+/// Agreement is this function's job, not the callers'. It owns *both* halves:
+/// the subject verb ("`--writeRad` has" / "`--x`, `--y` have") and the pronoun
+/// and verb opening the reason ("it shapes" / "they shape"). Callers used to
+/// pass the reason with a hard-coded "they …", so a lone flag read as
+/// "`--decoyThreshold` has no effect …: they configure salmon's read mapper" —
+/// the exact defect the doc above this function already claimed was handled,
+/// because only the subject half had been (#1162).
+///
+/// `why_verb` is `Some((third-person singular, plural))` when the reason's
+/// subject is the flags themselves, so its pronoun and verb have to agree with
+/// how many were passed; the pair is given explicitly rather than by appending
+/// an "s" to a stem, so an irregular verb cannot be silently mangled later.
+/// It is `None` when the reason supplies its own subject — the mode ("it writes
+/// no intermediate RAD") or a noun phrase ("posterior sampling happens …") — in
+/// which case `why_rest` is used verbatim and no agreement applies.
+fn warn_inert_in_mode(
+    mode: &str,
+    why_verb: Option<(&str, &str)>,
+    why_rest: &str,
+    flags: &[(&str, bool)],
+) {
+    if let Some(msg) = inert_in_mode_message(mode, why_verb, why_rest, flags) {
+        tracing::warn!("{msg}");
+    }
+}
+
+/// The message [`warn_inert_in_mode`] logs, split out so the agreement rules can
+/// be asserted directly. Returns `None` when no listed flag was passed.
+///
+/// Kept separate because the defect this guards was invisible at the call sites:
+/// the warning read correctly in every test that passed two flags and wrongly in
+/// every case that passed one, and nothing asserted the singular form (#1162).
+fn inert_in_mode_message(
+    mode: &str,
+    why_verb: Option<(&str, &str)>,
+    why_rest: &str,
+    flags: &[(&str, bool)],
+) -> Option<String> {
     let named: Vec<&str> = flags
         .iter()
         .filter_map(|&(name, passed)| passed.then_some(name))
         .collect();
     if named.is_empty() {
-        return;
+        return None;
     }
-    let (subject, verb) = if named.len() == 1 {
+    let single = named.len() == 1;
+    let (subject, verb) = if single {
         (named[0].to_string(), "has")
     } else {
         (named.join(", "), "have")
     };
-    tracing::warn!("{subject} {verb} no effect in {mode}: {why}. Ignored.");
+    let why = match why_verb {
+        Some((singular_verb, plural_verb)) => {
+            let (pronoun, agreed) = if single {
+                ("it", singular_verb)
+            } else {
+                ("they", plural_verb)
+            };
+            format!("{pronoun} {agreed} {why_rest}")
+        }
+        None => why_rest.to_string(),
+    };
+    Some(format!(
+        "{subject} {verb} no effect in {mode}: {why}. Ignored."
+    ))
 }
 
 /// The reads-mode mapping/scoring/seeding knobs, paired with whether the user
@@ -2234,8 +2285,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if let Some(bam) = args.alignments {
         warn_inert_in_mode(
             "alignment mode (-a)",
-            "they configure salmon's read mapper, and these alignments were produced by \
-             another aligner",
+            Some(("configures", "configure")),
+            "salmon's read mapper, and these alignments were produced by another aligner",
             &reads_only_flags,
         );
         if args.index.is_some() {
@@ -2399,8 +2450,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // (#1140: a flag that does nothing must say so).
         warn_inert_in_mode(
             "the deprecated online alignment path (--online -a)",
-            "they shape the intermediate RAD, which that path never writes (the default \
-             deterministic mode honours them)",
+            Some(("shapes", "shape")),
+            "the intermediate RAD, which that path never writes (the default deterministic \
+             mode honours them)",
             &[
                 ("--writeRad", args.write_rad.is_some()),
                 ("--keepRad", args.keep_rad),
@@ -2475,7 +2527,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if let Some(rad_path) = args.rad {
         warn_inert_in_mode(
             "RAD-input mode (--rad)",
-            "they configure salmon's read mapper, and a RAD already holds the mappings",
+            Some(("configures", "configure")),
+            "salmon's read mapper, and a RAD already holds the mappings",
             &reads_only_flags,
         );
         if args.index.is_some() {
@@ -2495,7 +2548,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // one have nothing to act on (#1140).
         warn_inert_in_mode(
             "RAD-input mode (--rad)",
-            "they shape an intermediate RAD, and the --rad file is the input",
+            Some(("shapes", "shape")),
+            "an intermediate RAD, and the --rad file is the input",
             &[
                 ("--writeRad", args.write_rad.is_some()),
                 ("--keepRad", args.keep_rad),
@@ -2510,6 +2564,25 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             "RAD-input mode (--rad)",
             "a RAD carries no read names or sequences, so SAM/BAM records cannot be reconstructed",
         );
+        // Fail on an unwritable output directory *before* reading the RAD and
+        // running the EM, as the reads, alignment and genome-projection drivers
+        // already do. Without this the run did the whole job and then discarded
+        // it: on the 26M-fragment benchmark the failure arrived at 12.74 s
+        // against a 12.81 s successful run, i.e. after the entire inference,
+        // and the message named no path (#1162).
+        //
+        // `aux_info` rather than the output directory alone, because that is the
+        // one the write actually failed on. Creating only the parent would still
+        // succeed for an existing-but-read-only `-o`, which is the more likely
+        // way to hit this than a missing parent.
+        let aux_dir = args.output.join("aux_info");
+        std::fs::create_dir_all(&aux_dir).with_context(|| {
+            format!(
+                "creating output directory {} (needed before quantification; \
+                 check that it is writable)",
+                args.output.display()
+            )
+        })?;
         // The RAD reuses alignment mode's inference/output; AlignQuantOptions
         // carries the relevant knobs (lib type, EM/VBEM, score-exp, FLD prior,
         // bootstrap/Gibbs). `bam` is unused by the RAD path.
@@ -2618,7 +2691,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // help means a user who passes one here learns nothing.
     warn_inert_in_mode(
         "reads mode",
-        "they configure how salmon reads *existing* alignments, and reads mode produces its \
+        Some(("configures", "configure")),
+        "how salmon reads *existing* alignments, and reads mode produces its \
          own (reads mode uses --discardOrphansQuasi for the orphan policy)",
         &[
             ("--errorModel", args.error_model),
@@ -2633,7 +2707,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if !args.unmated.is_empty() {
         warn_inert_in_mode(
             "single-end mode (-r)",
-            "they describe how two mates relate, and single-end reads have no mate",
+            Some(("describes", "describe")),
+            "how two mates relate, and single-end reads have no mate",
             &[
                 ("--recoverOrphans", args.recover_orphans),
                 ("--allowDovetail", args.allow_dovetail),
@@ -2670,6 +2745,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.online {
         warn_inert_in_mode(
             "the deprecated one-pass reads path (--online)",
+            None,
             "it writes no intermediate RAD",
             &[
                 ("--writeRad", args.write_rad.is_some()),
@@ -2687,6 +2763,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.skip_quant {
         warn_inert_in_mode(
             "a --skipQuant run",
+            None,
             "posterior sampling happens inside the quantification pass that --skipQuant \
              skips (quantify the kept RAD with --rad to draw samples from it)",
             &[
@@ -2701,7 +2778,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if args.thinning_factor.is_some() && args.num_gibbs_samples == 0 {
         warn_inert_in_mode(
             "a run without Gibbs sampling",
-            "it thins a Gibbs chain, which needs --numGibbsSamples",
+            Some(("thins", "thin")),
+            "a Gibbs chain, which needs --numGibbsSamples",
             &[("--thinningFactor", true)],
         );
     }
@@ -2709,7 +2787,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     if !(args.seq_bias || args.gc_bias || args.pos_bias) {
         warn_inert_in_mode(
             "a run without bias correction",
-            "they tune the bias model, which needs --seqBias, --gcBias or --posBias",
+            Some(("tunes", "tune")),
+            "the bias model, which needs --seqBias, --gcBias or --posBias",
             &[
                 ("--numGCBins", args.num_gc_bins.is_some()),
                 ("--conditionalGCBins", args.conditional_gc_bins.is_some()),
@@ -3233,6 +3312,81 @@ mod tests {
     /// Parse a `quant` command line and return just the two mapping-output paths.
     fn write_flags(extra: &[&str]) -> Result<(Option<PathBuf>, Option<PathBuf>), clap::Error> {
         quant_args(extra).map(|args| (args.write_mappings, args.write_bam))
+    }
+
+    /// One inert flag must not be described in the plural.
+    ///
+    /// The warning read "`--decoyThreshold` has no effect in RAD-input mode
+    /// (--rad): **they configure** salmon's read mapper" — the subject agreed
+    /// while the reason did not. It survived because the helper's own doc
+    /// comment claimed singular and plural were handled, and every test that
+    /// exercised it happened to pass more than one flag (#1162).
+    #[test]
+    fn inert_flag_reason_agrees_with_how_many_were_passed() {
+        let verb = Some(("configures", "configure"));
+        let rest = "salmon's read mapper, and a RAD already holds the mappings";
+
+        let one = inert_in_mode_message(
+            "RAD-input mode (--rad)",
+            verb,
+            rest,
+            &[("--decoyThreshold", true), ("--sketch", false)],
+        )
+        .expect("one flag was passed");
+        assert!(
+            one.starts_with("--decoyThreshold has no effect"),
+            "subject should be singular: {one}"
+        );
+        assert!(
+            one.contains("it configures salmon's read mapper"),
+            "reason should be singular too: {one}"
+        );
+        assert!(!one.contains("they"), "no plural anywhere: {one}");
+
+        let many = inert_in_mode_message(
+            "RAD-input mode (--rad)",
+            verb,
+            rest,
+            &[("--sketch", true), ("--decoyThreshold", true)],
+        )
+        .expect("two flags were passed");
+        assert!(
+            many.starts_with("--sketch, --decoyThreshold have no effect"),
+            "subject should be plural: {many}"
+        );
+        assert!(
+            many.contains("they configure salmon's read mapper"),
+            "reason should be plural: {many}"
+        );
+    }
+
+    /// A reason that supplies its own subject is used verbatim: forcing a
+    /// pronoun onto it would produce "it it writes no intermediate RAD".
+    #[test]
+    fn inert_reason_with_its_own_subject_is_left_alone() {
+        let msg = inert_in_mode_message(
+            "the deprecated one-pass reads path (--online)",
+            None,
+            "it writes no intermediate RAD",
+            &[("--keepRad", true)],
+        )
+        .expect("one flag was passed");
+        assert!(
+            msg.ends_with("(--online): it writes no intermediate RAD. Ignored."),
+            "reason should be verbatim: {msg}"
+        );
+    }
+
+    /// Nothing passed, nothing said.
+    #[test]
+    fn inert_message_is_silent_when_no_flag_was_passed() {
+        assert!(inert_in_mode_message(
+            "RAD-input mode (--rad)",
+            Some(("configures", "configure")),
+            "salmon's read mapper",
+            &[("--sketch", false)],
+        )
+        .is_none());
     }
 
     /// `-a` with read inputs must be a parse error, not a silent choice of the
