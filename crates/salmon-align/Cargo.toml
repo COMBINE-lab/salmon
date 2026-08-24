@@ -17,7 +17,7 @@ salmon-rad = { workspace = true }
 libradicl = { workspace = true }
 crossbeam-queue = "0.3"
 noodles-bam = "0.94"
-noodles-sam = "0.89"
+noodles-sam = "0.90"
 noodles-bgzf = "0.51"
 # Genome-alignment projection (spliced genome BAM -> transcriptome coords). Its
 # public API is plain structs, so it composes with salmon's own noodles for BAM
