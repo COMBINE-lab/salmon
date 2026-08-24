@@ -334,6 +334,7 @@ non-positive `min_alpha` makes it a no-op (used by the bias warm-up).
 | **Fixed-chunk convergence maximum** (`61d8ff05`) | removes a per-iteration serial vector pass | `lib.rs`, `daarem.rs` |
 | **Parallel point-estimate VBEM map / sequential replicate mode** (`61d8ff05`) | speeds production VBEM without nested Rayon | `packed.rs` |
 | **Complete range-factorized class ordering** (`2477cd28`) | removes `DashMap` tie-order nondeterminism | `salmon-eqclass` |
+| **Persistent completion-counted phase queue** (`2be15176`) | removes repeated high-thread fork-join scheduling | `packed.rs` |
 
 EM phase time, newton, same binary pair, back to back, sketch, 26.1M fragments:
 
@@ -415,6 +416,99 @@ more total cycles while completing sooner by keeping more cores useful.
 | newton | 64 | -24.5% | 1698.5 / 1915.2 | 1295.4 / 1291.0 | 4.291 / 4.607 |
 
 ![EM speedup curves for the local and newton hosts](benchmarks/em-thread-scaling/scaling.svg)
+
+### Follow-up: persistent scheduling at 32+ workers
+
+The fixed-point loop repeats the same logical work graph 2811 times on this
+workload. Commit `2be15176` keeps one `rayon::broadcast` closure resident on
+each worker and dispatches jobs from a reusable phase queue instead of creating
+fresh Rayon task graphs in every iteration. Production VBEM has five phases:
+
+1. the historical left-to-right normalization sum (one job),
+2. the fixed 2,048-transcript expectation-map chunks,
+3. the fixed 128 complete shards,
+4. the fixed 2,048-transcript sparse-reduction/convergence chunks, and
+5. the fixed-order convergence/control decision (one job).
+
+Plain EM skips the first two. The low 32 bits of one atomic word are the next
+job and the high 32 bits are a monotonically increasing phase generation. A
+worker claims a job with one CAS; the last completed job publishes the next
+generation through a release/acquire edge. Consequently, an idle or preempted
+worker that owns no job cannot delay the phase transition, unlike an all-worker
+barrier. Shared floating-point arrays use atomic bit cells for race-free phase
+visibility, but there is no atomic floating-point addition: every cell has one
+writer per phase and all arithmetic inside every shard/chunk is unchanged.
+
+The queue is selected only for parallel, unaccelerated EM/VBEM with at least 32
+iterations and at least 32 Rayon workers. Smaller pools, short seed loops,
+bootstrap replicates, SQUAREM, and DAAREM retain the existing kernels. The
+32-worker cutoff is a scheduling choice only: `ShardPlan`, its 128-shard cap,
+and all reduction groupings remain data-derived and independent of `-p`.
+
+The measured baseline is `04c0a93b` (production-equivalent `27c19a71`), and
+the candidate is `2be15176`. The exact candidate binary copied to both hosts
+has SHA-256 `3e8f8e9760874578f45da6bab6a9a10c2bd6b7f174b2ac623a778df18413681c`.
+Values below are median ± MAD over five alternating repetitions; RSS is MiB.
+
+| host | `-p` | EM baseline (s) | EM persistent (s) | change | wall B / P (s) | user CPU B / P (s) | RSS B / P |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| local EPYC | 16 | 5.504±0.236 | 5.613±0.088 | +2.0% | 7.28 / 7.33 | 82.55 / 81.43 | 1074.1 / 1053.5 |
+| local EPYC | 32 | 5.127±0.184 | 3.903±0.286 | **-23.9%** | 6.61 / 5.26 | 131.87 / 99.27 | 1110.1 / 1090.0 |
+| local EPYC | 64 | 6.298±0.082 | 2.836±0.213 | **-55.0%** | 7.69 / 4.40 | 337.39 / 119.33 | 1400.4 / 1396.3 |
+| newton | 16 | 12.362±0.036 | 12.395±0.049 | +0.3% | 16.66 / 16.63 | 195.79 / 196.30 | 922.9 / 912.4 |
+| newton | 32 | 9.976±0.033 | 8.151±0.206 | **-18.3%** | 14.20 / 12.36 | 291.18 / 253.05 | 1025.0 / 1011.1 |
+| newton | 64 | 11.362±0.011 | 8.043±0.182 | **-29.2%** | 15.84 / 12.49 | 652.88 / 480.84 | 1348.5 / 1367.8 |
+
+The 16/32/64 geometric mean falls from 5.622 to 3.961 s locally (**29.6%**)
+and from 11.190 to 9.332 s on newton (**16.6%**). More importantly, local
+16→32 and 16→64 speedups change from 1.074×/0.874× to 1.438×/1.980×; newton
+changes from 1.239×/1.088× to 1.521×/1.541×. This demonstrates useful scaling
+past 16 threads, but not unlimited scaling: newton improves only 1.013× from
+32→64 because its 64-thread affinity exhausts all 44 physical cores and then
+adds 20 SMT siblings. The 128-physical-core EPYC still improves 1.377× from
+32→64. Release notes should make that distinction rather than claim linear
+high-thread scaling.
+
+![High-thread EM speedup with the persistent phase queue](benchmarks/em-thread-scaling/persistent-scaling.svg)
+
+Every baseline and candidate run on a host produced the same `quant.sf` hash
+(`2a86764f...f6860a3` local, `6cc0241a...7a8710` newton), converged in 2811
+iterations, and therefore inherits the already-verified finite/nonnegative and
+mass-conservation checks above. The stable one-thread local control improved
+1.3%. The first four-thread sweep was noisy (the same fallback code measured
+4.5% slower), so it was repeated alone; the confirmation measured 17.298 vs
+16.541 s, 4.4% faster. Both raw samples are retained.
+
+One full-process generic-counter run per point gives the following values in
+billions (baseline / persistent):
+
+| host | `-p` | EM change | cycles (G) | instructions (G) | cache misses (G) |
+|---|---:|---:|---:|---:|---:|
+| local | 16 | +15.4% | 418.5 / 412.2 | 1131.3 / 1121.4 | 0.892 / 0.923 |
+| local | 32 | -7.3% | 657.5 / 453.4 | 1157.9 / 1316.9 | 1.869 / 0.850 |
+| local | 64 | -47.7% | 1626.1 / 554.4 | 1282.8 / 1322.6 | 5.943 / 0.960 |
+| newton | 16 | +1.3% | 540.7 / 549.2 | 1041.1 / 1041.0 | 4.898 / 4.899 |
+| newton | 32 | -23.4% | 775.8 / 667.0 | 1090.8 / 1278.5 | 4.946 / 4.893 |
+| newton | 64 | -30.9% | 1784.4 / 1247.5 | 1241.7 / 1344.7 | 4.592 / 4.204 |
+
+The persistent queue retires more instructions at 32/64 because workers poll
+and claim jobs, but aggregate cycles fall substantially. On EPYC the old
+high-thread task graph also caused much more cache traffic; at 64 threads the
+queue removes 65.9% of cycles and 83.8% of cache misses.
+
+Three intermediate designs were rejected and are not present in the commit:
+
+- fixed worker-to-shard ownership plus a blocking barrier gained about 25% at
+  64 threads but regressed 16 threads by roughly 40% from tail imbalance;
+- dynamic shard pickup plus a blocking barrier gained 37% at 64 but still
+  regressed 16 by about 14% from repeated park/wake latency; and
+- spin/hybrid barriers were unstable under worker preemption (one 16-thread
+  variant ranged from 4.68 to 11.61 s) and made 64 workers compete with the
+  memory-bound shard phase.
+
+The completion-counted queue preserves dynamic pickup without requiring every
+worker to rendezvous, which is the material difference from those rejected
+fork-join replacements.
 
 ---
 
@@ -519,6 +613,22 @@ scripts/bench_em_rad.sh \
   --out target/em-scaling/local-ab-04c0a93b \
   --cpu-order 0,64,1,65,2,66,3,67,4,68,5,69,6,70,7,71,8,72,9,73,10,74,11,75,12,76,13,77,14,78,15,79,16,80,17,81,18,82,19,83,20,84,21,85,22,86,23,87,24,88,25,89,26,90,27,91,28,92,29,93,30,94,31,95
 ```
+
+The persistent follow-up used the same command and affinity with:
+
+```bash
+scripts/bench_em_rad.sh \
+  --baseline target/em-scaling/bin/salmon-04c0a93b \
+  --candidate target/release/salmon \
+  --rad target/em-scaling/local-workload.rad \
+  --out target/em-scaling/local-persistent-high \
+  --threads 16,32,64 --repeats 5 \
+  --cpu-order 0,64,1,65,2,66,3,67,4,68,5,69,6,70,7,71,8,72,9,73,10,74,11,75,12,76,13,77,14,78,15,79,16,80,17,81,18,82,19,83,20,84,21,85,22,86,23,87,24,88,25,89,26,90,27,91,28,92,29,93,30,94,31,95
+```
+
+The 1/2/4/8 controls were run separately only to avoid making the already long
+serial sweep block the high-thread experiment; the raw files record the same
+binaries and five-repetition alternating protocol.
 
 Newton uses physical cores from both sockets first
 (`0,22,1,23,...,21,43`), followed by SMT siblings for 64-thread runs

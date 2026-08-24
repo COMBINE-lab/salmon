@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="430" viewBox="0 0 1040 430" role="img" aria-labelledby="title desc">
+<title id="title">High-thread EM speedup with persistent scheduling</title>
+<desc id="desc">Two line charts compare 16-thread-normalized speedup for the existing fork-join loop, the persistent phase queue, and ideal scaling on local EPYC and newton Xeon hosts. The persistent queue reaches 1.98 times at 64 threads locally and 1.54 times on newton; newton is nearly flat from 32 to 64 because the latter includes SMT siblings.</desc>
+<rect width="1040" height="430" fill="#ffffff"/>
+<style>text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#24292f}.grid{stroke:#d8dee4;stroke-width:1}.frame{stroke:#57606a;stroke-width:1;fill:none}.base{stroke:#57606a;fill:none;stroke-width:2.5}.queue{stroke:#cf4f00;fill:none;stroke-width:3}.ideal{stroke:#0969da;fill:none;stroke-width:2;stroke-dasharray:6 5}.base-dot{fill:#57606a}.queue-dot{fill:#cf4f00}.ideal-dot{fill:#0969da}</style>
+<text x="520" y="28" text-anchor="middle" font-size="18" font-weight="600">High-thread EM speedup from five-run medians</text>
+<line x1="320" y1="50" x2="350" y2="50" class="base"/><circle cx="335" cy="50" r="3.5" class="base-dot"/><text x="358" y="54" font-size="12">fork-join</text>
+<line x1="440" y1="50" x2="470" y2="50" class="queue"/><circle cx="455" cy="50" r="4" class="queue-dot"/><text x="478" y="54" font-size="12">persistent queue</text>
+<line x1="600" y1="50" x2="630" y2="50" class="ideal"/><circle cx="615" cy="50" r="3" class="ideal-dot"/><text x="638" y="54" font-size="12">ideal</text>
+
+<text x="312" y="76" text-anchor="middle" font-size="14" font-weight="600">Local · 2× EPYC 9575F</text>
+<line x1="124" y1="350.0" x2="500" y2="350.0" class="grid"/><text x="115" y="354" text-anchor="end" font-size="11">0</text>
+<line x1="124" y1="287.6" x2="500" y2="287.6" class="grid"/><text x="115" y="291.6" text-anchor="end" font-size="11">1</text>
+<line x1="124" y1="225.2" x2="500" y2="225.2" class="grid"/><text x="115" y="229.2" text-anchor="end" font-size="11">2</text>
+<line x1="124" y1="162.9" x2="500" y2="162.9" class="grid"/><text x="115" y="166.9" text-anchor="end" font-size="11">3</text>
+<line x1="124" y1="100.5" x2="500" y2="100.5" class="grid"/><text x="115" y="104.5" text-anchor="end" font-size="11">4</text>
+<rect x="124" y="88" width="376" height="262" class="frame"/>
+<text x="124" y="369" text-anchor="middle" font-size="11">16</text><text x="312" y="369" text-anchor="middle" font-size="11">32</text><text x="500" y="369" text-anchor="middle" font-size="11">64</text>
+<polyline points="124,287.6 312,283.0 500,295.5" class="base"/>
+<polyline points="124,287.6 312,260.3 500,226.5" class="queue"/>
+<polyline points="124,287.6 312,225.2 500,100.5" class="ideal"/>
+<circle cx="124" cy="287.6" r="3.5" class="base-dot"><title>fork-join: 1.000× at 16 threads</title></circle><circle cx="312" cy="283.0" r="3.5" class="base-dot"><title>fork-join: 1.074× at 32 threads</title></circle><circle cx="500" cy="295.5" r="3.5" class="base-dot"><title>fork-join: 0.874× at 64 threads</title></circle>
+<circle cx="124" cy="287.6" r="4" class="queue-dot"><title>persistent: 1.000× at 16 threads</title></circle><circle cx="312" cy="260.3" r="4" class="queue-dot"><title>persistent: 1.438× at 32 threads</title></circle><circle cx="500" cy="226.5" r="4" class="queue-dot"><title>persistent: 1.980× at 64 threads</title></circle>
+<circle cx="124" cy="287.6" r="3" class="ideal-dot"/><circle cx="312" cy="225.2" r="3" class="ideal-dot"/><circle cx="500" cy="100.5" r="3" class="ideal-dot"/>
+<text x="312" y="392" text-anchor="middle" font-size="12">threads</text><text transform="translate(84 219) rotate(-90)" text-anchor="middle" font-size="12">speedup (T16 / Tp)</text>
+
+<text x="792" y="76" text-anchor="middle" font-size="14" font-weight="600">Newton · 2× Xeon E5-2699 v4</text>
+<line x1="604" y1="350.0" x2="980" y2="350.0" class="grid"/><text x="595" y="354" text-anchor="end" font-size="11">0</text>
+<line x1="604" y1="287.6" x2="980" y2="287.6" class="grid"/><text x="595" y="291.6" text-anchor="end" font-size="11">1</text>
+<line x1="604" y1="225.2" x2="980" y2="225.2" class="grid"/><text x="595" y="229.2" text-anchor="end" font-size="11">2</text>
+<line x1="604" y1="162.9" x2="980" y2="162.9" class="grid"/><text x="595" y="166.9" text-anchor="end" font-size="11">3</text>
+<line x1="604" y1="100.5" x2="980" y2="100.5" class="grid"/><text x="595" y="104.5" text-anchor="end" font-size="11">4</text>
+<rect x="604" y="88" width="376" height="262" class="frame"/>
+<text x="604" y="369" text-anchor="middle" font-size="11">16</text><text x="792" y="369" text-anchor="middle" font-size="11">32</text><text x="980" y="369" text-anchor="middle" font-size="11">64</text>
+<polyline points="604,287.6 792,272.7 980,282.1" class="base"/>
+<polyline points="604,287.6 792,255.1 980,253.9" class="queue"/>
+<polyline points="604,287.6 792,225.2 980,100.5" class="ideal"/>
+<circle cx="604" cy="287.6" r="3.5" class="base-dot"><title>fork-join: 1.000× at 16 threads</title></circle><circle cx="792" cy="272.7" r="3.5" class="base-dot"><title>fork-join: 1.239× at 32 threads</title></circle><circle cx="980" cy="282.1" r="3.5" class="base-dot"><title>fork-join: 1.088× at 64 threads</title></circle>
+<circle cx="604" cy="287.6" r="4" class="queue-dot"><title>persistent: 1.000× at 16 threads</title></circle><circle cx="792" cy="255.1" r="4" class="queue-dot"><title>persistent: 1.521× at 32 threads</title></circle><circle cx="980" cy="253.9" r="4" class="queue-dot"><title>persistent: 1.541× at 64 threads</title></circle>
+<circle cx="604" cy="287.6" r="3" class="ideal-dot"/><circle cx="792" cy="225.2" r="3" class="ideal-dot"/><circle cx="980" cy="100.5" r="3" class="ideal-dot"/>
+<text x="792" y="392" text-anchor="middle" font-size="12">threads</text><text transform="translate(564 219) rotate(-90)" text-anchor="middle" font-size="12">speedup (T16 / Tp)</text>
+</svg>

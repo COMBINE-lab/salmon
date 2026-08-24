@@ -20,6 +20,19 @@ fragment SRR21186103 / GENCODE v49 workload and were collected on 2026-08-23.
 - `perf-counters.tsv`: one full-process `perf stat` run per arm at 16/32/64
   threads on each host, recording generic cycles, instructions, and cache
   misses alongside the isolated `em_bias` phase time.
+- `local-persistent-low.tsv` and `local-persistent-high.tsv`: the five-run
+  follow-up comparison of `04c0a93b` against the persistent phase queue in
+  `2be15176`. The files split 1/2/4/8 from 16/32/64 only because the serial
+  controls take much longer; all use the same binaries and protocol.
+- `local-persistent-p4-confirm.tsv`: a second isolated five-pair 4-thread run,
+  retained because the first low-thread sweep had large placement variance even
+  though both arms execute the same fork-join path below 32 workers.
+- `newton-persistent-high.tsv`: the corresponding five-run 16/32/64 comparison
+  on newton.
+- `persistent-perf-counters.tsv`: one full-process generic-counter run per arm
+  and host for the persistent follow-up.
+- `persistent-scaling.svg`: 16-thread-normalized scaling for the fork-join and
+  persistent loops on both hosts, with ideal scaling shown only as a reference.
 
 `quant.sf` files are not committed because each is about 38 MiB. Their SHA-256
 values are retained in every final-result row. The candidate hash must be
