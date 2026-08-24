@@ -32,7 +32,7 @@ jiff = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-noodles-bam = "0.94"
+noodles-bam = "0.95"
 noodles-sam = "0.89"
 # reading back RAD output in the end-to-end test
 libradicl = { workspace = true }
