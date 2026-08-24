@@ -554,3 +554,130 @@ fn rad_input_refuses_an_unwritable_output_directory_before_reading_the_rad() {
     perms.set_readonly(false);
     std::fs::set_permissions(&readonly, perms).unwrap();
 }
+
+/// `--deterministic` is the default since 2.6.0, so passing it explicitly must
+/// be an accepted no-op that says so at INFO — the flag lives in opt-in-era
+/// scripts and CI, and users should learn they can drop it without any hint that
+/// something is wrong. A default run must not print the note.
+#[test]
+fn explicit_deterministic_is_a_no_op_with_an_info_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fx = fixture(tmp.path());
+    let out = tmp.path().join("out");
+
+    let o = run(&[
+        os("quant"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-l"),
+        os("A"),
+        os("-r"),
+        fx.se.as_os_str(),
+        os("--deterministic"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "explicit --deterministic must succeed");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("--deterministic is the default since 2.6.0")
+            && err.contains("no longer needs to be passed"),
+        "explicit --deterministic must note it is the default: {err}"
+    );
+
+    // A default run (no flag) must be silent about it.
+    let out2 = tmp.path().join("out2");
+    let o2 = run(&[
+        os("quant"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-l"),
+        os("A"),
+        os("-r"),
+        fx.se.as_os_str(),
+        os("-o"),
+        out2.as_os_str(),
+    ]);
+    assert!(o2.status.success());
+    assert!(
+        !String::from_utf8_lossy(&o2.stderr).contains("--deterministic is the default"),
+        "a default run must not print the deterministic note"
+    );
+}
+
+/// The online-only knobs (`--forgettingFactor`, `--numAuxModelSamples`,
+/// `--numPreAuxModelSamples`) warn-and-ignore when passed without `--online`,
+/// naming the 2.7.0 removal, and the message agrees in number: one flag
+/// "configures … to use it", several "configure … to use them".
+#[test]
+fn online_only_knobs_warn_without_online_and_agree_in_number() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fx = fixture(tmp.path());
+
+    // One knob → singular.
+    let one = run(&[
+        os("quant"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-l"),
+        os("A"),
+        os("-r"),
+        fx.se.as_os_str(),
+        os("-f"),
+        os("0.7"),
+        os("-o"),
+        tmp.path().join("o1").as_os_str(),
+    ]);
+    assert!(one.status.success());
+    let e1 = String::from_utf8_lossy(&one.stderr);
+    assert!(
+        e1.contains("--forgettingFactor configures the online inference path")
+            && e1.contains("removal planned for 2.7.0")
+            && e1.contains("to use it."),
+        "single online knob must warn in the singular, naming 2.7.0: {e1}"
+    );
+
+    // Two knobs → plural.
+    let two = run(&[
+        os("quant"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-l"),
+        os("A"),
+        os("-r"),
+        fx.se.as_os_str(),
+        os("-f"),
+        os("0.7"),
+        os("--numAuxModelSamples"),
+        os("1000"),
+        os("-o"),
+        tmp.path().join("o2").as_os_str(),
+    ]);
+    assert!(two.status.success());
+    let e2 = String::from_utf8_lossy(&two.stderr);
+    assert!(
+        e2.contains("configure the online inference path") && e2.contains("to use them."),
+        "two online knobs must warn in the plural: {e2}"
+    );
+
+    // Passing --online must suppress the inert-knob warning (the knobs now apply).
+    let online = run(&[
+        os("quant"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-l"),
+        os("A"),
+        os("-r"),
+        fx.se.as_os_str(),
+        os("--online"),
+        os("-f"),
+        os("0.7"),
+        os("-o"),
+        tmp.path().join("o3").as_os_str(),
+    ]);
+    assert!(online.status.success());
+    assert!(
+        !String::from_utf8_lossy(&online.stderr).contains("configures the online inference path"),
+        "under --online the knob is honoured, not warned about"
+    );
+}

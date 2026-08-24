@@ -2230,6 +2230,19 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // claim the one-pass path will run, and must not suppress the inert-knob
     // warnings below (`--rad X --online -f 0.9` used to drop `-f` silently
     // behind a misleading deprecation notice, #1140).
+    // `--deterministic` is the default since 2.6.0, so passing it explicitly is
+    // a no-op. Say so at INFO rather than staying silent: the flag lives in
+    // scripts and CI from the opt-in period, and a one-line note tells those
+    // users they can drop it without implying anything is wrong. (`--online`
+    // conflicts with `--deterministic` at the clap layer, so the two branches
+    // are mutually exclusive.)
+    if args.deterministic {
+        tracing::info!(
+            "--deterministic is the default since 2.6.0 and no longer needs to be passed; \
+             accepting it as a no-op. Pass --online for the deprecated one-pass path \
+             (removal planned for 2.7.0)."
+        );
+    }
     let online_path_exists = args.rad.is_none();
     if args.online && !online_path_exists {
         tracing::warn!(
@@ -2255,11 +2268,18 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             inert.push("--numPreAuxModelSamples");
         }
         if !inert.is_empty() {
+            // Agree with how many were passed: one flag reads "--forgettingFactor
+            // configures … to use it", several read "…, … configure … to use
+            // them". Same singular/plural care as `warn_inert_in_mode`.
+            let (subject, verb, pronoun) = if inert.len() == 1 {
+                (inert[0].to_string(), "configures", "it")
+            } else {
+                (inert.join(", "), "configure", "them")
+            };
             tracing::warn!(
-                "{} configure the online inference path, which the default deterministic \
+                "{subject} {verb} the online inference path, which the default deterministic \
                  mode does not run: ignored. Pass --online (deprecated, removal planned \
-                 for 2.7.0) to use them.",
-                inert.join(", ")
+                 for 2.7.0) to use {pronoun}."
             );
         }
     }
