@@ -60,7 +60,7 @@ rand_distr = "0.6"
 # hashing
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 # compression
-flate2 = "1"
+flate2 = { version = "1", features = ["zlib-rs"] }
 zstd = "0.13"
 # format-sniffing decompression (gzip/BGZF, bzip2, xz, zstd) for user-supplied
 # annotation files; already in the tree via paraseq and piscem-rs.
