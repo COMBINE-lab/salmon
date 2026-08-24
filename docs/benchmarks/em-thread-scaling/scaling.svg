@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="430" viewBox="0 0 1040 430" role="img" aria-labelledby="title desc">
+<title id="title">Deterministic EM speedup by thread count</title>
+<desc id="desc">Two line charts compare baseline and selected 128-shard candidate T1 over Tp speedup on the local EPYC and newton Xeon hosts. The candidate is faster at every multi-thread count and peaks at 10.3 times locally and 9.44 times on newton at 32 threads.</desc>
+<rect width="1040" height="430" fill="#ffffff"/>
+<style>text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#24292f}.grid{stroke:#d8dee4;stroke-width:1}.frame{stroke:#57606a;stroke-width:1;fill:none}.base{stroke:#57606a;fill:none;stroke-width:2.5}.cand{stroke:#cf4f00;fill:none;stroke-width:3}.base-dot{fill:#57606a}.cand-dot{fill:#cf4f00}</style>
+<text x="520" y="28" text-anchor="middle" font-size="18" font-weight="600">EM speedup from five-run medians</text>
+<line x1="390" y1="50" x2="420" y2="50" class="base"/><circle cx="405" cy="50" r="3.5" class="base-dot"/><text x="428" y="54" font-size="12">#1169 baseline</text>
+<line x1="550" y1="50" x2="580" y2="50" class="cand"/><circle cx="565" cy="50" r="4" class="cand-dot"/><text x="588" y="54" font-size="12">selected candidate</text>
+<text x="312" y="76" text-anchor="middle" font-size="14" font-weight="600">Local · 2× EPYC 9575F</text>
+<line x1="124" y1="350.0" x2="500" y2="350.0" class="grid"/>
+<text x="115" y="354.0" text-anchor="end" font-size="11">0</text>
+<line x1="124" y1="302.4" x2="500" y2="302.4" class="grid"/>
+<text x="115" y="306.4" text-anchor="end" font-size="11">2</text>
+<line x1="124" y1="254.7" x2="500" y2="254.7" class="grid"/>
+<text x="115" y="258.7" text-anchor="end" font-size="11">4</text>
+<line x1="124" y1="207.1" x2="500" y2="207.1" class="grid"/>
+<text x="115" y="211.1" text-anchor="end" font-size="11">6</text>
+<line x1="124" y1="159.5" x2="500" y2="159.5" class="grid"/>
+<text x="115" y="163.5" text-anchor="end" font-size="11">8</text>
+<line x1="124" y1="111.8" x2="500" y2="111.8" class="grid"/>
+<text x="115" y="115.8" text-anchor="end" font-size="11">10</text>
+<rect x="124" y="88" width="376" height="262" class="frame"/>
+<text x="124.0" y="369" text-anchor="middle" font-size="11">1</text>
+<text x="186.7" y="369" text-anchor="middle" font-size="11">2</text>
+<text x="249.3" y="369" text-anchor="middle" font-size="11">4</text>
+<text x="312.0" y="369" text-anchor="middle" font-size="11">8</text>
+<text x="374.7" y="369" text-anchor="middle" font-size="11">16</text>
+<text x="437.3" y="369" text-anchor="middle" font-size="11">32</text>
+<text x="500.0" y="369" text-anchor="middle" font-size="11">64</text>
+<polyline points="124.0,326.2 186.7,322.7 249.3,288.2 312.0,241.7 374.7,198.8 437.3,189.3 500.0,222.1" class="base"/>
+<polyline points="124.0,326.2 186.7,319.8 249.3,282.6 312.0,214.6 374.7,135.3 437.3,104.7 500.0,147.6" class="cand"/>
+<circle cx="124.0" cy="326.2" r="3.5" class="base-dot"><title>baseline: 1.000× at 1 threads</title></circle>
+<circle cx="124.0" cy="326.2" r="4" class="cand-dot"><title>candidate: 1.000× at 1 threads</title></circle>
+<circle cx="186.7" cy="322.7" r="3.5" class="base-dot"><title>baseline: 1.148× at 2 threads</title></circle>
+<circle cx="186.7" cy="319.8" r="4" class="cand-dot"><title>candidate: 1.266× at 2 threads</title></circle>
+<circle cx="249.3" cy="288.2" r="3.5" class="base-dot"><title>baseline: 2.594× at 4 threads</title></circle>
+<circle cx="249.3" cy="282.6" r="4" class="cand-dot"><title>candidate: 2.829× at 4 threads</title></circle>
+<circle cx="312.0" cy="241.7" r="3.5" class="base-dot"><title>baseline: 4.548× at 8 threads</title></circle>
+<circle cx="312.0" cy="214.6" r="4" class="cand-dot"><title>candidate: 5.685× at 8 threads</title></circle>
+<circle cx="374.7" cy="198.8" r="3.5" class="base-dot"><title>baseline: 6.349× at 16 threads</title></circle>
+<circle cx="374.7" cy="135.3" r="4" class="cand-dot"><title>candidate: 9.013× at 16 threads</title></circle>
+<circle cx="437.3" cy="189.3" r="3.5" class="base-dot"><title>baseline: 6.745× at 32 threads</title></circle>
+<circle cx="437.3" cy="104.7" r="4" class="cand-dot"><title>candidate: 10.300× at 32 threads</title></circle>
+<circle cx="500.0" cy="222.1" r="3.5" class="base-dot"><title>baseline: 5.371× at 64 threads</title></circle>
+<circle cx="500.0" cy="147.6" r="4" class="cand-dot"><title>candidate: 8.499× at 64 threads</title></circle>
+<text x="312" y="392" text-anchor="middle" font-size="12">threads</text>
+<text transform="translate(84 219.0) rotate(-90)" text-anchor="middle" font-size="12">speedup (T1 / Tp)</text>
+<text x="792" y="76" text-anchor="middle" font-size="14" font-weight="600">Newton · 2× Xeon E5-2699 v4</text>
+<line x1="604" y1="350.0" x2="980" y2="350.0" class="grid"/>
+<text x="595" y="354.0" text-anchor="end" font-size="11">0</text>
+<line x1="604" y1="302.4" x2="980" y2="302.4" class="grid"/>
+<text x="595" y="306.4" text-anchor="end" font-size="11">2</text>
+<line x1="604" y1="254.7" x2="980" y2="254.7" class="grid"/>
+<text x="595" y="258.7" text-anchor="end" font-size="11">4</text>
+<line x1="604" y1="207.1" x2="980" y2="207.1" class="grid"/>
+<text x="595" y="211.1" text-anchor="end" font-size="11">6</text>
+<line x1="604" y1="159.5" x2="980" y2="159.5" class="grid"/>
+<text x="595" y="163.5" text-anchor="end" font-size="11">8</text>
+<line x1="604" y1="111.8" x2="980" y2="111.8" class="grid"/>
+<text x="595" y="115.8" text-anchor="end" font-size="11">10</text>
+<rect x="604" y="88" width="376" height="262" class="frame"/>
+<text x="604.0" y="369" text-anchor="middle" font-size="11">1</text>
+<text x="666.7" y="369" text-anchor="middle" font-size="11">2</text>
+<text x="729.3" y="369" text-anchor="middle" font-size="11">4</text>
+<text x="792.0" y="369" text-anchor="middle" font-size="11">8</text>
+<text x="854.7" y="369" text-anchor="middle" font-size="11">16</text>
+<text x="917.3" y="369" text-anchor="middle" font-size="11">32</text>
+<text x="980.0" y="369" text-anchor="middle" font-size="11">64</text>
+<polyline points="604.0,326.2 666.7,315.4 729.3,284.7 792.0,244.5 854.7,207.6 917.3,182.8 980.0,206.3" class="base"/>
+<polyline points="604.0,326.2 666.7,311.1 729.3,278.2 792.0,229.2 854.7,169.0 917.3,125.2 980.0,157.3" class="cand"/>
+<circle cx="604.0" cy="326.2" r="3.5" class="base-dot"><title>baseline: 1.000× at 1 threads</title></circle>
+<circle cx="604.0" cy="326.2" r="4" class="cand-dot"><title>candidate: 1.000× at 1 threads</title></circle>
+<circle cx="666.7" cy="315.4" r="3.5" class="base-dot"><title>baseline: 1.454× at 2 threads</title></circle>
+<circle cx="666.7" cy="311.1" r="4" class="cand-dot"><title>candidate: 1.633× at 2 threads</title></circle>
+<circle cx="729.3" cy="284.7" r="3.5" class="base-dot"><title>baseline: 2.743× at 4 threads</title></circle>
+<circle cx="729.3" cy="278.2" r="4" class="cand-dot"><title>candidate: 3.016× at 4 threads</title></circle>
+<circle cx="792.0" cy="244.5" r="3.5" class="base-dot"><title>baseline: 4.430× at 8 threads</title></circle>
+<circle cx="792.0" cy="229.2" r="4" class="cand-dot"><title>candidate: 5.070× at 8 threads</title></circle>
+<circle cx="854.7" cy="207.6" r="3.5" class="base-dot"><title>baseline: 5.978× at 16 threads</title></circle>
+<circle cx="854.7" cy="169.0" r="4" class="cand-dot"><title>candidate: 7.599× at 16 threads</title></circle>
+<circle cx="917.3" cy="182.8" r="3.5" class="base-dot"><title>baseline: 7.020× at 32 threads</title></circle>
+<circle cx="917.3" cy="125.2" r="4" class="cand-dot"><title>candidate: 9.438× at 32 threads</title></circle>
+<circle cx="980.0" cy="206.3" r="3.5" class="base-dot"><title>baseline: 6.033× at 64 threads</title></circle>
+<circle cx="980.0" cy="157.3" r="4" class="cand-dot"><title>candidate: 8.091× at 64 threads</title></circle>
+<text x="792" y="392" text-anchor="middle" font-size="12">threads</text>
+<text transform="translate(564 219.0) rotate(-90)" text-anchor="middle" font-size="12">speedup (T1 / Tp)</text>
+</svg>

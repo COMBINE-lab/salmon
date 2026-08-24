@@ -455,36 +455,8 @@ fn thread_count_invariant() {
     let c8 = run(8);
     let c1b = run(1);
     assert_eq!(c1.len(), c8.len());
-    // Across thread counts the result is deterministic *to far beyond the
-    // reported precision*, but not bit-identical: the EM merges per-worker
-    // shards (`reduce_shards`), and how many shards exist -- and which
-    // fragments each accumulated under work stealing -- changes the order f64
-    // additions associate in. Measured on a deliberately hard fixture (800
-    // transcripts, 60k fragments, 1-4-way ambiguity, 2-32 threads, 50 runs):
-    // max |delta| = 4.5e-13. quant.sf rounds NumReads to 5e-4 and TPM to 5e-7,
-    // so a 1e-9 gate is six orders stricter than anything a reader of the
-    // output could observe, while 2000x above the measured ulp noise -- a real
-    // determinism bug (order-dependent assignment, a lost fragment) lands well
-    // above it, associativity noise well below.
-    //
-    // Asserting bit-equality here instead makes the test flaky, and the "fix"
-    // for that (PR #1056) would have restructured the reduction for a property
-    // no consumer of quant.sf can see.
-    let max_delta = c1
-        .iter()
-        .zip(c8.iter())
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
-    assert!(
-        max_delta < 1e-9,
-        "thread counts disagree by {max_delta:e}: beyond FP associativity          noise, this is a real determinism regression"
-    );
-    // Repeated runs at a fixed thread count of 1 have no reduction-order
-    // freedom at all, so bit-identity is required, not approximated.
-    assert_eq!(
-        c1, c1b,
-        "result differs across repeated single-threaded runs"
-    );
+    assert_eq!(c1, c8, "result differs across thread counts");
+    assert_eq!(c1, c1b, "result differs across repeated runs");
 }
 
 /// A salmon RAD that bakes its FLD into the header must use that FLD, not derive

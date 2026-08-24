@@ -30,6 +30,7 @@
 //! ([`EmAccel::Squarem`]) extrapolates over the plain iteration to reach the same
 //! fixpoint in far fewer M-steps.
 
+use rayon::prelude::*;
 use salmon_eqclass::CollapsedEqClasses;
 
 mod daarem;
@@ -218,7 +219,9 @@ pub struct EmResult {
 /// The *maximum* rather than an average: convergence means every meaningful
 /// transcript has settled, and an average would let one large still-moving
 /// transcript hide behind thousands of settled ones.
-pub(crate) fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
+const VECTOR_REDUCTION_CHUNK: usize = 2048;
+
+fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
     let mut max_d = f64::NEG_INFINITY;
     for i in 0..alpha_in.len() {
         // Skip negligible transcripts (see `alpha_check_cutoff`) and guard the
@@ -232,6 +235,47 @@ pub(crate) fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> 
     }
     // Stays -inf when no transcript qualified; callers test `is_finite()`.
     max_d
+}
+
+/// Parallel convergence check with a data-fixed task partition. Each chunk's
+/// maximum is written independently, then the partial maxima are combined in
+/// ascending chunk order. Unlike a sum, max does not round, but retaining an
+/// explicit order also pins the treatment of non-finite candidates to the
+/// sequential `if d > max` semantics above.
+fn max_rel_diff_par(
+    alpha_in: &[f64],
+    alpha_out: &[f64],
+    cutoff: f64,
+    partials: &mut Vec<f64>,
+) -> f64 {
+    let nchunks = alpha_in.len().div_ceil(VECTOR_REDUCTION_CHUNK);
+    partials.resize(nchunks, f64::NEG_INFINITY);
+    partials
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(chunk, out)| {
+            let lo = chunk * VECTOR_REDUCTION_CHUNK;
+            let hi = (lo + VECTOR_REDUCTION_CHUNK).min(alpha_in.len());
+            *out = max_rel_diff(&alpha_in[lo..hi], &alpha_out[lo..hi], cutoff);
+        });
+    partials.iter().fold(
+        f64::NEG_INFINITY,
+        |max_d, &d| if d > max_d { d } else { max_d },
+    )
+}
+
+fn max_rel_diff_mode(
+    alpha_in: &[f64],
+    alpha_out: &[f64],
+    cutoff: f64,
+    parallel: bool,
+    partials: &mut Vec<f64>,
+) -> f64 {
+    if parallel {
+        max_rel_diff_par(alpha_in, alpha_out, cutoff, partials)
+    } else {
+        max_rel_diff(alpha_in, alpha_out, cutoff)
+    }
 }
 
 /// Run the optimizer to convergence (parallel EM/VBEM over the packed layout).
@@ -388,20 +432,23 @@ pub(crate) fn run_em_counts(
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
     let mut exp_theta = vec![0.0f64; num_txps];
+    let mut rel_diff_partials = Vec::new();
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
-    // Per-shard dense accumulators reused across all parallel M-steps (allocated
+    // Per-shard compressed accumulators reused across all parallel M-steps (allocated
     // once here, not per-task per-iteration). Each shard processes a contiguous
     // slice of the classes with plain adds, then they are summed into `alpha_out`
     // — avoiding the cross-thread CAS contention of a single shared atomic array.
-    // Capped at 64 shards: beyond that, the per-iteration zero/reduce overhead
-    // outweighs the extra accumulation parallelism.
-    // The partition is derived from the class count alone, never from the
+    // Capped at 128 logical shards after measuring class-balanced 64 and
+    // incidence-balanced 64/128/256 on both benchmark hosts. Although 256 was
+    // 0.61% faster in the combined high-thread geometric mean, the predeclared
+    // 2% tie rule selects the smaller plan.
+    // The partition is derived from incidence counts alone, never from the
     // thread count: the shard boundaries fix the order of the floating-point
     // sums, so deriving them from `-p` made `quant.sf` depend on the thread
     // count — the one thing this mode exists to prevent. See `ShardPlan`.
     let plan = parallel.then(|| packed::ShardPlan::new(p));
     let mut shards: Vec<Vec<f64>> = match &plan {
-        Some(pl) => vec![vec![0.0f64; num_txps]; pl.num_shards()],
+        Some(pl) => pl.allocate_buffers(),
         None => Vec::new(),
     };
 
@@ -453,7 +500,13 @@ pub(crate) fn run_em_counts(
                 f(&alphas, &mut alphas_prime);
                 it += 1;
                 if it >= min_iter {
-                    let d = max_rel_diff(&alphas, &alphas_prime, opts.alpha_check_cutoff);
+                    let d = max_rel_diff_mode(
+                        &alphas,
+                        &alphas_prime,
+                        opts.alpha_check_cutoff,
+                        parallel,
+                        &mut rel_diff_partials,
+                    );
                     // Swap rather than copy: the buffers just exchange roles, so
                     // no data movement is needed.
                     std::mem::swap(&mut alphas, &mut alphas_prime);
@@ -475,10 +528,21 @@ pub(crate) fn run_em_counts(
                 opts,
                 min_iter,
                 &mut it,
+                parallel,
+                &mut rel_diff_partials,
             );
         }
         EmAccel::Daarem => {
-            converged = daarem::daarem_loop(&mut f, &mut alphas, num_txps, opts, min_iter, &mut it);
+            converged = daarem::daarem_loop(
+                &mut f,
+                &mut alphas,
+                num_txps,
+                opts,
+                min_iter,
+                &mut it,
+                parallel,
+                &mut rel_diff_partials,
+            );
         }
     }
     (alphas, it, converged)
@@ -521,6 +585,8 @@ fn squarem_loop(
     opts: &EmOptions,
     min_iter: u32,
     it: &mut u32,
+    parallel: bool,
+    rel_diff_partials: &mut Vec<f64>,
 ) -> bool {
     let n = num_txps;
     // Allocated once outside the loop; these are reused every cycle.
@@ -602,7 +668,13 @@ fn squarem_loop(
         f(&xp, x_next);
         *it += 1;
         if *it >= min_iter {
-            let d = max_rel_diff(x0, x_next, opts.alpha_check_cutoff);
+            let d = max_rel_diff_mode(
+                x0,
+                x_next,
+                opts.alpha_check_cutoff,
+                parallel,
+                rel_diff_partials,
+            );
             std::mem::swap(x0, x_next);
             if d.is_finite() && d < opts.rel_diff_tol {
                 return true;
@@ -632,6 +704,39 @@ mod tests {
         let mut eq = b.finish();
         eq.update_eff_lengths(&vec![1.0; num_txps]);
         eq
+    }
+
+    #[test]
+    fn parallel_max_rel_diff_matches_sequential_special_values() {
+        let n = VECTOR_REDUCTION_CHUNK * 3 + 17;
+        let mut alpha_in = (0..n).map(|i| 1.0 + (i % 97) as f64).collect::<Vec<_>>();
+        let mut alpha_out = alpha_in
+            .iter()
+            .enumerate()
+            .map(|(i, &a)| a * (1.0 + (i % 13) as f64 * 1.0e-6))
+            .collect::<Vec<_>>();
+        alpha_in[11] = 0.0;
+        alpha_out[11] = 2.0;
+        alpha_in[VECTOR_REDUCTION_CHUNK + 7] = 1.0;
+        alpha_out[VECTOR_REDUCTION_CHUNK + 7] = f64::NAN;
+        alpha_in[VECTOR_REDUCTION_CHUNK * 2 + 3] = 1.0e-12;
+        alpha_out[VECTOR_REDUCTION_CHUNK * 2 + 3] = 1.0;
+
+        let cutoff = 1.0e-8;
+        let expected = max_rel_diff(&alpha_in, &alpha_out, cutoff);
+        for threads in [1, 2, 3, 8, 16] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let actual =
+                pool.install(|| max_rel_diff_par(&alpha_in, &alpha_out, cutoff, &mut Vec::new()));
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "thread count {threads}"
+            );
+        }
     }
 
     /// With no ambiguity there is nothing to infer, so the EM must return the
