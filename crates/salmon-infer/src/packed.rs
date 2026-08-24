@@ -34,6 +34,8 @@
 use rayon::prelude::*;
 use salmon_eqclass::CollapsedEqClasses;
 use statrs::function::gamma::digamma;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 /// Minimum `alpha + prior` for which VBEM evaluates `digamma`.
 /// Below this the function heads to negative infinity and the result is
@@ -749,6 +751,315 @@ pub(crate) fn vbem_step_par(
     reduce_shards_sparse(shards, plan, alpha_out);
 }
 
+/// Minimum fixed-point budget for the persistent worker path.
+///
+/// The one-step benchmark and short bias-seed runs are better served by the
+/// ordinary Rayon kernels: their plan/workspace setup is not amortized. The
+/// production point estimate normally runs hundreds or thousands of steps.
+pub(crate) const PERSISTENT_MIN_STEPS: u32 = 32;
+
+/// Fork-join is still cheaper for smaller pools; the persistent phase queue is
+/// selected where repeated scheduler overhead becomes the measured bottleneck.
+pub(crate) const PERSISTENT_MIN_WORKERS: usize = 32;
+
+#[inline]
+fn load_f64(cell: &AtomicU64) -> f64 {
+    f64::from_bits(cell.load(Ordering::Relaxed))
+}
+
+#[inline]
+fn store_f64(cell: &AtomicU64, value: f64) {
+    cell.store(value.to_bits(), Ordering::Relaxed);
+}
+
+fn atomic_f64_vec(values: impl IntoIterator<Item = f64>) -> Vec<AtomicU64> {
+    values
+        .into_iter()
+        .map(|value| AtomicU64::new(value.to_bits()))
+        .collect()
+}
+
+/// Run an unaccelerated fixed-point EM/VBEM loop as one persistent Rayon
+/// broadcast rather than constructing four independent parallel task graphs per
+/// iteration.
+///
+/// Rayon already owns persistent OS threads. `broadcast` places one long-lived
+/// closure on each of them. Workers claim fixed vector chunks or complete
+/// logical shards from the current phase. The last completed job publishes the
+/// next phase, so an idle or preempted worker is not itself a barrier participant.
+///
+/// The numerical contract is unchanged:
+///
+/// - shard boundaries and within-shard class order still come from `ShardPlan`;
+/// - each transcript still reduces contributors in ascending shard order;
+/// - convergence maxima still use fixed 2,048-transcript chunks and an
+///   ascending final fold;
+/// - worker count affects only ownership and completion time, never grouping.
+///
+/// Atomic cells provide phase-shared storage without atomic arithmetic. Every
+/// cell has exactly one writer in a phase, and readers access it only after the
+/// release/acquire phase transition. Relaxed loads/stores therefore compile to
+/// ordinary scalar accesses on the supported targets while keeping this
+/// implementation data-race-free without an unsafe phase-sharing abstraction.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fixed_point_persistent(
+    p: &PackedEqClasses,
+    counts: &[u64],
+    prior_alphas: &[f64],
+    initial_alphas: Vec<f64>,
+    use_vbem: bool,
+    min_iter: u32,
+    max_iter: u32,
+    rel_diff_tol: f64,
+    alpha_check_cutoff: f64,
+) -> (Vec<f64>, u32, bool) {
+    if max_iter == 0 {
+        return (initial_alphas, 0, false);
+    }
+
+    let plan = ShardPlan::new(p);
+    let num_workers = rayon::current_num_threads().max(1);
+    let num_txps = p.num_txps;
+    let num_chunks = num_txps.div_ceil(crate::VECTOR_REDUCTION_CHUNK);
+
+    let alpha = [
+        atomic_f64_vec(initial_alphas),
+        atomic_f64_vec(std::iter::repeat_n(0.0, num_txps)),
+    ];
+    let exp_theta = atomic_f64_vec(std::iter::repeat_n(0.0, num_txps));
+    let rel_diff_partials = atomic_f64_vec(std::iter::repeat_n(f64::NEG_INFINITY, num_chunks));
+    let shard_buffers: Vec<OnceLock<Vec<AtomicU64>>> =
+        (0..plan.num_shards()).map(|_| OnceLock::new()).collect();
+
+    let current = AtomicUsize::new(0);
+    let iterations = AtomicU32::new(0);
+    let log_norm = AtomicU64::new(0.0f64.to_bits());
+    // High 32 bits are a monotonically increasing phase generation; low 32
+    // bits are the next job within that phase. One CAS therefore prevents a
+    // worker paused during an old phase from claiming a new phase's job.
+    let work_state = AtomicU64::new(0);
+    let completed_jobs = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let converged = AtomicBool::new(false);
+
+    rayon::broadcast(|ctx| {
+        debug_assert_eq!(ctx.num_threads(), num_workers);
+
+        loop {
+            if stop.load(Ordering::Acquire) {
+                break;
+            }
+
+            let snapshot = work_state.load(Ordering::Acquire);
+            let phase_id = (snapshot >> 32) as u32;
+            let next_job = snapshot as u32;
+            // VBEM: sum, expectation map, accumulate, reduce, control.
+            // EM: accumulation, reduction, control.
+            let phase_kind = if use_vbem {
+                phase_id % 5
+            } else {
+                2 + phase_id % 3
+            };
+            let job_count = match phase_kind {
+                0 | 4 => 1,
+                1 | 3 => num_chunks,
+                2 => plan.num_shards(),
+                _ => unreachable!(),
+            };
+            let job_count = u32::try_from(job_count)
+                .expect("persistent EM phase cannot contain more than 2^32 jobs");
+
+            // Empty inputs still need to advance through a zero-job phase.
+            if job_count == 0 {
+                let next_phase = (u64::from(phase_id) + 1) << 32;
+                let _ = work_state.compare_exchange(
+                    snapshot,
+                    next_phase,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+                continue;
+            }
+
+            if next_job >= job_count {
+                // This worker owns no outstanding job. Yield until the last
+                // completed job advances the generation; unlike a barrier, this
+                // worker's own scheduling cannot delay that transition.
+                'wait: loop {
+                    for _ in 0..64 {
+                        if stop.load(Ordering::Acquire)
+                            || (work_state.load(Ordering::Acquire) >> 32) != u64::from(phase_id)
+                        {
+                            break 'wait;
+                        }
+                        std::hint::spin_loop();
+                    }
+                    std::thread::yield_now();
+                }
+                continue;
+            }
+
+            if work_state
+                .compare_exchange_weak(snapshot, snapshot + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                continue;
+            }
+
+            let job = next_job as usize;
+            let src_index = current.load(Ordering::Relaxed);
+            let dst_index = src_index ^ 1;
+            let src = &alpha[src_index];
+            let dst = &alpha[dst_index];
+            let next_iteration = iterations.load(Ordering::Relaxed) + 1;
+
+            match phase_kind {
+                0 => {
+                    // Preserve the historical left-to-right VBEM sum.
+                    let mut alpha_sum = 0.0;
+                    for i in 0..num_txps {
+                        alpha_sum += load_f64(&src[i]) + prior_alphas[i];
+                    }
+                    store_f64(&log_norm, digamma(alpha_sum));
+                }
+                1 => {
+                    let lo = job * crate::VECTOR_REDUCTION_CHUNK;
+                    let hi = (lo + crate::VECTOR_REDUCTION_CHUNK).min(num_txps);
+                    let norm = load_f64(&log_norm);
+                    for i in lo..hi {
+                        let ap = load_f64(&src[i]) + prior_alphas[i];
+                        let value = if ap > DIGAMMA_MIN {
+                            (digamma(ap) - norm).exp()
+                        } else {
+                            0.0
+                        };
+                        store_f64(&exp_theta[i], value);
+                    }
+                }
+                2 => {
+                    let shard = job;
+                    let buf = shard_buffers[shard].get_or_init(|| {
+                        atomic_f64_vec(std::iter::repeat_n(0.0, plan.local_lens[shard]))
+                    });
+                    for value in buf {
+                        store_f64(value, 0.0);
+                    }
+
+                    let (class_lo, class_hi) = plan.range(shard);
+                    for ci in class_lo..class_hi {
+                        let count = counts[ci] as f64;
+                        let (tids, ws) = p.class(ci);
+                        let locals = plan.entry_locals(p, ci);
+                        if tids.len() > 1 {
+                            let mut denom = 0.0;
+                            if use_vbem {
+                                for (&tid, &weight) in tids.iter().zip(ws) {
+                                    let et = load_f64(&exp_theta[tid as usize]);
+                                    if et > 0.0 {
+                                        denom += et * weight;
+                                    }
+                                }
+                            } else {
+                                for (&tid, &weight) in tids.iter().zip(ws) {
+                                    denom += load_f64(&src[tid as usize]) * weight;
+                                }
+                            }
+
+                            if denom > MIN_EQ_CLASS_WEIGHT {
+                                let inv = count / denom;
+                                for i in 0..tids.len() {
+                                    let basis = if use_vbem {
+                                        load_f64(&exp_theta[tids[i] as usize])
+                                    } else {
+                                        load_f64(&src[tids[i] as usize])
+                                    };
+                                    let value = if use_vbem && basis <= 0.0 {
+                                        continue;
+                                    } else {
+                                        basis * ws[i]
+                                    };
+                                    if !use_vbem && value.is_nan() {
+                                        continue;
+                                    }
+                                    let cell = &buf[locals[i] as usize];
+                                    store_f64(cell, load_f64(cell) + value * inv);
+                                }
+                            }
+                        } else {
+                            let cell = &buf[locals[0] as usize];
+                            store_f64(cell, load_f64(cell) + count);
+                        }
+                    }
+                }
+                3 => {
+                    // Fuse sparse reduction with the convergence scan. Output
+                    // jobs retain the fixed 2,048-transcript boundaries used by
+                    // `max_rel_diff_par`, independent of worker count.
+                    let lo = job * crate::VECTOR_REDUCTION_CHUNK;
+                    let hi = (lo + crate::VECTOR_REDUCTION_CHUNK).min(num_txps);
+                    let mut max_d = f64::NEG_INFINITY;
+                    for tid in lo..hi {
+                        let contrib_lo = plan.contrib_start[tid] as usize;
+                        let contrib_hi = plan.contrib_start[tid + 1] as usize;
+                        let mut sum = 0.0;
+                        for contributor in &plan.contributors[contrib_lo..contrib_hi] {
+                            let shard = shard_buffers[contributor.shard as usize]
+                                .get()
+                                .expect("the accumulation phase initialized every shard");
+                            sum += load_f64(&shard[contributor.local as usize]);
+                        }
+                        store_f64(&dst[tid], sum);
+
+                        if next_iteration >= min_iter {
+                            let before = load_f64(&src[tid]);
+                            if before > alpha_check_cutoff && sum > 0.0 {
+                                let d = (sum - before).abs() / sum;
+                                if d > max_d {
+                                    max_d = d;
+                                }
+                            }
+                        }
+                    }
+                    store_f64(&rel_diff_partials[job], max_d);
+                }
+                4 => {
+                    let mut max_d = f64::NEG_INFINITY;
+                    if next_iteration >= min_iter {
+                        for partial in &rel_diff_partials {
+                            let d = load_f64(partial);
+                            if d > max_d {
+                                max_d = d;
+                            }
+                        }
+                    }
+
+                    iterations.store(next_iteration, Ordering::Relaxed);
+                    current.store(dst_index, Ordering::Relaxed);
+                    if next_iteration >= max_iter || (max_d.is_finite() && max_d < rel_diff_tol) {
+                        converged
+                            .store(max_d.is_finite() && max_d < rel_diff_tol, Ordering::Relaxed);
+                        stop.store(true, Ordering::Release);
+                    }
+                }
+                _ => unreachable!(),
+            }
+
+            if completed_jobs.fetch_add(1, Ordering::AcqRel) + 1 == job_count as usize {
+                completed_jobs.store(0, Ordering::Relaxed);
+                work_state.store((u64::from(phase_id) + 1) << 32, Ordering::Release);
+            }
+        }
+    });
+
+    let final_index = current.load(Ordering::Relaxed);
+    let result = alpha[final_index].iter().map(load_f64).collect();
+    (
+        result,
+        iterations.load(Ordering::Relaxed),
+        converged.load(Ordering::Relaxed),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1052,7 +1363,7 @@ mod shard_plan_determinism {
             };
 
             let base = run(1);
-            for threads in [2usize, 3, 8, 16] {
+            for threads in [2usize, 3, 8, 16, 32] {
                 let other = run(threads);
                 assert_same_result(label, threads, &base, &other);
             }
@@ -1142,6 +1453,70 @@ mod shard_plan_determinism {
     }
 
     #[test]
+    fn persistent_loop_matches_repeated_rayon_steps_bit_for_bit() {
+        const STEPS: u32 = 50;
+        let (packed, _) = fixture(3_000, 12_000);
+        let initial: Vec<f64> = (0..packed.num_txps)
+            .map(|i| 0.25 + (i % 31) as f64 / 17.0)
+            .collect();
+        let prior: Vec<f64> = (0..packed.num_txps)
+            .map(|i| 0.01 + (i % 7) as f64 * 1e-4)
+            .collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .build()
+            .expect("thread pool");
+
+        for use_vbem in [false, true] {
+            let reference = pool.install(|| {
+                let plan = ShardPlan::new(&packed);
+                let mut shards = plan.allocate_buffers();
+                let mut exp_theta = vec![0.0; packed.num_txps];
+                let mut src = initial.clone();
+                let mut dst = vec![0.0; packed.num_txps];
+                for _ in 0..STEPS {
+                    if use_vbem {
+                        vbem_step_par(
+                            &packed,
+                            &packed.counts,
+                            &prior,
+                            &src,
+                            &mut dst,
+                            &mut exp_theta,
+                            &mut shards,
+                            &plan,
+                        );
+                    } else {
+                        em_step_par(&packed, &packed.counts, &src, &mut dst, &mut shards, &plan);
+                    }
+                    std::mem::swap(&mut src, &mut dst);
+                }
+                src
+            });
+
+            let (persistent, iterations, converged) = pool.install(|| {
+                fixed_point_persistent(
+                    &packed,
+                    &packed.counts,
+                    &prior,
+                    initial.clone(),
+                    use_vbem,
+                    STEPS,
+                    STEPS,
+                    -1.0,
+                    0.01,
+                )
+            });
+            assert_eq!(iterations, STEPS);
+            assert!(!converged);
+            assert!(reference
+                .iter()
+                .zip(&persistent)
+                .all(|(a, b)| a.to_bits() == b.to_bits()));
+        }
+    }
+
+    #[test]
     fn empty_plan_has_one_empty_shard() {
         let b = EquivalenceClassBuilder::new();
         let mut eq = b.finish();
@@ -1153,6 +1528,58 @@ mod shard_plan_determinism {
         assert!(plan.entry_local.is_empty());
         assert!(plan.contributors.is_empty());
         assert_eq!(plan.contrib_start, [0; 5]);
+    }
+
+    #[test]
+    fn persistent_loop_handles_empty_classes_and_zero_job_phases() {
+        let b = EquivalenceClassBuilder::new();
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[1.0; 4]);
+        let packed = PackedEqClasses::from_collapsed(&eq, 4);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("thread pool");
+
+        for use_vbem in [false, true] {
+            let (result, iterations, converged) = pool.install(|| {
+                fixed_point_persistent(
+                    &packed,
+                    &packed.counts,
+                    &[0.01; 4],
+                    vec![1.0; 4],
+                    use_vbem,
+                    1,
+                    3,
+                    0.01,
+                    0.01,
+                )
+            });
+            assert_eq!(result, [0.0; 4]);
+            assert_eq!(iterations, 3);
+            assert!(!converged);
+        }
+
+        let b = EquivalenceClassBuilder::new();
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[]);
+        let packed = PackedEqClasses::from_collapsed(&eq, 0);
+        let (result, iterations, converged) = pool.install(|| {
+            fixed_point_persistent(
+                &packed,
+                &packed.counts,
+                &[],
+                Vec::new(),
+                false,
+                1,
+                2,
+                0.01,
+                0.01,
+            )
+        });
+        assert!(result.is_empty());
+        assert_eq!(iterations, 2);
+        assert!(!converged);
     }
 
     /// The plan's shard count must come from the data, never from the pool.

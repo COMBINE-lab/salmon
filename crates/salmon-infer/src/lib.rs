@@ -426,11 +426,38 @@ pub(crate) fn run_em_counts(
         Some(a) if a.len() == num_txps => a.to_vec(),
         _ => vec![init; num_txps],
     };
-    // Destination buffer for each M-step; the two are swapped rather than copied.
-    let mut alphas_prime = vec![0.0f64; num_txps];
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
+
+    // Long unaccelerated point-estimate loops repeat exactly the same logical
+    // partitions hundreds or thousands of times. Keep one closure resident on
+    // each Rayon worker for the entire loop and dispatch fixed chunks from a
+    // reusable phase queue, avoiding repeated task-graph construction. Short
+    // runs and accelerated methods retain the ordinary kernels because their
+    // setup is not similarly amortized or their iteration structure includes
+    // extra vector phases. The queue packs a five-phase generation into `u32`.
+    if parallel
+        && opts.accel == EmAccel::None
+        && opts.max_iter >= packed::PERSISTENT_MIN_STEPS
+        && opts.max_iter <= u32::MAX / 5
+        && rayon::current_num_threads() >= packed::PERSISTENT_MIN_WORKERS
+    {
+        return packed::fixed_point_persistent(
+            p,
+            counts,
+            &prior_alphas,
+            alphas,
+            opts.use_vbem,
+            min_iter,
+            opts.max_iter,
+            opts.rel_diff_tol,
+            opts.alpha_check_cutoff,
+        );
+    }
+
+    // Destination buffer for each M-step; the two are swapped rather than copied.
+    let mut alphas_prime = vec![0.0f64; num_txps];
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut rel_diff_partials = Vec::new();
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
