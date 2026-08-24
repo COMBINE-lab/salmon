@@ -458,6 +458,26 @@ fn index_seq<R: RefProvider>(refs: &R, tid: u32) -> &[u8] {
     refs.ref_seq(tid)
 }
 
+/// read1's `AS` component for an orphan, given the anchor (placed mate) score.
+///
+/// The SAM writer reconstructs read2's score as `score - r1_score` (see
+/// [`ScoredMapping::r1_score`]). For an orphan only one mate is placed, so the
+/// unmapped mate contributes 0. When the anchor is the *left* mate, read1 is the
+/// anchor and carries its score; when the anchor is the *right* mate, read1 is
+/// the unmapped one and must be 0 — otherwise `score - r1_score` collapses to 0
+/// and every right-orphan record reports `AS:i:0` for an alignment that really
+/// scored ~180–200. Both orphan constructors below route through here so the two
+/// cannot drift apart, which is exactly how the right side went unfixed while the
+/// left was correct.
+#[inline]
+fn orphan_read1_score(anchor_is_left: bool, anchor_score: i32) -> i32 {
+    if anchor_is_left {
+        anchor_score
+    } else {
+        0
+    }
+}
+
 /// Build an orphan [`RawMapping`] for a single mate's validated chain (used when
 /// a concordant pair is rejected but one mate aligns well — the salmon `m1`/`m2`
 /// orphan-rescue). `is_left` selects read1 vs read2.
@@ -489,7 +509,7 @@ fn orphan_raw(
         r1_pos: if is_left { start } else { -1 },
         r2_pos: if is_left { -1 } else { start },
         r2_fw: false,
-        r1_score: score,
+        r1_score: orphan_read1_score(is_left, score),
     }
 }
 
@@ -679,7 +699,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
             anchor.chain.ref_start()
         },
         r2_fw: false,
-        r1_score: anchor_aln.score,
+        r1_score: orphan_read1_score(anchor_is_left, anchor_aln.score),
     });
 }
 
@@ -733,5 +753,30 @@ fn recover_mate(
         let partner_end_abs = win_start + aln.end_col as i32;
         let partner_start_abs = partner_end_abs - partner_read.len() as i32;
         Some((aln.score, (a_e - partner_start_abs).max(0)))
+    }
+}
+
+#[cfg(test)]
+mod orphan_as_tests {
+    use super::*;
+
+    /// A left orphan's read1 carries the anchor score; a right orphan's read1 is
+    /// the unmapped mate and must be 0, so the SAM writer's `score - r1_score`
+    /// yields the real anchor score rather than 0. This is the invariant that was
+    /// violated for right orphans (every such record reported `AS:i:0` for an
+    /// alignment scoring ~180–200); both orphan constructors route through this
+    /// helper so they cannot diverge again.
+    #[test]
+    fn right_orphan_read1_score_is_zero_so_read2_as_is_the_anchor_score() {
+        let anchor_score = 194;
+        // Left orphan: read1 is the anchor.
+        assert_eq!(orphan_read1_score(true, anchor_score), anchor_score);
+        // Right orphan: read1 is unmapped -> 0, and the writer emits
+        // score - r1_score = anchor_score - 0 = anchor_score.
+        assert_eq!(orphan_read1_score(false, anchor_score), 0);
+        assert_eq!(
+            anchor_score - orphan_read1_score(false, anchor_score),
+            anchor_score
+        );
     }
 }
