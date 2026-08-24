@@ -2815,7 +2815,7 @@ version = "2.5.1"
 dependencies = [
  "ahash",
  "divan",
- "hashbrown 0.15.5",
+ "hashbrown 0.17.1",
  "ksw2rs",
  "piscem-rs",
  "salmon-core",
