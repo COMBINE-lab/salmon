@@ -1,9 +1,25 @@
 name: CI
 
 on:
+  # Only the long-lived branches, which are the ones that receive direct pushes
+  # (release bumps, release notes, `master` -> `develop` merges) and would
+  # otherwise get no CI at all.
+  #
+  # Deliberately not `"**"`. Together with `pull_request` below, a branch pushed
+  # to this repository and then opened as a PR matched both triggers and ran the
+  # whole four-way `build-test` matrix twice on the same commit — visible on
+  # #1172 as runs 32668385956 and 32668407492. That is pure waste, and worst
+  # where it costs most: the macOS jobs take 24-38 minutes each. Fork PRs were
+  # never affected, since their pushes run in the fork, so this only ever
+  # doubled the cost of branches pushed here directly.
+  #
+  # The trade: a branch pushed here with no PR open gets no CI until one is
+  # opened. That is intended — CI runs on what is proposed for merge, plus
+  # whatever lands on the long-lived branches directly.
   push:
     branches:
-      - "**"
+      - master
+      - develop
   pull_request:
   workflow_dispatch:
 
