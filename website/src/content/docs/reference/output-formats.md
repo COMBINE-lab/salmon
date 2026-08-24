@@ -471,6 +471,12 @@ them just because output was requested:
 - **`AS`** is the score salmon's mapper assigned to the placement — the same
   number quantification used — not a score recomputed from the record's own
   CIGAR. It is comparable across records within one run, not across aligners.
+  **In sketch mode (`--sketch`) there is no such score**: pseudoalignment maps
+  by k-mer/equivalence-class compatibility without computing a per-placement
+  alignment score, so `AS` is reported as `0` and every reported mapping is a
+  co-equal best mapping for the read as assessed by the algorithm. A meaningful
+  `AS` appears only under selective alignment (the default), which computes a
+  banded alignment score per candidate.
 - **`MAPQ`** reflects only the placement count, not alignment confidence — see
   below.
 
