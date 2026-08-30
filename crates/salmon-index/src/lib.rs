@@ -81,7 +81,13 @@ const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 ///   the decoy block is always a single contiguous range (enforced by a
 ///   build-time contiguity guard), `N` is retained in decoy sequences, and the
 ///   reference layout `[transcripts][decoys][short transcripts]` is guaranteed.
-pub const INDEX_FORMAT_VERSION: u32 = 1;
+/// - **2** — sshash-rs 0.7 one-modality minimizer scheme (C++ SSHash v6 port):
+///   the `.ssi` dictionary format moved to 5.0 (canonical minimizer at forward
+///   density, centre-closest tie-break; header records the build seed and a
+///   hasher guard). Indices written by salmon <= 2.4.x cannot be loaded and
+///   must be rebuilt. `info.json` now records `sshash_format_version` so
+///   future dictionary format breaks are diagnosable from the index dir.
+pub const INDEX_FORMAT_VERSION: u32 = 2;
 
 /// Minimum index format version this build can load. Indices below this are
 /// rejected with an actionable rebuild message (their decoy / short-transcript
@@ -89,7 +95,11 @@ pub const INDEX_FORMAT_VERSION: u32 = 1;
 ///
 /// Refusing to load is deliberate: silently producing subtly wrong abundances is
 /// far worse than telling the user to spend ten minutes rebuilding.
-pub const MIN_READABLE_INDEX_VERSION: u32 = 1;
+pub const MIN_READABLE_INDEX_VERSION: u32 = 2;
+
+/// The sshash `.ssi` dictionary format major version this salmon builds
+/// against (recorded in `info.json` as `sshash_format_version`).
+pub const SSHASH_FORMAT_VERSION_MAJOR: u32 = 5;
 
 /// Default minimizer length for a given k (used when `m == 0`).
 ///
@@ -134,10 +144,9 @@ pub struct IndexBuildOptions {
     pub m: usize,
     /// worker threads; `0` means all available cores
     pub threads: usize,
-    /// build canonical-k-mer index (the salmon/pufferfish convention)
-    ///
-    /// "Canonical" means a k-mer and its reverse complement are stored under one
-    /// key, since DNA is double-stranded and a read may come from either strand.
+    /// Ignored since index format v2: the sshash dictionary is always
+    /// canonical (a k-mer and its reverse complement share one key — the
+    /// salmon/pufferfish convention is now the only modality).
     pub canonical: bool,
     /// build the equivalence-class table (needed for pseudoalignment-only mode)
     pub build_ec_table: bool,
@@ -224,6 +233,8 @@ impl IndexBuildOptions {
 pub struct IndexInfo {
     pub k: usize,
     pub m: usize,
+    /// Always `true` since index format v2 (the sshash dictionary is
+    /// canonical by construction); kept for readers of older info.json.
     pub canonical: bool,
     pub has_ec_table: bool,
     pub num_refs: usize,
@@ -253,6 +264,12 @@ pub struct IndexInfo {
     /// from `salmon_version`, the software release string below.
     #[serde(default)]
     pub index_version: u32,
+    /// The sshash `.ssi` dictionary format major version the index was built
+    /// with (5 = sshash-rs 0.7 unified scheme). Absent (0) in older indices.
+    /// Recorded so a dictionary format break is diagnosable from `info.json`
+    /// without poking the binary `.ssi` header.
+    #[serde(default)]
+    pub sshash_format_version: u32,
     /// whether the index was built with `--keepDuplicates`.
     ///
     /// `Option` rather than a defaulted `bool`: an index built before this was
@@ -852,7 +869,6 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         m,
         build_ec_table: opts.build_ec_table,
         num_threads: opts.threads,
-        canonical: opts.canonical,
         // Fixed seed: the hash function must be reproducible, or two builds of
         // the same reference would differ.
         seed: 1,
@@ -929,12 +945,13 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     let info = IndexInfo {
         k: opts.k,
         m,
-        canonical: opts.canonical,
+        canonical: true,
         has_ec_table: idx.has_ec_table(),
         num_refs: idx.num_refs(),
         first_decoy_index,
         num_decoys,
         index_version: INDEX_FORMAT_VERSION,
+        sshash_format_version: SSHASH_FORMAT_VERSION_MAJOR,
         keep_duplicates: Some(opts.keep_duplicates),
         // `env!` reads an environment variable at compile time; Cargo sets this
         // one from Cargo.toml, so the recorded version is always this build's.
@@ -1157,8 +1174,9 @@ impl SalmonIndex {
             anyhow::bail!(
                 "{} was built by {} (index format v{}), which this salmon cannot read \
                  (requires index format v{}+).\n\
-                 Indices built before salmon 2.1.0 could mis-handle decoy and short \
-                 (sub-k) transcript references; rebuild it with \
+                 Index format v1 (salmon 2.1.x-2.4.x) predates the unified sshash \
+                 minimizer scheme, and formats before v1 could mis-handle decoy and \
+                 short (sub-k) transcript references; rebuild it with \
                  `salmon index -t <transcripts> [-d <decoys>] -i {}`.",
                 dir.display(),
                 built_by,
@@ -1564,5 +1582,34 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("salmon 2.0.1"), "message was: {msg}");
         assert!(msg.contains("rebuild"), "message was: {msg}");
+    }
+
+    #[test]
+    fn rejects_v1_index() {
+        // A format-v1 index (salmon 2.1.x-2.4.x) predates the unified sshash
+        // minimizer scheme: its .ssi is unreadable by sshash-lib 0.7, so the
+        // info.json gate must reject it up front with a rebuild message.
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+
+        let info_path = out.join(INFO_FILE);
+        let mut info: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&info_path).unwrap()).unwrap();
+        info["index_version"] = serde_json::Value::from(1u32);
+        info["salmon_version"] = serde_json::Value::String("2.4.1".into());
+        std::fs::write(&info_path, serde_json::to_vec_pretty(&info).unwrap()).unwrap();
+
+        let err = match SalmonIndex::load(&out) {
+            Ok(_) => panic!("format-v1 index must be rejected"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(msg.contains("salmon 2.4.1"), "message was: {msg}");
+        assert!(msg.contains("rebuild"), "message was: {msg}");
+        assert!(msg.contains("index format v1"), "message was: {msg}");
     }
 }
