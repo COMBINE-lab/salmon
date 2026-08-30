@@ -1,0 +1,22 @@
+[package]
+name = "salmon-degnorm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Transcript-coverage profiles and DegNorm-style degradation normalization for the salmon Rust port."
+
+[dependencies]
+anyhow = { workspace = true }
+flate2 = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

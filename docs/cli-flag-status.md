@@ -10,6 +10,8 @@ compatibility.
 > that redirects to alevin-fry, and any unrecognized (⛔) flag now errors with a
 > pointer to that migration guide rather than a bare clap message. New 2.0-only
 > flags: `--sketch`, `--sketchStrictOrphans`, `--allowDovetail` (in sketch).
+> Later additions: `--degCoverage` / `--degCovBins` and the `salmon degnorm`
+> subcommand (degradation normalization).
 
 ## Legend
 
@@ -20,8 +22,9 @@ compatibility.
 | ⚠️ **Accept + warn** | Parsed for command-line compatibility, logs a warning, has no effect (no Rust analog, or genuinely a no-op). |
 | ⛔ **Rejected** | Not implemented; passing it is an "unknown argument" error. |
 | 🔁 **Covered** | Functionality is reachable via a different flag / is the default. |
+| 🆕 **Rust-port only** | No C++ salmon analog; new functionality this port adds. |
 
-Anything not ✅/🟰/🔁 does **not** change results; ⚠️ flags let existing salmon
+Anything not ✅/🟰/🔁/🆕 does **not** change results; ⚠️ flags let existing salmon
 command lines run unchanged, while ⛔ flags fail loudly so nothing silently
 misbehaves.
 
@@ -84,6 +87,7 @@ misbehaves.
 | `--reduceGCMemory` | 🟰 | The rank-bitvector GC representation it selects is now the default (faster + ~2× leaner, identical results). |
 | `--numBiasSamples` | ⛔ | No separate seq-bias sample cap (collected within the aux window). |
 | `--numPreAuxModelSamples` | ✅ | Pre-aux burn-in window (port default 5000; salmon 1,000,000); same `--online`-only caveat as `--forgettingFactor`. |
+| `--degCoverage`, `--degCovBins` | 🆕 | Rust-port feature (no C++ analog): per-transcript coverage curves for `salmon degnorm`. Reads mode only; warns and is ignored with `-a` or `--rad`, rejected with `--deterministic`. See [`degnorm.md`](degnorm.md). |
 | `--noFragLengthDist` | ✅ | Drops the fragment-length term from a placement's probability (the proper-pair PMF term and the orphan ambiguous-length term alike). Honoured on every quantification path — reads, `-a`, `--rad`, deterministic and online — except the deprecated `--online -a`, which warns that it lacks it. |
 | `--noSingleFragProb` | ✅ | Replaces an orphan's bounded-CMF fragment-length estimate with salmon's flat `LOG_EPSILON` penalty. Honoured on the default deterministic / RAD paths as well as `--online`; it changes point estimates wherever orphans are contested. |
 
@@ -128,6 +132,15 @@ misbehaves.
 | Flag | Status | Notes |
 |------|--------|-------|
 | `--quants`, `--names`, `--column`, `--missing`, `--genes`, `-o/--output` | ✅ | Complete. |
+
+## `salmon degnorm`
+
+Rust-port subcommand with no C++ analog: degradation normalization across a
+cohort, in the spirit of [DegNorm](https://nustatbioinfo.github.io/DegNorm/).
+All flags 🆕 — `--quants`, `--names`, `-o/--output`, `--minLength`,
+`--minCoverage`, `--maxAdjustDI`, `--maskFrac`, `--maxIter`, `--tol`,
+`--noCounts`, `--noQuantSf`, `-p/--threads`. Writes one corrected `quant.sf`
+per sample (salmon's own format, for tximport/DESeq2) alongside the matrices. See [`degnorm.md`](degnorm.md).
 
 ## Hidden / testing flags (C++ `getHiddenOptions` / `getTestingOptions`)
 

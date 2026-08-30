@@ -243,6 +243,8 @@ enum Command {
     Quant(QuantArgs),
     /// Merge a column across multiple samples' quant files into a matrix.
     Quantmerge(QuantMergeArgs),
+    /// Correct read counts for transcript degradation across a set of samples.
+    Degnorm(DegnormArgs),
     /// Diagnostic: per-read best-mapping detail (placement, seed coverage, score).
     DebugMap(DebugMapArgs),
     /// Single-cell quantification: removed; use the alevin-fry ecosystem.
@@ -262,6 +264,56 @@ enum Command {
 struct AlevinArgs {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., hide = true)]
     _ignored: Vec<String>,
+}
+
+/// `salmon degnorm`: the cohort half of degradation normalization.
+///
+/// Every sample must have been quantified with `--degCoverage` against the same
+/// index; the per-sample coverage curves are what makes degradation visible,
+/// and one sample on its own cannot show it (see the `salmon-degnorm` crate
+/// docs).
+#[derive(Args)]
+struct DegnormArgs {
+    /// Quantification directories (one per sample), each holding
+    /// `aux_info/coverage.gz` and `quant.sf`.
+    #[arg(long = "quants", num_args = 1.., required = true)]
+    quants: Vec<PathBuf>,
+    /// Optional sample names (default: the directory basenames).
+    #[arg(long = "names", num_args = 1..)]
+    names: Vec<String>,
+    /// Output directory for the degradation index and count matrices.
+    #[arg(short = 'o', long = "output", required = true)]
+    output: PathBuf,
+    /// Skip transcripts shorter than this.
+    #[arg(long = "minLength", default_value_t = 200)]
+    min_length: u32,
+    /// Skip transcripts whose mean coverage depth across the cohort is below
+    /// this. The degradation index is noisy where there is little to measure.
+    #[arg(long = "minCoverage", default_value_t = 0.1)]
+    min_coverage: f64,
+    /// Ceiling on the index used to inflate counts (the reported index is
+    /// untouched).
+    #[arg(long = "maxAdjustDI", default_value_t = 0.9)]
+    max_adjust_di: f64,
+    /// Hold entries below this fraction of the fitted envelope out of the
+    /// envelope fit, as damaged. `0` fits every entry.
+    #[arg(long = "maskFrac", default_value_t = 0.5)]
+    mask_frac: f64,
+    /// Maximum fit/project iterations per transcript.
+    #[arg(long = "maxIter", default_value_t = 100)]
+    max_iter: usize,
+    /// Relative convergence tolerance for the per-transcript fit.
+    #[arg(long = "tol", default_value_t = 1e-4)]
+    tol: f64,
+    /// Report degradation only; do not read `quant.sf` or adjust counts.
+    #[arg(long = "noCounts")]
+    no_counts: bool,
+    /// Skip the per-sample adjusted `quant.sf` files (write only the matrices).
+    #[arg(long = "noQuantSf")]
+    no_quant_sf: bool,
+    /// Worker threads (0 = all cores).
+    #[arg(short = 'p', long = "threads", default_value_t = 0)]
+    threads: usize,
 }
 
 #[derive(Args)]
@@ -613,6 +665,14 @@ struct QuantArgs {
     /// Enable positional bias correction.
     #[arg(long = "posBias")]
     pos_bias: bool,
+    /// Accumulate per-transcript coverage curves and write
+    /// `aux_info/coverage.gz`, the input to `salmon degnorm`. Reads mode only.
+    #[arg(long = "degCoverage")]
+    deg_coverage: bool,
+    /// Position bins per transcript for --degCoverage. Costs
+    /// `(bins + 1) x transcripts x 8` bytes of memory during mapping.
+    #[arg(long = "degCovBins", default_value_t = salmon_degnorm::DEFAULT_NUM_BINS)]
+    deg_cov_bins: usize,
     /// EM iterations for the preliminary abundance estimate that weights bias
     /// model collection (expert; rough on purpose to avoid overfitting).
     #[arg(long = "biasSeedEMIters", default_value_t = 11, hide = true)]
@@ -2332,6 +2392,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             "the input alignments already are the per-mapping records",
         );
         warn_unsupported_fld_policy(args.fld_policy, "alignment mode (-a)");
+        warn_unsupported_deg_coverage(args.deg_coverage, "alignment mode (-a)");
         let mut opts = AlignQuantOptions::new(bam, args.output);
         opts.lib_type = args.lib_type;
         opts.em.use_vbem = use_vbem;
@@ -2606,6 +2667,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // The RAD reuses alignment mode's inference/output; AlignQuantOptions
         // carries the relevant knobs (lib type, EM/VBEM, score-exp, FLD prior,
         // bootstrap/Gibbs). `bam` is unused by the RAD path.
+        warn_unsupported_deg_coverage(args.deg_coverage, "RAD input mode");
         let mut opts = AlignQuantOptions::new(rad_path.clone(), args.output);
         opts.lib_type = args.lib_type;
         opts.em.use_vbem = use_vbem;
@@ -2868,6 +2930,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.gc_bias = args.gc_bias;
     opts.pos_bias = args.pos_bias;
     opts.bias_seed_em_iters = args.bias_seed_em_iters;
+    opts.coverage_bins = args.deg_coverage.then_some(args.deg_cov_bins);
     opts.dump_bias_models = args.dump_bias_models;
     // RAD chunk compression (only consumed when a RAD is actually written:
     // --writeRad output or the --deterministic intermediate). --noCompressRad
@@ -3157,6 +3220,7 @@ fn main() -> Result<()> {
         Command::Index(args) => run_index(args),
         Command::Quant(args) => run_quant(args, cli.quiet),
         Command::Quantmerge(args) => run_quantmerge(args),
+        Command::Degnorm(args) => run_degnorm(args),
         Command::DebugMap(args) => run_debug_map(args),
         Command::Alevin(_) => unreachable!("alevin handled before logging init"),
         Command::Swim => {
@@ -3182,6 +3246,87 @@ fn run_swim() {
 
 "#
     );
+}
+
+fn run_degnorm(args: DegnormArgs) -> Result<()> {
+    use salmon_degnorm::{cohort, CohortOptions, FitOptions, Sample};
+
+    let names: Vec<String> = if args.names.is_empty() {
+        args.quants
+            .iter()
+            .map(|d| {
+                d.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
+            .collect()
+    } else {
+        anyhow::ensure!(
+            args.names.len() == args.quants.len(),
+            "--names ({}) must match the number of --quants ({})",
+            args.names.len(),
+            args.quants.len()
+        );
+        args.names.clone()
+    };
+
+    let samples: Vec<Sample> = args
+        .quants
+        .iter()
+        .zip(&names)
+        .map(|(dir, name)| Sample {
+            name: name.clone(),
+            coverage: dir.join("aux_info").join("coverage.gz"),
+            // A missing quant.sf is reported by the cohort layer with the
+            // sample's name attached, which beats a bare "no such file".
+            quant: (!args.no_counts).then(|| dir.join("quant.sf")),
+        })
+        .collect();
+    for s in &samples {
+        anyhow::ensure!(
+            s.coverage.exists(),
+            "sample '{}': no {} — quantify it with --degCoverage first",
+            s.name,
+            s.coverage.display()
+        );
+    }
+
+    if args.threads > 0 {
+        // Best-effort: a pool already built by something else in-process is not
+        // an error, it just means this setting does not apply.
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global();
+    }
+
+    let opts = CohortOptions {
+        fit: FitOptions {
+            max_iter: args.max_iter,
+            tol: args.tol,
+            mask_frac: args.mask_frac,
+            ..FitOptions::default()
+        },
+        min_length: args.min_length,
+        min_mean_coverage: args.min_coverage,
+        max_adjust_di: args.max_adjust_di,
+    };
+
+    let res = cohort::run(&samples, &opts)?;
+    cohort::write_tables(&args.output, &res, &opts)?;
+    if !args.no_quant_sf {
+        cohort::write_adjusted_quants(&args.output, &res, &samples)?;
+    }
+    let fitted = res.fitted.iter().filter(|&&f| f).count();
+    tracing::info!(
+        "fitted {fitted} / {} transcripts across {} samples",
+        res.num_targets(),
+        res.num_samples()
+    );
+    for (name, di) in res.sample_names.iter().zip(res.mean_di()) {
+        tracing::info!("{name}: mean degradation index {di:.4}");
+    }
+    tracing::info!("wrote degradation tables to {}", args.output.display());
+    Ok(())
 }
 
 fn run_quantmerge(args: QuantMergeArgs) -> Result<()> {
@@ -3292,6 +3437,17 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
 // Warn rather than ignore. A flag that has no effect in the chosen mode is a
 // misunderstanding on the user's part, and silently discarding it would leave
 // them believing they had configured something they had not.
+/// `--degCoverage` is a reads-mode feature: coverage is accumulated from the
+/// per-fragment posteriors the mapping pass computes, which the alignment and
+/// RAD paths do not produce. Warn rather than fail — the flag is additive, and
+/// refusing an otherwise valid command line over an extra output would be the
+/// more disruptive answer.
+fn warn_unsupported_deg_coverage(requested: bool, mode: &str) {
+    if requested {
+        tracing::warn!("--degCoverage is not supported in {mode}; no coverage will be written");
+    }
+}
+
 fn warn_unsupported_fld_policy(policy: FldPolicyArg, mode: &str) {
     if policy == FldPolicyArg::default() {
         return;

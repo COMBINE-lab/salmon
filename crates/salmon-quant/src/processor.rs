@@ -122,6 +122,12 @@ pub(crate) struct Shared<'a> {
     pub length_class: Option<&'a [usize]>,
     /// shared observed (5', 3') positional-bias models (per length class) to merge into
     pub posbias_obs: Option<&'a Mutex<(Vec<SimplePosBias>, Vec<SimplePosBias>)>>,
+    /// shared per-transcript coverage accumulator (`--degCoverage`). Unlike the
+    /// bias models this is not per-thread: a per-worker copy would be one
+    /// `bins × transcripts` array *per thread*, so workers update it in place
+    /// through relaxed atomics instead (see
+    /// [`salmon_degnorm::CoverageAccumulator`]).
+    pub coverage: Option<&'a salmon_degnorm::CoverageAccumulator>,
     /// online (dual-phase) inference state; when present, observed bias models
     /// are collected with abundance-aware posteriors instead of score-only weights
     pub online: Option<&'a OnlineInference>,
@@ -678,6 +684,45 @@ fn tally_observed_formats(
     }
 }
 
+/// Lay one fragment's placements onto the per-transcript coverage curves
+/// (`--degCoverage`), each weighted by `bias_w[k]`.
+///
+/// The span is the fragment's footprint on the transcript: the inferred insert
+/// for a proper pair, the read itself for an orphan or a single-end library.
+/// That is the footprint degradation removes, so it is what the downstream
+/// model has to see — the *start* alone (what positional bias records) would
+/// leave the interior of every fragment invisible.
+///
+/// Unlike the bias models this is not stopped at the end of the training
+/// window: a coverage curve is a summary of the whole library, and truncating
+/// it after the first few million fragments would describe the head of the
+/// FASTQ rather than the sample. The weights themselves do change at that
+/// point — `bias_w` is the abundance-aware online posterior inside the window
+/// and the score-only normalized weight after it — which matters only for
+/// multi-mapping fragments, and only in how they are split between the
+/// transcripts they are compatible with.
+fn collect_coverage(
+    placements: &[ScoredMapping],
+    compat: &[(MapIdx, f64)],
+    bias_w: &CompatAligned<f64>,
+    cov: &salmon_degnorm::CoverageAccumulator,
+) {
+    for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
+        let m = i.get(placements);
+        // `bias_w` is aligned to `compat`, indexed by `k`, not by `i`.
+        let mass = bias_w[k];
+        if mass <= 0.0 {
+            continue;
+        }
+        let span = if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
+            m.fragment_len
+        } else {
+            m.read_len
+        };
+        cov.add_fragment(m.tid as usize, m.ref_pos, span, mass);
+    }
+}
+
 /// Cheap per-fragment work for `--deterministic`'s mapping pass: count the
 /// fragment and, for a uniquely-mapped proper pair, record its length + observed
 /// format into the order-independent [`salmon_model::DiscreteFld`]. No online
@@ -967,7 +1012,8 @@ fn record(
     // these are abundance-aware posteriors `softmax(mass_t + log w_t)`, which
     // also advances the online masses by `logForgettingMass + log(posterior)`;
     // without it they fall back to the normalized aux (score) weights.
-    let collecting = seqbias.is_some() || gcbias.is_some() || posbias.is_some();
+    let collecting =
+        seqbias.is_some() || gcbias.is_some() || posbias.is_some() || sh.coverage.is_some();
     // Abundance-aware online posterior, computed once per fragment within the
     // model-training window (`o.collecting()`), advancing the online masses.
     // Mirrors salmon's `aln.logProb = transcriptLogCount + auxProb + startPosProb`
@@ -1044,6 +1090,10 @@ fn record(
         if let Some(pos) = posbias {
             collect_pos(sh, placements, compat, bias_w, pos);
         }
+    }
+    // Deliberately outside `collect_now`: see `collect_coverage`.
+    if let Some(cov) = sh.coverage {
+        collect_coverage(placements, compat, bias_w, cov);
     }
 
     // Train the fragment-length distribution from this fragment. The FLD is

@@ -2740,6 +2740,7 @@ dependencies = [
  "rayon",
  "salmon-align",
  "salmon-core",
+ "salmon-degnorm",
  "salmon-index",
  "salmon-map",
  "salmon-quant",
@@ -2762,6 +2763,18 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "zstd",
+]
+
+[[package]]
+name = "salmon-degnorm"
+version = "2.6.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2852,6 +2865,7 @@ dependencies = [
  "rapidgzip-core",
  "rayon",
  "salmon-core",
+ "salmon-degnorm",
  "salmon-eqclass",
  "salmon-index",
  "salmon-infer",
