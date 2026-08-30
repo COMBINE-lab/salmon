@@ -40,7 +40,15 @@ instead of silently zeroing the mapping rate.
   is ~6% faster at ~17% lower peak RSS.
 - **Mapping**: sshash streaming lookups are ~33% faster (single minimizer
   iterator + v6's same-minimizer memos for the negative-in-positive streams
-  sequencing errors produce); human sketch quant ~3% faster wall overall.
+  sequencing errors produce). Sketch-mode map-only (`--writeRad --skipQuant`,
+  ERR188044 36M pairs, 16 threads, 3 interleaved reps): wall 17.1s → 16.1s
+  (−5.5%), CPU 260s → 245s (−5.7%). Full sketch quant ~3% faster wall.
+  Point lookups (not on the mapping hot path) are 77.7 ns/kmer vs 79.1
+  before the port and 134 for C++ v6 on the same machine — an initial +26%
+  regression there turned out to be branch misprediction from the
+  tie-tracking (`if < / else if ==` defeats LLVM's if-conversion; measured
+  IPC 5.1→3.7, 6.5× branch misses) and was fixed by writing the running-min
+  update branchlessly.
 - Also fixed upstream in sshash-rs 0.7: K ≥ 33 streaming produced wrong
   results in release builds (u64 truncation of u128 k-mer state), and a
   non-default build seed produced an index that returned zero hits.
