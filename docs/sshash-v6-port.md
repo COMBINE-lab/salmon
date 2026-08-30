@@ -2,7 +2,8 @@
 
 Salmon's k-mer dictionary, `sshash-lib`, was updated to 0.7 — a port of C++
 SSHash v6.0.0 (jermp/sshash PR #93). This is an **index-format break**:
-indices built by salmon ≤ 2.4.x (index format v1) must be rebuilt with
+indices built by earlier salmon releases (index format v1, salmon 2.1.0
+through the release preceding this change) must be rebuilt with
 `salmon index`. Both gates fire with actionable messages: salmon's
 `info.json` version check, and sshash's own `.ssi` header check underneath it.
 

@@ -84,8 +84,8 @@ const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 /// - **2** — sshash-rs 0.7 one-modality minimizer scheme (C++ SSHash v6 port):
 ///   the `.ssi` dictionary format moved to 5.0 (canonical minimizer at forward
 ///   density, centre-closest tie-break; header records the build seed and a
-///   hasher guard). Indices written by salmon <= 2.4.x cannot be loaded and
-///   must be rebuilt. `info.json` now records `sshash_format_version` so
+///   hasher guard). Format-v1 indices (every salmon release from 2.1.0 up to
+///   this format change) cannot be loaded and must be rebuilt. `info.json` now records `sshash_format_version` so
 ///   future dictionary format breaks are diagnosable from the index dir.
 pub const INDEX_FORMAT_VERSION: u32 = 2;
 
@@ -1174,7 +1174,8 @@ impl SalmonIndex {
             anyhow::bail!(
                 "{} was built by {} (index format v{}), which this salmon cannot read \
                  (requires index format v{}+).\n\
-                 Index format v1 (salmon 2.1.x-2.4.x) predates the unified sshash \
+                 Index format v1 (salmon releases before this format change) predates \
+                 the unified sshash \
                  minimizer scheme, and formats before v1 could mis-handle decoy and \
                  short (sub-k) transcript references; rebuild it with \
                  `salmon index -t <transcripts> [-d <decoys>] -i {}`.",
@@ -1631,7 +1632,7 @@ mod tests {
 
     #[test]
     fn rejects_v1_index() {
-        // A format-v1 index (salmon 2.1.x-2.4.x) predates the unified sshash
+        // A format-v1 index (salmon releases before this format change) predates the unified sshash
         // minimizer scheme: its .ssi is unreadable by sshash-lib 0.7, so the
         // info.json gate must reject it up front with a rebuild message.
         let tmp = tempfile::tempdir().unwrap();
