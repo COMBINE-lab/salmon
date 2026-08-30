@@ -1185,6 +1185,23 @@ impl SalmonIndex {
                 dir.display(),
             );
         }
+        // The mirror gate: an index from a FUTURE format would otherwise slip
+        // past the >= MIN check and die deep inside the sshash loader with a
+        // raw I/O error. Say what actually happened instead.
+        if info.index_version > INDEX_FORMAT_VERSION {
+            anyhow::bail!(
+                "{} was built by salmon {} (index format v{}), which is newer than this \
+                 salmon understands (format v{}).\n\
+                 Upgrade salmon, or rebuild the index with this version: \
+                 `salmon index -t <transcripts> [-d <decoys>] -i {}`.",
+                dir.display(),
+                info.salmon_version,
+                info.index_version,
+                INDEX_FORMAT_VERSION,
+                dir.display(),
+            );
+        }
+
         let index_prefix = dir.join(INDEX_PREFIX);
         // Load the EC table when the index has one (enables pseudoalignment-only mode).
         let inner = ReferenceIndex::load(&index_prefix, info.has_ec_table, false)
@@ -1582,6 +1599,34 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("salmon 2.0.1"), "message was: {msg}");
         assert!(msg.contains("rebuild"), "message was: {msg}");
+    }
+
+    #[test]
+    fn rejects_future_index() {
+        // An index claiming a NEWER format than this build understands must be
+        // rejected up front with an "upgrade salmon" message, not by a raw
+        // sshash I/O error from deep inside the loader.
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+
+        let info_path = out.join(INFO_FILE);
+        let mut info: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&info_path).unwrap()).unwrap();
+        info["index_version"] = serde_json::Value::from(INDEX_FORMAT_VERSION + 1);
+        info["salmon_version"] = serde_json::Value::String("99.0.0".into());
+        std::fs::write(&info_path, serde_json::to_vec_pretty(&info).unwrap()).unwrap();
+
+        let err = match SalmonIndex::load(&out) {
+            Ok(_) => panic!("future-format index must be rejected"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(msg.contains("newer"), "message was: {msg}");
+        assert!(msg.contains("Upgrade salmon"), "message was: {msg}");
     }
 
     #[test]
