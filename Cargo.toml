@@ -152,12 +152,3 @@ lto = "thin"
 inherits = "release"
 lto = "thin"
 
-# Local development against the sshash-rs 0.7 / piscem-rs 0.10 branches;
-# removed at release. Cargo honours [patch] only at the workspace root, so
-# piscem-rs's own patch section does not apply transitively — salmon must
-# redirect sshash-lib itself (see docs/sshash-bucket-cache.md).
-[patch.crates-io]
-piscem-rs = { path = "../piscem-rs" }
-thread-broker = { path = "../piscem-rs/crates/thread-broker" }
-sshash-lib = { path = "../sshash-rs/crates/sshash-lib" }
-tiny-dict = { path = "../sshash-rs/crates/tiny-dict" }
