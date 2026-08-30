@@ -16,7 +16,7 @@ salmon-model = { workspace = true }
 salmon-rad = { workspace = true }
 libradicl = { workspace = true }
 crossbeam-queue = "0.3"
-noodles-bam = "0.94"
+noodles-bam = "0.95"
 noodles-sam = "0.89"
 noodles-bgzf = "0.51"
 # Genome-alignment projection (spliced genome BAM -> transcriptome coords). Its

@@ -1918,11 +1918,11 @@ version = "0.115.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ef86cb036ab589c660e76bc6d7741454fe8ff71ba3348f71812936f5c1a43f6"
 dependencies = [
- "noodles-bam",
+ "noodles-bam 0.94.0",
  "noodles-core",
  "noodles-gff",
  "noodles-gtf",
- "noodles-sam",
+ "noodles-sam 0.89.0",
 ]
 
 [[package]]
@@ -1936,8 +1936,23 @@ dependencies = [
  "memchr",
  "noodles-bgzf",
  "noodles-core",
- "noodles-csi",
- "noodles-sam",
+ "noodles-csi 0.60.0",
+ "noodles-sam 0.89.0",
+]
+
+[[package]]
+name = "noodles-bam"
+version = "0.95.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd3b4801c9e0aec465de9cc396db2cfa629226cf9aa98dbcab0f460007c62e0d"
+dependencies = [
+ "bstr",
+ "indexmap",
+ "memchr",
+ "noodles-bgzf",
+ "noodles-core",
+ "noodles-csi 0.61.0",
+ "noodles-sam 0.90.0",
 ]
 
 [[package]]
@@ -1975,6 +1990,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "noodles-csi"
+version = "0.61.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59b884d95b1c04066f2364201f4ba126b1fdc590841745c226952c424fceeb02"
+dependencies = [
+ "bit-vec",
+ "bstr",
+ "indexmap",
+ "noodles-bgzf",
+ "noodles-core",
+]
+
+[[package]]
 name = "noodles-gff"
 version = "0.61.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1985,7 +2013,7 @@ dependencies = [
  "lexical-core",
  "noodles-bgzf",
  "noodles-core",
- "noodles-csi",
+ "noodles-csi 0.60.0",
  "percent-encoding",
 ]
 
@@ -2000,7 +2028,7 @@ dependencies = [
  "lexical-core",
  "noodles-bgzf",
  "noodles-core",
- "noodles-csi",
+ "noodles-csi 0.60.0",
  "noodles-gff",
 ]
 
@@ -2017,7 +2045,23 @@ dependencies = [
  "memchr",
  "noodles-bgzf",
  "noodles-core",
- "noodles-csi",
+ "noodles-csi 0.60.0",
+]
+
+[[package]]
+name = "noodles-sam"
+version = "0.90.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11f1fed0ec07fac91d110a402ab0ba39490d5bb0effb995d75907756226456f1"
+dependencies = [
+ "bitflags 2.13.1",
+ "bstr",
+ "indexmap",
+ "lexical-core",
+ "memchr",
+ "noodles-bgzf",
+ "noodles-core",
+ "noodles-csi 0.61.0",
 ]
 
 [[package]]
@@ -2712,9 +2756,9 @@ dependencies = [
  "flate2",
  "jiff",
  "libradicl",
- "noodles-bam",
+ "noodles-bam 0.95.0",
  "noodles-bgzf",
- "noodles-sam",
+ "noodles-sam 0.89.0",
  "rayon",
  "salmon-core",
  "salmon-eqclass",
@@ -2844,9 +2888,9 @@ dependencies = [
  "flate2",
  "jiff",
  "libradicl",
- "noodles-bam",
+ "noodles-bam 0.95.0",
  "noodles-bgzf",
- "noodles-sam",
+ "noodles-sam 0.89.0",
  "paraseq-temp",
  "piscem-rs",
  "rapidgzip-core",
