@@ -78,7 +78,7 @@ cf1-rs = "0.5"
 # budget shared between gzip decoding and mapping, solved from live measurement
 # rather than split by a fixed guess. `rapidgzip` enables the parallel decoder
 # that budget is worth dividing in the first place.
-piscem-rs = { version = "0.9.2", features = ["rapidgzip"] }
+piscem-rs = { version = "0.10.0", features = ["rapidgzip"] }
 # The control law piscem-rs 0.9.0 is built on. Taken directly so salmon can
 # implement `Consumer` for its own mapping pool; must resolve to the same
 # version piscem-rs uses or the trait would not match across the boundary.
@@ -151,3 +151,4 @@ lto = "thin"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
