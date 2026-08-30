@@ -6,7 +6,7 @@
 # resolve from crates.io, so the build needs only this repo as context.
 
 # ---- builder ----------------------------------------------------------------
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.98-bookworm AS builder
 
 WORKDIR /src
 # Copy the whole workspace (Cargo.toml, crates/, .cargo/config.toml with the
