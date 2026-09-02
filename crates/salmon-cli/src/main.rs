@@ -30,11 +30,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-// mimalloc as the global allocator: the quant hot path is highly multithreaded
-// and allocation-heavy, where mimalloc markedly outperforms the system allocator.
-#[cfg(not(feature = "sysalloc"))]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// The global allocator (mimalloc by default). See the module for why the quant
+// hot path is sensitive to this and how the diagnostic features select it.
+mod global_alloc;
 
 use salmon_align::{
     project_genome_bam_to_rad, quantify_alignments, quantify_rad, AlignQuantOptions,
@@ -3146,6 +3144,10 @@ fn main() -> Result<()> {
         )
         .with_writer(ProgressAwareWriter)
         .init();
+
+    // Which allocator this build selected. Only interesting when comparing
+    // builds, so it sits at debug rather than in the normal run banner.
+    tracing::debug!("global allocator: {}", global_alloc::NAME);
 
     if cli.no_version_check {
         tracing::debug!(
