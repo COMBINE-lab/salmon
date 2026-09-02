@@ -28,7 +28,9 @@ tracing-subscriber = { workspace = true }
 indicatif = "0.18"
 
 [features]
-# Diagnostic: build with the system allocator instead of mimalloc.
+# Diagnostic: build with the system allocator instead of mimalloc. See
+# src/global_alloc.rs for how the choice is made and docs/allocator-choice.md
+# for what would have to be measured to change it.
 sysalloc = []
 
 [dev-dependencies]
