@@ -457,32 +457,38 @@ formats cannot drift apart.
 Both options apply to the read-mapping path only. In alignment mode (`-a`) and
 RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
 
-### The pseudoalignment output contract
+### What a record contains
 
-This output is a **diagnostic view of salmon's mappings**, not a
-general-purpose aligner output, and several fields are deliberately nominal —
-for brevity, and because the mapping path computes scores without base-level
-alignments (score-only dynamic programming, no traceback) and does not compute
-them just because output was requested:
+The header declares `@HD VN:1.6 SO:unsorted GO:query`, one `@SQ` per reference
+with its length, an `M5` checksum of its bases and a `UR` pointing at the index,
+then `@PG` and a `@CO` restating the ordering guarantee below. `--rgLine` adds an
+`@RG` line, and every record then carries `RG:Z`.
 
-- **`CIGAR`** is synthesized from the read length (`<readLen>M`, plus a clip at
-  a transcript end). It records *where* the mapping is, not a base-level
-  alignment; indels are not represented, and no `NM`/`MD` accompany it.
-- **`AS`** is the score salmon's mapper assigned to the placement — the same
-  number quantification used — not a score recomputed from the record's own
-  CIGAR. It is comparable across records within one run, not across aligners.
-  **In sketch mode (`--sketch`) there is no such score**: pseudoalignment maps
-  by k-mer/equivalence-class compatibility without computing a per-placement
-  alignment score, so `AS` is reported as `0` and every reported mapping is a
-  co-equal best mapping for the read as assessed by the algorithm. A meaningful
-  `AS` appears only under selective alignment (the default), which computes a
-  banded alignment score per candidate.
-- **`MAPQ`** reflects only the placement count, not alignment confidence — see
-  below.
+Each record carries:
 
-Treat the records as positions + pairing + the quantifier's scores. If you need
-true base-level alignments, run a general-purpose aligner; a possible opt-in
-"realized alignment" output mode is under discussion (see #1141).
+| Field | Value |
+|-------|-------|
+| `MAPQ` | Derived from the number of placements, on STAR's scale: 255 for a uniquely placed fragment, 3 for two placements, 1 for three or four, 0 beyond. `-q 255` therefore means "uniquely placed", as it does for STAR output. |
+| `CIGAR` | A base-level alignment with real `I` and `D` operations, and `S` where a read overhangs a transcript end. The placement is re-aligned with traceback when the record is written, which is work a run without mapping output never does. |
+| `SEQ` / `QUAL` | The read's bases and its Phred+33 qualities, reverse-complemented together on the reverse strand. Qualities are not optional and there is no flag to enable them; `QUAL` is `*` only when the input carried none, as for a FASTA. |
+| `NM` / `MD` | Edit distance and the reference bases at each mismatch, matching what `samtools calmd` recomputes from the input FASTA. Indexing has to replace non-ACGT bases with ACGT, since the k-mer structure cannot hold them, but the build records where it did so and the record reports the `N` that was there rather than the substitute. `@SQ M5` is computed the same way, so the header names the reference the user supplied. |
+| `NH` / `HI` | How many placements this fragment has, and which one this record is. |
+| `AS` | The selective-alignment score. |
+| `XT` | `T` for a transcript placement, `D` for a decoy. In practice always `T`: a fragment whose best placement is a decoy is dropped by scoring before any record is written, so a decoy-aware index changes which fragments appear, not what `XT` says about them. |
+| `ZW` | The placement's equivalence-class weight. |
+| `MC` / `MQ` | The mate's CIGAR and mapping quality, so a mate-aware tool does not have to sort the file to find them. |
+
+In sketch mode (`--sketch`) there is no per-placement alignment score:
+pseudoalignment maps by k-mer/equivalence-class compatibility without computing
+one, so `AS` is reported as `0` and every reported mapping is a co-equal best
+mapping for the read as assessed by the algorithm. A meaningful `AS` appears
+only under selective alignment (the default), which computes a banded alignment
+score per candidate.
+
+`--sampleUnaligned` additionally writes a `FLAG 0x4` record for every fragment
+that did not map, with its bases and qualities intact and no reference,
+position, CIGAR or placement tags. The output then covers the whole library, and
+`samtools fastq` can round-trip the input back out of it.
 
 ### `MAPQ`
 
@@ -502,6 +508,10 @@ is what STAR reports, so `MAPQ` follows STAR's mapping:
 Matching STAR matters because the tools downstream of a salmon BAM are tuned to
 it: `samtools view -q 255` means "uniquely placed" to all of them. Before this,
 every record carried a constant `1`, so that filter discarded the entire file.
+
+The header says `SO:unsorted GO:query` because that is exactly what salmon
+produces, and tools that only need records grouped by read name can therefore
+read the output directly, without a `samtools collate` first.
 
 ### Compression threads
 
