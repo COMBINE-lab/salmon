@@ -166,6 +166,9 @@ See the [RAD I/O & deterministic quantification](../../guides/rad-and-determinis
 | `-z, --writeMappings <FILE>` | Write per-mapping SAM records. `--writeSam` is an alias. |
 | `--writeBam <FILE>` | Write the same per-mapping records as BGZF-compressed BAM. Mutually exclusive with `--writeMappings`/`--writeSam`; records for a fragment are contiguous, but no other order is imposed. |
 | `--bamCompressThreads <N>` | BGZF compression workers for `--writeBam`. Defaults to about one per 3 mapping threads (at most 8), which balances compression against record production; see [Record order](../output-formats/#record-order). |
+| `--spliced` | Report mapping output in genome coordinates instead of transcript ones, with `N` operations at exon junctions. Needs `--annotation` for the exon structures and `--genome` for the chromosome lengths the header declares. Adds `XS:A` for the transcript's strand. |
+| `--rgLine <LINE>` | Read group to declare as `@RG`, as tab-separated `KEY:value` fields with a mandatory `ID` (for example `ID:sample1\tSM:sample1\tPL:ILLUMINA`). A literal `\t` is accepted in place of a tab. Every record is tagged `RG:Z:<ID>`. |
+| `-u, --sampleUnaligned` | Also write a record for every fragment that did not map, flagged `0x4` with its bases and qualities intact, so the output covers the whole library. |
 
 ```sh
 salmon quant -i salmon_index -l A -1 r1.fq.gz -2 r2.fq.gz -p 16 -o out

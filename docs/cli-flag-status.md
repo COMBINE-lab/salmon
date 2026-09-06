@@ -51,7 +51,9 @@ misbehaves.
 
 | Flag | Status | Notes |
 |------|--------|-------|
-| `-l/--libType`, `-o/--output`, `-p/--threads`, `-z/--writeMappings`, `--writeBam` | ✅ | `--writeSam` is a visible alias for `--writeMappings`. `--writeMappings`/`--writeSam` and `--writeBam` are mutually exclusive, and are warned-and-ignored in `-a`/`--rad` modes. Records for a fragment are contiguous; no other order is imposed. `MAPQ` is derived from the placement count on STAR's scale (255 unique, 3, 1, 0); other unwritten fields keep salmon's pseudobam conventions. |
+| `-l/--libType`, `-o/--output`, `-p/--threads`, `-z/--writeMappings`, `--writeBam` | ✅ | `--writeSam` is a visible alias for `--writeMappings`. `--writeMappings`/`--writeSam` and `--writeBam` are mutually exclusive, and are warned-and-ignored in `-a`/`--rad` modes. Records for a fragment are contiguous; no other order is imposed. Records carry real base-level CIGARs (`I`/`D`/`S`) with `NM` and `MD`, base qualities from the input, `MAPQ` derived from the placement count on STAR's scale (255 unique, 3, 1, 0), and `NH`/`HI`/`XT`/`AS`/`ZW`/`MC`/`MQ` tags. The header declares `VN:1.6 SO:unsorted GO:query`, `@SQ` with `M5` and `UR`, and `@PG`. |
+| `--spliced` | ✅ | Report mapping output in genome coordinates with `N` at exon junctions, from `--annotation` (exon structures) and `--genome` (chromosome lengths for `@SQ`). Adds `XS` for the transcript strand. Rust-port feature; not in this salmon build. |
+| `--rgLine` | ✅ | `@RG` header line plus `RG:Z` on every record; bwa/STAR spelling, escaped tabs accepted. Rust-port feature; not in this salmon build. |
 | `--bamCompressThreads` | ✅ | BGZF compression pool for `--writeBam`; defaults to ~1 worker per 3 mapping threads (max 8), balancing measured deflate throughput against record production. Rust-port feature; not in this salmon build. |
 | `--useEM` | ✅ | VBEM is the default; `--useEM` selects plain EM. |
 | `--meta` | ✅ | Metagenomic preset: plain EM, no range-factorized eq-classes, uniform init (the Rust EM already inits uniformly). Overrides `--useEM`/`--rangeFactorizationBins`. |
@@ -120,7 +122,9 @@ misbehaves.
 | `--hardFilter`, `--scoreExp` | ✅ | Also honoured on `-a`/`--rad`, not just in reads mode: the requant applies them to the RAD's `AS`-derived scores exactly as it does to selective-alignment ones. |
 | `--ont` | ✅ | Redirect (long-read mode is out of scope, as upstream). |
 | `--mappingCacheMemoryLimit` | ⚠️ | Rust streams with bounded buffers; no mass-banking cache. |
-| `--sampleOut`/`-s`, `--sampleUnaligned`/`-u`, `--writeQualities` | ⚠️ | Posterior-sampled BAM output; accepted, not yet implemented. |
+| `--sampleUnaligned`/`-u` | ✅ | Adds a `FLAG 0x4` record per unmapped fragment to `--writeMappings`/`--writeBam`, sequence and qualities intact, so the output covers the whole library. No longer requires `--sampleOut`. |
+| `--writeQualities` | 🔁 | Base qualities are not optional output: every record carries them whenever the input does, so the flag is accepted and has nothing to switch on. |
+| `--sampleOut`/`-s` | ⚠️ | A BAM of posterior-sampled alignments; accepted, not yet implemented. |
 | `--auxTargetFile`, `--writeOrphanLinks` | ⛔ | |
 
 ## `salmon quantmerge`

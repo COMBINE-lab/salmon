@@ -65,6 +65,18 @@ const INFO_FILE: &str = "info.json";
 const REFSEQ_FILE: &str = "refseq.bin";
 /// Per-reference offsets into `REFSEQ_FILE` (`num_refs + 1` entries).
 const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
+/// Reference offsets whose base was not ACGT in the input and was replaced to
+/// make the sequence k-mer-able. Pairs of `(tid, offset)`, little-endian `u32`,
+/// sorted, behind a `u64` count.
+///
+/// The index has to align against a cleaned sequence, but a record describing
+/// that alignment should not claim the reference had a base it never had. Keeping
+/// the positions costs one entry per ambiguous base (four across the whole
+/// GENCODE v44 human transcriptome) and lets `NM`, `MD` and the `@SQ M5` speak
+/// about the reference the user actually supplied.
+///
+/// Absent in indexes built before this existed, which load as "none recorded".
+const AMBIGUOUS_FILE: &str = "ambiguous.bin";
 
 /// On-disk salmon index *format* version written into `info.json` by this build.
 /// Distinct from `salmon_version` (the software release string): this is bumped
@@ -404,6 +416,10 @@ struct RefHashes {
 struct PreprocessResult {
     /// non-ACGT bases replaced with pseudo-random ACGT
     replaced: u64,
+    /// per written reference, the offsets whose base was replaced. Keyed by name
+    /// rather than by position because the index assigns its own reference order
+    /// later, and matching on names cannot drift from it.
+    ambiguous: Vec<(Vec<u8>, Vec<u32>)>,
     /// `(retained_name, duplicate_name)` pairs in discovery order. Without
     /// `--keepDuplicates` the duplicate was *not* written to the cleaned FASTA (so
     /// it is absent from the index); with `--keepDuplicates` every transcript is
@@ -479,6 +495,7 @@ fn preprocess_fasta(
             .with_context(|| format!("creating {}", out_path.display()))?,
     );
     let mut replaced = 0u64;
+    let mut ambiguous: Vec<(Vec<u8>, Vec<u32>)> = Vec::new();
     let mut polya_clipped = 0u64;
     let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
     let mut short_decoys_dropped: Vec<Vec<u8>> = Vec::new();
@@ -554,9 +571,13 @@ fn preprocess_fasta(
             // assembly gaps. The refseq store keeps the raw bytes and the aligner
             // encodes N as a mismatch (dna5 code 4), so a read aligning over a decoy
             // N-run simply scores it as a mismatch.
+            // Offsets replaced in this record, kept so a later alignment can say
+            // the reference base was unknown rather than report the substitute.
+            let mut replaced_here: Vec<u32> = Vec::new();
             if !is_decoy {
-                for b in seq.iter_mut() {
+                for (offset, b) in seq.iter_mut().enumerate() {
                     if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+                        replaced_here.push(offset as u32);
                         // A linear congruential generator: multiply, add, and take
                         // high bits. `wrapping_*` means overflow wraps around
                         // rather than panicking, which is the intended arithmetic.
@@ -609,6 +630,13 @@ fn preprocess_fasta(
                 continue;
             }
 
+            // Clipping can cut the tail off, taking replaced offsets with it, and
+            // only a record that is actually written has a reference to belong to.
+            replaced_here.retain(|&o| (o as usize) < seq.len());
+            if !replaced_here.is_empty() {
+                ambiguous.push((name.to_vec(), replaced_here));
+            }
+
             // Write the record in canonical two-line form (header, then the whole
             // sequence unwrapped), which is what the downstream builder expects.
             out.write_all(b">")?;
@@ -621,6 +649,7 @@ fn preprocess_fasta(
     out.flush()?;
     Ok(PreprocessResult {
         replaced,
+        ambiguous,
         duplicate_clusters,
         polya_clipped,
         polya_dropped,
@@ -967,6 +996,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
 
     // Persist the (cleaned) reference sequences (piscem does not retain them) so
     // the selective-alignment step fetches windows matching the indexed k-mers.
+    write_ambiguous_positions(&opts.output_dir, &pre.ambiguous, &idx)
+        .context("writing the ambiguous-base position table")?;
     write_refseq_store(&opts.output_dir, std::slice::from_ref(&cleaned), &idx)
         .context("writing reference sequence store")?;
 
@@ -1038,6 +1069,67 @@ fn processed_name(id: &[u8], gencode: bool) -> &[u8] {
 ///
 /// Order matters: the sequences are written in the *index's* id order, not the
 /// FASTA's, because that is how every later lookup indexes them.
+/// Read the ambiguous-base table, or empty when the index predates it.
+///
+/// A missing file is not an error: an index built before this was recorded
+/// simply cannot say, and the output then matches what it always produced.
+fn read_ambiguous_positions(dir: &Path) -> Result<(Vec<u32>, Vec<u32>)> {
+    let path = dir.join(AMBIGUOUS_FILE);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    if bytes.len() < 8 {
+        anyhow::bail!("{AMBIGUOUS_FILE} is truncated");
+    }
+    let count = u64::from_le_bytes(bytes[..8].try_into().expect("8 bytes")) as usize;
+    if bytes.len() != 8 + count * 8 {
+        anyhow::bail!(
+            "{AMBIGUOUS_FILE} declares {count} entries but is {} bytes",
+            bytes.len()
+        );
+    }
+    let mut tids = Vec::with_capacity(count);
+    let mut offsets = Vec::with_capacity(count);
+    for entry in bytes[8..].chunks_exact(8) {
+        tids.push(u32::from_le_bytes(entry[..4].try_into().expect("4 bytes")));
+        offsets.push(u32::from_le_bytes(entry[4..].try_into().expect("4 bytes")));
+    }
+    Ok((tids, offsets))
+}
+
+/// Record which reference offsets held a base the index had to replace.
+///
+/// Names are resolved to reference ids here rather than during preprocessing,
+/// because the index assigns its own order and a table keyed by position would
+/// drift from it silently. A name the index does not carry is one whose record
+/// was dropped later, and is simply not recorded.
+fn write_ambiguous_positions(
+    dir: &Path,
+    ambiguous: &[(Vec<u8>, Vec<u32>)],
+    idx: &ReferenceIndex,
+) -> Result<()> {
+    use std::collections::HashMap;
+    let by_name: HashMap<&[u8], u32> = (0..idx.num_refs())
+        .map(|tid| (idx.ref_name(tid).as_bytes(), tid as u32))
+        .collect();
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
+    for (name, offsets) in ambiguous {
+        if let Some(&tid) = by_name.get(name.as_slice()) {
+            pairs.extend(offsets.iter().map(|&offset| (tid, offset)));
+        }
+    }
+    pairs.sort_unstable();
+    let mut buf = Vec::with_capacity(8 + pairs.len() * 8);
+    buf.extend_from_slice(&(pairs.len() as u64).to_le_bytes());
+    for (tid, offset) in &pairs {
+        buf.extend_from_slice(&tid.to_le_bytes());
+        buf.extend_from_slice(&offset.to_le_bytes());
+    }
+    std::fs::write(dir.join(AMBIGUOUS_FILE), &buf)
+        .with_context(|| format!("writing {AMBIGUOUS_FILE}"))?;
+    Ok(())
+}
+
 fn write_refseq_store(dir: &Path, transcripts: &[PathBuf], idx: &ReferenceIndex) -> Result<()> {
     use std::collections::HashMap;
 
@@ -1105,6 +1197,15 @@ pub struct SalmonIndex {
     ref_offsets: Vec<u64>,
     /// whether the reference sequence bytes were loaded
     refseq_loaded: bool,
+    /// Reference ids of the bases the build had to replace, ascending, parallel
+    /// to [`Self::ambiguous_off`]. Held as two arrays rather than pairs so one
+    /// reference's offsets can be handed out as a slice.
+    ///
+    /// Empty for an index built before these were recorded, which reads as "none
+    /// known" rather than "none exist": the output is then what it always was.
+    ambiguous_tid: Vec<u32>,
+    /// Offsets within the corresponding reference.
+    ambiguous_off: Vec<u32>,
 }
 
 /// Load just the per-reference forward sequences from an index directory, in
@@ -1218,16 +1319,35 @@ impl SalmonIndex {
         } else {
             (Vec::new(), Vec::new())
         };
+        // Cheap enough to read unconditionally: it is empty for almost every
+        // index, and a caller that skipped the sequences still gets a consistent
+        // answer from `ambiguous_offsets`.
+        let (ambiguous_tid, ambiguous_off) = read_ambiguous_positions(dir)?;
         Ok(Self {
             inner,
             info,
             refseq,
             ref_offsets,
             refseq_loaded: load_refseq,
+            ambiguous_tid,
+            ambiguous_off,
         })
     }
 
     /// Whether the reference sequence bytes were loaded (see [`load_with_opts`](Self::load_with_opts)).
+    /// Offsets within reference `tid` whose base the build replaced, ascending.
+    ///
+    /// Empty for almost every reference: across the whole GENCODE v44 human
+    /// transcriptome there are four such bases. Callers can therefore treat the
+    /// empty case as the fast path without measuring.
+    pub fn ambiguous_offsets(&self, tid: usize) -> &[u32] {
+        let tid = tid as u32;
+        // Sorted by `(tid, offset)`, so one reference's offsets are contiguous.
+        let start = self.ambiguous_tid.partition_point(|&t| t < tid);
+        let end = self.ambiguous_tid.partition_point(|&t| t <= tid);
+        &self.ambiguous_off[start..end]
+    }
+
     pub fn refseq_loaded(&self) -> bool {
         self.refseq_loaded
     }
@@ -1346,6 +1466,38 @@ fn read_info(dir: &Path) -> Result<IndexInfo> {
 
 #[cfg(test)]
 mod tests {
+    /// The ambiguous-base table has to survive a write/read round trip, and an
+    /// index built before it existed has to keep loading.
+    #[test]
+    fn ambiguous_positions_round_trip_and_tolerate_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        // Absent: not an error, and nothing recorded.
+        assert_eq!(
+            super::read_ambiguous_positions(dir.path()).unwrap(),
+            (Vec::new(), Vec::new())
+        );
+        let pairs: Vec<(u32, u32)> = vec![(0, 5), (0, 9), (7, 2)];
+        let mut buf = (pairs.len() as u64).to_le_bytes().to_vec();
+        for (tid, offset) in &pairs {
+            buf.extend_from_slice(&tid.to_le_bytes());
+            buf.extend_from_slice(&offset.to_le_bytes());
+        }
+        std::fs::write(dir.path().join(super::AMBIGUOUS_FILE), &buf).unwrap();
+        let (tids, offsets) = super::read_ambiguous_positions(dir.path()).unwrap();
+        assert_eq!(tids, vec![0, 0, 7]);
+        assert_eq!(offsets, vec![5, 9, 2]);
+    }
+
+    /// A truncated table is a corrupt index, not something to read past.
+    #[test]
+    fn a_truncated_ambiguous_table_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut buf = 3u64.to_le_bytes().to_vec();
+        buf.extend_from_slice(&[0, 0, 0, 0]);
+        std::fs::write(dir.path().join(super::AMBIGUOUS_FILE), &buf).unwrap();
+        assert!(super::read_ambiguous_positions(dir.path()).is_err());
+    }
+
     use super::*;
     use std::io::Write;
 
