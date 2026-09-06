@@ -532,9 +532,10 @@ struct QuantArgs {
     /// Write the names of unmapped fragments to aux_info/unmapped_names.txt.
     #[arg(long = "writeUnmappedNames")]
     write_unmapped_names: bool,
-    /// Write per-mapping SAM records to this file (spoofed CIGAR, like salmon's
-    /// standard `--writeMappings`). `--writeSam` is an accepted alias, naming
-    /// the format explicitly to pair with `--writeBam`.
+    /// Write per-mapping SAM records to this file. Records carry a base-level
+    /// CIGAR with NM and MD, describing the alignment the record reports.
+    /// `--writeSam` is an accepted alias, naming the format explicitly to pair
+    /// with `--writeBam`.
     #[arg(
         short = 'z',
         long = "writeMappings",
@@ -542,7 +543,8 @@ struct QuantArgs {
         conflicts_with = "write_bam"
     )]
     write_mappings: Option<PathBuf>,
-    /// Write per-mapping BAM records to this file. Mutually exclusive with
+    /// Write per-mapping BAM records to this file: the same records as
+    /// --writeMappings, BGZF-compressed. Mutually exclusive with
     /// --writeMappings/--writeSam.
     #[arg(long = "writeBam", conflicts_with = "write_mappings")]
     write_bam: Option<PathBuf>,
@@ -3545,6 +3547,16 @@ mod tests {
         assert_eq!(q.dump_eq_weights, defaults.dump_eq_weights);
         assert_eq!(q.no_length_correction, defaults.no_length_correction);
         assert_eq!(q.no_frag_length_dist, defaults.no_frag_length_dist);
+    }
+
+    /// `--sampleUnaligned` keeps its salmon short form, since it is the flag
+    /// users already have in their scripts.
+    #[test]
+    fn sample_unaligned_has_both_spellings() {
+        for flag in ["--sampleUnaligned", "-u"] {
+            assert!(quant_args(&[flag]).unwrap().sample_unaligned, "{flag}");
+        }
+        assert!(!quant_args(&[]).unwrap().sample_unaligned);
     }
 
     /// `--writeSam` is a spelling of `--writeMappings`, giving SAM output a

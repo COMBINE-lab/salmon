@@ -457,32 +457,32 @@ formats cannot drift apart.
 Both options apply to the read-mapping path only. In alignment mode (`-a`) and
 RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
 
-### The pseudoalignment output contract
+### What a record contains
 
-This output is a **diagnostic view of salmon's mappings**, not a
-general-purpose aligner output, and several fields are deliberately nominal —
-for brevity, and because the mapping path computes scores without base-level
-alignments (score-only dynamic programming, no traceback) and does not compute
-them just because output was requested:
+The header is unchanged: `@HD`, one `@SQ` per reference with its length, and
+`@PG`.
 
-- **`CIGAR`** is synthesized from the read length (`<readLen>M`, plus a clip at
-  a transcript end). It records *where* the mapping is, not a base-level
-  alignment; indels are not represented, and no `NM`/`MD` accompany it.
-- **`AS`** is the score salmon's mapper assigned to the placement — the same
-  number quantification used — not a score recomputed from the record's own
-  CIGAR. It is comparable across records within one run, not across aligners.
-  **In sketch mode (`--sketch`) there is no such score**: pseudoalignment maps
-  by k-mer/equivalence-class compatibility without computing a per-placement
-  alignment score, so `AS` is reported as `0` and every reported mapping is a
-  co-equal best mapping for the read as assessed by the algorithm. A meaningful
-  `AS` appears only under selective alignment (the default), which computes a
-  banded alignment score per candidate.
-- **`MAPQ`** reflects only the placement count, not alignment confidence — see
-  below.
+Each record carries:
 
-Treat the records as positions + pairing + the quantifier's scores. If you need
-true base-level alignments, run a general-purpose aligner; a possible opt-in
-"realized alignment" output mode is under discussion (see #1141).
+| Field | Value |
+|-------|-------|
+| `MAPQ` | Derived from the number of placements, on STAR's scale: 255 for a uniquely placed fragment, 3 for two placements, 1 for three or four, 0 beyond. `-q 255` therefore means "uniquely placed", as it does for STAR output. |
+| `CIGAR` | A base-level alignment with real `I` and `D` operations, and `S` where a read overhangs a transcript end. The placement is re-aligned with traceback when the record is written, which is work a run without mapping output never does. |
+| `NM` / `MD` | Edit distance and the reference bases at each mismatch, matching what `samtools calmd` recomputes from the input FASTA. Indexing has to replace non-ACGT bases with ACGT, since the k-mer structure cannot hold them, but the build records where it did so and the record reports the `N` that was there rather than the substitute. |
+| `NH` / `HI` | How many placements this fragment has, and which one this record is. |
+| `AS` | The score of the alignment in this same record. |
+| `XT` | `T` for a transcript placement, `D` for a decoy. In practice always `T`: a fragment whose best placement is a decoy is dropped by scoring before any record is written, so a decoy-aware index changes which fragments appear, not what `XT` says about them. |
+
+`QUAL` is still `*`: salmon does not carry base qualities into the record
+builder. That is an omission the format allows, unlike a CIGAR that does not
+describe the alignment it sits beside.
+
+In sketch mode (`--sketch`) there is no per-placement alignment score:
+pseudoalignment maps by k-mer/equivalence-class compatibility without computing
+one, so `AS` is reported as `0` and every reported mapping is a co-equal best
+mapping for the read as assessed by the algorithm. A meaningful `AS` appears
+only under selective alignment (the default), which computes a banded alignment
+score per candidate.
 
 ### `MAPQ`
 

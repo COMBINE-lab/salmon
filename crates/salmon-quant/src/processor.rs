@@ -190,6 +190,9 @@ pub(crate) struct Shared<'a> {
     pub unmapped_names: Option<&'a Mutex<UnmappedWriter>>,
     /// when set, write per-mapping SAM records (`--writeMappings`)
     pub sam: Option<&'a crate::sam::SamWriter>,
+    /// run-wide mapping-output settings: whether to realize a base-level CIGAR
+    /// for each written placement, and with what alignment parameters
+    pub record_options: &'a crate::mapping_record::RecordOptions<'a>,
     /// when set, encode per-mapping BAM records into reusable worker chunks
     pub bam: Option<&'a crate::bam::BamOutput>,
     /// when set, write per-fragment mappings to a RAD file (`--writeRad`)
@@ -393,6 +396,9 @@ pub(crate) struct QuantProcessor<'a> {
     /// per-thread RAD chunk buffer (flushed as one chunk per batch); `None`
     /// unless `--writeRad` is set
     pub rad_buf: Option<salmon_rad::FragmentChunkBuf>,
+    /// per-thread buffers for deriving record fields (realized CIGARs, MD
+    /// strings, the aligner workspace); allocated once per worker, not per record
+    pub emit_scratch: crate::mapping_record::EmitScratch,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -428,6 +434,7 @@ impl<'a> QuantProcessor<'a> {
             rad_buf: shared.rad.map(|rad| {
                 salmon_rad::FragmentChunkBuf::with_capacity_codec(64 * 1024, rad.codec())
             }),
+            emit_scratch: crate::mapping_record::EmitScratch::default(),
         }
     }
 }
@@ -1331,6 +1338,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             sam_buf,
             bam_scratch,
             rad_buf,
+            emit_scratch,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -1429,6 +1437,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     s1.as_ref(),
                     Some((r2.id(), s2.as_ref())),
                     &placements,
+                    sh.record_options,
+                    emit_scratch,
                 );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
@@ -1439,6 +1449,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         s1.as_ref(),
                         Some((r2.id(), s2.as_ref())),
                         &placements,
+                        sh.record_options,
+                        emit_scratch,
                     )?;
                 }
             }
@@ -1517,6 +1529,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             sam_buf,
             bam_scratch,
             rad_buf,
+            emit_scratch,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -1588,11 +1601,21 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     s.as_ref(),
                     None,
                     &placements,
+                    sh.record_options,
+                    emit_scratch,
                 );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
                 if !placements.is_empty() {
-                    scratch.write_fragment(sh.salmon, rec.id(), s.as_ref(), None, &placements)?;
+                    scratch.write_fragment(
+                        sh.salmon,
+                        rec.id(),
+                        s.as_ref(),
+                        None,
+                        &placements,
+                        sh.record_options,
+                        emit_scratch,
+                    )?;
                 }
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {

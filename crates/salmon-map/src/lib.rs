@@ -52,6 +52,7 @@ pub mod extend;
 pub mod mapper;
 pub mod mem;
 pub mod pair;
+pub mod realize;
 pub mod score;
 pub mod sketch;
 
@@ -71,6 +72,9 @@ pub use mapper::{
 };
 pub use mem::Mem;
 pub use pair::{join_reads_and_filter, JointMapping, PairingConfig};
+pub use realize::{
+    push_op, realize, reference_span, CigarOp, CigarOpKind, RealizeScratch, RealizedAlignment,
+};
 pub use salmon_core::RefProvider;
 pub use score::{
     filter_sketch_decoys, finalize_mappings, DedupScratch, MapScratch, RawMapping, ScoreConfig,
