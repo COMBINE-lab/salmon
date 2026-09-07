@@ -43,7 +43,7 @@ jobs:
             runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Platform pair
         run: echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
@@ -94,7 +94,7 @@ jobs:
     needs: [build]
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4 # for Cargo.toml (image version)
+      - uses: actions/checkout@v7 # for Cargo.toml (image version)
 
       - name: Image version (from Cargo.toml)
         id: ver

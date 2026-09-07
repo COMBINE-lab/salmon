@@ -49,7 +49,7 @@ jobs:
             target_id: macos-arm64
     steps:
       - name: Checkout salmon
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
         uses: dtolnay/rust-toolchain@master
