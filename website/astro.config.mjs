@@ -1,19 +1,19 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import remarkGfm from 'remark-gfm';
 
 // GitHub Pages: site + base. The repo deploys to
 // https://combine-lab.github.io/salmon/.
+//
+// GitHub-Flavored Markdown (tables, strikethrough, autolinks) is enabled by
+// default by Astro's Sätteri Markdown processor, and `@astrojs/mdx` inherits
+// that setting, so tables render in both `.md` and `.mdx` pages without any
+// extra config. (The legacy `markdown.remarkPlugins: [remarkGfm]` API was
+// removed here: it now requires the separate `@astrojs/markdown-remark`
+// package and is deprecated in favor of configuring the processor directly.)
 export default defineConfig({
   site: 'https://combine-lab.github.io',
   base: '/salmon',
-  // GitHub-Flavored Markdown (tables, strikethrough, autolinks) is applied to
-  // `.md` by default but NOT to `.mdx`; add remark-gfm explicitly so tables in
-  // the `.mdx` pages render.
-  markdown: {
-    remarkPlugins: [remarkGfm],
-  },
   integrations: [
     starlight({
       title: 'salmon',
