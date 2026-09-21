@@ -253,16 +253,15 @@ fn compressed_rad_quantifies_identically() {
 }
 
 /// Hand-write a piscem `map-bulk`-style RAD (read tag `frag_map_type`, alignment
-/// triple `compressed_ori_ref`/`pos`/`frag_len`, no `frag_name_hash`) and confirm
-/// salmon detects the piscem-bulk profile and quantifies it.
-#[test]
-/// A RAD written by piscem rather than salmon must quantify too — the format is
-/// shared, and this is what makes the two tools interoperate.
-fn piscem_bulk_input_quantifies() {
+/// triple `compressed_ori_ref`/`pos`/`frag_len`, no `frag_name_hash`) with the
+/// requested spec version and confirm salmon detects the piscem-bulk profile and
+/// quantifies it (300 -> t0, 100 -> t1). Returns the RAD path's first 8 bytes so
+/// callers can assert the on-disk prelude flavor (magic vs magic-less).
+fn run_piscem_bulk_quant(version: libradicl::header::SpecVersion) -> [u8; 8] {
     use libradicl::header::{RadHeader, RadPrelude};
     use libradicl::rad_types::{RadIntId, RadType, TagDesc, TagSection, TagSectionLabel, TagValue};
     use libradicl::writers::RadFileWriter;
-    use std::io::Write as _;
+    use std::io::{Read as _, Write as _};
 
     let tmp = tempfile::tempdir().unwrap();
     let rad = tmp.path().join("piscem.rad");
@@ -275,23 +274,21 @@ fn piscem_bulk_input_quantifies() {
         &[("ref_lengths", TagValue::ArrayU32(lens.clone()))],
     );
     let mut read_tags = TagSection::new_with_label(TagSectionLabel::ReadTags);
-    read_tags.add_tag_desc(TagDesc {
-        name: "frag_map_type".into(),
-        typeid: RadType::Int(RadIntId::U8),
-    });
+    read_tags.add_tag_desc(TagDesc::new("frag_map_type", RadType::Int(RadIntId::U8)));
     let mut aln_tags = TagSection::new_with_label(TagSectionLabel::AlignmentTags);
     for n in ["compressed_ori_ref", "pos", "frag_len"] {
-        aln_tags.add_tag_desc(TagDesc {
-            name: n.into(),
-            typeid: RadType::Int(if n == "frag_len" {
+        aln_tags.add_tag_desc(TagDesc::new(
+            n,
+            RadType::Int(if n == "frag_len" {
                 RadIntId::U16
             } else {
                 RadIntId::U32
             }),
-        });
+        ));
     }
     let prelude = RadPrelude {
         hdr: RadHeader {
+            version,
             is_paired: 1,
             ref_count: names.len() as u64,
             ref_names: names.clone(),
@@ -329,6 +326,12 @@ fn piscem_bulk_input_quantifies() {
     let mut f = fw.finalize().unwrap();
     f.flush().unwrap();
 
+    let mut magic = [0u8; 8];
+    std::fs::File::open(&rad)
+        .unwrap()
+        .read_exact(&mut magic)
+        .unwrap();
+
     let out = tmp.path().join("quant");
     std::fs::create_dir_all(&out).unwrap();
     let res = quantify_rad(&opts_for(&out), &rad).expect("quantify_rad (piscem)");
@@ -346,6 +349,29 @@ fn piscem_bulk_input_quantifies() {
         "t1 = {}",
         res.counts[1]
     );
+    magic
+}
+
+/// A legacy (magic-less) RAD written by piscem rather than salmon must quantify
+/// too — the format is shared, and this is what makes the two tools interoperate.
+#[test]
+fn piscem_bulk_input_quantifies() {
+    let magic = run_piscem_bulk_quant(libradicl::header::SpecVersion::Legacy);
+    // legacy prelude begins directly with `is_paired` (1), not the versioned magic
+    assert_ne!(&magic, b"RAD_FILE", "legacy fixture must be magic-less");
+}
+
+/// A **RAD v2** bulk file (magic + spec version + prelude extension block) written
+/// by a v2-emitting piscem must read identically. This is the interop linchpin:
+/// once piscem emits v2 unconditionally, salmon (on libradicl >= 0.20) must skip
+/// the prelude and quantify the bulk records exactly as before. The bulk role
+/// reader lands in a later libradicl; on 0.20 the `frag_map_type` name bridge
+/// resolves the record context, which this exercises.
+#[test]
+fn piscem_bulk_v2_prelude_quantifies() {
+    let magic =
+        run_piscem_bulk_quant(libradicl::header::SpecVersion::Versioned { major: 2, minor: 0 });
+    assert_eq!(&magic, b"RAD_FILE", "v2 fixture must carry the RAD magic");
 }
 
 /// Regression test for the worker-drain race: a `quantify_rad` run must never

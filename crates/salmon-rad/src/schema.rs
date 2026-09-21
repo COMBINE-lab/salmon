@@ -17,7 +17,7 @@
 //! This module only *declares* the read/alignment tags; the values are written
 //! per record by [`crate::record`].
 
-use libradicl::header::{RadHeader, RadPrelude};
+use libradicl::header::{RadHeader, RadPrelude, SpecVersion};
 use libradicl::rad_types::{
     RadIntId, RadType, TagDesc, TagMap, TagSection, TagSectionLabel, TagValue,
 };
@@ -29,10 +29,10 @@ use crate::RadProfile;
 /// (`RadIntId::U32` and friends). Used purely to keep the declarations below
 /// readable.
 fn int_desc(name: &str, id: RadIntId) -> TagDesc {
-    TagDesc {
-        name: name.to_string(),
-        typeid: RadType::Int(id),
-    }
+    // `TagDesc` gained a semantic `role` field and became non-exhaustive in
+    // libradicl 0.20; `TagDesc::new` sets `role: TagRole::None`, preserving
+    // salmon's (roleless) on-disk tag layout exactly.
+    TagDesc::new(name, RadType::Int(id))
 }
 
 /// Build the prelude and file-tag values for a salmon RAD file.
@@ -179,6 +179,10 @@ pub fn build_prelude(
     }
 
     let hdr = RadHeader {
+        // libradicl 0.20 added a spec-version field. Keep salmon writing the
+        // legacy (magic-less) header it always has, so this bump stays a pure
+        // read-compatibility change and salmon's on-disk output is unchanged.
+        version: SpecVersion::Legacy,
         is_paired: is_paired as u8,
         ref_count: ref_names.len() as u64,
         ref_names: ref_names.iter().map(|s| s.to_string()).collect(),
