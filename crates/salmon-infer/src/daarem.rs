@@ -62,6 +62,28 @@ const A1: f64 = 1.2; // damping base
 const KAPPA: f64 = 25.0; // damping schedule exponent offset
 const RESID_TOL: f64 = 0.95; // rho in the residual acceptance test
 
+/// Floor on an extrapolated abundance, as a fraction of the current iterate's.
+///
+/// Not part of the CRAN method, which extrapolates in an unconstrained space.
+/// Abundances are non-negative, and the Anderson step, being a linear
+/// combination of past differences, routinely overshoots below zero: on a
+/// 646k-transcript GENCODE run, a quarter of the coordinates went negative. A
+/// negative iterate is not a valid input to the M-step, so its residual is
+/// meaningless; the acceptance test and the convergence check then act on
+/// garbage, and the loop stopped early, far from the fixpoint (Spearman 0.90
+/// against a fully converged EM, with whole classes truncated away).
+///
+/// Rejecting any step with a negative component is no fix: in that many
+/// dimensions nearly every step has one, and DAAREM degenerates into plain EM at
+/// twice the cost. Projecting instead keeps the step. The floor is relative
+/// because a zero floor makes a coordinate absorbing under the multiplicative
+/// M-step, while `0.1 * x` lets an extrapolation shrink an abundance by at most
+/// 10x per step, so a wrongly drained transcript can still recover. On the
+/// GENCODE run, floors from 0.01 to 0.25 all landed within Spearman 0.997-0.999
+/// of the converged fixpoint in 340-540 M-steps; 0.5 damped the steps so much
+/// that the method fell back to plain-EM behaviour.
+const PROJ_FLOOR: f64 = 0.1;
+
 /// Jacobi eigendecomposition of a small symmetric `n×n` matrix `a` (row-major,
 /// `n <= ORDER`). Overwrites `a`; returns eigenvalues in `eval` and the
 /// eigenvectors as the columns of `evec` (row-major `n×n`). Deterministic: fixed
@@ -439,6 +461,8 @@ pub(crate) fn daarem_loop(
         // The Anderson step: correct both the current iterate and its residual by
         // the fitted combination of recent differences, then take one implied
         // fixed-point step. This is the "jump ahead" the whole file exists for.
+        // The result is projected onto the floor `PROJ_FLOOR * xnew`, which keeps
+        // every iterate non-negative (see `PROJ_FLOOR`).
         for i in 0..n {
             let mut xg = 0.0;
             let mut fg = 0.0;
@@ -446,7 +470,7 @@ pub(crate) fn daarem_loop(
                 xg += xdiff[a][i] * gamma[a];
                 fg += fdiff[a][i] * gamma[a];
             }
-            x_prop[i] = (xnew[i] - xg) + (fnew[i] - fg);
+            x_prop[i] = ((xnew[i] - xg) + (fnew[i] - fg)).max(PROJ_FLOOR * xnew[i]);
         }
 
         f(&x_prop, &mut fx); // F(x_prop)
@@ -524,6 +548,8 @@ pub(crate) fn daarem_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PackedEqClasses;
+    use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
 
     /// The eigensolver is the one piece here with a checkable closed-form answer,
     /// so pin it on a matrix whose spectrum is known by hand — and check the
@@ -543,5 +569,150 @@ mod tests {
         // Eigenvectors orthonormal: columns dot to ~0.
         let dot = evec[0] * evec[1] + evec[2] * evec[3];
         assert!(dot.abs() < 1e-9, "columns not orthogonal: {dot}");
+    }
+
+    /// A transcriptome-shaped problem: heavy-tailed abundances, a third of the
+    /// transcripts absent, and every fragment multi-mapping to a few decoy
+    /// transcripts besides its source. The absent transcripts are what matter —
+    /// EM drains them toward zero slowly, and that slow drain is exactly where
+    /// an Anderson extrapolation overshoots into negative abundances.
+    fn skewed_fixture(num_genes: usize, num_frags: usize) -> PackedEqClasses {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut unif = move || ((rnd() >> 11) as f64) / ((1u64 << 53) as f64);
+        // Genes of 1..=8 isoforms. Gene abundance is heavy-tailed (1/u^2); within
+        // a gene about a third of the isoforms are absent.
+        let mut genes: Vec<(u32, usize)> = Vec::with_capacity(num_genes);
+        let mut iso_share: Vec<f64> = Vec::new();
+        let mut cum = Vec::with_capacity(num_genes);
+        let mut acc = 0.0;
+        let mut next = 0u32;
+        for _ in 0..num_genes {
+            let n = 1 + (unif() * 8.0) as usize;
+            genes.push((next, n));
+            for _ in 0..n {
+                iso_share.push(if unif() < 0.35 { 0.0 } else { unif() });
+            }
+            next += n as u32;
+            let u = unif().max(1e-6);
+            acc += (1.0 / (u * u)).min(1e6);
+            cum.push(acc);
+        }
+        let num_txps = next as usize;
+        let b = EquivalenceClassBuilder::new();
+        for _ in 0..num_frags {
+            let r = unif() * acc;
+            let g = cum.partition_point(|&c| c < r).min(num_genes - 1);
+            let (first, n) = genes[g];
+            let shares = &iso_share[first as usize..first as usize + n];
+            let tot: f64 = shares.iter().sum();
+            if tot == 0.0 {
+                continue;
+            }
+            let mut r = unif() * tot;
+            let mut src = n - 1;
+            for (i, &sh) in shares.iter().enumerate() {
+                if r < sh {
+                    src = i;
+                    break;
+                }
+                r -= sh;
+            }
+            // Isoforms of a gene share most of their sequence: a fragment is
+            // usually compatible with most of its siblings too.
+            let mut tids: Vec<u32> = (0..n)
+                .filter(|&i| i == src || unif() < 0.8)
+                .map(|i| first + i as u32)
+                .collect();
+            if unif() < 0.1 {
+                tids.push((unif() * num_txps as f64) as u32);
+            }
+            tids.sort_unstable();
+            tids.dedup();
+            let k = tids.len();
+            b.add_group(TranscriptGroup::new(tids), vec![1.0; k], 1);
+        }
+        let mut eq = b.finish();
+        let eff: Vec<f64> = (0..num_txps)
+            .map(|i| 200.0 + (i % 1013) as f64 * 3.1)
+            .collect();
+        eq.update_eff_lengths(&eff);
+        PackedEqClasses::from_collapsed(&eq, num_txps)
+    }
+
+    /// Log-likelihood up to a constant. The EM preserves total mass, so
+    /// `sum_c n_c log(sum_t alpha_t w_ct)` ranks estimates of equal total.
+    fn log_lik(p: &PackedEqClasses, alphas: &[f64]) -> f64 {
+        (0..p.counts.len())
+            .map(|c| {
+                let (s, e) = (p.starts[c] as usize, p.starts[c + 1] as usize);
+                let d: f64 = (s..e)
+                    .map(|j| alphas[p.labels[j] as usize] * p.combined[j])
+                    .sum();
+                p.counts[c] as f64 * d.ln()
+            })
+            .sum()
+    }
+
+    /// The defect this guards: the Anderson step overshot below zero and the
+    /// negative iterate was kept, so the M-step, the acceptance test and the
+    /// convergence check all ran on an invalid vector. Read before truncation
+    /// (`run_em_counts`), since truncation would silently clamp the evidence
+    /// away. Before the projection this fixture left thousands of negative
+    /// abundances.
+    #[test]
+    fn daarem_iterates_stay_non_negative() {
+        let p = skewed_fixture(2_000, 200_000);
+        for use_vbem in [false, true] {
+            let opts = EmOptions {
+                accel: crate::EmAccel::Daarem,
+                use_vbem,
+                ..EmOptions::default()
+            };
+            let (alphas, _, converged) = crate::run_em_counts(
+                &p,
+                &p.counts,
+                &opts,
+                true,
+                opts.min_iter,
+                crate::InitAlphas::NONE,
+                crate::EffLens::NONE,
+            );
+            assert!(converged, "vbem={use_vbem}: did not converge");
+            let bad = alphas.iter().filter(|a| a.is_nan() || **a < 0.0).count();
+            assert_eq!(bad, 0, "vbem={use_vbem}: {bad} negative or NaN abundances");
+        }
+    }
+
+    /// Acceleration must not buy speed with accuracy: under the same stopping
+    /// rule, DAAREM should land at least as close to the maximum-likelihood
+    /// fixpoint as plain EM, and must not lose whole classes to truncation.
+    #[test]
+    fn daarem_is_no_less_accurate_than_plain_em() {
+        let p = skewed_fixture(2_000, 200_000);
+        let run = |accel| {
+            crate::optimize_packed(
+                &p,
+                &EmOptions {
+                    accel,
+                    ..EmOptions::default()
+                },
+                true,
+            )
+        };
+        let plain = run(crate::EmAccel::None);
+        let da = run(crate::EmAccel::Daarem);
+        assert_eq!(da.dropped_mass, 0.0, "DAAREM truncated whole classes away");
+        let (ll_plain, ll_da) = (log_lik(&p, &plain.alphas), log_lik(&p, &da.alphas));
+        assert!(
+            ll_da >= ll_plain,
+            "DAAREM log-lik {ll_da} below plain EM {ll_plain}"
+        );
+        assert!(da.iters < plain.iters, "{} vs {}", da.iters, plain.iters);
     }
 }
