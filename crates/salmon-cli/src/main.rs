@@ -183,8 +183,9 @@ enum EmAccelArg {
     None,
     /// SQUAREM acceleration (same fixpoint, far fewer M-steps; not byte-identical).
     Squarem,
-    /// DAAREM: damped Anderson acceleration over a window of past iterates; faster
-    /// than SQUAREM on high-dimensional problems. Same fixpoint; not byte-identical.
+    /// DAAREM: damped Anderson acceleration over a window of past iterates. The
+    /// fastest option with plain EM (`--useEM`); not supported with VBEM, the
+    /// default optimizer. Not byte-identical.
     Daarem,
 }
 
@@ -705,8 +706,10 @@ struct QuantArgs {
     /// VBEM per-feature Dirichlet prior weight.
     #[arg(long = "vbPrior", default_value_t = 1e-2)]
     vb_prior: f64,
-    /// EM/VBEM convergence acceleration. `squarem` reaches the same abundances in
-    /// far fewer M-steps but is not byte-identical to the default `none`.
+    /// EM/VBEM convergence acceleration. `squarem` needs fewer M-steps for a given
+    /// accuracy (with VBEM it pays off at tighter tolerances); `daarem` requires
+    /// `--useEM` and is the fastest option there. Neither is byte-identical to
+    /// the default `none`.
     #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
     em_accel: EmAccelArg,
     /// Mean of the fragment-length distribution prior [default: 250].
@@ -2288,6 +2291,12 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // preset also sets initUniform; the Rust offline EM already initializes
     // uniformly, so that part is inherent. --meta overrides --useEM/--rangeFactorizationBins.
     let use_vbem = !args.use_em && !args.meta;
+    if use_vbem && args.em_accel == EmAccelArg::Daarem {
+        anyhow::bail!(
+            "--emAccel daarem requires plain EM (--useEM or --meta); with VBEM, the \
+             default optimizer, use --emAccel none or squarem"
+        );
+    }
     let range_factorization_bins = if args.meta {
         0
     } else {
