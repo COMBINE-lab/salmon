@@ -58,12 +58,12 @@ pub enum EmAccel {
     /// reaching the same fixpoint in far fewer M-steps. Not byte-identical to
     /// `None` (a different iterate sequence, same fixpoint within `rel_diff_tol`).
     Squarem,
-    /// DAAREM: damped Anderson acceleration with restarts and residual-monotonicity
+    /// DAAREM: damped Anderson acceleration with restarts and objective-monotonicity
     /// control, extrapolating over a window of the last several iterates (a
     /// multi-secant quasi-Newton step) rather than just two. Converges faster than
-    /// SQUAREM on high-dimensional, ill-conditioned problems. Same opt-in,
-    /// same-fixpoint semantics as [`EmAccel::Squarem`]; not byte-identical to
-    /// `None`. See the `daarem` module.
+    /// SQUAREM on high-dimensional, ill-conditioned problems. Opt-in and not
+    /// byte-identical to `None`. **Plain EM only**: rejected with VBEM (see
+    /// [`EmOptions::validate`]). See the `daarem` module.
     Daarem,
 }
 
@@ -194,6 +194,28 @@ impl Default for EmOptions {
     }
 }
 
+impl EmOptions {
+    /// Reject option combinations the optimizer does not support.
+    ///
+    /// DAAREM is refused under VBEM. On three GENCODE datasets it was slower
+    /// than plain VBEM at the default tolerance (fewer M-steps rarely made up
+    /// for the costlier step) and failed to converge within 100k M-steps at
+    /// `1e-4` on two of them: VBEM's sparse-prior objective has many optima, and
+    /// the Anderson steps kept moving between basins rather than settling.
+    /// Plain VBEM or SQUAREM should be used instead. Under plain EM, whose
+    /// objective has a single optimum, DAAREM is the fastest option measured.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.use_vbem && self.accel == EmAccel::Daarem {
+            return Err(
+                "DAAREM acceleration is only supported with plain EM, not VBEM; \
+                        use no acceleration or SQUAREM with VBEM"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Result of an optimization run.
 #[derive(Debug, Clone)]
 pub struct EmResult {
@@ -276,6 +298,44 @@ fn max_rel_diff_mode(
     } else {
         max_rel_diff(alpha_in, alpha_out, cutoff)
     }
+}
+
+/// The Dirichlet part of the VBEM objective at abundances `alpha`:
+/// `Σ_t [lnΓ(ã_t) + (a0_t − ã_t)·ln ω_t] − lnΓ(Σ ã)`, where `ã = alpha + a0`,
+/// `a0` is the prior and `ln ω_t = ψ(ã_t) − ψ(Σ ã)` (what `exp_theta` exponentiates).
+///
+/// Added to the kernel's data term `Σ_c n_c ln Σ_t ω_t w_ct` this is the evidence
+/// lower bound with the assignment distribution optimized for
+/// `q(θ) = Dir(ã)` — the quantity each VBEM step cannot decrease, which is
+/// what makes it a valid monotonicity check for DAAREM. Chunked like
+/// [`max_rel_diff_par`], so the sum's grouping does not depend on the pool.
+fn vbem_objective_prior_term(alpha: &[f64], prior: &[f64], parallel: bool) -> f64 {
+    use statrs::function::gamma::{digamma, ln_gamma};
+    let total: f64 = alpha.iter().zip(prior).map(|(a, p0)| a + p0).sum();
+    let psi_total = digamma(total);
+    let chunk_sum = |lo: usize, hi: usize| -> f64 {
+        let mut s = 0.0;
+        for t in lo..hi {
+            let at = alpha[t] + prior[t];
+            // Transcripts the M-step treats as absent (exp_theta = 0) carry no
+            // variational mass and contribute nothing here either.
+            if at > 0.0 {
+                s += ln_gamma(at) + (prior[t] - at) * (digamma(at) - psi_total);
+            }
+        }
+        s
+    };
+    let nchunks = alpha.len().div_ceil(VECTOR_REDUCTION_CHUNK);
+    let per_chunk = |c: usize| {
+        let lo = c * VECTOR_REDUCTION_CHUNK;
+        chunk_sum(lo, (lo + VECTOR_REDUCTION_CHUNK).min(alpha.len()))
+    };
+    let parts: Vec<f64> = if parallel {
+        (0..nchunks).into_par_iter().map(per_chunk).collect()
+    } else {
+        (0..nchunks).map(per_chunk).collect()
+    };
+    parts.iter().sum::<f64>() - ln_gamma(total)
 }
 
 /// Run the optimizer to convergence (parallel EM/VBEM over the packed layout).
@@ -410,6 +470,11 @@ pub(crate) fn run_em_counts(
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
 ) -> (Vec<f64>, u32, bool) {
+    if let Err(e) = opts.validate() {
+        // Callers are expected to validate up front (the CLI does); reaching
+        // here is a programming error, not a data condition.
+        panic!("invalid EmOptions: {e}");
+    }
     let num_txps = p.num_txps;
     let total: u64 = counts.iter().sum();
     // Uniform start: spread all the observed mass evenly. Any strictly positive
@@ -460,41 +525,59 @@ pub(crate) fn run_em_counts(
     // Packaging the M-step as a closure is what lets the three acceleration
     // strategies below be written once against an abstract `F`, with no knowledge
     // of EM vs VBEM or of the threading model.
-    let mut f = |src: &[f64], dst: &mut [f64]| match (opts.use_vbem, parallel) {
-        (false, true) => packed::em_step_par(
-            p,
-            counts,
-            src,
-            dst,
-            &mut shards,
-            plan.as_ref().expect("parallel implies a shard plan"),
-        ),
-        (false, false) => packed::em_step_seq(p, counts, src, dst, &mut scratch),
-        (true, true) => packed::vbem_step_par(
-            p,
-            counts,
-            &prior_alphas,
-            src,
-            dst,
-            &mut exp_theta,
-            &mut shards,
-            plan.as_ref().expect("parallel implies a shard plan"),
-        ),
-        (true, false) => packed::vbem_step_seq(
-            p,
-            counts,
-            &prior_alphas,
-            src,
-            dst,
-            &mut exp_theta,
-            &mut scratch,
-        ),
+    //
+    // `with_ll` additionally returns the data term of the objective at `src`
+    // (only DAAREM asks for it); the kernels are monomorphized on it, so the
+    // plain and SQUAREM paths run exactly the code they always did.
+    let mut step = |src: &[f64], dst: &mut [f64], with_ll: bool| -> f64 {
+        macro_rules! dispatch {
+            ($ll:literal) => {
+                match (opts.use_vbem, parallel) {
+                    (false, true) => packed::em_step_par::<$ll>(
+                        p,
+                        counts,
+                        src,
+                        dst,
+                        &mut shards,
+                        plan.as_ref().expect("parallel implies a shard plan"),
+                    ),
+                    (false, false) => packed::em_step_seq::<$ll>(p, counts, src, dst, &mut scratch),
+                    (true, true) => packed::vbem_step_par::<$ll>(
+                        p,
+                        counts,
+                        &prior_alphas,
+                        src,
+                        dst,
+                        &mut exp_theta,
+                        &mut shards,
+                        plan.as_ref().expect("parallel implies a shard plan"),
+                    ),
+                    (true, false) => packed::vbem_step_seq::<$ll>(
+                        p,
+                        counts,
+                        &prior_alphas,
+                        src,
+                        dst,
+                        &mut exp_theta,
+                        &mut scratch,
+                    ),
+                }
+            };
+        }
+        if with_ll {
+            dispatch!(true)
+        } else {
+            dispatch!(false)
+        }
     };
 
     let mut converged = false;
     let mut it = 0u32;
     match opts.accel {
         EmAccel::None => {
+            let mut f = |src: &[f64], dst: &mut [f64]| {
+                step(src, dst, false);
+            };
             // The textbook loop: one M-step, check whether anything moved, repeat.
             while it < opts.max_iter {
                 f(&alphas, &mut alphas_prime);
@@ -520,6 +603,9 @@ pub(crate) fn run_em_counts(
             }
         }
         EmAccel::Squarem => {
+            let mut f = |src: &[f64], dst: &mut [f64]| {
+                step(src, dst, false);
+            };
             converged = squarem_loop(
                 &mut f,
                 &mut alphas,
@@ -533,6 +619,18 @@ pub(crate) fn run_em_counts(
             );
         }
         EmAccel::Daarem => {
+            // DAAREM's monotonicity control needs the objective at every point it
+            // evaluates `F` at, so the objective rides along with the M-step: the
+            // data term comes out of the kernel, the rest is O(num_txps).
+            let n_total = counts.iter().sum::<u64>() as f64;
+            let mut f = |src: &[f64], dst: &mut [f64]| -> f64 {
+                let data = step(src, dst, true);
+                if opts.use_vbem {
+                    data + vbem_objective_prior_term(src, &prior_alphas, parallel)
+                } else {
+                    data - n_total * src.iter().sum::<f64>().ln()
+                }
+            };
             converged = daarem::daarem_loop(
                 &mut f,
                 &mut alphas,
@@ -976,33 +1074,34 @@ mod tests {
         );
     }
 
-    /// Same fixpoint under VBEM.
+    /// DAAREM is plain-EM only: the combination with VBEM is rejected by
+    /// `validate` (which the CLI calls up front) and, if a caller skips that,
+    /// refused by the optimizer rather than run.
     #[test]
-    fn daarem_matches_plain_vbem_fixpoint() {
-        let eq = ambiguous();
-        let base = EmOptions {
+    fn daarem_with_vbem_is_rejected() {
+        let opts = EmOptions {
             use_vbem: true,
+            accel: EmAccel::Daarem,
             ..Default::default()
         };
-        let plain = optimize(&eq, 3, &base, EffLens::NONE);
-        let da = optimize(
-            &eq,
-            3,
-            &EmOptions {
-                accel: EmAccel::Daarem,
-                ..base.clone()
-            },
-            EffLens::NONE,
-        );
-        for t in 0..3 {
-            let rel = (da.alphas[t] - plain.alphas[t]).abs() / plain.alphas[t].max(1.0);
-            assert!(
-                rel < 1e-3,
-                "vbem txp {t}: {} vs {}",
-                da.alphas[t],
-                plain.alphas[t]
-            );
+        assert!(opts.validate().is_err());
+        for accel in [EmAccel::None, EmAccel::Squarem] {
+            assert!(EmOptions {
+                accel,
+                ..opts.clone()
+            }
+            .validate()
+            .is_ok());
         }
+        assert!(EmOptions {
+            use_vbem: false,
+            ..opts.clone()
+        }
+        .validate()
+        .is_ok());
+        let eq = ambiguous();
+        let r = std::panic::catch_unwind(|| optimize(&eq, 3, &opts, EffLens::NONE));
+        assert!(r.is_err(), "optimizer ran DAAREM under VBEM");
     }
 
     /// Mass conservation through the Anderson extrapolation.
@@ -1020,6 +1119,74 @@ mod tests {
         );
         let total: f64 = res.alphas.iter().sum();
         assert!((total - 1340.0).abs() < 1e-6, "total={total}");
+    }
+
+    /// DAAREM's monotonicity control is only as good as its objective, so check
+    /// the objective is the one the M-steps climb: under plain EM and plain VBEM
+    /// steps it must never decrease (beyond rounding), and for EM it must equal
+    /// the multinomial log-likelihood computed directly.
+    #[test]
+    fn daarem_objective_is_monotone_under_plain_steps() {
+        let eq = build(
+            &[
+                (vec![0, 1], 400),
+                (vec![1, 2], 300),
+                (vec![0, 1, 2], 500),
+                (vec![2], 7),
+                (vec![3, 4], 90),
+                (vec![4], 1),
+            ],
+            5,
+        );
+        let p = PackedEqClasses::from_collapsed(&eq, 5);
+        let n_total = p.counts.iter().sum::<u64>() as f64;
+        let prior = vec![0.01; 5];
+        let mut exp_theta = vec![0.0; 5];
+        let mut scratch = vec![];
+        for use_vbem in [false, true] {
+            let mut x = vec![n_total / 5.0; 5];
+            let mut y = vec![0.0; 5];
+            let mut prev = f64::NEG_INFINITY;
+            for _ in 0..200 {
+                let obj = if use_vbem {
+                    packed::vbem_step_seq::<true>(
+                        &p,
+                        &p.counts,
+                        &prior,
+                        &x,
+                        &mut y,
+                        &mut exp_theta,
+                        &mut scratch,
+                    ) + vbem_objective_prior_term(&x, &prior, false)
+                } else {
+                    let data = packed::em_step_seq::<true>(&p, &p.counts, &x, &mut y, &mut scratch);
+                    let sx: f64 = x.iter().sum();
+                    let direct: f64 = (0..p.num_classes())
+                        .map(|c| {
+                            let (tids, ws) = p.class(c);
+                            let d: f64 = tids
+                                .iter()
+                                .zip(ws)
+                                .map(|(&t, &w)| x[t as usize] / sx * w)
+                                .sum();
+                            p.counts[c] as f64 * d.ln()
+                        })
+                        .sum();
+                    let obj = data - n_total * sx.ln();
+                    assert!(
+                        (obj - direct).abs() < 1e-8 * direct.abs(),
+                        "{obj} vs {direct}"
+                    );
+                    obj
+                };
+                assert!(
+                    obj >= prev - 1e-9 * obj.abs(),
+                    "vbem={use_vbem}: {obj} < {prev}"
+                );
+                prev = obj;
+                std::mem::swap(&mut x, &mut y);
+            }
+        }
     }
 
     /// And that DAAREM actually accelerates, on the same deliberately slow case.
