@@ -30,11 +30,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-// mimalloc as the global allocator: the quant hot path is highly multithreaded
-// and allocation-heavy, where mimalloc markedly outperforms the system allocator.
-#[cfg(not(feature = "sysalloc"))]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// The global allocator (mimalloc by default). See the module for why the quant
+// hot path is sensitive to this and how the diagnostic features select it.
+mod global_alloc;
 
 use salmon_align::{
     project_genome_bam_to_rad, quantify_alignments, quantify_rad, AlignQuantOptions,
@@ -183,8 +181,9 @@ enum EmAccelArg {
     None,
     /// SQUAREM acceleration (same fixpoint, far fewer M-steps; not byte-identical).
     Squarem,
-    /// DAAREM: damped Anderson acceleration over a window of past iterates; faster
-    /// than SQUAREM on high-dimensional problems. Same fixpoint; not byte-identical.
+    /// DAAREM: damped Anderson acceleration over a window of past iterates. The
+    /// fastest option with plain EM (`--useEM`); not supported with VBEM, the
+    /// default optimizer. Not byte-identical.
     Daarem,
 }
 
@@ -705,8 +704,10 @@ struct QuantArgs {
     /// VBEM per-feature Dirichlet prior weight.
     #[arg(long = "vbPrior", default_value_t = 1e-2)]
     vb_prior: f64,
-    /// EM/VBEM convergence acceleration. `squarem` reaches the same abundances in
-    /// far fewer M-steps but is not byte-identical to the default `none`.
+    /// EM/VBEM convergence acceleration. `squarem` needs fewer M-steps for a given
+    /// accuracy (with VBEM it pays off at tighter tolerances); `daarem` requires
+    /// `--useEM` and is the fastest option there. Neither is byte-identical to
+    /// the default `none`.
     #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
     em_accel: EmAccelArg,
     /// Mean of the fragment-length distribution prior [default: 250].
@@ -2288,6 +2289,12 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // preset also sets initUniform; the Rust offline EM already initializes
     // uniformly, so that part is inherent. --meta overrides --useEM/--rangeFactorizationBins.
     let use_vbem = !args.use_em && !args.meta;
+    if use_vbem && args.em_accel == EmAccelArg::Daarem {
+        anyhow::bail!(
+            "--emAccel daarem requires plain EM (--useEM or --meta); with VBEM, the \
+             default optimizer, use --emAccel none or squarem"
+        );
+    }
     let range_factorization_bins = if args.meta {
         0
     } else {
@@ -3146,6 +3153,10 @@ fn main() -> Result<()> {
         )
         .with_writer(ProgressAwareWriter)
         .init();
+
+    // Which allocator this build selected. Only interesting when comparing
+    // builds, so it sits at debug rather than in the normal run banner.
+    tracing::debug!("global allocator: {}", global_alloc::NAME);
 
     if cli.no_version_check {
         tracing::debug!(

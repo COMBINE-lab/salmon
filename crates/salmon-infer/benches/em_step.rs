@@ -173,8 +173,10 @@ fn bench_em(c: &mut Criterion) {
         accel: EmAccel::Squarem,
         ..Default::default()
     };
+    // DAAREM is plain-EM only (rejected with VBEM), so it is timed against
+    // plain EM rather than alongside the VBEM variants.
+    let conv_em = EmOptions::default();
     let conv_da = EmOptions {
-        use_vbem: true,
         accel: EmAccel::Daarem,
         ..Default::default()
     };
@@ -188,7 +190,8 @@ fn bench_em(c: &mut Criterion) {
         for (name, opts) in [
             ("vbem_none", &conv_plain),
             ("vbem_squarem", &conv_sq),
-            ("vbem_daarem", &conv_da),
+            ("em_none", &conv_em),
+            ("em_daarem", &conv_da),
         ] {
             convergence.bench_with_input(
                 BenchmarkId::new(name, format!("t{threads}_20000txp_50000cls")),

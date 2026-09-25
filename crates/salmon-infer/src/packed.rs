@@ -307,14 +307,31 @@ pub(crate) fn redistribute_truncated(
             } else {
                 dropped += count; // every member truncated: cannot redistribute
             }
-        } else if inactive[tids[0] as usize] {
-            dropped += count; // single-transcript class, its transcript truncated
+        } else if tids.is_empty() || inactive[tids[0] as usize] {
+            // An empty class has nowhere to go; a single-transcript class whose
+            // transcript was truncated has nowhere left to go.
+            dropped += count;
         } else {
             // Unambiguous class: its whole count belongs to that transcript.
             alpha_out[tids[0] as usize] += count;
         }
     }
     (alpha_out, dropped)
+}
+
+/// `count · ln(denom)`: one class's contribution to the objective, taken from
+/// the denominator the M-step computes anyway. An empty (zero-count) class
+/// contributes nothing rather than `0 · -inf = NaN`; a class whose every member
+/// has zero mass contributes `-inf`, which the caller reads as "reject".
+#[inline]
+fn class_log_term(count: f64, denom: f64) -> f64 {
+    if count == 0.0 {
+        0.0
+    } else if denom > 0.0 {
+        count * denom.ln()
+    } else {
+        f64::NEG_INFINITY
+    }
 }
 
 /// One sequential EM M-step: `alpha_out[t] += count·(alpha_in[t]·w_t)/Σ_j(alpha_in[j]·w_j)`,
@@ -324,13 +341,18 @@ pub(crate) fn redistribute_truncated(
 /// Read the formula as: a fragment that could have come from several transcripts
 /// is split between them in proportion to how likely each is — which depends on
 /// the current abundance estimate, which is why this has to be iterated.
-pub(crate) fn em_step_seq(
+///
+/// With `LL = true` it also returns `Σ_c count_c · ln Σ_t alpha_in[t]·w_t`, the
+/// data term of the log-likelihood at `alpha_in` (see [`class_log_term`]); with
+/// `LL = false` that bookkeeping compiles away and it returns `0.0`.
+pub(crate) fn em_step_seq<const LL: bool>(
     p: &PackedEqClasses,
     counts: &[u64],
     alpha_in: &[f64],
     alpha_out: &mut [f64],
     scratch: &mut Vec<f64>,
-) {
+) -> f64 {
+    let mut ll = 0.0;
     // The output accumulates from zero every step; it is not an update in place.
     alpha_out.iter_mut().for_each(|a| *a = 0.0);
     for ci in 0..p.num_classes() {
@@ -344,6 +366,9 @@ pub(crate) fn em_step_seq(
                 scratch.push(v);
                 denom += v;
             }
+            if LL {
+                ll += class_log_term(count, denom);
+            }
             if denom > MIN_EQ_CLASS_WEIGHT {
                 let inv = count / denom;
                 for (&tid, &v) in tids.iter().zip(scratch.iter()) {
@@ -354,10 +379,14 @@ pub(crate) fn em_step_seq(
                     }
                 }
             }
-        } else {
+        } else if tids.len() == 1 {
+            if LL {
+                ll += class_log_term(count, alpha_in[tids[0] as usize] * ws[0]);
+            }
             alpha_out[tids[0] as usize] += count;
         }
     }
+    ll
 }
 
 /// The fixed work partition for the parallel M-step, plus the set of
@@ -579,15 +608,19 @@ fn reduce_shards_sparse(shards: &[Vec<f64>], plan: &ShardPlan, alpha_out: &mut [
 ///
 /// Fixed data-derived shard boundaries and an ascending contributor reduction
 /// keep the floating-point order stable regardless of how Rayon schedules work.
-pub(crate) fn em_step_par(
+///
+/// `LL` as in [`em_step_seq`]. The per-shard partial sums are added in shard
+/// order, so the returned value is as thread-count independent as the M-step.
+pub(crate) fn em_step_par<const LL: bool>(
     p: &PackedEqClasses,
     counts: &[u64],
     alpha_in: &[f64],
     alpha_out: &mut [f64],
     shards: &mut [Vec<f64>],
     plan: &ShardPlan,
-) {
-    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
+) -> f64 {
+    let parts = shards.par_iter_mut().enumerate().map(|(s, buf)| {
+        let mut ll = 0.0;
         // The whole compressed buffer was touched in the previous iteration;
         // clearing it contiguously is both complete and cache-friendly.
         buf.fill(0.0);
@@ -601,6 +634,9 @@ pub(crate) fn em_step_par(
                 for (&tid, &w) in tids.iter().zip(ws) {
                     denom += alpha_in[tid as usize] * w;
                 }
+                if LL {
+                    ll += class_log_term(count, denom);
+                }
                 if denom > MIN_EQ_CLASS_WEIGHT {
                     let inv = count / denom;
                     // Recomputes `alpha_in[tid] * w` rather than keeping a scratch
@@ -613,12 +649,31 @@ pub(crate) fn em_step_par(
                         }
                     }
                 }
-            } else {
+            } else if tids.len() == 1 {
+                if LL {
+                    ll += class_log_term(count, alpha_in[tids[0] as usize] * ws[0]);
+                }
                 buf[locals[0] as usize] += count;
             }
         }
+        ll
     });
+    let ll = sum_shard_parts::<LL>(parts);
     reduce_shards_sparse(shards, plan, alpha_out);
+    ll
+}
+
+/// Drive the per-shard closures and, when the objective is requested, add their
+/// partials in shard order (`collect` preserves order, so the grouping of the
+/// floating-point sum is fixed by the data-derived plan, not by scheduling).
+fn sum_shard_parts<const LL: bool>(parts: impl IndexedParallelIterator<Item = f64>) -> f64 {
+    if LL {
+        let v: Vec<f64> = parts.collect();
+        v.iter().sum()
+    } else {
+        parts.for_each(|_| {});
+        0.0
+    }
 }
 
 /// `exp_theta[i] = exp(digamma(alpha_in[i]+prior_i) - digamma(Σ_j alpha_in[j]+prior_j))`,
@@ -660,7 +715,10 @@ fn fill_exp_theta_par(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f
 }
 
 /// One sequential VBEM M-step (uses `exp_theta` in place of `alpha`).
-pub(crate) fn vbem_step_seq(
+///
+/// With `LL = true` it also returns the data term of the VBEM objective,
+/// `Σ_c count_c · ln Σ_t exp_theta[t]·w_t` (see [`crate::daarem`]).
+pub(crate) fn vbem_step_seq<const LL: bool>(
     p: &PackedEqClasses,
     counts: &[u64],
     prior_alphas: &[f64],
@@ -668,7 +726,8 @@ pub(crate) fn vbem_step_seq(
     alpha_out: &mut [f64],
     exp_theta: &mut [f64],
     scratch: &mut Vec<f64>,
-) {
+) -> f64 {
+    let mut ll = 0.0;
     // Bootstrap already parallelizes over replicates. Keeping this entire
     // per-replicate kernel sequential avoids nested Rayon scheduling.
     fill_exp_theta_seq(alpha_in, prior_alphas, exp_theta);
@@ -687,6 +746,9 @@ pub(crate) fn vbem_step_seq(
                 scratch.push(v);
                 denom += v;
             }
+            if LL {
+                ll += class_log_term(count, denom);
+            }
             if denom > MIN_EQ_CLASS_WEIGHT {
                 let inv = count / denom;
                 for (&tid, &v) in tids.iter().zip(scratch.iter()) {
@@ -695,14 +757,20 @@ pub(crate) fn vbem_step_seq(
                     }
                 }
             }
-        } else {
+        } else if tids.len() == 1 {
+            if LL {
+                ll += class_log_term(count, exp_theta[tids[0] as usize] * ws[0]);
+            }
             alpha_out[tids[0] as usize] += count;
         }
     }
+    ll
 }
 
 /// Parallel VBEM M-step. Sharded private buffers + reduce (see [`em_step_par`]).
-pub(crate) fn vbem_step_par(
+///
+/// `LL` as in [`vbem_step_seq`], summed in shard order as in [`em_step_par`].
+pub(crate) fn vbem_step_par<const LL: bool>(
     p: &PackedEqClasses,
     counts: &[u64],
     prior_alphas: &[f64],
@@ -711,13 +779,14 @@ pub(crate) fn vbem_step_par(
     exp_theta: &mut [f64],
     shards: &mut [Vec<f64>],
     plan: &ShardPlan,
-) {
+) -> f64 {
     // Computed once, before the parallel region: it depends on a global sum over
     // all transcripts, so it cannot be sharded.
     fill_exp_theta_par(alpha_in, prior_alphas, exp_theta);
     // Reborrow as immutable so the closure below can share it across threads.
     let exp_theta: &[f64] = exp_theta;
-    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
+    let parts = shards.par_iter_mut().enumerate().map(|(s, buf)| {
+        let mut ll = 0.0;
         buf.fill(0.0);
         let (start, end) = plan.range(s);
         for ci in start..end {
@@ -732,6 +801,9 @@ pub(crate) fn vbem_step_par(
                         denom += et * w;
                     }
                 }
+                if LL {
+                    ll += class_log_term(count, denom);
+                }
                 if denom > MIN_EQ_CLASS_WEIGHT {
                     let inv = count / denom;
                     for i in 0..tids.len() {
@@ -741,12 +813,18 @@ pub(crate) fn vbem_step_par(
                         }
                     }
                 }
-            } else {
+            } else if tids.len() == 1 {
+                if LL {
+                    ll += class_log_term(count, exp_theta[tids[0] as usize] * ws[0]);
+                }
                 buf[locals[0] as usize] += count;
             }
         }
+        ll
     });
+    let ll = sum_shard_parts::<LL>(parts);
     reduce_shards_sparse(shards, plan, alpha_out);
+    ll
 }
 
 #[cfg(test)]
@@ -1021,7 +1099,6 @@ mod shard_plan_determinism {
             ("plain EM + SQUAREM", false, false, crate::EmAccel::Squarem),
             ("VBEM + SQUAREM", true, false, crate::EmAccel::Squarem),
             ("plain EM + DAAREM", false, false, crate::EmAccel::Daarem),
-            ("VBEM + DAAREM", true, false, crate::EmAccel::Daarem),
         ];
 
         for (label, use_vbem, per_nucleotide_prior, accel) in configs {
@@ -1108,7 +1185,7 @@ mod shard_plan_determinism {
         let em_reference = dense_em_reference(&packed, &packed.counts, &alpha, &plan);
         let mut em_out = vec![0.0; packed.num_txps];
         let mut em_shards = plan.allocate_buffers();
-        em_step_par(
+        em_step_par::<false>(
             &packed,
             &packed.counts,
             &alpha,
@@ -1125,7 +1202,7 @@ mod shard_plan_determinism {
         let mut vb_out = vec![0.0; packed.num_txps];
         let mut exp_theta = vec![0.0; packed.num_txps];
         let mut vb_shards = plan.allocate_buffers();
-        vbem_step_par(
+        vbem_step_par::<false>(
             &packed,
             &packed.counts,
             &prior,
