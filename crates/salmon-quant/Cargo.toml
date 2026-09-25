@@ -16,6 +16,7 @@ salmon-model = { workspace = true }
 salmon-eqclass = { workspace = true }
 salmon-infer = { workspace = true }
 salmon-rad = { workspace = true }
+salmon-degnorm = { workspace = true }
 piscem-rs = { workspace = true }
 paraseq-temp = { workspace = true }
 thread-broker = { workspace = true }

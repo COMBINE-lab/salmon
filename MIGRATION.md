@@ -70,6 +70,14 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
   default. Needed for an Ensembl cDNA index against an Ensembl GTF, where the
   FASTA carries the version in the identifier and the GTF puts it in a separate
   `transcript_version` attribute.
+- `--degCoverage` / `--degCovBins` and the `salmon degnorm` subcommand —
+  degradation normalization in the spirit of
+  [DegNorm](https://nustatbioinfo.github.io/DegNorm/). `quant --degCoverage`
+  records each transcript's coverage curve while the reads are streaming;
+  `salmon degnorm` fits them across a cohort and writes a degradation index per
+  transcript per sample, plus one corrected `quant.sf` per sample that tximport
+  and DESeq2 read unchanged. Reads mode only. See
+  [`docs/degnorm.md`](docs/degnorm.md).
 
 ## Behavior differences to be aware of
 
