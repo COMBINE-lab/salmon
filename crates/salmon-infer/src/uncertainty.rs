@@ -255,7 +255,7 @@ fn gibbs_round(
             for (&tid, &k) in tids.iter().zip(&draws) {
                 txp_count[tid as usize] += k as f64;
             }
-        } else {
+        } else if tids.len() == 1 {
             // Unambiguous class: nothing random about where its reads go.
             txp_count[tids[0] as usize] += class_count as f64;
         }
@@ -433,7 +433,7 @@ pub fn ambiguity_counts(p: &PackedEqClasses) -> (Vec<u32>, Vec<u32>) {
             for &t in tids {
                 ambig[t as usize] += count;
             }
-        } else {
+        } else if tids.len() == 1 {
             unique[tids[0] as usize] += count;
         }
     }
