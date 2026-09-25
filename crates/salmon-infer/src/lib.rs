@@ -55,8 +55,13 @@ pub enum EmAccel {
     #[default]
     None,
     /// SQUAREM (SqS3): extrapolate over two M-steps with a stabilizing third,
-    /// reaching the same fixpoint in far fewer M-steps. Not byte-identical to
-    /// `None` (a different iterate sequence, same fixpoint within `rel_diff_tol`).
+    /// needing fewer M-steps for a given accuracy. Not byte-identical to `None`
+    /// (a different iterate sequence). Under plain EM, whose objective has a
+    /// single optimum, it reaches the same fixpoint within `rel_diff_tol`. The
+    /// VBEM objective has many optima (one per choice of winners among
+    /// near-identical transcripts), so there it can settle in a different one
+    /// than `None` would; from the default start the two agreed closely on the
+    /// GENCODE datasets measured.
     Squarem,
     /// DAAREM: damped Anderson acceleration with restarts and objective-monotonicity
     /// control, extrapolating over a window of the last several iterates (a
@@ -1072,6 +1077,85 @@ mod tests {
             da.iters,
             plain.iters
         );
+    }
+
+    /// `PackedEqClasses` has public fields, so a caller can build a class with no
+    /// targets (piscem-infer did: a fragment whose every mapping failed its
+    /// strand filter). Such a class carries no assignable evidence; every path
+    /// must skip it rather than index its first target, and the result must be
+    /// the one without it.
+    #[test]
+    fn empty_classes_are_skipped_everywhere() {
+        let eq = build(
+            &[
+                (vec![0, 1], 40),
+                (vec![1], 25),
+                (vec![2], 9),
+                (vec![1, 2], 30),
+            ],
+            3,
+        );
+        let clean = PackedEqClasses::from_collapsed(&eq, 3);
+        // Same classes with an empty one inserted in the middle.
+        let mut with_empty = clean.clone();
+        let mid = 2usize;
+        let at = with_empty.starts[mid];
+        with_empty.starts.insert(mid, at);
+        with_empty.counts.insert(mid, 17);
+        let empty_count = 17.0;
+        let eff = vec![1.0; 3];
+        for use_vbem in [false, true] {
+            for accel in [EmAccel::None, EmAccel::Squarem, EmAccel::Daarem] {
+                if use_vbem && accel == EmAccel::Daarem {
+                    continue;
+                }
+                for parallel in [false, true] {
+                    let opts = EmOptions {
+                        use_vbem,
+                        accel,
+                        ..Default::default()
+                    };
+                    let a = optimize_packed(&clean, &opts, parallel);
+                    let b = optimize_packed(&with_empty, &opts, parallel);
+                    let label = format!("vbem={use_vbem} {accel:?} par={parallel}");
+                    let total_a: f64 = a.alphas.iter().sum();
+                    let total_b: f64 = b.alphas.iter().sum();
+                    // Nothing assignable was added, so the assigned mass matches.
+                    assert!(
+                        (total_a - total_b).abs() < 1e-6,
+                        "{label}: {total_a} vs {total_b}"
+                    );
+                    for t in 0..3 {
+                        assert!(
+                            (a.alphas[t] - b.alphas[t]).abs() < 1e-3 * a.alphas[t].max(1.0),
+                            "{label} txp {t}: {} vs {}",
+                            a.alphas[t],
+                            b.alphas[t]
+                        );
+                    }
+                }
+            }
+        }
+        // The final truncation step reports the empty class's count as dropped.
+        let r = optimize_packed(&with_empty, &EmOptions::default(), true);
+        assert!(r.dropped_mass >= empty_count, "dropped {}", r.dropped_mass);
+        assert_eq!(
+            uncertainty::ambiguity_counts(&with_empty),
+            uncertainty::ambiguity_counts(&clean)
+        );
+        let g = uncertainty::gibbs_sample(
+            &with_empty,
+            &eff,
+            &[25.0, 50.0, 25.0],
+            &uncertainty::GibbsOptions {
+                num_samples: 4,
+                ..Default::default()
+            },
+            7,
+        );
+        assert_eq!(g.len(), 4);
+        let bs = uncertainty::bootstrap(&with_empty, &EmOptions::default(), EffLens::NONE, 3, 7);
+        assert_eq!(bs.len(), 3);
     }
 
     /// DAAREM is plain-EM only: the combination with VBEM is rejected by

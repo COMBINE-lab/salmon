@@ -307,8 +307,10 @@ pub(crate) fn redistribute_truncated(
             } else {
                 dropped += count; // every member truncated: cannot redistribute
             }
-        } else if inactive[tids[0] as usize] {
-            dropped += count; // single-transcript class, its transcript truncated
+        } else if tids.is_empty() || inactive[tids[0] as usize] {
+            // An empty class has nowhere to go; a single-transcript class whose
+            // transcript was truncated has nowhere left to go.
+            dropped += count;
         } else {
             // Unambiguous class: its whole count belongs to that transcript.
             alpha_out[tids[0] as usize] += count;
@@ -377,7 +379,7 @@ pub(crate) fn em_step_seq<const LL: bool>(
                     }
                 }
             }
-        } else {
+        } else if tids.len() == 1 {
             if LL {
                 ll += class_log_term(count, alpha_in[tids[0] as usize] * ws[0]);
             }
@@ -647,7 +649,7 @@ pub(crate) fn em_step_par<const LL: bool>(
                         }
                     }
                 }
-            } else {
+            } else if tids.len() == 1 {
                 if LL {
                     ll += class_log_term(count, alpha_in[tids[0] as usize] * ws[0]);
                 }
@@ -755,7 +757,7 @@ pub(crate) fn vbem_step_seq<const LL: bool>(
                     }
                 }
             }
-        } else {
+        } else if tids.len() == 1 {
             if LL {
                 ll += class_log_term(count, exp_theta[tids[0] as usize] * ws[0]);
             }
@@ -811,7 +813,7 @@ pub(crate) fn vbem_step_par<const LL: bool>(
                         }
                     }
                 }
-            } else {
+            } else if tids.len() == 1 {
                 if LL {
                     ll += class_log_term(count, exp_theta[tids[0] as usize] * ws[0]);
                 }
