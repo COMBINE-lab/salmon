@@ -34,7 +34,7 @@
 
 mod bam;
 pub mod decode;
-mod mapping_record;
+pub mod mapping_record;
 mod output;
 mod processor;
 mod sam;
@@ -466,6 +466,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     } else {
         opts.num_threads
     };
+    // Run-wide mapping-output settings, shared by the header and every record so
+    // the two cannot disagree. Realizing a base-level CIGAR costs two banded DPs
+    // per emitted record, so it is only switched on when records are being
+    // written at all.
+    let record_options = mapping_record::RecordOptions {
+        align_config: (opts.write_mappings.is_some() || opts.write_bam.is_some())
+            .then_some(&opts.map_config.align),
+    };
     // SAM sink for `--writeMappings` (header written here).
     let sam_writer: Option<sam::SamWriter> = match &opts.write_mappings {
         Some(path) => {
@@ -685,6 +693,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         )?;
 
         let shared = Shared {
+            record_options: &record_options,
             busy: &plan.busy,
             salmon: &salmon,
             eq: &eq_builder,

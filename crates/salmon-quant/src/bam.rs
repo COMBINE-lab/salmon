@@ -48,7 +48,7 @@ use noodles_bgzf as bgzf;
 use salmon_index::SalmonIndex;
 use salmon_map::ScoredMapping;
 
-use crate::mapping_record::{self, AlignmentRecord, CigarKind};
+use crate::mapping_record::{self, AlignmentRecord, EmitScratch, RecordOptions};
 
 /// Hand a chunk to the writer once it reaches this size. Large enough that the
 /// per-chunk handoff is negligible, small enough to bound queued memory.
@@ -318,6 +318,7 @@ impl BamScratch<'_> {
     /// therefore contiguous in one chunk, and chunks are written whole. That is
     /// what keeps the output collated by fragment even though nothing else
     /// about the record order is constrained.
+    #[allow(clippy::too_many_arguments)]
     pub fn write_fragment(
         &mut self,
         salmon: &SalmonIndex,
@@ -325,10 +326,20 @@ impl BamScratch<'_> {
         r1_seq: &[u8],
         r2: Option<(&[u8], &[u8])>,
         maps: &[ScoredMapping],
+        options: &RecordOptions<'_>,
+        scratch: &mut EmitScratch,
     ) -> io::Result<()> {
-        mapping_record::emit_fragment_records(salmon, r1_id, r1_seq, r2, maps, |record| {
-            encode_record(&mut self.buffer, record)
-        })?;
+        let buffer = &mut self.buffer;
+        mapping_record::emit_fragment_records(
+            salmon,
+            r1_id,
+            r1_seq,
+            r2,
+            maps,
+            options,
+            scratch,
+            |record| encode_record(buffer, record),
+        )?;
         if self.buffer.len() >= CHUNK_TARGET {
             self.flush()?;
         }
@@ -457,6 +468,14 @@ fn push_aux_i64(buf: &mut Vec<u8>, tag: [u8; 2], value: i64) {
     }
 }
 
+/// Append a NUL-terminated string tag (`Z`).
+fn push_aux_str(buf: &mut Vec<u8>, tag: [u8; 2], value: &str) {
+    buf.extend_from_slice(&tag);
+    buf.push(b'Z');
+    buf.extend_from_slice(value.as_bytes());
+    buf.push(0);
+}
+
 /// Encode one record in BAM's binary layout: a fixed 32-byte header, then the
 /// variable-length name, CIGAR, packed sequence, qualities and tags.
 ///
@@ -466,23 +485,29 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
     // reserve the four bytes now and patch them in below.
     let block_start = buf.len();
     push_u32(buf, 0);
-    push_i32(buf, record.reference_id as i32);
-    push_i32(buf, record.position.max(0));
+    // An unmapped record has no reference and no position; BAM spells both -1.
+    push_i32(buf, record.reference_id.map_or(-1, |id| id as i32));
+    push_i32(
+        buf,
+        if record.reference_id.is_some() {
+            record.position.max(0)
+        } else {
+            -1
+        },
+    );
     let name_len = record.name.len() + 1;
-    let cigar_len = record.cigar.as_slice().len();
-    let reference_span: i32 = record
-        .cigar
-        .as_slice()
-        .iter()
-        .filter(|op| matches!(op.kind, CigarKind::Match))
-        .map(|op| op.len as i32)
-        .sum();
+    let cigar_len = record.cigar.len();
+    let reference_span = salmon_map::realize::reference_span(record.cigar);
     buf.push(u8::try_from(name_len).map_err(|_| io::Error::other("BAM read name too long"))?);
     buf.push(record.mapping_quality);
     buf.extend_from_slice(
         &reg2bin(record.position, record.position + reference_span).to_le_bytes(),
     );
-    buf.extend_from_slice(&(cigar_len as u16).to_le_bytes());
+    buf.extend_from_slice(
+        &u16::try_from(cigar_len)
+            .map_err(|_| io::Error::other("BAM CIGAR too long"))?
+            .to_le_bytes(),
+    );
     buf.extend_from_slice(&record.flags.to_le_bytes());
     push_i32(buf, record.sequence.len() as i32);
     push_i32(buf, record.mate_reference_id.map_or(-1, |id| id as i32));
@@ -490,12 +515,8 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
     push_i32(buf, record.template_length);
     buf.extend_from_slice(record.name);
     buf.push(0);
-    for op in record.cigar.as_slice() {
-        let code = match op.kind {
-            CigarKind::Match => 0,
-            CigarKind::SoftClip => 4,
-        };
-        push_u32(buf, ((op.len as u32) << 4) | code);
+    for op in record.cigar {
+        push_u32(buf, (op.len << 4) | op.kind as u32);
     }
     for i in (0..record.sequence.len()).step_by(2) {
         let high = base_code(record_base(record, i));
@@ -514,6 +535,12 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
     buf.extend_from_slice(b"XTA");
     buf.push(record.xt);
     push_aux_i64(buf, *b"AS", record.alignment_score as i64);
+    if let Some(edit_distance) = record.edit_distance {
+        push_aux_i64(buf, *b"NM", edit_distance as i64);
+    }
+    if let Some(md) = record.md {
+        push_aux_str(buf, *b"MD", md);
+    }
     // Patch the reserved length field now the record's extent is known (`- 4`
     // because the length itself is not counted).
     let block_size = u32::try_from(buf.len() - block_start - 4)
