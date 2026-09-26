@@ -29,6 +29,9 @@ rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 noodles-bgzf = "0.51"
 jiff = "0.2"
+# @SQ M5: the MD5 of each reference sequence. It is what binds a BAM to the
+# exact reference it was made against, and what CRAM needs to reconstruct bases.
+md-5 = "0.11"
 
 [dev-dependencies]
 tempfile = { workspace = true }
