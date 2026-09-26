@@ -18,6 +18,11 @@ salmon-infer = { workspace = true }
 salmon-rad = { workspace = true }
 piscem-rs = { workspace = true }
 paraseq-temp = { workspace = true }
+# Annotation parsing for the spliced genome output: exon structures per
+# transcript, so a transcriptome alignment can be cut at exon boundaries and
+# reported in genome coordinates. Same crate salmon-align already uses for the
+# opposite (genome -> transcriptome) direction, kept at one version.
+bramble-rs = "0.1.8"
 thread-broker = { workspace = true }
 rapidgzip-core = { workspace = true }
 anyhow = { workspace = true }
@@ -29,6 +34,9 @@ rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 noodles-bgzf = "0.51"
 jiff = "0.2"
+# @SQ M5: the MD5 of each reference sequence. It is what binds a BAM to the
+# exact reference it was made against, and what CRAM needs to reconstruct bases.
+md-5 = "0.11"
 
 [dev-dependencies]
 tempfile = { workspace = true }
