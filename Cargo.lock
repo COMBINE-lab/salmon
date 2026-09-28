@@ -904,7 +904,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1092,7 +1092,7 @@ dependencies = [
  "mem_dbg",
  "mmap-rs",
  "sealed",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "xxhash-rust",
 ]
 
@@ -1833,7 +1833,7 @@ dependencies = [
  "mach2",
  "nix",
  "sysctl",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "widestring",
  "windows 0.48.0",
 ]
@@ -1890,7 +1890,7 @@ dependencies = [
  "cfg-if",
  "flate2",
  "liblzma",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "zstd 0.13.3",
 ]
 
@@ -2222,7 +2222,7 @@ dependencies = [
  "num_cpus",
  "parking_lot",
  "smallvec",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2758,7 +2758,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "zstd 0.14.0",
 ]
@@ -2941,7 +2941,7 @@ dependencies = [
  "ariadne",
  "chumsky",
  "smallvec",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3076,7 +3076,7 @@ dependencies = [
  "rayon",
  "seq-macro",
  "sux",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "value-traits",
 ]
@@ -3110,7 +3110,7 @@ dependencies = [
  "nalgebra",
  "num-traits",
  "rand",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3184,7 +3184,7 @@ dependencies = [
  "succinctly",
  "sync-cell-slice",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "thread-priority",
  "value-traits",
  "xxhash-rust",
@@ -3293,11 +3293,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.20",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -3313,9 +3313,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3386,7 +3386,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "rapidhash 4.5.1",
  "sshash-lib",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
