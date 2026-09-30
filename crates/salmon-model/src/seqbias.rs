@@ -373,6 +373,26 @@ pub fn build_expected<'a, F>(
 where
     F: Fn(usize) -> &'a [u8] + Sync,
 {
+    build_expected_strided(num_targets, seq_of, |_| 1, alphas, eff_lens, cdf)
+}
+
+/// [`build_expected`] visiting only every `pos_stride_of(tid)`-th context of a
+/// target and weighting each visit by that stride: systematic sampling, an
+/// unbiased estimate of the full sweep. A stride of 1 is the exact sweep, bit
+/// for bit. Used for the long unspliced targets of an index built with
+/// `--unspliced` (see [`crate::bias::unspliced_position_stride`]).
+pub fn build_expected_strided<'a, F, S>(
+    num_targets: usize,
+    seq_of: F,
+    pos_stride_of: S,
+    alphas: &[f64],
+    eff_lens: &[f64],
+    cdf: &[f64],
+) -> (SBModel, SBModel)
+where
+    F: Fn(usize) -> &'a [u8] + Sync,
+    S: Fn(usize) -> usize + Sync,
+{
     use rayon::prelude::*;
     let k = CONTEXT_LENGTH;
     let cu = CONTEXT_LEFT as i32;
@@ -402,12 +422,15 @@ where
         let rc = revcomp_bytes(seq);
         let mut fw = SBModel::new();
         let mut rc_m = SBModel::new();
+        let stride = pos_stride_of(tid).max(1);
+        // Multiplying by exactly 1.0 is the identity, so stride 1 is unchanged.
+        let scale = stride as f64;
         // fragStartPos in 0..(refLen - K) (salmon's loop bound)
-        for frag_start in 0..(ref_len - k) {
+        for frag_start in (0..(ref_len - k)).step_by(stride) {
             let max_frag_len = ref_len as i32 - (frag_start as i32 + cu);
             if max_frag_len >= 0 && (max_frag_len as usize) < ref_len {
                 let cdensity = conditional_cdf(cdf, cdf_max_arg, cdf_max_val, max_frag_len);
-                let w = weight * cdensity;
+                let w = weight * cdensity * scale;
                 fw.add_context(&seq[frag_start..frag_start + k], false, w);
                 rc_m.add_context(&rc[frag_start..frag_start + k], false, w);
             }

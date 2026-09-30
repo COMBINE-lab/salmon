@@ -296,6 +296,11 @@ pub struct AlignQuantOptions {
     /// processed/mapped fragment counts here as it runs so the caller can drive
     /// a live progress display. `None` (the default) disables sharing.
     pub progress: Option<std::sync::Arc<salmon_core::ProgressCounters>>,
+    /// Splicing annotation of the index the fragments were mapped to (an index
+    /// built with `salmon index --unspliced`). When set, a RAD quantification
+    /// also writes the gene-level spliced / unspliced / ambiguous summary. Set
+    /// by reads-mode `--deterministic`, whose RAD shares the index numbering.
+    pub splice_annotation: Option<salmon_core::splicing::SpliceAnnotation>,
 }
 
 impl AlignQuantOptions {
@@ -350,6 +355,7 @@ impl AlignQuantOptions {
             num_gibbs_samples: 0,
             thinning_factor: 16,
             progress: None,
+            splice_annotation: None,
         }
     }
 }
@@ -440,6 +446,9 @@ pub struct AlignQuantResult {
     pub peak_rss_kb: u64,
     /// structured run diagnostics / bad-input warnings (also emitted to the log)
     pub diagnostics: Vec<salmon_core::Diagnostic>,
+    /// gene-level spliced / unspliced / ambiguous counts (see
+    /// [`AlignQuantOptions::splice_annotation`])
+    pub splicing: Option<salmon_core::splicing::SplicingSummary>,
 }
 
 /// Current local time as an asctime-style string, matching salmon's timestamps.
@@ -2004,6 +2013,19 @@ fn apply_bias_correction(
     gc_bins: usize,
     bias_speed_samp: usize,
     no_bias_length_threshold: bool,
+    // Per-reference position stride for the bias sweeps (long unspliced
+    // targets of an index built with `--unspliced`); `None` means 1 for all,
+    // the exact computation.
+    pos_stride: Option<&[usize]>,
+    // References left out of the expected bias models (unspliced targets):
+    // the models describe the library's protocol and are estimated on spliced
+    // targets, as with a gentrome index where intronic fragments go to the
+    // decoy; the correction is still applied to every target.
+    model_exclude: Option<&[bool]>,
+    // End of the decoy block: references in `[num_targets, decoy_end)` are
+    // decoys and are not swept; a tail after it (sub-k transcripts, projected
+    // unspliced targets) is. `num_refs` when there is no such tail.
+    decoy_end: usize,
 ) -> salmon_model::dumps::BiasDump {
     use salmon_model::seqbias::CONTEXT_LENGTH;
     let mut bias_dump = salmon_model::dumps::BiasDump::default();
@@ -2012,12 +2034,29 @@ fn apply_bias_correction(
     let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
     let k = if seq_bias { CONTEXT_LENGTH } else { 1 };
     let refseq_of = |t: usize| &ref_bytes[t];
+    let stride_of = |t: usize| pos_stride.map_or(1, |s| s[t]);
+    // Abundances the expected models see: excluded targets weigh nothing.
+    let model_alphas: std::borrow::Cow<[f64]> = match model_exclude {
+        Some(ex) => alphas
+            .iter()
+            .zip(ex)
+            .map(|(&a, &x)| if x { 0.0 } else { a })
+            .collect::<Vec<f64>>()
+            .into(),
+        None => alphas.into(),
+    };
 
     let seq = seq_obs.map(|(mut of, mut or)| {
         of.normalize();
         or.normalize();
-        let (ef, er) =
-            salmon_model::build_expected(num_targets, refseq_of, alphas, eff_lengths, &fld_cdf);
+        let (ef, er) = salmon_model::build_expected_strided(
+            num_targets,
+            refseq_of,
+            stride_of,
+            &model_alphas,
+            eff_lengths,
+            &fld_cdf,
+        );
         (of, or, ef, er)
     });
     if let Some((of, or, ef, er)) = seq.as_ref() {
@@ -2036,11 +2075,12 @@ fn apply_bias_correction(
         )
     });
     let gc_ratio_model = if let Some(mut obs) = gc_obs {
-        let mut exp = salmon_model::build_expected_gc(
+        let mut exp = salmon_model::build_expected_gc_strided(
             num_targets,
             refseq_of,
             |t| gc_store.view(t),
-            alphas,
+            stride_of,
+            &model_alphas,
             eff_lengths,
             &fld_cdf,
             fld_low,
@@ -2069,7 +2109,7 @@ fn apply_bias_correction(
         let (ef, er) = salmon_model::build_expected_pos(
             num_targets,
             |t| lengths[t] as usize,
-            alphas,
+            &model_alphas,
             eff_lengths,
             &fld_cdf,
             length_quantiles.expect("positional bias requires length quantiles"),
@@ -2098,7 +2138,7 @@ fn apply_bias_correction(
             // Decoys keep their uncorrected effective length: they are never
             // reported, so the corrected value would be unused, and computing
             // it is the #1019 stall. Same guard the one-pass path applies.
-            if tid >= num_targets || alphas[tid] < 1e-8 {
+            if (tid >= num_targets && tid < decoy_end) || alphas[tid] < 1e-8 {
                 return;
             }
             let s = &ref_bytes[tid];
@@ -2124,7 +2164,7 @@ fn apply_bias_correction(
                     .as_ref()
                     .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
             };
-            *eff_length = salmon_model::corrected_effective_length_full(
+            *eff_length = salmon_model::corrected_effective_length_strided(
                 s,
                 &fld_cdf,
                 fld_low,
@@ -2133,6 +2173,7 @@ fn apply_bias_correction(
                 *eff_length,
                 bias_speed_samp,
                 no_bias_length_threshold,
+                stride_of(tid),
             );
         });
     bias_dump
@@ -2502,6 +2543,9 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             opts.gc_bins,
             opts.bias_speed_samp,
             opts.no_bias_length_threshold,
+            None,
+            None,
+            num_refs,
         );
         collapsed.update_eff_lengths(&eff_lengths);
         // Only the combined weights changed; patch them in place.
@@ -2653,6 +2697,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
         diagnostics,
+        splicing: None,
     };
     write_outputs(opts, &result)?;
     timer.mark("output");
@@ -2755,6 +2800,11 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         }
         w.flush()?;
     }
+    if let Some(sp) = &res.splicing {
+        let path = dir.join(salmon_core::splicing::USA_FILE);
+        salmon_core::splicing::write_usa_tsv(&path, sp, opts.sig_digits as usize)
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
 
     /// Shape of the positional-bias model: one model per transcript length
     /// class, each binned over the transcript's relative position. Reported as
@@ -2854,6 +2904,9 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         total_time_seconds: f64,
         peak_rss_kb: u64,
         diagnostics: Vec<salmon_core::Diagnostic>,
+        /// present only for an index built with `--unspliced`
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unspliced: Option<salmon_core::splicing::UnsplicedMeta>,
         call: String,
         start_time: String,
         end_time: String,
@@ -3128,6 +3181,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
             d.extend(opts.extra_diagnostics.iter().cloned());
             d
         },
+        unspliced: res.splicing.as_ref().map(Into::into),
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: asctime_now(),

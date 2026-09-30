@@ -144,7 +144,10 @@ fn open_maybe_compressed(path: &Path) -> io::Result<Box<dyn BufRead>> {
 ///
 /// Both syntaxes are handled by one parser because real files mix conventions,
 /// and because the caller only knows the file's extension, not its dialect.
-fn extract_attr(attrs: &str, key: &str) -> Option<String> {
+///
+/// Public so the index builder's GTF reader (unspliced targets) parses
+/// attributes by exactly the same rules as `--geneMap`.
+pub fn extract_attr(attrs: &str, key: &str) -> Option<String> {
     for entry in attrs.split(';') {
         let entry = entry.trim();
         if entry.is_empty() {

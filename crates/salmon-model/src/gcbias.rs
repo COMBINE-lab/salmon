@@ -584,6 +584,49 @@ where
     FS: Fn(usize) -> &'a [u8] + Sync,
     FP: Fn(usize) -> GcView<'a> + Sync,
 {
+    build_expected_gc_strided(
+        num_targets,
+        seq_of,
+        view_of,
+        |_| 1,
+        alphas,
+        eff_lens,
+        cdf,
+        fld_low,
+        fld_high,
+        cond_bins,
+        gc_bins,
+        k,
+        stride,
+    )
+}
+
+/// [`build_expected_gc`] visiting only every `pos_stride_of(tid)`-th fragment
+/// start of a target, each visit weighted by that stride (systematic sampling,
+/// unbiased; stride 1 is the exact sweep, bit for bit). Used for the long
+/// unspliced targets of an index built with `--unspliced`, where the exact
+/// O(refLen · fldRange) sweep dominates the run.
+#[allow(clippy::too_many_arguments)]
+pub fn build_expected_gc_strided<'a, FS, FP, S>(
+    num_targets: usize,
+    seq_of: FS,
+    view_of: FP,
+    pos_stride_of: S,
+    alphas: &[f64],
+    eff_lens: &[f64],
+    cdf: &[f64],
+    fld_low: usize,
+    fld_high: usize,
+    cond_bins: usize,
+    gc_bins: usize,
+    k: usize,
+    stride: usize,
+) -> GcFragModel
+where
+    FS: Fn(usize) -> &'a [u8] + Sync,
+    FP: Fn(usize) -> GcView<'a> + Sync,
+    S: Fn(usize) -> usize + Sync,
+{
     let stride = stride.max(1) as i32;
     // The expected-GC distribution is a sum of independent per-transcript
     // contributions, each an O(refLen · fldRange/stride) double loop — billions
@@ -608,11 +651,14 @@ where
         }
         let view = view_of(tid);
         let ctx = GcContext::build(&view);
-        let weight = alphas[tid] / eff_lens[tid];
+        // Multiplying by exactly 1.0 is the identity, so position stride 1 is
+        // unchanged.
+        let pos_stride = pos_stride_of(tid).max(1);
+        let weight = alphas[tid] / eff_lens[tid] * pos_stride as f64;
         let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
         let sp = if fld_low > 0 { fld_low as i32 - 1 } else { 0 };
         let mut model = GcFragModel::new(cond_bins, gc_bins);
-        for frag_start in 0..(ref_len - k) {
+        for frag_start in (0..(ref_len - k)).step_by(pos_stride) {
             let mut prev = cond(sp);
             let mut fl = fld_low as i32;
             while fl <= fld_high as i32 {

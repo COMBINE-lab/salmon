@@ -122,6 +122,60 @@ pub fn corrected_effective_length_full(
     stride: usize,
     no_length_threshold: bool,
 ) -> f64 {
+    corrected_effective_length_strided(
+        seq,
+        cdf,
+        fld_low,
+        fld_high,
+        bias,
+        elen,
+        stride,
+        no_length_threshold,
+        1,
+    )
+}
+
+/// Position stride of the bias sweeps over an unspliced target (see
+/// [`unspliced_position_stride`]).
+pub const UNSPLICED_BIAS_STRIDE: usize = 16;
+
+/// Fewest fragment starts an unspliced target keeps in the bias sweeps; the
+/// stride shrinks below [`UNSPLICED_BIAS_STRIDE`] for targets too short to
+/// provide them.
+pub const UNSPLICED_BIAS_MIN_STARTS: usize = 64;
+
+/// Position stride for the bias sweeps of an unspliced target of length `len`:
+/// every 16th fragment start, weighted by 16 (fewer for targets under 1 kb).
+///
+/// A fragment's GC content and end contexts change little when its start moves
+/// by a few bases, since it spans ~250 of them, so the per-start bias factor is
+/// smooth and systematic sampling at a stride well below the fragment length
+/// estimates the full sweep closely (see the tests). Unspliced targets are
+/// what makes the sweep expensive: 2.4 Gb of them against 1.5 Gb of
+/// transcripts for GENCODE v50 intron targets. Spliced targets always use 1.
+pub fn unspliced_position_stride(len: usize) -> usize {
+    (len / UNSPLICED_BIAS_MIN_STARTS).clamp(1, UNSPLICED_BIAS_STRIDE)
+}
+
+/// [`corrected_effective_length_full`] with the scalar (GC) sweep visiting only
+/// every `pos_stride`-th fragment start, each visit weighted by the stride.
+/// `pos_stride = 1` is the exact computation, bit for bit. The FFT path (no GC
+/// model) is already O(L log L) and ignores the stride.
+#[allow(clippy::too_many_arguments)]
+pub fn corrected_effective_length_strided(
+    seq: &[u8],
+    cdf: &[f64],
+    fld_low: usize,
+    fld_high: usize,
+    bias: &BiasInputs,
+    elen: f64,
+    stride: usize,
+    no_length_threshold: bool,
+    pos_stride: usize,
+) -> f64 {
+    let pos_step = pos_stride.max(1) as i32;
+    // Multiplying by exactly 1.0 is the identity, so stride 1 is unchanged.
+    let pos_scale = pos_step as f64;
     if !bias.any() {
         return elen;
     }
@@ -275,7 +329,7 @@ pub fn corrected_effective_length_full(
                         // No usable GC context (too close to an end): neutral.
                         mass += 1.0;
                     }
-                    kstart += 1;
+                    kstart += pos_step;
                 }
             }
             // General loop: multiply in whichever factors are present.
@@ -298,13 +352,13 @@ pub fn corrected_effective_length_full(
                         frag_factor *= pf[frag_start as usize] * pr[frag_end as usize];
                     }
                     mass += frag_factor;
-                    kstart += 1;
+                    kstart += pos_step;
                 }
             }
         }
         // Weight this length's total start-position mass by the length's own
         // probability, and accumulate — this is the convolution.
-        eff += fl_weight * mass;
+        eff += fl_weight * (mass * pos_scale);
         fl += stride;
     }
 
@@ -442,6 +496,168 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A GC-biased ratio model, an FLD around 250 and a random sequence with
+    /// GC-rich and GC-poor stretches: the ingredients of a scalar GC sweep.
+    fn gc_fixture(len: usize) -> (Vec<u8>, Vec<u32>, GcFragModel, Vec<f64>, usize, usize) {
+        gc_fixture_blocks(len, 3000)
+    }
+
+    fn gc_fixture_blocks(
+        len: usize,
+        block: usize,
+    ) -> (Vec<u8>, Vec<u32>, GcFragModel, Vec<f64>, usize, usize) {
+        use crate::gcbias::{gc_prefix, gc_ratio, DEFAULT_COND_BINS, DEFAULT_GC_BINS};
+        let mut x = 0x1234_5678u64;
+        let seq: Vec<u8> = (0..len)
+            .map(|i| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let r = (x >> 33) % 100;
+                // alternate GC-rich and GC-poor stretches of `block` bases
+                let gc_rich = (i / block).is_multiple_of(2);
+                match (gc_rich, r) {
+                    (true, 0..=34) | (false, 0..=14) => b'G',
+                    (true, 35..=69) | (false, 15..=29) => b'C',
+                    (_, r) if r % 2 == 0 => b'A',
+                    _ => b'T',
+                }
+            })
+            .collect();
+        let prefix = gc_prefix(&seq);
+        let mut obs = GcFragModel::new(DEFAULT_COND_BINS, DEFAULT_GC_BINS);
+        let mut exp = GcFragModel::new(DEFAULT_COND_BINS, DEFAULT_GC_BINS);
+        for ctx in 0..=100 {
+            for gc in 0..=100 {
+                obs.inc(gc, ctx, 1.0 + 0.8 * (gc as f64 / 100.0));
+                exp.inc(gc, ctx, 1.0);
+            }
+        }
+        let model = gc_ratio(&mut obs, &mut exp, 1000.0);
+        let pmf: Vec<f64> = (0..=1000usize)
+            .map(|l| (-0.5 * ((l as f64 - 250.0) / 40.0).powi(2)).exp())
+            .collect();
+        let (cdf, lo, hi) = crate::seqbias::fld_cdf_and_bounds(&pmf);
+        (seq, prefix, model, cdf, lo, hi)
+    }
+
+    /// Stride 1 is the exact computation, bit for bit, so every existing call
+    /// (and every default output) is unchanged.
+    #[test]
+    fn position_stride_one_is_exact() {
+        let (seq, prefix, model, cdf, lo, hi) = gc_fixture(20_000);
+        let bias = BiasInputs {
+            seq: None,
+            gc: Some((&model, GcView::Dense(&prefix))),
+            pos: None,
+        };
+        let full = corrected_effective_length_full(&seq, &cdf, lo, hi, &bias, 19_750.0, 5, false);
+        let one =
+            corrected_effective_length_strided(&seq, &cdf, lo, hi, &bias, 19_750.0, 5, false, 1);
+        assert_eq!(full.to_bits(), one.to_bits());
+    }
+
+    /// Sampling every 16th start and weighting by 16 estimates the full sweep
+    /// closely, for a typical 5 kb intron target and a long one alike, with
+    /// GC content switching every 300 bases (the scale of an Alu repeat).
+    #[test]
+    fn position_stride_estimates_intron_targets() {
+        for len in [5_000usize, 100_000] {
+            let (seq, prefix, model, cdf, lo, hi) = gc_fixture_blocks(len, 300);
+            let bias = BiasInputs {
+                seq: None,
+                gc: Some((&model, GcView::Dense(&prefix))),
+                pos: None,
+            };
+            let elen = len as f64 - 250.0;
+            let full = corrected_effective_length_full(&seq, &cdf, lo, hi, &bias, elen, 5, false);
+            let s = unspliced_position_stride(len);
+            assert_eq!(s, UNSPLICED_BIAS_STRIDE);
+            let est =
+                corrected_effective_length_strided(&seq, &cdf, lo, hi, &bias, elen, 5, false, s);
+            let rel = (est - full).abs() / full;
+            assert!(
+                rel < 2e-3,
+                "len {len}: strided {est} vs exact {full} ({rel:e})"
+            );
+            // and the bias did move the length, so the test measures something
+            assert!((full - elen).abs() / elen > 0.01, "{full} vs {elen}");
+        }
+    }
+
+    /// The expected GC and sequence models: stride 1 is exact, a stride on a
+    /// long target lands on the same normalized distribution. The abundance is
+    /// set so each increment sits far above the accumulators' fixed-point
+    /// resolution (`BIAS_WEIGHT_SCALE`, truncating): at a few reads per
+    /// megabase the exact sweep's increments truncate towards zero, which a
+    /// stride (larger, fewer increments) mitigates rather than worsens.
+    #[test]
+    fn expected_models_accept_a_position_stride() {
+        use crate::gcbias::{build_expected_gc, build_expected_gc_strided, GcFragModel};
+        use crate::seqbias::{build_expected, build_expected_strided};
+        let (seq, prefix, _, cdf, lo, hi) = gc_fixture(300_000);
+        let alphas = [1e7];
+        let eff = [seq.len() as f64 - 250.0];
+        let gc = |stride: Option<usize>| -> GcFragModel {
+            let mut m = match stride {
+                None => build_expected_gc(
+                    1,
+                    |_| &seq[..],
+                    |_| GcView::Dense(&prefix),
+                    &alphas,
+                    &eff,
+                    &cdf,
+                    lo,
+                    hi,
+                    3,
+                    25,
+                    1,
+                    5,
+                ),
+                Some(s) => build_expected_gc_strided(
+                    1,
+                    |_| &seq[..],
+                    |_| GcView::Dense(&prefix),
+                    |_| s,
+                    &alphas,
+                    &eff,
+                    &cdf,
+                    lo,
+                    hi,
+                    3,
+                    25,
+                    1,
+                    5,
+                ),
+            };
+            m.normalize();
+            m
+        };
+        let (exact, one, sampled) = (gc(None), gc(Some(1)), gc(Some(6)));
+        assert_eq!(exact.dump(), one.dump());
+        let tv: f64 = exact
+            .dump()
+            .iter()
+            .zip(sampled.dump())
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f64>();
+        // three conditioning rows, each a distribution: < 1% of mass moved per row
+        assert!(tv < 0.03, "total variation {tv}");
+
+        let (efw, _) = build_expected(1, |_| &seq[..], &alphas, &eff, &cdf);
+        let (ofw, _) = build_expected_strided(1, |_| &seq[..], |_| 1, &alphas, &eff, &cdf);
+        assert_eq!(efw.dump(), ofw.dump());
+    }
+
+    #[test]
+    fn unspliced_stride_keeps_short_targets_dense() {
+        assert_eq!(unspliced_position_stride(0), 1);
+        assert_eq!(unspliced_position_stride(100), 1);
+        assert_eq!(unspliced_position_stride(640), 10);
+        assert_eq!(unspliced_position_stride(5_000), UNSPLICED_BIAS_STRIDE);
+        assert_eq!(unspliced_position_stride(2_000_000), UNSPLICED_BIAS_STRIDE);
+    }
     use crate::posbias::compute_length_quantiles;
     use crate::seqbias::fld_cdf_and_bounds;
 

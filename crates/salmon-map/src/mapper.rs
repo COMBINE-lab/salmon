@@ -65,6 +65,10 @@ pub struct MapConfig {
     /// how seeds are extended into chaining anchors (additive/experimental;
     /// see the [`extend`](crate::extend) module docs).
     pub seed_mode: SeedMode,
+    /// Unspliced targets reached by projecting genome-decoy alignments (an
+    /// index built with `--unspliced` in the projection layout); `None` for
+    /// any other index. See [`crate::project`].
+    pub projection: Option<std::sync::Arc<crate::project::UnsplicedProjection>>,
 }
 
 /// Per-fragment selective-alignment statistics for the meta_info counters,
@@ -235,6 +239,9 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
         } else {
             below += 1;
         }
+    }
+    if let Some(p) = &cfg.projection {
+        crate::project::project_decoy_mappings(raw, p, read.len() as i32, 0);
     }
     let (decoy_dominated, below_final) =
         finalize_mappings_counted_into(out, raw, &cfg.score, &mut scratch.dedup);
@@ -422,6 +429,13 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
             }
             MateStatus::SingleEnd => {}
         }
+    }
+    // Genome-decoy placements inside an unspliced target's interval become
+    // placements on that target (projection layout). Done first, so a projected
+    // concordant pair counts as a transcript pair in the orphan rule below,
+    // exactly as the same pair found on an indexed target sequence would.
+    if let Some(p) = &cfg.projection {
+        crate::project::project_decoy_mappings(raw, p, r1.len() as i32, r2.len() as i32);
     }
     // Orphans are a *fallback*: if this fragment has a concordant (proper-pair)
     // mapping to a *transcript*, discard all orphan mappings. A lone mate matching

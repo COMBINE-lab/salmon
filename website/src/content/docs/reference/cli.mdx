@@ -42,9 +42,23 @@ Build a reusable index from one or more transcriptome FASTA files.
 | `--sshashTmpDir <DIR>` | Directory for sshash's external minimizer-sort scratch. Defaults to a `sshash_tmp` subdirectory of `--tmpdir` (or the index dir when `--tmpdir` is unset). Override to place the sort scratch on a separate/fast disk; it is created before the build and removed afterwards (kept with `--keepIntermediate`). |
 | `--ramLimit <GiB>` | RAM ceiling for sshash's external minimizer sort — the main build-time memory/disk trade-off. Default `8`; a smaller value uses less RAM but spills to disk sooner. |
 | `--filterSize <N>` | *Accepted for compatibility; no effect.* |
+| `--unspliced <MODE>` | Also index unspliced targets, for total-RNA libraries. `intron`: each gene's merged introns plus a flank on both sides (`<gene>-I`, `<gene>-I1`, …, as `pyroe make-splici`). `premrna`: each gene's full body (`<gene>-I`, as `make-spliceu`). Genes without an intron get no target. Needs `--genome` and `--gtf`; writes `t2g_3col.tsv` into the index. Default `none` (index unchanged). See [total RNA-seq](../../guides/total-rna/). |
+| `--genome <FASTA>` | Genome the unspliced targets are cut from. The first word of each header must match the GTF sequence names. |
+| `--gtf <GTF>` | Annotation (plain or gzipped GTF) for `--unspliced`; also the gene column of `t2g_3col.tsv`. |
+| `--flank <N>` | Bases added to each side of the merged introns (`--unspliced intron`). Recommended: read length − 1, so any read with one intronic base fits inside an intron target. |
+| `--readLength <L>` | Shorthand for `--flank L-1`. |
+| `--unsplicedLayout <L>` | `projection`: targets carry no k-mers; genome-decoy alignments inside a target are projected onto it (needs the same genome as decoys, `-d`; selective alignment only). `sequence`: target sequences are indexed like transcripts. `auto` (default): projection whenever every target lies on a decoy. |
 
 ```sh
 salmon index -t transcripts.fa -i salmon_index -p 16
+```
+
+Total RNA, with genome decoys and intron targets for 2×51 reads:
+
+```sh
+salmon index -t gentrome.fa.gz -d decoys.txt --gencode -i salmon_index -p 16 \
+  --unspliced intron --genome GRCh38.primary_assembly.genome.fa.gz \
+  --gtf gencode.annotation.gtf.gz --readLength 51
 ```
 
 ## `salmon quant`

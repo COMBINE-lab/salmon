@@ -40,6 +40,7 @@ pub mod math;
 pub mod progress;
 pub mod quantmerge;
 pub mod refprovider;
+pub mod splicing;
 pub mod timing;
 
 // Re-exports: the modules above are the real homes of these items, but naming

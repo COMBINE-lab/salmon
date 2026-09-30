@@ -36,10 +36,12 @@ use salmon_eqclass::CollapsedEqClasses;
 mod daarem;
 mod online;
 mod packed;
+pub mod splicing;
 pub mod uncertainty;
 
 pub use online::OnlineInference;
 pub use packed::{PackedEqClasses, PosteriorMethod};
+pub use splicing::splicing_summary;
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
 
 /// EM/VBEM acceleration scheme applied on top of the fixed-point map.

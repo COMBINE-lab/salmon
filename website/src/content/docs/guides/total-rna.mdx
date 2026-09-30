@@ -1,0 +1,200 @@
+---
+title: Total RNA-seq (unspliced targets)
+description: Quantify rRNA-depleted total RNA with an index that also holds each gene's unspliced sequence, so pre-mRNA fragments stop inflating retained-intron isoforms.
+---
+
+A poly(A)-selected library is mostly mature mRNA. A **total RNA** library
+(ribosomal RNA depleted) is not: nascent, not-yet-spliced RNA typically makes up
+half or more of its fragments, most of them intronic.
+
+With a transcripts-only index those fragments either fail to map or are pushed
+onto whichever annotated isoform contains their sequence. Adding the genome as
+decoys (a *gentrome* index) catches the ones that align better to the genome,
+but not all of them: a fragment only goes to the decoy when its genome score is
+**strictly greater** than its best transcript score. A pre-mRNA fragment that
+lies inside a `retained_intron` isoform scores the same on both, the tie goes to
+the transcript, and the retained-intron isoform absorbs intronic signal. The
+isoform proportions, and anything derived from them (for example the
+`avgTxLength` offsets tximport passes to DESeq2), then follow the library's
+pre-mRNA content rather than its mature RNA.
+
+`salmon index --unspliced` gives those fragments a target of their own: it cuts
+each gene's unspliced sequence out of the genome and indexes it next to the
+transcripts, as alevin-fry does for single-nucleus data (the *splici* and
+*spliceu* references of `pyroe`). The EM then shares the ambiguous evidence
+between the mature isoforms and the unspliced target by abundance.
+
+## Building the index
+
+```sh
+# decoy-aware gentrome: transcripts first, then the genome
+zcat GRCh38.primary_assembly.genome.fa.gz | grep '^>' | cut -d ' ' -f 1 | tr -d '>' > decoys.txt
+cat gencode.v50.transcripts.fa.gz GRCh38.primary_assembly.genome.fa.gz > gentrome.fa.gz
+
+salmon index -t gentrome.fa.gz -d decoys.txt --gencode -p 16 -i salmon_index \
+  --unspliced intron \
+  --genome GRCh38.primary_assembly.genome.fa.gz \
+  --gtf gencode.v50.primary_assembly.annotation.gtf.gz \
+  --readLength 51
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--unspliced intron` | Each gene's introns (the union over its transcripts, so retained introns count as introns), merged, then extended by `--flank` bases on both sides and merged again. Targets are named `<gene>-I`, `<gene>-I1`, `<gene>-I2`, … |
+| `--unspliced premrna` | Each gene's full body, first exon start to last exon end, named `<gene>-I`. |
+| `--genome`, `--gtf` | The genome the targets are cut from and the annotation that defines them. Sequence names must match (first word of the FASTA header, GTF column 1). The genome may be the same file as the decoys. |
+| `--flank N` / `--readLength L` | Intron flank; `--readLength L` sets `L - 1`. With that flank, every read with at least one intronic base fits wholly inside an intron target, so it scores as well there as on the genome and is not lost to the decoy. (`pyroe` uses `L - 5`.) |
+
+Genes whose transcripts have no intron get no unspliced target. The targets are
+read on the gene's strand, so a stranded library keeps its strand information.
+They sit between the transcripts and the decoys in the index, and the index
+also records `t2g_3col.tsv`: `target<TAB>gene<TAB>S|U` for every quantified
+target, the same file `pyroe` writes.
+
+### How the targets are held: `--unsplicedLayout`
+
+A target is a slice of the genome, so when the genome is also in the index as
+decoys there is no need to index its sequence twice. In the **projection**
+layout (the default whenever every target lies on a decoy) the targets carry
+no k-mers: reads are mapped to the transcripts and the genome as with a plain
+gentrome, and an alignment to the genome that lies wholly inside a target's
+interval is copied onto that target, with the same score and with coordinates
+shifted or reflected (minus-strand genes) to the target's frame. The index and
+the mapping cost stay close to those of the gentrome.
+
+The **sequence** layout indexes the targets' sequences like transcripts. It is
+what `auto` picks without genome decoys, and it can be requested explicitly.
+Both layouts give the same alignments: on the simulation in salmon's test
+suite, 0.0001% of the fragment mass differs between them. Two differences
+remain. The projection layout needs selective alignment (`--sketch` is
+refused), and for single-end reads the mapper keeps one genomic locus per
+chromosome and strand, so a repeat present in several introns of one
+chromosome is projected onto fewer targets than the sequence layout would
+reach.
+
+### Which mode
+
+`intron` keeps the unspliced targets off constitutive exons (apart from the
+flanks), so exonic fragments are still assigned to mature isoforms. `premrna`
+also offers each exonic fragment an unspliced home; it is the better model when
+pre-mRNA covers the gene body evenly, at the price of a larger index and of
+more fragments filed as *ambiguous* below. The benchmark in the pull request
+that introduced the option compares both.
+
+## Quantifying
+
+Nothing changes on the command line. With such an index, `quant.sf` lists the
+unspliced targets as extra rows, and two outputs are added:
+
+- `quant.genes.usa.tsv`: per gene, fragments filed as **Spliced** (compatible
+  only with the gene's transcripts), **Unspliced** (only with its unspliced
+  targets) and **Ambiguous** (both). Each class's fragments are shared between
+  genes by the final EM responsibilities, so the three columns add up to the
+  gene's `NumReads` in `quant.sf`. This is alevin-fry's USA split applied to
+  bulk EM counts.
+- an `unspliced` block in `aux_info/meta_info.json`, with the fraction of
+  assigned fragments filed under each status, and `fractions_with_decoys`: the
+  same split with the decoy-dominated fragments as a fourth category, over
+  assigned + decoy fragments. That is the figure to compare between libraries:
+  it does not depend on how much each library lost to the decoys.
+
+## Downstream: tximport and DESeq2
+
+Map targets to genes with the index's `t2g_3col.tsv`. Two common choices:
+
+- **mature-mRNA expression and isoform-aware offsets**: import only the spliced
+  rows (status `S`), so `avgTxLength` is computed over the mature isoforms:
+
+  ```r
+  t2g <- read.delim(file.path(index, "t2g_3col.tsv"), header = FALSE,
+                    col.names = c("tx", "gene", "status"))
+  txi <- tximport(files, type = "salmon",
+                  tx2gene = t2g[t2g$status == "S", c("tx", "gene")])
+  ```
+
+- **all RNA from the gene**: keep every row. The unspliced targets then join
+  their gene and its counts include pre-mRNA; its `avgTxLength` then mixes
+  mature and unspliced lengths, which brings back the dependence on each
+  library's pre-mRNA content, so do not use those offsets for isoform-aware
+  length correction. `quant.genes.usa.tsv` gives the same totals split by
+  status.
+
+## Why not send ties to the decoy instead
+
+Making a decoy that *ties* the best transcript win would not help: the genome
+contains every exon, so any fragment lying within one exon scores the same on
+its transcript and on the genome, and all of them would be discarded. With an
+unspliced index the strict rule does the right thing: an intronic fragment ties
+between its gene's unspliced target and the genome, the tie goes to the target,
+and the fragment is counted as unspliced. Only fragments that align strictly
+better to the genome (intergenic, unannotated, or from another locus) go to the
+decoy.
+
+## Costs and limits
+
+- **Index size, build time and mapping cost** stay close to the gentrome's in
+  the projection layout; only the reference store grows by the targets'
+  sequences (used for effective lengths and bias correction). The sequence
+  layout also grows the position tables and makes every intronic k-mer occur
+  twice, which slows mapping.
+- **Bias correction** (`--gcBias`, `--seqBias`) evaluates unspliced targets at
+  every 16th fragment start, weighted by 16, rather than at every start: their
+  length would otherwise dominate the run.
+- **Overlapping genes** each get their own unspliced target over the shared
+  region; fragments there are shared by the EM like any multi-mapping fragment.
+  Antisense overlaps are separated by strand on stranded libraries only.
+- **Flank choice** trades exonic fragments near a splice site being called
+  ambiguous (longer flank) against intron-straddling fragments being lost to
+  the decoy (shorter flank).
+- The spliced/unspliced summary is written in reads mode (default and
+  `--online`). A standalone `--rad` requant or `-a` alignment input has no index
+  to read the table from; aggregate `quant.sf` with `t2g_3col.tsv` instead.
+- Only GTF annotations are read (`gene_id` and `transcript_id` on exon lines).
+
+## Background and references
+
+Indexing unspliced sequence next to mature transcripts comes from single-cell
+RNA velocity, where spliced and unspliced abundances are the signal itself.
+Bulk analyses of intronic reads mostly count them from genome alignments.
+
+- **Intronic reads in bulk RNA-seq.** Gaidatzis et al. use exonic and
+  intronic read counts to separate transcriptional from post-transcriptional
+  regulation (EISA). Lee et al. make the case for using intron signal in bulk
+  RNA-seq. Zhao et al. show that rRNA-depleted libraries carry far more
+  intronic reads than poly(A)-selected ones.
+- **Spliced / unspliced quantification.** La Manno et al. introduced RNA
+  velocity with spliced and unspliced counts from genome alignments. Soneson
+  et al. compared ways of quantifying them, including joint indices of
+  transcripts plus flanked introns, and found that the choice changes the
+  results. He et al. define the *splici* index (transcripts plus merged,
+  flanked introns) and the USA (unspliced / spliced / ambiguous) resolution
+  used by alevin-fry; `--unspliced intron`, its naming and `t2g_3col.tsv`
+  follow it. Pre-mRNA references of whole gene bodies (`--unspliced premrna`)
+  correspond to alevin-fry's *spliceu*, kallisto's *nac* index
+  (Eldjárn Hjörleifsson et al.; Sullivan et al.) and STARsolo's `GeneFull`
+  counting (Kaminow et al.). Melsted et al. describe the earlier kb-python
+  intron-aware workflows.
+- **Decoys and the tie rule.** Srivastava et al. describe selective alignment
+  with genome decoys and the rule that sends a fragment to the decoy only when
+  it aligns strictly better there.
+- **Why isoform proportions matter downstream.** Soneson et al. (tximport)
+  derive gene-level offsets from transcript abundances and effective lengths.
+
+To our knowledge no bulk benchmark of these indices has been published; the
+pull request that introduced `--unspliced` carries a simulation and a public
+benchmark on the ABRF rRNA-depletion data (Herbert et al.).
+
+1. Eldjárn Hjörleifsson K, et al. Accurate quantification of single-cell and single-nucleus RNA-seq transcripts using distinguishing flanking k-mers. *bioRxiv* (2022). [doi:10.1101/2022.12.02.518832](https://doi.org/10.1101/2022.12.02.518832)
+2. Gaidatzis D, et al. Analysis of intronic and exonic reads in RNA-seq data characterizes transcriptional and post-transcriptional regulation. *Nat Biotechnol* 33, 722-729 (2015). [doi:10.1038/nbt.3269](https://doi.org/10.1038/nbt.3269)
+3. He D, et al. Alevin-fry unlocks rapid, accurate and memory-frugal quantification of single-cell RNA-seq data. *Nat Methods* 19, 316-322 (2022). [doi:10.1038/s41592-022-01408-3](https://doi.org/10.1038/s41592-022-01408-3)
+4. Herbert ZT, et al. Cross-site comparison of ribosomal depletion kits for Illumina RNAseq library construction. *BMC Genomics* 19, 199 (2018). [doi:10.1186/s12864-018-4585-1](https://doi.org/10.1186/s12864-018-4585-1)
+5. Kaminow B, Yunusov D, Dobin A. STARsolo: accurate, fast and versatile mapping/quantification of single-cell and single-nucleus RNA-seq data. *bioRxiv* (2021). [doi:10.1101/2021.05.05.442755](https://doi.org/10.1101/2021.05.05.442755)
+6. La Manno G, et al. RNA velocity of single cells. *Nature* 560, 494-498 (2018). [doi:10.1038/s41586-018-0414-6](https://doi.org/10.1038/s41586-018-0414-6)
+7. Lee S, et al. Covering all your bases: incorporating intron signal from RNA-seq data. *NAR Genom Bioinform* 2, lqaa073 (2020). [doi:10.1093/nargab/lqaa073](https://doi.org/10.1093/nargab/lqaa073)
+8. Melsted P, et al. Modular, efficient and constant-memory single-cell RNA-seq preprocessing. *Nat Biotechnol* 39, 813-818 (2021). [doi:10.1038/s41587-021-00870-2](https://doi.org/10.1038/s41587-021-00870-2)
+9. Patro R, et al. Salmon provides fast and bias-aware quantification of transcript expression. *Nat Methods* 14, 417-419 (2017). [doi:10.1038/nmeth.4197](https://doi.org/10.1038/nmeth.4197)
+10. Soneson C, Love MI, Robinson MD. Differential analyses for RNA-seq: transcript-level estimates improve gene-level inferences. *F1000Research* 4, 1521 (2016, version 2). [doi:10.12688/f1000research.7563.2](https://doi.org/10.12688/f1000research.7563.2)
+11. Soneson C, et al. Preprocessing choices affect RNA velocity results for droplet scRNA-seq data. *PLoS Comput Biol* 17, e1008585 (2021). [doi:10.1371/journal.pcbi.1008585](https://doi.org/10.1371/journal.pcbi.1008585)
+12. Srivastava A, et al. Alignment and mapping methodology influence transcript abundance estimation. *Genome Biol* 21, 239 (2020). [doi:10.1186/s13059-020-02151-8](https://doi.org/10.1186/s13059-020-02151-8)
+13. Sullivan DK, et al. kallisto, bustools and kb-python for quantifying bulk, single-cell and single-nucleus RNA-seq. *Nat Protoc* 20, 587-607 (2025). [doi:10.1038/s41596-024-01057-0](https://doi.org/10.1038/s41596-024-01057-0)
+14. Zhao W, et al. Comparison of RNA-Seq by poly (A) capture, ribosomal RNA depletion, and DNA microarray for expression profiling. *BMC Genomics* 15, 419 (2014). [doi:10.1186/1471-2164-15-419](https://doi.org/10.1186/1471-2164-15-419)

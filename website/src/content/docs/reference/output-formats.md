@@ -130,6 +130,7 @@ aggregates (no per-fragment cost) and are emitted for every mode — reads,
 | `total_time_seconds` | float | wall-clock seconds for the quantification call |
 | `peak_rss_kb` | int | peak resident set size in KiB (Linux `VmHWM`; 0 elsewhere) |
 | `diagnostics` | object[] | structured run diagnostics (see below) |
+| `unspliced` | object | only for an index built with `salmon index --unspliced` (reads mode): `mode`, `num_spliced_targets`, `num_unspliced_targets`, `num_genes`, `num_{spliced,unspliced,ambiguous,decoy}_fragments`, the spliced / unspliced / ambiguous `*_fraction`s of the assigned fragments, and `fractions_with_decoys` (`spliced`, `unspliced`, `ambiguous`, `decoy`) of assigned + decoy fragments. Omitted otherwise, so other runs keep the same file |
 
 ##### `diagnostics` — machine-readable run warnings
 
@@ -162,6 +163,18 @@ Header `UniqueCount<TAB>AmbigCount`, then one row per quantified transcript in
 index order (the same `num_valid_targets` set as `quant.sf`). `UniqueCount` =
 fragments mapping uniquely to that transcript; `AmbigCount` = fragments mapping
 ambiguously.
+
+### `quant.genes.usa.tsv` — spliced / unspliced / ambiguous per gene (TSV) [unspliced index]
+
+Written only when the index was built with `salmon index --unspliced`.
+Header `Name<TAB>Spliced<TAB>Unspliced<TAB>Ambiguous`, then one row per gene of
+the index's `t2g_3col.tsv`, in index order, at `--sigDigits` decimals. Each
+equivalence class's fragments are shared between genes by the final EM
+responsibilities (the E-step behind `quant.sf`'s `NumReads`); a gene's share is
+**Spliced** when the class holds only spliced targets of that gene,
+**Unspliced** when only unspliced ones, and **Ambiguous** when both (the
+alevin-fry USA split, applied to bulk EM counts). The three columns of a gene
+sum to the `NumReads` of its targets in `quant.sf`, up to EM convergence.
 
 ### `libParams/flenDist.txt` — fragment-length distribution (TSV, one line)
 
@@ -337,6 +350,14 @@ count, fragment-length mean/sd). Downstream tools key off the JSON metadata, not
 this log.
 
 ## Index directory
+
+An index built with `--unspliced` also holds `t2g_3col.tsv`
+(`target<TAB>gene<TAB>S|U`, no header, one row per quantified target in index
+order, as written by `pyroe make-splici`), `unspliced_targets.tsv`
+(`target<TAB>seqname<TAB>start<TAB>end<TAB>strand`, 0-based half-open genomic
+intervals) and an `unspliced` block in `info.json` (`mode`, `layout`, `flank`,
+`genome`, `gtf`, `t2g_file` and target counts). In the projection layout the
+targets are k-mer-free references placed after the decoy block.
 
 The 2.0 index is the piscem-rs format and is **not** compatible with C++ salmon
 (pufferfish) indices — they must be rebuilt. Pointing 2.0 at a C++ index (or C++

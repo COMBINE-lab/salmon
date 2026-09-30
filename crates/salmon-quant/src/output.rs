@@ -44,6 +44,11 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
     if !opts.skip_quant {
         write_quant_sf(&dir.join("quant.sf"), res, opts.sig_digits as usize)?;
     }
+    if let Some(sp) = &res.splicing {
+        let path = dir.join(salmon_core::splicing::USA_FILE);
+        salmon_core::splicing::write_usa_tsv(&path, sp, opts.sig_digits as usize)
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
     write_cmd_info(&dir.join("cmd_info.json"), opts)?;
     // The library-format warnings are structured diagnostics: written into
     // `meta_info.json`'s `diagnostics` alongside the run's own, so a pipeline
@@ -385,6 +390,10 @@ struct MetaInfo {
     peak_rss_kb: u64,
     /// machine-readable run diagnostics / bad-input warnings
     diagnostics: Vec<crate::Diagnostic>,
+    /// spliced / unspliced / ambiguous totals; present only for an index built
+    /// with `--unspliced`, so other runs keep the exact same file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unspliced: Option<salmon_core::splicing::UnsplicedMeta>,
     call: String,
     start_time: String,
     end_time: String,
@@ -515,6 +524,7 @@ fn write_meta_info(
             d.extend(lib_diags.iter().cloned());
             d
         },
+        unspliced: res.splicing.as_ref().map(Into::into),
         call: "quant".to_string(),
         start_time: res.start_time.clone(),
         end_time: crate::asctime_now(),

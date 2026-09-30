@@ -55,6 +55,10 @@ use salmon_core::RefSeqs;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+pub mod unspliced;
+
+pub use unspliced::{UnsplicedLayout, UnsplicedMode};
+
 /// Basename (within the index directory) of the cDBG tiling files.
 const CDBG_PREFIX: &str = "cdbg";
 /// Basename (within the index directory) of the piscem index files.
@@ -197,6 +201,19 @@ pub struct IndexBuildOptions {
     /// build-time memory/disk trade-off). `None` keeps sshash's default (8 GiB);
     /// a smaller value spills to disk sooner (less RAM, more I/O).
     pub ram_limit_gib: Option<usize>,
+    /// Add unspliced targets derived from `genome` + `gtf` (`--unspliced`).
+    /// [`UnsplicedMode::None`] (the default) leaves the index exactly as
+    /// without this option.
+    pub unspliced: UnsplicedMode,
+    /// Genome FASTA the unspliced targets are cut from.
+    pub genome: Option<PathBuf>,
+    /// GTF annotation the unspliced targets are derived from; also the source
+    /// of the transcript -> gene column of `t2g_3col.tsv`.
+    pub gtf: Option<PathBuf>,
+    /// Flank added on both sides of each merged intron (`intron` mode only).
+    pub flank: Option<u64>,
+    /// How the unspliced targets are held (see [`UnsplicedLayout`]).
+    pub unspliced_layout: UnsplicedLayout,
 }
 
 impl IndexBuildOptions {
@@ -220,6 +237,11 @@ impl IndexBuildOptions {
             clip_polya: true,
             sshash_tmp: None,
             ram_limit_gib: None,
+            unspliced: UnsplicedMode::None,
+            genome: None,
+            gtf: None,
+            flank: None,
+            unspliced_layout: UnsplicedLayout::Auto,
         }
     }
 }
@@ -299,6 +321,48 @@ pub struct IndexInfo {
     pub decoy_seq_hash: String,
     #[serde(default)]
     pub decoy_name_hash: String,
+    /// Present only for an index built with `--unspliced intron|premrna`.
+    /// Skipped when absent, so an index built without the option has the
+    /// same `info.json` as before the option existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unspliced: Option<UnsplicedInfo>,
+}
+
+/// File (in the index directory) mapping every quantified target to its gene
+/// and splicing status: `target<TAB>gene<TAB>S|U`, no header, in reference
+/// order. Same name and layout as `pyroe make-splici`'s `t2g_3col.tsv`.
+pub const T2G_3COL_FILE: &str = "t2g_3col.tsv";
+
+/// File (in the index directory) listing every unspliced target with its
+/// genomic interval: `target<TAB>seqname<TAB>start<TAB>end<TAB>strand`,
+/// 0-based half-open, no header.
+pub const UNSPLICED_TARGETS_FILE: &str = "unspliced_targets.tsv";
+
+fn default_layout() -> String {
+    "sequence".to_string()
+}
+
+/// How the unspliced targets of an index were made (`info.json`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnsplicedInfo {
+    /// `intron` or `premrna`
+    pub mode: String,
+    /// `projection` or `sequence` (see [`UnsplicedLayout`])
+    #[serde(default = "default_layout")]
+    pub layout: String,
+    /// flank added to each side of the merged introns (`intron` mode)
+    pub flank: Option<u64>,
+    pub genome: String,
+    pub gtf: String,
+    /// name of the target -> gene -> status table in the index directory
+    pub t2g_file: String,
+    /// spliced targets (the input transcripts) in the index
+    pub num_spliced_targets: usize,
+    /// unspliced targets in the index
+    pub num_unspliced_targets: usize,
+    /// spliced targets the GTF does not name; each is its own gene in
+    /// `t2g_3col.tsv`
+    pub num_unannotated_spliced_targets: usize,
 }
 
 /// Compute the reference sequence/name SHA-256 and SHA-512 hashes exactly as
@@ -459,6 +523,12 @@ fn longest_acgt_run(seq: &[u8]) -> usize {
 /// The rules, applied per record in this order: reject a transcript that follows
 /// a decoy, drop exact duplicates, randomize non-ACGT bases (transcripts only),
 /// clip poly-A tails, drop untileable decoys.
+///
+/// `generated`, when given, is a FASTA of derived non-decoy targets (the
+/// unspliced targets of `--unspliced`). Its records are cleaned by the same
+/// rules and written after the last transcript and before the first decoy, so
+/// the decoy block stays the contiguous tail the O(1) decoy test relies on. An
+/// input record whose name is one of `generated`'s is rejected.
 fn preprocess_fasta(
     inputs: &[PathBuf],
     out_path: &Path,
@@ -467,33 +537,35 @@ fn preprocess_fasta(
     gencode: bool,
     clip_polya: bool,
     k: usize,
+    generated: Option<&Generated<'_>>,
 ) -> Result<PreprocessResult> {
-    use std::io::Write as _;
-    const B: [u8; 4] = *b"ACGT";
-    // Seed of a small deterministic generator (below) used for base replacement.
-    // Deterministic on purpose: the same FASTA must always produce the same
-    // index, so a real random source would be wrong here.
-    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
-    let mut out = std::io::BufWriter::new(
+    let out = std::io::BufWriter::new(
         std::fs::File::create(out_path)
             .with_context(|| format!("creating {}", out_path.display()))?,
     );
-    let mut replaced = 0u64;
-    let mut polya_clipped = 0u64;
-    let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
-    let mut short_decoys_dropped: Vec<Vec<u8>> = Vec::new();
-    let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    // Tracks whether a decoy has been seen, to enforce the "decoys last" rule.
-    let mut saw_decoy = false;
-    // Exact original (pure-ACGT) sequence -> name of the first transcript that
-    // carried it. salmon collapses transcripts whose *processed* sequences match;
-    // because it randomizes non-ACGT bases with a position-advancing RNG, two
-    // identical sequences that contain any non-ACGT base never compare equal and
-    // so are never collapsed — we mirror that by only deduplicating pure-ACGT
-    // sequences (keyed on the exact original bytes, matching salmon's pre-process
-    // XXH64 over the unmodified sequence). Populated in both modes so duplicates
-    // are detected for `duplicate_clusters.tsv` even under --keepDuplicates.
-    let mut seen: ahash::AHashMap<Vec<u8>, Vec<u8>> = ahash::AHashMap::new();
+    let mut p = Preprocessor {
+        out,
+        keep_duplicates,
+        clip_polya,
+        k,
+        x: 0x9E37_79B9_7F4A_7C15,
+        saw_decoy: false,
+        seen: ahash::AHashMap::new(),
+        projection_refseq: None,
+        decoy_digests: ahash::AHashMap::new(),
+        res: PreprocessResult {
+            replaced: 0,
+            duplicate_clusters: Vec::new(),
+            polya_clipped: 0,
+            polya_dropped: Vec::new(),
+            short_decoys_dropped: Vec::new(),
+        },
+    };
+    // The generated records are emitted exactly once: just before the first
+    // decoy, or after the last input record when there is no decoy.
+    let mut pending = generated;
+    let reserved = generated.map(|g| g.names);
+    let needed = generated.and_then(|g| g.check_decoys);
     for path in inputs {
         let mut reader = needletail::parse_fastx_file(path)
             .with_context(|| format!("opening {}", path.display()))?;
@@ -503,129 +575,269 @@ fn preprocess_fasta(
             // and the first `|` too under `--gencode`.
             let id = rec.id();
             let name = processed_name(id, gencode);
-            let orig = rec.seq();
             let is_decoy = decoy_names.contains(name);
-            // salmon requires every decoy record to appear, contiguously, at the
-            // end of the input — reject a real transcript after any decoy.
-            //
-            // This is what ultimately guarantees the contiguous decoy id block;
-            // failing here is far better than discovering the violation later,
-            // when the only symptom is wrong abundances.
-            if is_decoy {
-                saw_decoy = true;
-            } else if saw_decoy {
+            if reserved.is_some_and(|r| r.contains(name)) {
                 anyhow::bail!(
-                    "non-decoy reference {:?} appears after a decoy; decoy records must be \
-                     contiguous at the end of the FASTA input",
+                    "input reference {:?} has the name of a generated unspliced target; \
+                     rename it or build without --unspliced",
                     String::from_utf8_lossy(name)
                 );
             }
-
-            // Detect exact-sequence duplicates (pure-ACGT only — salmon hashes the
-            // unmodified sequence, and because it randomizes any non-ACGT base
-            // per-position, sequences containing one never compare equal). The
-            // cluster is recorded for `duplicate_clusters.tsv` in BOTH modes,
-            // matching salmon (which reports duplicates even with --keepDuplicates);
-            // without --keepDuplicates the duplicate is additionally dropped
-            // (collapsed onto the first occurrence).
-            let pure_acgt = orig
-                .iter()
-                .all(|&b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'));
-            if pure_acgt {
-                if let Some(retained_name) = seen.get(orig.as_ref()) {
-                    duplicate_clusters.push((retained_name.clone(), name.to_vec()));
-                    if !keep_duplicates {
-                        // `continue` skips the write below, so the duplicate never
-                        // reaches the index.
-                        continue;
-                    }
-                } else {
-                    seen.insert(orig.to_vec(), name.to_vec());
+            if is_decoy {
+                if let Some(g) = pending.take() {
+                    p.generated(g)?;
                 }
             }
-
-            let mut seq = orig.into_owned();
-            // Transcripts: replace non-ACGT bases with pseudo-random ACGT so the
-            // processed sequence is fully k-mer-able (salmon FixFasta behavior).
-            // DECOYS: leave non-ACGT bases (e.g. genome N-runs) in place — cf1-rs
-            // splits the de Bruijn graph on them natively (and records the N-gaps in
-            // the tiling), yielding a far less tangled, smaller, faster-to-build
-            // cDBG than seeding spurious k-mers from random replacements across
-            // assembly gaps. The refseq store keeps the raw bytes and the aligner
-            // encodes N as a mismatch (dna5 code 4), so a read aligning over a decoy
-            // N-run simply scores it as a mismatch.
-            if !is_decoy {
-                for b in seq.iter_mut() {
-                    if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
-                        // A linear congruential generator: multiply, add, and take
-                        // high bits. `wrapping_*` means overflow wraps around
-                        // rather than panicking, which is the intended arithmetic.
-                        x = x
-                            .wrapping_mul(6364136223846793005)
-                            .wrapping_add(1442695040888963407);
-                        *b = B[((x >> 33) & 3) as usize];
-                        replaced += 1;
-                    }
+            let seq = rec.seq();
+            if is_decoy {
+                if let Some(want) = needed.and_then(|n| n.get(&*String::from_utf8_lossy(name))) {
+                    p.decoy_digests
+                        .insert(name.to_vec(), unspliced::sequence_digest(&seq) == *want);
                 }
             }
-            // Kallisto-esque poly-A clipping (salmon/pufferfish FixFasta): if the
-            // (cleaned) sequence ends in a run of >= POLYA_CLIP_LEN `A`s, trim all
-            // trailing `A`s. This runs after non-ACGT replacement (matching salmon's
-            // order); the reference hashes are computed pre-clip, so provenance is
-            // unaffected.
-            if clip_polya
-                && seq.len() > POLYA_CLIP_LEN
-                && seq[seq.len() - POLYA_CLIP_LEN..]
-                    .iter()
-                    .all(|&b| matches!(b, b'A' | b'a'))
-            {
-                // `rposition` finds the last non-`A`, i.e. where the tail begins.
-                match seq.iter().rposition(|&b| !matches!(b, b'A' | b'a')) {
-                    Some(last) => {
-                        seq.truncate(last + 1);
-                        polya_clipped += 1;
-                    }
-                    None => {
-                        // All `A`s: drop the reference entirely (not written, not
-                        // counted as retained), matching salmon.
-                        polya_clipped += 1;
-                        polya_dropped.push(name.to_vec());
-                        continue;
-                    }
-                }
-            }
-
-            // Drop a decoy that Cuttlefish cannot tile. A reference carries a k-mer
-            // (and so a unitig) iff it has a run of >= k consecutive ACGT bases — a
-            // run of exactly k has one k-mer (validated empirically). A decoy with
-            // no such run (too short, or fragmented into sub-k pieces by N-runs)
-            // can never be seeded or catch a read, and keeping it would let the
-            // builder relocate it into the trailing sub-`k`/untiled block, breaking
-            // the contiguity that the O(1) decoy check relies on. Sub-`k`/N-broken
-            // *transcripts* are kept (reported at 0 reads); after the replacement
-            // above transcripts have no N-runs, so only decoys are affected here.
-            if is_decoy && longest_acgt_run(&seq) < k {
-                short_decoys_dropped.push(name.to_vec());
-                continue;
-            }
-
-            // Write the record in canonical two-line form (header, then the whole
-            // sequence unwrapped), which is what the downstream builder expects.
-            out.write_all(b">")?;
-            out.write_all(name)?;
-            out.write_all(b"\n")?;
-            out.write_all(&seq)?;
-            out.write_all(b"\n")?;
+            p.record(name, &seq, is_decoy)?;
         }
     }
-    out.flush()?;
-    Ok(PreprocessResult {
-        replaced,
-        duplicate_clusters,
-        polya_clipped,
-        polya_dropped,
-        short_decoys_dropped,
-    })
+    if let Some(g) = pending.take() {
+        p.generated(g)?;
+    }
+    std::io::Write::flush(&mut p.out)?;
+    if let Some(w) = p.projection_refseq.as_mut() {
+        std::io::Write::flush(w)?;
+    }
+    // Projection copies alignments to a decoy onto targets using coordinates
+    // from the genome FASTA: both must be the very same sequence.
+    if let Some(want) = needed {
+        for seqname in want.keys() {
+            match p.decoy_digests.get(seqname.as_bytes()) {
+                Some(true) => {}
+                Some(false) => anyhow::bail!(
+                    "decoy {seqname:?} differs from the --genome sequence of the same name; \
+                     unspliced targets can only be projected onto the genome they were cut \
+                     from (use the same genome FASTA, or --unsplicedLayout sequence)"
+                ),
+                None => anyhow::bail!(
+                    "unspliced targets lie on {seqname:?}, which is not among the indexed decoys; \
+                     projection needs the genome as decoys (or --unsplicedLayout sequence)"
+                ),
+            }
+        }
+    }
+    Ok(p.res)
+}
+
+/// Derived (unspliced) targets handed to [`preprocess_fasta`].
+struct Generated<'a> {
+    /// FASTA of the target sequences
+    path: &'a Path,
+    /// target names, reserved against input names
+    names: &'a ahash::AHashSet<Vec<u8>>,
+    /// projection layout: write here the targets' (cleaned) sequences for the
+    /// reference store, and only a k-mer-free placeholder to the index input
+    projection_refseq: Option<&'a Path>,
+    /// projection layout: expected digest of every decoy the targets lie on
+    check_decoys: Option<&'a std::collections::HashMap<String, u64>>,
+}
+
+/// Sequence written for a projected target in the index input: shorter than
+/// any k, so it carries no k-mer and the builder keeps it as a (relocated)
+/// short reference. Its real sequence goes to the reference store.
+const PROJECTION_PLACEHOLDER: &[u8] = b"A";
+
+/// The per-record state of [`preprocess_fasta`].
+struct Preprocessor {
+    out: std::io::BufWriter<std::fs::File>,
+    keep_duplicates: bool,
+    clip_polya: bool,
+    k: usize,
+    /// State of a small deterministic generator used for base replacement.
+    /// Deterministic on purpose: the same FASTA must always produce the same
+    /// index, so a real random source would be wrong here.
+    x: u64,
+    /// Tracks whether a decoy has been seen, to enforce the "decoys last" rule.
+    saw_decoy: bool,
+    /// Exact original (pure-ACGT) sequence -> name of the first transcript that
+    /// carried it. salmon collapses transcripts whose *processed* sequences match;
+    /// because it randomizes non-ACGT bases with a position-advancing RNG, two
+    /// identical sequences that contain any non-ACGT base never compare equal and
+    /// so are never collapsed — we mirror that by only deduplicating pure-ACGT
+    /// sequences (keyed on the exact original bytes, matching salmon's pre-process
+    /// XXH64 over the unmodified sequence). Populated in both modes so duplicates
+    /// are detected for `duplicate_clusters.tsv` even under --keepDuplicates.
+    seen: ahash::AHashMap<Vec<u8>, Vec<u8>>,
+    /// projection layout: the targets' cleaned sequences, for the reference
+    /// store
+    projection_refseq: Option<std::io::BufWriter<std::fs::File>>,
+    /// projection layout: decoy name -> whether its digest matched the genome
+    decoy_digests: ahash::AHashMap<Vec<u8>, bool>,
+    res: PreprocessResult,
+}
+
+impl Preprocessor {
+    /// Clean and write every record of a generated (non-decoy) FASTA. In the
+    /// projection layout only a placeholder reaches the index input and the
+    /// sequence (non-ACGT bases replaced, nothing clipped, so it keeps the
+    /// length of its genomic interval) goes to the reference-store FASTA.
+    fn generated(&mut self, g: &Generated) -> Result<()> {
+        use std::io::Write as _;
+        if let Some(path) = g.projection_refseq {
+            self.projection_refseq = Some(std::io::BufWriter::new(
+                std::fs::File::create(path)
+                    .with_context(|| format!("creating {}", path.display()))?,
+            ));
+        }
+        let mut reader = needletail::parse_fastx_file(g.path)
+            .with_context(|| format!("opening {}", g.path.display()))?;
+        while let Some(rec) = reader.next() {
+            let rec = rec.context("reading generated FASTA record")?;
+            let name = header_name(rec.id()).to_vec();
+            match self.projection_refseq.as_mut() {
+                None => self.record(&name, &rec.seq(), false)?,
+                Some(w) => {
+                    let mut seq = rec.seq().into_owned();
+                    for b in seq.iter_mut() {
+                        if !matches!(*b, b'A' | b'C' | b'G' | b'T') {
+                            self.x = self
+                                .x
+                                .wrapping_mul(6364136223846793005)
+                                .wrapping_add(1442695040888963407);
+                            *b = b"ACGT"[((self.x >> 33) & 3) as usize];
+                            self.res.replaced += 1;
+                        }
+                    }
+                    for (out, s) in [(&mut self.out, PROJECTION_PLACEHOLDER), (w, &seq[..])] {
+                        out.write_all(b">")?;
+                        out.write_all(&name)?;
+                        out.write_all(b"\n")?;
+                        out.write_all(s)?;
+                        out.write_all(b"\n")?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply the cleaning rules to one record and write it unless dropped.
+    fn record(&mut self, name: &[u8], orig: &[u8], is_decoy: bool) -> Result<()> {
+        use std::io::Write as _;
+        const B: [u8; 4] = *b"ACGT";
+        // salmon requires every decoy record to appear, contiguously, at the
+        // end of the input — reject a real transcript after any decoy.
+        //
+        // This is what ultimately guarantees the contiguous decoy id block;
+        // failing here is far better than discovering the violation later,
+        // when the only symptom is wrong abundances.
+        if is_decoy {
+            self.saw_decoy = true;
+        } else if self.saw_decoy {
+            anyhow::bail!(
+                "non-decoy reference {:?} appears after a decoy; decoy records must be \
+                 contiguous at the end of the FASTA input",
+                String::from_utf8_lossy(name)
+            );
+        }
+
+        // Detect exact-sequence duplicates (pure-ACGT only — salmon hashes the
+        // unmodified sequence, and because it randomizes any non-ACGT base
+        // per-position, sequences containing one never compare equal). The
+        // cluster is recorded for `duplicate_clusters.tsv` in BOTH modes,
+        // matching salmon (which reports duplicates even with --keepDuplicates);
+        // without --keepDuplicates the duplicate is additionally dropped
+        // (collapsed onto the first occurrence).
+        let pure_acgt = orig
+            .iter()
+            .all(|&b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'));
+        if pure_acgt {
+            if let Some(retained_name) = self.seen.get(orig) {
+                self.res
+                    .duplicate_clusters
+                    .push((retained_name.clone(), name.to_vec()));
+                if !self.keep_duplicates {
+                    // Returning skips the write below, so the duplicate never
+                    // reaches the index.
+                    return Ok(());
+                }
+            } else {
+                self.seen.insert(orig.to_vec(), name.to_vec());
+            }
+        }
+
+        let mut seq = orig.to_vec();
+        // Transcripts: replace non-ACGT bases with pseudo-random ACGT so the
+        // processed sequence is fully k-mer-able (salmon FixFasta behavior).
+        // DECOYS: leave non-ACGT bases (e.g. genome N-runs) in place — cf1-rs
+        // splits the de Bruijn graph on them natively (and records the N-gaps in
+        // the tiling), yielding a far less tangled, smaller, faster-to-build
+        // cDBG than seeding spurious k-mers from random replacements across
+        // assembly gaps. The refseq store keeps the raw bytes and the aligner
+        // encodes N as a mismatch (dna5 code 4), so a read aligning over a decoy
+        // N-run simply scores it as a mismatch.
+        if !is_decoy {
+            for b in seq.iter_mut() {
+                if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+                    // A linear congruential generator: multiply, add, and take
+                    // high bits. `wrapping_*` means overflow wraps around
+                    // rather than panicking, which is the intended arithmetic.
+                    self.x = self
+                        .x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    *b = B[((self.x >> 33) & 3) as usize];
+                    self.res.replaced += 1;
+                }
+            }
+        }
+        // Kallisto-esque poly-A clipping (salmon/pufferfish FixFasta): if the
+        // (cleaned) sequence ends in a run of >= POLYA_CLIP_LEN `A`s, trim all
+        // trailing `A`s. This runs after non-ACGT replacement (matching salmon's
+        // order); the reference hashes are computed pre-clip, so provenance is
+        // unaffected.
+        if self.clip_polya
+            && seq.len() > POLYA_CLIP_LEN
+            && seq[seq.len() - POLYA_CLIP_LEN..]
+                .iter()
+                .all(|&b| matches!(b, b'A' | b'a'))
+        {
+            // `rposition` finds the last non-`A`, i.e. where the tail begins.
+            match seq.iter().rposition(|&b| !matches!(b, b'A' | b'a')) {
+                Some(last) => {
+                    seq.truncate(last + 1);
+                    self.res.polya_clipped += 1;
+                }
+                None => {
+                    // All `A`s: drop the reference entirely (not written, not
+                    // counted as retained), matching salmon.
+                    self.res.polya_clipped += 1;
+                    self.res.polya_dropped.push(name.to_vec());
+                    return Ok(());
+                }
+            }
+        }
+
+        // Drop a decoy that Cuttlefish cannot tile. A reference carries a k-mer
+        // (and so a unitig) iff it has a run of >= k consecutive ACGT bases — a
+        // run of exactly k has one k-mer (validated empirically). A decoy with
+        // no such run (too short, or fragmented into sub-k pieces by N-runs)
+        // can never be seeded or catch a read, and keeping it would let the
+        // builder relocate it into the trailing sub-`k`/untiled block, breaking
+        // the contiguity that the O(1) decoy check relies on. Sub-`k`/N-broken
+        // *transcripts* are kept (reported at 0 reads); after the replacement
+        // above transcripts have no N-runs, so only decoys are affected here.
+        if is_decoy && longest_acgt_run(&seq) < self.k {
+            self.res.short_decoys_dropped.push(name.to_vec());
+            return Ok(());
+        }
+
+        // Write the record in canonical two-line form (header, then the whole
+        // sequence unwrapped), which is what the downstream builder expects.
+        self.out.write_all(b">")?;
+        self.out.write_all(name)?;
+        self.out.write_all(b"\n")?;
+        self.out.write_all(&seq)?;
+        self.out.write_all(b"\n")?;
+        Ok(())
+    }
 }
 
 /// Read a decoy-names file (one name per line; blank lines ignored) into a set,
@@ -737,6 +949,10 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         None => ahash::AHashSet::new(),
     };
 
+    // Unspliced targets (`--unspliced`): cut from the genome now, cleaned and
+    // indexed with the transcripts below.
+    let unspliced = prepare_unspliced(opts, &intermediate_dir, &decoy_names)?;
+
     // Preprocess the references into the cleaned FASTA that feeds both the cDBG
     // build and the refseq store (the hashes below use the original input):
     // transcripts get non-ACGT bases replaced with pseudo-random ACGT (salmon
@@ -751,6 +967,15 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         opts.gencode,
         opts.clip_polya,
         opts.k,
+        unspliced
+            .as_ref()
+            .map(|u| Generated {
+                path: &u.fasta,
+                names: &u.names,
+                projection_refseq: u.projection_refseq.as_deref(),
+                check_decoys: u.projection_refseq.as_ref().map(|_| &u.seq_digests),
+            })
+            .as_ref(),
     )
     .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
     // Everything below reports what the preprocessing did. Silent transformation
@@ -884,7 +1109,15 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     let idx = ReferenceIndex::load(&index_prefix, opts.build_ec_table, false)
         .context("loading freshly built index")?;
     // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
-    let h = compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode)
+    //
+    // With `--unspliced` the generated targets are hashed after the transcripts,
+    // in index order: the index then differs from a transcripts-only one, and
+    // so must its digest, or tximeta would match it to the plain transcriptome.
+    let mut hashed = opts.transcripts.clone();
+    if let Some(u) = &unspliced {
+        hashed.push(u.fasta.clone());
+    }
+    let h = compute_ref_hashes(&hashed, &decoy_names, opts.gencode)
         .context("hashing reference sequences/names")?;
     // Locate the decoy block in the *built* index's reference numbering. We
     // cannot reuse the preprocess `retained` count (`pre.first_decoy_index`):
@@ -942,6 +1175,13 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
              {n_short} short (sub-k, 0-count) transcript(s) recorded after the decoys"
         );
     }
+    let unspliced_info = match &unspliced {
+        Some(u) => Some(
+            write_t2g_3col(&opts.output_dir, &idx, first_decoy_index, num_decoys, u)
+                .context("writing t2g_3col.tsv")?,
+        ),
+        None => None,
+    };
     let info = IndexInfo {
         k: opts.k,
         m,
@@ -962,12 +1202,19 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         name_hash512: h.name_hash512,
         decoy_seq_hash: h.decoy_seq_hash,
         decoy_name_hash: h.decoy_name_hash,
+        unspliced: unspliced_info,
     };
     write_info(&opts.output_dir, &info)?;
 
     // Persist the (cleaned) reference sequences (piscem does not retain them) so
     // the selective-alignment step fetches windows matching the indexed k-mers.
-    write_refseq_store(&opts.output_dir, std::slice::from_ref(&cleaned), &idx)
+    // Projection layout: the targets' real sequences replace their index
+    // placeholders in the store (a later FASTA overrides a name).
+    let mut stored = vec![cleaned.clone()];
+    if let Some(p) = unspliced.as_ref().and_then(|u| u.projection_refseq.clone()) {
+        stored.push(p);
+    }
+    write_refseq_store(&opts.output_dir, &stored, &idx)
         .context("writing reference sequence store")?;
 
     if !opts.keep_intermediate {
@@ -977,6 +1224,12 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             // temporary file must not fail an otherwise successful build.
             let _ = std::fs::remove_file(&cleaned);
         }
+        if let Some(u) = &unspliced {
+            let _ = std::fs::remove_file(&u.fasta);
+            if let Some(p) = &u.projection_refseq {
+                let _ = std::fs::remove_file(p);
+            }
+        }
         // sshash removes its own scratch files but leaves the directory. Prune
         // it: `remove_dir` only succeeds on an empty directory, so a caller-
         // supplied override that is shared / pre-populated is left untouched.
@@ -985,6 +1238,217 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
 
     info!("index built: {} references", info.num_refs);
     Ok(info)
+}
+
+/// The unspliced targets of a build, ready to be indexed.
+struct PreparedUnspliced {
+    mode: UnsplicedMode,
+    /// resolved layout (never `Auto`)
+    layout: UnsplicedLayout,
+    /// projection layout: FASTA of the targets' sequences for the reference
+    /// store (a build intermediate)
+    projection_refseq: Option<PathBuf>,
+    /// written targets with their genomic intervals
+    targets: Vec<unspliced::WrittenTarget>,
+    /// digests of the genome sequences carrying targets
+    seq_digests: std::collections::HashMap<String, u64>,
+    flank: Option<u64>,
+    genome: PathBuf,
+    gtf: PathBuf,
+    /// generated FASTA (a build intermediate)
+    fasta: PathBuf,
+    /// every generated target name, reserved against input names
+    names: ahash::AHashSet<Vec<u8>>,
+    /// generated target -> gene
+    target_gene: ahash::AHashMap<String, String>,
+    annotation: unspliced::Annotation,
+}
+
+/// Validate the `--unspliced` options and, when on, derive the targets from
+/// the GTF and cut them from the genome into a FASTA under `dir`.
+fn prepare_unspliced(
+    opts: &IndexBuildOptions,
+    dir: &Path,
+    decoy_names: &ahash::AHashSet<Vec<u8>>,
+) -> Result<Option<PreparedUnspliced>> {
+    if opts.unspliced == UnsplicedMode::None {
+        anyhow::ensure!(
+            opts.genome.is_none() && opts.gtf.is_none() && opts.flank.is_none(),
+            "a genome, GTF or flank was given without --unspliced intron|premrna; \
+             they only describe unspliced targets"
+        );
+        return Ok(None);
+    }
+    let genome = opts
+        .genome
+        .clone()
+        .context("--unspliced requires --genome <genome FASTA>")?;
+    let gtf = opts
+        .gtf
+        .clone()
+        .context("--unspliced requires --gtf <annotation GTF>")?;
+    let flank = match opts.unspliced {
+        UnsplicedMode::Intron => Some(opts.flank.context(
+            "--unspliced intron requires a flank length (--flank, or --readLength for L - 1)",
+        )?),
+        _ => {
+            if opts.flank.is_some() {
+                warn!(
+                    "--flank has no effect with --unspliced premrna (gene bodies are not flanked)"
+                );
+            }
+            None
+        }
+    };
+    let annotation = unspliced::read_gtf(&gtf)?;
+    if annotation.unstranded_exons > 0 {
+        warn!(
+            "skipped {} GTF exon record(s) with no strand (neither + nor -)",
+            annotation.unstranded_exons
+        );
+    }
+    let targets = unspliced::unspliced_targets(&annotation, opts.unspliced, flank.unwrap_or(0));
+    let fasta = dir.join("unspliced_targets.fa");
+    let st = unspliced::write_unspliced_fasta(&genome, &targets, &fasta)
+        .context("extracting unspliced targets from the genome")?;
+    info!(
+        "unspliced ({}): {} target(s) from {} gene model(s){}",
+        opts.unspliced.as_str(),
+        st.written,
+        annotation.genes.len(),
+        flank.map_or(String::new(), |f| format!(", flank {f}"))
+    );
+    if st.clipped > 0 {
+        info!(
+            "{} unspliced target(s) clipped at a sequence end",
+            st.clipped
+        );
+    }
+    if !st.missing_seqnames.is_empty() {
+        warn!(
+            "{} unspliced target(s) dropped: {} GTF sequence(s) absent from the genome FASTA: {}",
+            st.dropped_missing_seq,
+            st.missing_seqnames.len(),
+            st.missing_seqnames.join(", ")
+        );
+    }
+    if !st.dropped_low_acgt.is_empty() {
+        warn!(
+            "{} unspliced target(s) dropped: less than half of their bases are ACGT \
+             (hard-masked region?): {}",
+            st.dropped_low_acgt.len(),
+            st.dropped_low_acgt.join(", ")
+        );
+    }
+    // Projection needs every target to lie on an indexed decoy.
+    let on_decoys = !decoy_names.is_empty()
+        && st
+            .targets
+            .iter()
+            .all(|t| decoy_names.contains(t.seqname.as_bytes()));
+    let layout = match opts.unspliced_layout {
+        UnsplicedLayout::Auto if on_decoys => UnsplicedLayout::Projection,
+        UnsplicedLayout::Auto => UnsplicedLayout::Sequence,
+        UnsplicedLayout::Projection => {
+            anyhow::ensure!(
+                on_decoys,
+                "--unsplicedLayout projection needs the genome as decoys (-d): every \
+                 unspliced target must lie on a decoy sequence"
+            );
+            UnsplicedLayout::Projection
+        }
+        UnsplicedLayout::Sequence => UnsplicedLayout::Sequence,
+    };
+    info!("unspliced layout: {}", layout.as_str());
+    let projection_refseq =
+        (layout == UnsplicedLayout::Projection).then(|| dir.join("unspliced_refseq.fa"));
+    let names = targets.iter().map(|t| t.name.as_bytes().to_vec()).collect();
+    let target_gene = targets.into_iter().map(|t| (t.name, t.gene_id)).collect();
+    Ok(Some(PreparedUnspliced {
+        mode: opts.unspliced,
+        layout,
+        projection_refseq,
+        targets: st.targets,
+        seq_digests: st.seq_digests,
+        flank,
+        genome,
+        gtf,
+        fasta,
+        names,
+        target_gene,
+        annotation,
+    }))
+}
+
+/// Write [`T2G_3COL_FILE`] for every quantified (non-decoy) reference of the
+/// built index and summarize it for `info.json`.
+fn write_t2g_3col(
+    dir: &Path,
+    idx: &ReferenceIndex,
+    first_decoy_index: Option<usize>,
+    num_decoys: usize,
+    u: &PreparedUnspliced,
+) -> Result<UnsplicedInfo> {
+    use std::io::Write as _;
+    // Genomic interval of every target (both layouts; projection reads it at
+    // quant time).
+    let tpath = dir.join(UNSPLICED_TARGETS_FILE);
+    let mut tw = std::io::BufWriter::new(
+        std::fs::File::create(&tpath).with_context(|| format!("creating {}", tpath.display()))?,
+    );
+    for t in &u.targets {
+        writeln!(
+            tw,
+            "{}\t{}\t{}\t{}\t{}",
+            t.name,
+            t.seqname,
+            t.start,
+            t.end,
+            if t.minus { '-' } else { '+' }
+        )?;
+    }
+    tw.flush()?;
+    let path = dir.join(T2G_3COL_FILE);
+    let mut w = std::io::BufWriter::new(
+        std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?,
+    );
+    let (mut n_s, mut n_u, mut unannotated) = (0usize, 0usize, 0usize);
+    for t in salmon_core::quant_row_indices(idx.num_refs(), first_decoy_index, num_decoys) {
+        let name = idx.ref_name(t);
+        let (gene, status) = if let Some(g) = u.target_gene.get(name) {
+            n_u += 1;
+            (g.as_str(), 'U')
+        } else {
+            n_s += 1;
+            match u.annotation.gene_of(name) {
+                Some(g) => (g, 'S'),
+                None => {
+                    unannotated += 1;
+                    (name, 'S')
+                }
+            }
+        };
+        writeln!(w, "{name}\t{gene}\t{status}")?;
+    }
+    w.flush()?;
+    if unannotated > 0 {
+        warn!(
+            "{unannotated} of {n_s} transcript(s) are not named in the GTF; each is its own \
+             gene in {T2G_3COL_FILE} (do the FASTA and GTF come from the same release? \
+             GENCODE FASTA headers need --gencode)"
+        );
+    }
+    Ok(UnsplicedInfo {
+        mode: u.mode.as_str().to_string(),
+        layout: u.layout.as_str().to_string(),
+        flank: u.flank,
+        genome: u.genome.display().to_string(),
+        gtf: u.gtf.display().to_string(),
+        t2g_file: T2G_3COL_FILE.to_string(),
+        num_spliced_targets: n_s,
+        num_unspliced_targets: n_u,
+        num_unannotated_spliced_targets: unannotated,
+    })
 }
 
 /// Serialize [`IndexInfo`] to `info.json` (pretty-printed, since users read it).
@@ -1105,6 +1569,84 @@ pub struct SalmonIndex {
     ref_offsets: Vec<u64>,
     /// whether the reference sequence bytes were loaded
     refseq_loaded: bool,
+    /// projection layout: every reference's true length (the targets are
+    /// k-mer-free placeholders in the piscem index); `None` otherwise
+    ref_lens: Option<Vec<u64>>,
+    /// projection layout: the unspliced targets and their decoy intervals
+    projection: Option<Vec<ProjectedTarget>>,
+}
+
+/// An unspliced target of a projection-layout index: reference `tid` is the
+/// interval `[start, end)` of decoy reference `decoy` (read reverse-complemented
+/// when `minus`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectedTarget {
+    pub decoy: u32,
+    pub tid: u32,
+    pub start: u32,
+    pub end: u32,
+    pub minus: bool,
+}
+
+/// Read [`UNSPLICED_TARGETS_FILE`] and resolve every target and decoy name to
+/// its reference id; returns the targets and every reference's true length.
+fn load_projection(dir: &Path, inner: &ReferenceIndex) -> Result<(Vec<ProjectedTarget>, Vec<u64>)> {
+    let path = dir.join(UNSPLICED_TARGETS_FILE);
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let n = inner.num_refs();
+    let tid_of: ahash::AHashMap<&str, u32> =
+        (0..n).map(|t| (inner.ref_name(t), t as u32)).collect();
+    let mut lens: Vec<u64> = (0..n).map(|t| inner.ref_len(t)).collect();
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let f: Vec<&str> = line.split('\t').collect();
+        let bad = || anyhow::anyhow!("{}:{}: malformed line {line:?}", path.display(), i + 1);
+        if f.len() != 5 {
+            return Err(bad());
+        }
+        let (start, end): (u32, u32) = (
+            f[2].parse().map_err(|_| bad())?,
+            f[3].parse().map_err(|_| bad())?,
+        );
+        let tid = *tid_of
+            .get(f[0])
+            .with_context(|| format!("unspliced target {:?} is not in the index", f[0]))?;
+        let decoy = *tid_of.get(f[1]).with_context(|| {
+            format!("decoy {:?} of target {:?} is not in the index", f[1], f[0])
+        })?;
+        lens[tid as usize] = u64::from(end - start);
+        out.push(ProjectedTarget {
+            decoy,
+            tid,
+            start,
+            end,
+            minus: f[4] == "-",
+        });
+    }
+    Ok((out, lens))
+}
+
+/// The splicing annotation (`t2g_3col.tsv`) of an index built with
+/// `--unspliced`; `None` for any other index. Reads only `info.json` and the
+/// table, not the index itself, so a requant pass can call it cheaply.
+pub fn load_splice_annotation(
+    dir: impl AsRef<Path>,
+) -> Result<Option<salmon_core::splicing::SpliceAnnotation>> {
+    let dir = dir.as_ref();
+    let info = read_info(dir)?;
+    let Some(u) = &info.unspliced else {
+        return Ok(None);
+    };
+    let path = dir.join(&u.t2g_file);
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let ann = salmon_core::splicing::SpliceAnnotation::parse(
+        &u.mode,
+        &text,
+        &path.display().to_string(),
+    )?;
+    Ok(Some(ann))
 }
 
 /// Load just the per-reference forward sequences from an index directory, in
@@ -1218,12 +1760,22 @@ impl SalmonIndex {
         } else {
             (Vec::new(), Vec::new())
         };
+        let (projection, ref_lens) = match &info.unspliced {
+            Some(u) if u.layout == "projection" => {
+                let (p, l) = load_projection(dir, &inner)
+                    .context("loading the unspliced targets of a projection-layout index")?;
+                (Some(p), Some(l))
+            }
+            _ => (None, None),
+        };
         Ok(Self {
             inner,
             info,
             refseq,
             ref_offsets,
             refseq_loaded: load_refseq,
+            ref_lens,
+            projection,
         })
     }
 
@@ -1284,7 +1836,16 @@ impl SalmonIndex {
 
     /// length of reference `i`.
     pub fn ref_len(&self, i: usize) -> u64 {
-        self.inner.ref_len(i)
+        match &self.ref_lens {
+            Some(l) => l[i],
+            None => self.inner.ref_len(i),
+        }
+    }
+
+    /// The unspliced targets reached by projection (an index built with
+    /// `--unspliced` in the projection layout); `None` for any other index.
+    pub fn projection_targets(&self) -> Option<&[ProjectedTarget]> {
+        self.projection.as_deref()
     }
 
     /// whether an equivalence-class table is available (pseudoalignment mode).
@@ -1413,6 +1974,285 @@ mod tests {
             );
             assert!(seq.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')));
         }
+    }
+
+    /// Deterministic high-complexity sequence for the unspliced fixtures.
+    fn lcg_seq(n: usize, mut x: u64) -> String {
+        (0..n)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                b"ACGT"[((x >> 33) & 3) as usize] as char
+            })
+            .collect()
+    }
+
+    fn revcomp(s: &str) -> String {
+        s.bytes()
+            .rev()
+            .map(|b| match b {
+                b'A' => 'T',
+                b'C' => 'G',
+                b'G' => 'C',
+                _ => 'A',
+            })
+            .collect()
+    }
+
+    /// A two-chromosome genome, a GTF with a retained-intron isoform on the
+    /// plus strand and a minus-strand gene, and a gentrome FASTA (transcripts
+    /// then the genome as decoys). Returns (gentrome, decoys, genome, gtf,
+    /// chr1, chr2).
+    fn unspliced_fixture(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf, String, String) {
+        let chr1 = lcg_seq(5000, 11);
+        let chr2 = lcg_seq(3000, 29);
+        let t1 = format!(
+            "{}{}{}",
+            &chr1[1000..1200],
+            &chr1[1500..1700],
+            &chr1[2200..2400]
+        );
+        let t1ri = format!("{}{}", &chr1[1000..1700], &chr1[2200..2400]);
+        let t2 = revcomp(&format!("{}{}", &chr2[500..700], &chr2[1200..1400]));
+        let genome = dir.join("genome.fa");
+        std::fs::write(&genome, format!(">chr1 dna\n{chr1}\n>chr2 dna\n{chr2}\n")).unwrap();
+        let gentrome = dir.join("gentrome.fa");
+        std::fs::write(
+            &gentrome,
+            format!(">T1\n{t1}\n>T1ri\n{t1ri}\n>T2\n{t2}\n>chr1\n{chr1}\n>chr2\n{chr2}\n"),
+        )
+        .unwrap();
+        let decoys = dir.join("decoys.txt");
+        std::fs::write(&decoys, "chr1\nchr2\n").unwrap();
+        let gtf = dir.join("ann.gtf");
+        let mut g = String::new();
+        for (tx, gene, chr, strand, exons) in [
+            (
+                "T1",
+                "G1",
+                "chr1",
+                '+',
+                vec![(1001, 1200), (1501, 1700), (2201, 2400)],
+            ),
+            ("T1ri", "G1", "chr1", '+', vec![(1001, 1700), (2201, 2400)]),
+            ("T2", "G2", "chr2", '-', vec![(501, 700), (1201, 1400)]),
+        ] {
+            for (s, e) in exons {
+                g.push_str(&format!(
+                    "{chr}\tt\texon\t{s}\t{e}\t.\t{strand}\t.\tgene_id \"{gene}\"; transcript_id \"{tx}\";\n"
+                ));
+            }
+        }
+        std::fs::write(&gtf, g).unwrap();
+        (gentrome, decoys, genome, gtf, chr1, chr2)
+    }
+
+    /// `--unspliced intron` next to genome decoys: the targets land between the
+    /// transcripts and the decoy block, carry the genome sequence on the gene's
+    /// strand, are listed in `t2g_3col.tsv`, and change the sequence digest.
+    #[test]
+    fn unspliced_targets_sit_between_transcripts_and_decoys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (gentrome, decoys, genome, gtf, chr1, chr2) = unspliced_fixture(tmp.path());
+
+        let mut plain = IndexBuildOptions::new(vec![gentrome.clone()], tmp.path().join("plain"));
+        plain.threads = 1;
+        plain.decoys = Some(decoys.clone());
+        let plain_info = build(&plain).expect("plain build");
+        let plain_json = std::fs::read_to_string(tmp.path().join("plain/info.json")).unwrap();
+        assert!(!plain_json.contains("unspliced"), "{plain_json}");
+        assert!(!tmp.path().join("plain").join(T2G_3COL_FILE).exists());
+
+        let out = tmp.path().join("splici");
+        let mut opts = plain.clone();
+        opts.output_dir = out.clone();
+        opts.unspliced_layout = UnsplicedLayout::Sequence;
+        opts.unspliced = UnsplicedMode::Intron;
+        opts.genome = Some(genome);
+        opts.gtf = Some(gtf);
+        opts.flank = Some(30);
+        let info = build(&opts).expect("unspliced build");
+
+        let u = info.unspliced.clone().expect("unspliced info");
+        assert_eq!(u.mode, "intron");
+        assert_eq!(u.flank, Some(30));
+        assert_eq!((u.num_spliced_targets, u.num_unspliced_targets), (3, 3));
+        assert_eq!(u.num_unannotated_spliced_targets, 0);
+        assert_eq!(info.first_decoy_index, Some(6));
+        assert_eq!(info.num_decoys, 2);
+        assert!(!out.join("unspliced_targets.fa").exists());
+
+        let t2g = std::fs::read_to_string(out.join(T2G_3COL_FILE)).unwrap();
+        assert_eq!(
+            t2g,
+            "T1\tG1\tS\nT1ri\tG1\tS\nT2\tG2\tS\nG1-I\tG1\tU\nG1-I1\tG1\tU\nG2-I\tG2\tU\n"
+        );
+
+        let idx = SalmonIndex::load(&out).unwrap();
+        let names: Vec<&str> = (0..idx.num_refs()).map(|i| idx.ref_name(i)).collect();
+        let table = load_splice_annotation(&out)
+            .unwrap()
+            .expect("splice annotation")
+            .table(&names, 0..6)
+            .unwrap();
+        assert_eq!(table.genes, ["G1", "G2"]);
+        assert_eq!(table.target_counts(), (3, 3));
+        assert!(load_splice_annotation(tmp.path().join("plain"))
+            .unwrap()
+            .is_none());
+        let tid = |n: &str| (0..idx.num_refs()).find(|&i| idx.ref_name(i) == n).unwrap() as u32;
+        // G1 introns 1200..1500 and 1700..2200, 30-base flanks, 0-based.
+        assert_eq!(idx.ref_seq(tid("G1-I")), &chr1.as_bytes()[1170..1530]);
+        assert_eq!(idx.ref_seq(tid("G1-I1")), &chr1.as_bytes()[1670..2230]);
+        // G2 is on the minus strand: its intron 700..1200 read reverse-complemented.
+        assert_eq!(
+            idx.ref_seq(tid("G2-I")),
+            revcomp(&chr2[670..1230]).as_bytes()
+        );
+
+        // Different index, different digest; the decoy digests are unchanged.
+        assert_ne!(info.seq_hash, plain_info.seq_hash);
+        assert_ne!(info.name_hash, plain_info.name_hash);
+        assert_eq!(info.decoy_seq_hash, plain_info.decoy_seq_hash);
+    }
+
+    /// Projection layout: the targets carry no k-mers and sit after the decoys
+    /// as short references, the store keeps their real sequence, their true
+    /// length is restored on load, and their decoy intervals are exposed.
+    #[test]
+    fn projection_layout_keeps_targets_out_of_the_kmer_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (gentrome, decoys, genome, gtf, chr1, chr2) = unspliced_fixture(tmp.path());
+        let out = tmp.path().join("proj");
+        let mut opts = IndexBuildOptions::new(vec![gentrome], out.clone());
+        opts.threads = 1;
+        opts.decoys = Some(decoys);
+        opts.unspliced = UnsplicedMode::Intron;
+        opts.unspliced_layout = UnsplicedLayout::Projection;
+        opts.genome = Some(genome);
+        opts.gtf = Some(gtf);
+        opts.flank = Some(30);
+        let info = build(&opts).expect("projection build");
+        let u = info.unspliced.clone().unwrap();
+        assert_eq!(u.layout, "projection");
+        // transcripts, then the two chromosomes, then the three targets
+        assert_eq!(
+            (info.first_decoy_index, info.num_decoys, info.num_refs),
+            (Some(3), 2, 8)
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.join(T2G_3COL_FILE)).unwrap(),
+            "T1\tG1\tS\nT1ri\tG1\tS\nT2\tG2\tS\nG1-I\tG1\tU\nG1-I1\tG1\tU\nG2-I\tG2\tU\n"
+        );
+        assert!(!out.join("unspliced_refseq.fa").exists());
+
+        let idx = SalmonIndex::load(&out).unwrap();
+        let tid = |n: &str| (0..idx.num_refs()).find(|&i| idx.ref_name(i) == n).unwrap();
+        let (g1, g2) = (tid("G1-I"), tid("G2-I"));
+        assert!(g1 > 4 && g2 > 4, "targets follow the decoy block");
+        assert_eq!(idx.ref_len(g1), 360);
+        assert_eq!(idx.ref_seq(g1 as u32), &chr1.as_bytes()[1170..1530]);
+        assert_eq!(idx.ref_seq(g2 as u32), revcomp(&chr2[670..1230]).as_bytes());
+        let p = idx.projection_targets().expect("projection targets");
+        let (c1, c2) = (tid("chr1") as u32, tid("chr2") as u32);
+        assert_eq!(
+            p,
+            [
+                ProjectedTarget {
+                    decoy: c1,
+                    tid: g1 as u32,
+                    start: 1170,
+                    end: 1530,
+                    minus: false
+                },
+                ProjectedTarget {
+                    decoy: c1,
+                    tid: tid("G1-I1") as u32,
+                    start: 1670,
+                    end: 2230,
+                    minus: false
+                },
+                ProjectedTarget {
+                    decoy: c2,
+                    tid: g2 as u32,
+                    start: 670,
+                    end: 1230,
+                    minus: true
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn projection_layout_requires_the_same_genome_as_decoys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (gentrome, decoys, genome, gtf, chr1, chr2) = unspliced_fixture(tmp.path());
+        let mut opts = IndexBuildOptions::new(vec![gentrome.clone()], tmp.path().join("i"));
+        opts.threads = 1;
+        opts.unspliced = UnsplicedMode::Premrna;
+        opts.unspliced_layout = UnsplicedLayout::Projection;
+        opts.gtf = Some(gtf);
+
+        // a genome whose chr1 differs from the decoy chr1
+        let other = tmp.path().join("other.fa");
+        let mut c1 = chr1.clone().into_bytes();
+        c1[10] = if c1[10] == b'A' { b'C' } else { b'A' };
+        std::fs::write(
+            &other,
+            format!(">chr1\n{}\n>chr2\n{chr2}\n", String::from_utf8(c1).unwrap()),
+        )
+        .unwrap();
+        let mut o = opts.clone();
+        o.decoys = Some(decoys);
+        o.genome = Some(other);
+        let e = format!("{:#}", build(&o).unwrap_err());
+        assert!(e.contains("differs from the --genome sequence"), "{e}");
+
+        // no decoys at all
+        let mut o = opts.clone();
+        o.genome = Some(genome);
+        o.transcripts = vec![tmp.path().join("t.fa")];
+        std::fs::write(&o.transcripts[0], format!(">T\n{}\n", lcg_seq(300, 9))).unwrap();
+        let e = format!("{:#}", build(&o).unwrap_err());
+        assert!(e.contains("needs the genome as decoys"), "{e}");
+    }
+
+    #[test]
+    fn unspliced_option_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (gentrome, decoys, genome, gtf, _, _) = unspliced_fixture(tmp.path());
+        let mut opts = IndexBuildOptions::new(vec![gentrome], tmp.path().join("i"));
+        opts.threads = 1;
+        opts.decoys = Some(decoys);
+
+        // genome without --unspliced
+        let mut o = opts.clone();
+        o.genome = Some(genome.clone());
+        assert!(build(&o)
+            .unwrap_err()
+            .to_string()
+            .contains("without --unspliced"));
+
+        // intron mode without a flank
+        let mut o = opts.clone();
+        o.unspliced = UnsplicedMode::Intron;
+        o.genome = Some(genome.clone());
+        o.gtf = Some(gtf.clone());
+        let e = format!("{:#}", build(&o).unwrap_err());
+        assert!(e.contains("flank"), "{e}");
+
+        // an input record already named like a generated target
+        let clash = tmp.path().join("clash.fa");
+        std::fs::write(&clash, format!(">G1-I\n{}\n", lcg_seq(200, 5))).unwrap();
+        let mut o = opts.clone();
+        o.transcripts = vec![clash];
+        o.decoys = None;
+        o.unspliced = UnsplicedMode::Premrna;
+        o.genome = Some(genome);
+        o.gtf = Some(gtf);
+        let e = format!("{:#}", build(&o).unwrap_err());
+        assert!(e.contains("generated unspliced target"), "{e}");
     }
 
     /// The sshash scratch dir honors an explicit override and the

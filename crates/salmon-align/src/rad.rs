@@ -1356,6 +1356,9 @@ struct BiasCfg<'a> {
     ref_bytes: &'a salmon_core::RefSeqs,
     gc_store: &'a GcStore<'a>,
     length_class: Option<&'a [usize]>,
+    /// references whose share of a fragment is not observed (unspliced
+    /// targets): the bias models are trained on spliced targets only
+    exclude: Option<&'a [bool]>,
 }
 
 /// Collect one fragment's sequence/GC/positional bias contributions, weighted by
@@ -1504,6 +1507,12 @@ fn collect_bias_fragment(
     for ((run, &glog), &p_tid) in groups().zip(group_log.iter()).zip(post.iter()) {
         let tid = &run[0].tid;
         if p_tid <= 0.0 {
+            continue;
+        }
+        if cfg
+            .exclude
+            .is_some_and(|x| x.get(*tid as usize).copied().unwrap_or(false))
+        {
             continue;
         }
         // Sequence/GC need the reference bytes; positional bias needs only the
@@ -1803,6 +1812,56 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         "RAD ref_lengths ({}) does not match ref_names ({num_refs})",
         lengths.len()
     );
+    // Splicing status of each reference, when the driver passed the annotation
+    // of the (unspliced) index this RAD was mapped to: it feeds the
+    // spliced / unspliced summary and the bias sweeps' position stride.
+    let splice_table = match &opts.splice_annotation {
+        Some(ann) => {
+            let (first_decoy, num_decoys) = provenance
+                .index
+                .as_ref()
+                .map(|ix| {
+                    (
+                        ix.first_decoy_index.map(|v| v as usize),
+                        ix.num_decoys.unwrap_or(0) as usize,
+                    )
+                })
+                .unwrap_or((None, 0));
+            let rows = salmon_core::quant_row_indices(names.len(), first_decoy, num_decoys);
+            Some(
+                ann.table(&names, rows)
+                    .context("aligning the index's t2g_3col.tsv to the RAD references")?,
+            )
+        }
+        None => None,
+    };
+    // End of the decoy block; any tail after it (sub-k transcripts, projected
+    // unspliced targets) is quantified and bias-corrected.
+    let decoy_end = provenance
+        .index
+        .as_ref()
+        .and_then(|ix| match (ix.first_decoy_index, ix.num_decoys) {
+            // A RAD that did not record the block size treats everything from
+            // the first decoy on as decoy, as before.
+            (Some(f), Some(n)) if n > 0 => Some(f as usize + n as usize),
+            _ => None,
+        })
+        .map_or(num_refs, |e| e.min(num_refs));
+    // Long unspliced targets are visited at a position stride in the bias
+    // sweeps (spliced targets exactly, stride 1); `None` for any other index.
+    let bias_pos_stride: Option<Vec<usize>> = splice_table.as_ref().map(|t| {
+        t.unspliced
+            .iter()
+            .zip(&lengths)
+            .map(|(&u, &len)| {
+                if u {
+                    salmon_model::unspliced_position_stride(len as usize)
+                } else {
+                    1
+                }
+            })
+            .collect()
+    });
     let scored = matches!(
         profile,
         RadInputProfile::Salmon(salmon_rad::RadProfile::SelectiveAlignment)
@@ -2076,6 +2135,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 ref_bytes: &ref_bytes,
                 gc_store: &gc_store,
                 length_class: length_class.as_deref(),
+                exclude: splice_table.as_ref().map(|t| t.unspliced.as_slice()),
             };
             let obs = match profile {
                 RadInputProfile::PiscemBulk => run_rad_eq_and_bias_pass::<PiscemBulkReadRecord>(
@@ -2208,6 +2268,9 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             opts.gc_bins,
             opts.bias_speed_samp,
             opts.no_bias_length_threshold,
+            bias_pos_stride.as_deref(),
+            splice_table.as_ref().map(|t| t.unspliced.as_slice()),
+            decoy_end,
         );
         collapsed.update_eff_lengths(&eff_lengths);
         packed.refresh_combined(&collapsed);
@@ -2252,6 +2315,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 ref_bytes: &ref_bytes,
                 gc_store: &gc_store,
                 length_class: length_class.as_deref(),
+                exclude: splice_table.as_ref().map(|t| t.unspliced.as_slice()),
             };
             let (seq_obs, gc_obs, pos_obs) = match profile {
                 RadInputProfile::PiscemBulk => run_bias_pass::<PiscemBulkReadRecord>(
@@ -2294,6 +2358,9 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 opts.gc_bins,
                 opts.bias_speed_samp,
                 opts.no_bias_length_threshold,
+                bias_pos_stride.as_deref(),
+                splice_table.as_ref().map(|t| t.unspliced.as_slice()),
+                decoy_end,
             );
             collapsed.update_eff_lengths(&eff_lengths);
             packed.refresh_combined(&collapsed);
@@ -2338,6 +2405,17 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES);
 
     let ambig = salmon_infer::ambiguity_counts(&packed);
+    // Spliced / unspliced / ambiguous split, when the driver passed the
+    // splicing annotation of the (unspliced) index this RAD was mapped to.
+    let splicing = match (&splice_table, opts.skip_quant) {
+        (Some(table), false) => Some(salmon_infer::splicing_summary(
+            &packed,
+            &counts,
+            table,
+            provenance.counters.map_or(0, |c| c.num_decoy_fragments),
+        )),
+        _ => None,
+    };
     let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
         Vec::new()
     } else if opts.num_bootstraps > 0 {
@@ -2440,6 +2518,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
         diagnostics,
+        splicing,
     };
     crate::write_outputs(opts, &result)?;
     timer.mark("output");

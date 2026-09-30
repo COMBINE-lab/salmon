@@ -107,6 +107,9 @@ pub(crate) struct Shared<'a> {
     pub collect_seqbias: bool,
     /// shared observed (fw, rc) sequence-bias models to merge per-thread results into
     pub seqbias_obs: Option<&'a Mutex<(SBModel, SBModel)>>,
+    /// references whose share of a fragment is kept out of the observed bias
+    /// models (unspliced targets): the models are trained on spliced targets
+    pub bias_exclude: Option<&'a [bool]>,
     /// collect observed fragment-GC contexts (`--gcBias`)
     pub collect_gcbias: bool,
     /// GC bias model bin counts (`--conditionalGCBins` × `--numGCBins`)
@@ -316,6 +319,9 @@ impl<T> CompatAligned<T> {
         self.0.extend(it);
     }
     #[inline]
+    fn iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
+        self.0.iter_mut()
+    }
     fn iter(&self) -> std::slice::Iter<'_, T> {
         self.0.iter()
     }
@@ -1027,6 +1033,14 @@ fn record(
                     .iter()
                     .map(|&(_, w)| if wsum > 0.0 { w / wsum } else { 0.0 }),
             );
+        }
+    }
+    // Unspliced targets do not train the bias models (see `Shared::bias_exclude`).
+    if let (true, Some(ex)) = (collecting, sh.bias_exclude) {
+        for (w, &(i, _)) in bias_w.iter_mut().zip(compat.iter()) {
+            if ex[i.get(placements).tid as usize] {
+                *w = 0.0;
+            }
         }
     }
     // After burn-in salmon freezes model collection (still advances masses).

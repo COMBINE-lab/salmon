@@ -2790,6 +2790,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tracing",
+ "xxhash-rust",
 ]
 
 [[package]]

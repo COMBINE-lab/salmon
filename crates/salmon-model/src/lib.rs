@@ -60,19 +60,22 @@ pub mod spline;
 // Re-exports so callers can write `salmon_model::SBModel` rather than naming the
 // submodule; the modules above remain the real homes.
 pub use bias::{
-    build_expected_pos, corrected_effective_length_full, positional_factor, positional_factor_into,
-    BiasInputs,
+    build_expected_pos, corrected_effective_length_full, corrected_effective_length_strided,
+    positional_factor, positional_factor_into, unspliced_position_stride, BiasInputs,
+    UNSPLICED_BIAS_MIN_STARTS, UNSPLICED_BIAS_STRIDE,
 };
 pub use fld::FragLengthSource;
 pub use fld::{
     ambig_frag_log_prob, smoothed_effective_length, DiscreteFld, FragmentLengthDistribution,
 };
 pub use gcbias::{
-    build_expected_gc, gc_desc, gc_prefix, gc_ratio, GcFragModel, GcRank, GcStore, GcView,
-    GC_SAMP_STRIDE,
+    build_expected_gc, build_expected_gc_strided, gc_desc, gc_prefix, gc_ratio, GcFragModel,
+    GcRank, GcStore, GcView, GC_SAMP_STRIDE,
 };
 pub use libdetect::{infer_format_from_counts, LibraryTypeDetector};
 pub use posbias::{
     compute_length_quantiles, length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS,
 };
-pub use seqbias::{build_expected, corrected_effective_length, LogBiasTable, SBModel};
+pub use seqbias::{
+    build_expected, build_expected_strided, corrected_effective_length, LogBiasTable, SBModel,
+};

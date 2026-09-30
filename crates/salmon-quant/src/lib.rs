@@ -396,6 +396,9 @@ pub struct QuantResult {
     pub detected_library_type: Option<String>,
     /// structured run diagnostics / bad-input warnings (also emitted to the log)
     pub diagnostics: Vec<Diagnostic>,
+    /// gene-level spliced / unspliced / ambiguous counts; `Some` only for an
+    /// index built with `--unspliced` (and a run that quantified)
+    pub splicing: Option<salmon_core::splicing::SplicingSummary>,
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
@@ -419,6 +422,67 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let salmon = SalmonIndex::load_with_opts(&opts.index_dir, need_refseq)
         .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
     let num_refs = salmon.num_refs();
+    // Projection-layout unspliced index: genome-decoy alignments inside a
+    // target's interval are copied onto the target (see `salmon_map::project`).
+    // Sketch mode has no alignments to project.
+    let map_config = {
+        let mut c = opts.map_config.clone();
+        if let Some(targets) = salmon.projection_targets() {
+            anyhow::ensure!(
+                !opts.sketch,
+                "this index holds its unspliced targets in the projection layout, which needs \
+                 selective alignment: drop --sketch, or rebuild the index with \
+                 --unsplicedLayout sequence"
+            );
+            let fdi = salmon
+                .info()
+                .first_decoy_index
+                .context("projection-layout index without decoys")?;
+            c.projection = Some(std::sync::Arc::new(salmon_map::UnsplicedProjection::new(
+                fdi as u32,
+                salmon.info().num_decoys,
+                targets.iter().map(|t| {
+                    (
+                        t.decoy,
+                        salmon_map::ProjectionTarget {
+                            tid: t.tid,
+                            start: t.start,
+                            end: t.end,
+                            minus: t.minus,
+                        },
+                    )
+                }),
+            )));
+            tracing::info!(
+                "projecting genome-decoy alignments onto {} unspliced target(s)",
+                targets.len()
+            );
+        }
+        c
+    };
+    // Splicing status of each reference for an index built with `--unspliced`
+    // (`None` otherwise): the spliced / unspliced summary and the bias sweeps'
+    // position stride read it. Only `info.json` and the small table are read.
+    let splice_table = match salmon_index::load_splice_annotation(&opts.index_dir)? {
+        Some(ann) => {
+            let names: Vec<&str> = (0..num_refs).map(|i| salmon.ref_name(i)).collect();
+            let rows = salmon_core::quant_row_indices(
+                num_refs,
+                salmon.info().first_decoy_index,
+                salmon.info().num_decoys,
+            );
+            Some(ann.table(&names, rows)?)
+        }
+        None => None,
+    };
+    // Long unspliced targets are visited at a position stride in the bias
+    // sweeps; spliced targets (and every target of any other index) exactly.
+    let bias_pos_stride = |t: usize| match &splice_table {
+        Some(tab) if tab.unspliced[t] => {
+            salmon_model::unspliced_position_stride(salmon.ref_len(t) as usize)
+        }
+        _ => 1,
+    };
     timer.mark("index_load");
 
     let eq_builder = EquivalenceClassBuilder::new();
@@ -690,7 +754,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             eq: &eq_builder,
             fld: &fld,
             detector: detector.as_ref(),
-            map_cfg: &opts.map_config,
+            map_cfg: &map_config,
             sketch: opts.sketch,
             sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
@@ -702,6 +766,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             ignore_incompat,
             collect_seqbias: opts.seq_bias,
             seqbias_obs: seqbias_obs.as_ref(),
+            bias_exclude: splice_table.as_ref().map(|t| t.unspliced.as_slice()),
             collect_gcbias: opts.gc_bias,
             cond_gc_bins: opts.cond_gc_bins,
             gc_bins: opts.gc_bins,
@@ -1071,6 +1136,26 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // contribute nothing, but a decoy chromosome would otherwise hand one
         // rayon worker an O(ref_len) sweep over hundreds of Mbp. See issue #1019.
         let num_targets = salmon.info().first_decoy_index.unwrap_or(num_refs);
+        // End of the decoy block. A tail after it (sub-k transcripts, projected
+        // unspliced targets) is quantified, so it is bias-corrected too; only
+        // the decoys themselves are skipped.
+        let decoy_end = match salmon.info().first_decoy_index {
+            Some(f) if salmon.info().num_decoys > 0 => f + salmon.info().num_decoys,
+            _ => num_refs,
+        };
+        // The expected models describe the library protocol and are estimated
+        // on spliced targets only (unspliced targets weigh nothing), matching
+        // the observed models (`Shared::bias_exclude`).
+        let model_alphas: std::borrow::Cow<[f64]> = match &splice_table {
+            Some(t) => em
+                .alphas
+                .iter()
+                .zip(&t.unspliced)
+                .map(|(&a, &u)| if u { 0.0 } else { a })
+                .collect::<Vec<f64>>()
+                .into(),
+            None => std::borrow::Cow::Borrowed(&em.alphas),
+        };
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
         let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
         // K excludes the leading sequence context only when seq-correcting.
@@ -1085,10 +1170,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             let (mut obs_fw, mut obs_rc) = m.into_inner().unwrap();
             obs_fw.normalize();
             obs_rc.normalize();
-            let (exp_fw, exp_rc) = salmon_model::build_expected(
+            let (exp_fw, exp_rc) = salmon_model::build_expected_strided(
                 num_targets,
                 |t| salmon.ref_seq(t as u32),
-                &em.alphas,
+                bias_pos_stride,
+                &model_alphas,
                 &eff_lengths,
                 &fld_cdf,
             );
@@ -1114,11 +1200,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let store = gc_store;
         let gc_ratio_model = if let Some(m) = gcbias_obs {
             let mut obs = m.into_inner().unwrap();
-            let mut exp = salmon_model::build_expected_gc(
+            let mut exp = salmon_model::build_expected_gc_strided(
                 num_targets,
                 |t| salmon.ref_seq(t as u32),
                 |t| store.unwrap().view(t),
-                &em.alphas,
+                bias_pos_stride,
+                &model_alphas,
                 &eff_lengths,
                 &fld_cdf,
                 fld_low,
@@ -1152,7 +1239,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             let (exp_fw, exp_rc) = salmon_model::build_expected_pos(
                 num_targets,
                 |t| salmon.ref_len(t) as usize,
-                &em.alphas,
+                &model_alphas,
                 &eff_lengths,
                 &fld_cdf,
                 length_quantiles.as_ref().unwrap(),
@@ -1206,7 +1293,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 // chromosome (up to ~250 Mb) then serializes the entire phase while
                 // the other worker threads sit idle. Mirrors PR #1020's exclusion of
                 // decoys from the expected bias models.
-                if tid >= num_targets || em.alphas[tid] < 1e-8 {
+                if (tid >= num_targets && tid < decoy_end) || em.alphas[tid] < 1e-8 {
                     return eff_lengths[tid];
                 }
                 let s = salmon.ref_seq(tid as u32);
@@ -1243,7 +1330,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                         .as_ref()
                         .map(|_| (scratch.pf.as_slice(), scratch.pr.as_slice())),
                 };
-                salmon_model::corrected_effective_length_full(
+                salmon_model::corrected_effective_length_strided(
                     s,
                     &fld_cdf,
                     fld_low,
@@ -1252,6 +1339,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     eff_lengths[tid],
                     opts.bias_speed_samp,
                     opts.no_bias_length_threshold,
+                    bias_pos_stride(tid),
                 )
             })
             .collect();
@@ -1326,6 +1414,17 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // ---- posterior uncertainty (bootstrap / Gibbs) + ambiguity --------------
     // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
     let ambig = salmon_infer::ambiguity_counts(&packed);
+    // Spliced / unspliced / ambiguous split, for an index built with
+    // `--unspliced`: the same final E-step as `counts`, filed per gene.
+    let splicing = match (&splice_table, opts.skip_quant) {
+        (Some(table), false) => Some(salmon_infer::splicing_summary(
+            &packed,
+            &counts,
+            table,
+            num_decoy.load(Ordering::Relaxed),
+        )),
+        _ => None,
+    };
     // Same `posterior` the packed layout was built for, so the run cannot decide
     // it needs Gibbs after the weights it reads were skipped.
     let bootstraps: Vec<Vec<f64>> = match posterior {
@@ -1469,6 +1568,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         peak_rss_kb: salmon_core::peak_rss_kb(),
         detected_library_type,
         diagnostics,
+        splicing,
     };
 
     tracing::info!("writing results to {}", opts.output_dir.display());

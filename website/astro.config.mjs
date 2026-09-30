@@ -58,6 +58,10 @@ export default defineConfig({
               label: 'Genome-alignment quantification',
               slug: 'guides/genome-projection',
             },
+            {
+              label: 'Total RNA-seq (unspliced targets)',
+              slug: 'guides/total-rna',
+            },
           ],
         },
         {
