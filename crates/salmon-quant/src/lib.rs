@@ -378,7 +378,7 @@ pub struct QuantResult {
     /// when neither was requested
     pub bootstraps: Vec<Vec<f64>>,
     /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
-    pub ambig: (Vec<u32>, Vec<u32>),
+    pub ambig: (Vec<u64>, Vec<u64>),
     /// observed/expected bias-model tables for the aux dumps; each component is
     /// empty unless the corresponding `--seqBias`/`--gcBias`/`--posBias` ran
     pub bias_dump: BiasDump,

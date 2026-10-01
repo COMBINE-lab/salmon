@@ -421,14 +421,14 @@ pub fn gibbs_sample(
 /// not. Note `ambig` deliberately double-counts across transcripts — each member
 /// of a shared class is credited the whole class count, because the question
 /// being answered is per transcript.
-pub fn ambiguity_counts(p: &PackedEqClasses) -> (Vec<u32>, Vec<u32>) {
-    let mut unique = vec![0u32; p.num_txps];
-    let mut ambig = vec![0u32; p.num_txps];
+pub fn ambiguity_counts(p: &PackedEqClasses) -> (Vec<u64>, Vec<u64>) {
+    let mut unique = vec![0u64; p.num_txps];
+    let mut ambig = vec![0u64; p.num_txps];
     for ci in 0..p.num_classes() {
         let s = p.starts[ci] as usize;
         let e = p.starts[ci + 1] as usize;
         let tids = &p.labels[s..e];
-        let count = p.counts[ci] as u32;
+        let count = p.counts[ci];
         if tids.len() > 1 {
             for &t in tids {
                 ambig[t as usize] += count;
