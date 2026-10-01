@@ -208,23 +208,24 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
                     fragment_len: 0,
                     read_len: read.len() as i32,
                     is_decoy: refs.is_decoy(c.tid),
-                    // 5' position: leftmost for a forward read, rightmost for a
-                    // reverse read (orientation-aware sequence-bias context).
+                    // 5' position: leftmost base for a forward read, rightmost
+                    // base (inclusive) for a reverse read (orientation-aware
+                    // sequence-bias context). Projected over unmatched read ends.
                     ref_pos: if c.is_fw {
-                        c.chain.ref_start()
+                        c.proj_start()
                     } else {
-                        c.chain.ref_end()
+                        c.proj_end() - 1
                     },
                     // positional bias: the read's leftmost reference coordinate,
                     // attributed to its own strand (salmon's SINGLE_END case).
-                    fw_pos: if c.is_fw { c.chain.ref_start() } else { -1 },
-                    rc_pos: if c.is_fw { -1 } else { c.chain.ref_start() },
+                    fw_pos: if c.is_fw { c.proj_start().max(0) } else { -1 },
+                    rc_pos: if c.is_fw { -1 } else { c.proj_start().max(0) },
                     format: Some(LibraryFormat::new(
                         ReadType::SingleEnd,
                         ReadOrientation::None,
                         strand,
                     )),
-                    r1_pos: c.chain.ref_start(),
+                    r1_pos: c.proj_start(),
                     r2_pos: -1,
                     r2_fw: false,
                     r1_score: aln.score,
@@ -334,9 +335,9 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                         // the fragment 3' end, not the reverse mate's leftmost (which
                         // is 3'end - readLen) — fixing a coordinate mismatch between
                         // the observed and expected 3' positional models.
-                        let frag_start = l.chain.ref_start().min(r.chain.ref_start());
+                        let frag_start = l.proj_start().min(r.proj_start());
                         let (fw_pos, rc_pos) = if l.is_fw != r.is_fw {
-                            (frag_start, frag_start + j.fragment_len - 1)
+                            (frag_start.max(0), frag_start + j.fragment_len - 1)
                         } else {
                             (-1, -1)
                         };
@@ -348,12 +349,12 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                             fragment_len: j.fragment_len,
                             read_len: 0, // proper pair: fragment_len carries the length signal
                             is_decoy: refs.is_decoy(j.tid),
-                            ref_pos: l.chain.ref_start().min(r.chain.ref_start()),
+                            ref_pos: frag_start,
                             fw_pos,
                             rc_pos,
                             format: Some(j.format),
-                            r1_pos: l.chain.ref_start(),
-                            r2_pos: r.chain.ref_start(),
+                            r1_pos: l.proj_start(),
+                            r2_pos: r.proj_start(),
                             r2_fw: r.is_fw,
                             r1_score: al.score,
                         });
@@ -489,7 +490,7 @@ fn orphan_raw(
     is_decoy: bool,
     read_len: i32,
 ) -> RawMapping {
-    let start = c.chain.ref_start();
+    let start = c.proj_start();
     RawMapping {
         tid,
         is_fw: c.is_fw,
@@ -502,9 +503,10 @@ fn orphan_raw(
         fragment_len: 0,
         read_len,
         is_decoy,
-        ref_pos: start,
-        fw_pos: if c.is_fw { start } else { -1 },
-        rc_pos: if c.is_fw { -1 } else { start },
+        // 5' position, as for a single-end read
+        ref_pos: if c.is_fw { start } else { c.proj_end() - 1 },
+        fw_pos: if c.is_fw { start.max(0) } else { -1 },
+        rc_pos: if c.is_fw { -1 } else { start.max(0) },
         format: None,
         r1_pos: if is_left { start } else { -1 },
         r2_pos: if is_left { -1 } else { start },
@@ -556,7 +558,7 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
     Some(DebugMapping {
         tid: best.tid,
         is_fw: best.is_fw,
-        ref_pos: best.chain.ref_start(),
+        ref_pos: best.proj_start(),
         chain_cov: best.chain.covered_read_bases(),
         read_len: read.len(),
         full_score: aln.score,
@@ -662,6 +664,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
         }
     }
 
+    let anchor_start = anchor.proj_start();
     let status = if anchor_is_left {
         MateStatus::PairedEndLeft
     } else {
@@ -675,29 +678,26 @@ fn push_orphan_or_recovered<R: RefProvider>(
         fragment_len: 0,
         read_len: anchor_read.len() as i32,
         is_decoy,
-        ref_pos: anchor.chain.ref_start(),
+        // 5' position, as for a single-end read
+        ref_pos: if anchor.is_fw {
+            anchor_start
+        } else {
+            anchor.proj_end() - 1
+        },
         // orphan: leftmost coordinate attributed to its own strand.
         fw_pos: if anchor.is_fw {
-            anchor.chain.ref_start()
+            anchor_start.max(0)
         } else {
             -1
         },
         rc_pos: if anchor.is_fw {
             -1
         } else {
-            anchor.chain.ref_start()
+            anchor_start.max(0)
         },
         format: None, // orphans are not sampled for library-type detection
-        r1_pos: if anchor_is_left {
-            anchor.chain.ref_start()
-        } else {
-            -1
-        },
-        r2_pos: if anchor_is_left {
-            -1
-        } else {
-            anchor.chain.ref_start()
-        },
+        r1_pos: if anchor_is_left { anchor_start } else { -1 },
+        r2_pos: if anchor_is_left { -1 } else { anchor_start },
         r2_fw: false,
         r1_score: orphan_read1_score(anchor_is_left, anchor_aln.score),
     });
