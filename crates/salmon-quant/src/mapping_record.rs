@@ -219,7 +219,9 @@ fn overhang_cigar(pos: i32, read_len: i32, txp_len: i32) -> (Cigar, i32) {
         ops: [a, b],
         len: 2,
     };
-    if pos + (read_len as i32) < 0 {
+    // `<=` / `>=` below: a read with no overlapping base must be all soft-clip,
+    // never a zero-length `0M` op (rejected by htslib/samtools).
+    if pos + (read_len as i32) <= 0 {
         (one(CigarKind::SoftClip, read_len), 0)
     } else if pos < 0 {
         let matched = (read_len as i32 + pos).max(0) as usize;
@@ -236,7 +238,7 @@ fn overhang_cigar(pos: i32, read_len: i32, txp_len: i32) -> (Cigar, i32) {
             ),
             0,
         )
-    } else if pos > txp_len {
+    } else if pos >= txp_len {
         (one(CigarKind::SoftClip, read_len), pos)
     } else if pos + read_len as i32 > txp_len {
         let matched = (txp_len - pos).max(0) as usize;
@@ -447,5 +449,32 @@ mod tests {
         assert_eq!(mapping_quality(5), 0);
         // An unmapped record has no placement to be confident about.
         assert_eq!(mapping_quality(0), 0);
+    }
+
+    fn cigar_string(c: Cigar) -> String {
+        c.as_slice()
+            .iter()
+            .map(|op| {
+                let k = match op.kind {
+                    CigarKind::Match => 'M',
+                    CigarKind::SoftClip => 'S',
+                };
+                format!("{}{k}", op.len)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn overhang_cigar_never_emits_zero_length_ops() {
+        let oc = |pos, read_len, txp_len| {
+            let (c, p) = overhang_cigar(pos, read_len, txp_len);
+            (cigar_string(c), p)
+        };
+        assert_eq!(oc(10, 50, 100), ("50M".to_string(), 10));
+        assert_eq!(oc(-10, 50, 100), ("10S40M".to_string(), 0));
+        assert_eq!(oc(80, 50, 100), ("20M30S".to_string(), 80));
+        // read ends exactly at the transcript start / starts exactly at its end
+        assert_eq!(oc(-50, 50, 100), ("50S".to_string(), 0));
+        assert_eq!(oc(100, 50, 100), ("50S".to_string(), 100));
     }
 }
