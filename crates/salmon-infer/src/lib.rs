@@ -1375,6 +1375,32 @@ mod tests {
     }
 
     #[test]
+    fn parallel_and_sequential_em_agree() {
+        let eq = build(
+            &[
+                (vec![0, 1, 2], 50),
+                (vec![1, 2], 30),
+                (vec![2], 20),
+                (vec![0, 3], 7),
+                (vec![3], 1),
+            ],
+            4,
+        );
+        let p = PackedEqClasses::from_collapsed(&eq, 4);
+        for use_vbem in [false, true] {
+            let opts = EmOptions {
+                use_vbem,
+                ..Default::default()
+            };
+            let a = optimize_packed(&p, &opts, true).alphas;
+            let b = optimize_packed(&p, &opts, false).alphas;
+            for (x, y) in a.iter().zip(&b) {
+                assert!((x - y).abs() < 1e-6, "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
     fn effective_length_shifts_allocation() {
         // One shared class, equal weights, but t0 is 3x longer -> more of the
         // shared mass should go to the shorter t1.

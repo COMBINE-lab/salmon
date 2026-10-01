@@ -53,10 +53,19 @@ const MIN_EQ_CLASS_WEIGHT: f64 = f64::MIN_POSITIVE;
 /// bucket 0 removed and the probabilities renormalized. That is `k` draws total,
 /// and the result has exactly the right joint distribution.
 fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
+    let mut out = Vec::new();
+    multinomial_into(total, weights, rng, &mut out);
+    out
+}
+
+/// [`multinomial`] writing into `out` (resized to `weights.len()`), so hot loops
+/// such as the Gibbs rounds can reuse one buffer instead of allocating per class.
+fn multinomial_into(total: u64, weights: &[f64], rng: &mut impl Rng, out: &mut Vec<u64>) {
     let n = weights.len();
-    let mut out = vec![0u64; n];
+    out.clear();
+    out.resize(n, 0);
     if total == 0 || n == 0 {
-        return out;
+        return;
     }
     let mut remaining = total;
     let mut remaining_w: f64 = weights.iter().sum();
@@ -86,7 +95,6 @@ fn multinomial(total: u64, weights: &[f64], rng: &mut impl Rng) -> Vec<u64> {
         remaining -= k;
         remaining_w -= weights[i];
     }
-    out
 }
 
 /// Run `num_bootstraps` multinomial bootstrap replicates. Each resamples the
@@ -204,6 +212,8 @@ fn gibbs_round(
     txp_count: &mut [f64],
     mu: &mut [f64],
     rng: &mut impl Rng,
+    probs: &mut Vec<f64>,
+    draws: &mut Vec<u64>,
 ) {
     // Sample mu[i] ~ Gamma(txpCount[i] + prior[i], 1/(beta + effLen[i])); reset count.
     //
@@ -223,7 +233,6 @@ fn gibbs_round(
         txp_count[i] = 0.0;
     }
     // Resample each class's reads across its transcripts.
-    let mut probs: Vec<f64> = Vec::with_capacity(64);
     for ci in 0..p.num_classes() {
         let class_count = p.counts[ci];
         let s = p.starts[ci] as usize;
@@ -251,8 +260,8 @@ fn gibbs_round(
                     *v = 1.0;
                 }
             }
-            let draws = multinomial(class_count, &probs, rng);
-            for (&tid, &k) in tids.iter().zip(&draws) {
+            multinomial_into(class_count, probs, rng, draws);
+            for (&tid, &k) in tids.iter().zip(draws.iter()) {
                 txp_count[tid as usize] += k as f64;
             }
         } else if tids.len() == 1 {
@@ -362,6 +371,9 @@ pub fn gibbs_sample(
                 Pcg64Mcg::seed_from_u64(seed ^ (c as u64).wrapping_mul(0xD1B54A32D192ED03));
             let mut txp_count = init.clone();
             let mut mu = vec![0.0f64; num_txps];
+            // Per-chain scratch reused by every round (no per-class allocation).
+            let mut probs: Vec<f64> = Vec::with_capacity(64);
+            let mut draws: Vec<u64> = Vec::with_capacity(64);
             let mut out: Vec<Vec<f64>> = Vec::with_capacity(end - start);
             for _ in start..end {
                 // Advance the chain `thinning` steps, then record one state.
@@ -374,6 +386,8 @@ pub fn gibbs_sample(
                         &mut txp_count,
                         &mut mu,
                         &mut rng,
+                        &mut probs,
+                        &mut draws,
                     );
                 }
                 // Extrapolate counts from the final fractions mu, then normalize
