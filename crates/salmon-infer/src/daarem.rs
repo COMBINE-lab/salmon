@@ -662,7 +662,7 @@ pub(crate) fn daarem_loop(
                 rel_diff_partials,
             );
             let d = d_iter.max(d_step);
-            if d.is_finite() && d < opts.rel_diff_tol {
+            if d < opts.rel_diff_tol {
                 converged = true;
                 break;
             }
