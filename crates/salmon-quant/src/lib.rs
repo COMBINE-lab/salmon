@@ -1340,8 +1340,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         salmon_infer::PosteriorMethod::Gibbs { samples } => {
             // Gibbs prior follows the main optimizer (salmon): with VBEM and a
             // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
-            // 1e-3 per transcript. The rust VBEM uses a constant per-transcript prior.
-            let prior = if opts.em.use_vbem {
+            // 1e-3 per transcript. Under `--perNucleotidePrior` (a VBEM option)
+            // it is `vbPrior` per nucleotide, scaled by effective length,
+            // matching the point estimate.
+            let per_nucleotide = opts.em.use_vbem && opts.em.per_nucleotide_prior;
+            let prior = if per_nucleotide {
+                opts.em.vb_prior
+            } else if opts.em.use_vbem {
                 opts.em.vb_prior.max(1.0)
             } else {
                 1e-3
@@ -1353,7 +1358,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 // Honour --perNucleotidePrior here as the EM does; hardcoding a
                 // per-transcript prior made the flag a no-op for Gibbs on every
                 // path (#1140, audit D13).
-                per_transcript_prior: !opts.em.per_nucleotide_prior,
+                per_transcript_prior: !per_nucleotide,
             };
             salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
         }
