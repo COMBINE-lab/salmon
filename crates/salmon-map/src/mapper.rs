@@ -612,6 +612,17 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 !anchor.is_fw
             };
             let mate2_fw = !mate1_fw;
+            // Leftmost base of the fragment and of the recovered partner: a
+            // forward anchor starts the fragment and the partner ends it; a
+            // reverse anchor ends it and the partner starts it.
+            let (frag_start, partner_start) = if anchor.is_fw {
+                let fs = anchor.proj_start();
+                (fs, fs + frag_len - partner_read.len() as i32)
+            } else {
+                let fs = anchor.proj_end() - frag_len;
+                (fs, fs)
+            };
+            let anchor_start = anchor.proj_start();
             raw.push(RawMapping {
                 tid,
                 is_fw: mate1_fw,
@@ -620,20 +631,11 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 fragment_len: frag_len,
                 read_len: 0, // recovered proper pair: fragment_len carries the length signal
                 is_decoy,
-                ref_pos: anchor.chain.ref_start(),
-                // Positional bias attributes the anchor's coordinate to the
-                // anchor's own strand — that placement is directly observed,
-                // independently of which mate the anchor turned out to be.
-                fw_pos: if anchor.is_fw {
-                    anchor.chain.ref_start()
-                } else {
-                    -1
-                },
-                rc_pos: if anchor.is_fw {
-                    -1
-                } else {
-                    anchor.chain.ref_start()
-                },
+                ref_pos: frag_start,
+                // opposite-strand pair: fragment 5' start and 3' end, as for a
+                // concordant pair.
+                fw_pos: frag_start.max(0),
+                rc_pos: frag_start + frag_len - 1,
                 // The recovered pair's orientation IS observed: the anchor's
                 // strand is real evidence and the rescued mate is opposite by
                 // construction. Filling it lets the one-pass strand filter judge
@@ -642,16 +644,15 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 // while one-pass waved them through on `format: None` (#1140,
                 // the #1136 pattern surviving on this one site).
                 format: Some(salmon_core::observed_paired_format(mate1_fw, mate2_fw)),
-                // SAM: the partner's leftmost is estimated from the fragment length.
                 r1_pos: if anchor_is_left {
-                    anchor.chain.ref_start()
+                    anchor_start
                 } else {
-                    (anchor.chain.ref_start() + frag_len - partner_read.len() as i32).max(0)
+                    partner_start
                 },
                 r2_pos: if anchor_is_left {
-                    (anchor.chain.ref_start() + frag_len - partner_read.len() as i32).max(0)
+                    partner_start
                 } else {
-                    anchor.chain.ref_start()
+                    anchor_start
                 },
                 r2_fw: mate2_fw,
                 r1_score: if anchor_is_left {
@@ -714,12 +715,13 @@ fn recover_mate(
 ) -> Option<(i32, i32)> {
     let max_frag = cfg.pair.max_fragment_len;
     let reflen = refseq.len() as i32;
-    let a_s = anchor.chain.ref_start();
-    let a_e = anchor.chain.ref_end();
+    // Projected read extent (may overhang the transcript ends).
+    let a_s = anchor.proj_start();
+    let a_e = anchor.proj_end();
 
     if anchor.is_fw {
         // The partner lies downstream and maps to the reverse strand.
-        let win_start = a_s;
+        let win_start = a_s.max(0);
         let win_end = (a_s + max_frag).min(reflen);
         if win_end <= win_start {
             return None;
@@ -733,11 +735,11 @@ fn recover_mate(
         if !aln.valid {
             return None;
         }
-        // partner ends `end_col` bases past the anchor start -> fragment length
-        Some((aln.score, aln.end_col as i32))
+        // partner ends `end_col` bases past the window start -> fragment length
+        Some((aln.score, win_start - a_s + aln.end_col as i32))
     } else {
         // The partner lies upstream and maps to the forward strand.
-        let win_end = a_e;
+        let win_end = a_e.min(reflen);
         let win_start = (a_e - max_frag).max(0);
         if win_end <= win_start {
             return None;
