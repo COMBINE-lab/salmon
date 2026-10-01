@@ -1070,6 +1070,13 @@ fn write_refseq_store(dir: &Path, transcripts: &[PathBuf], idx: &ReferenceIndex)
         let seq = by_name.get(name.as_bytes()).ok_or_else(|| {
             anyhow::anyhow!("reference '{name}' from the index was not found in the input FASTA")
         })?;
+        anyhow::ensure!(
+            seq.len() as u64 == idx.ref_len(tid),
+            "reference '{name}' has length {} in the FASTA but {} in the index \
+             (duplicate reference names?)",
+            seq.len(),
+            idx.ref_len(tid)
+        );
         concat.extend_from_slice(seq);
         offsets.push(concat.len() as u64);
     }

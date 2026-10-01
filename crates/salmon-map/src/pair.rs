@@ -115,8 +115,8 @@ impl JointMapping {
 fn observed_format(l: &MappingCandidate, r: &MappingCandidate) -> LibraryFormat {
     let (orientation, strandedness) = if l.is_fw != r.is_fw {
         let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
-        let fw_5p = fw.chain.ref_start();
-        let rc_5p = rc.chain.ref_end();
+        let fw_5p = fw.proj_start();
+        let rc_5p = rc.proj_end();
         let orientation = if fw_5p <= rc_5p {
             ReadOrientation::Toward
         } else {
@@ -164,7 +164,9 @@ fn is_dovetailed(l: &MappingCandidate, r: &MappingCandidate) -> bool {
         return false;
     }
     let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
-    fw.chain.ref_start() > rc.chain.ref_start() || fw.chain.ref_end() > rc.chain.ref_end()
+    // The forward mate should nest upstream of the reverse mate; an overhang on
+    // either side is a dovetail.
+    fw.proj_start() > rc.proj_start() || fw.proj_end() > rc.proj_end()
 }
 
 thread_local! {
@@ -272,8 +274,11 @@ pub fn join_reads_and_filter(
                     if l.is_fw == r.is_fw {
                         continue;
                     }
-                    let frag_start = l.chain.ref_start().min(r.chain.ref_start());
-                    let frag_end = l.chain.ref_end().max(r.chain.ref_end());
+                    // Fragment extent from the reads' projected ends, not the
+                    // matched anchors: an unmatched read prefix/suffix (a mismatch
+                    // in the first/last k-mer) must not shorten the fragment.
+                    let frag_start = l.proj_start().min(r.proj_start());
+                    let frag_end = l.proj_end().max(r.proj_end());
                     let frag_len = frag_end - frag_start;
                     if frag_len <= 0 || frag_len > cfg.max_fragment_len {
                         continue;
@@ -310,8 +315,8 @@ pub fn join_reads_and_filter(
                         if l.is_fw == r.is_fw {
                             continue;
                         }
-                        let frag_start = l.chain.ref_start().min(r.chain.ref_start());
-                        let frag_end = l.chain.ref_end().max(r.chain.ref_end());
+                        let frag_start = l.proj_start().min(r.proj_start());
+                        let frag_end = l.proj_end().max(r.proj_end());
                         let frag_len = frag_end - frag_start;
                         if frag_len <= 0 || frag_len > cfg.max_fragment_len {
                             continue;
@@ -480,7 +485,31 @@ mod tests {
             tid,
             is_fw,
             chain: MemChain::new(vec![Mem::new(0, start, len)], len as f32, is_fw),
+            read_len: len,
         }
+    }
+
+    #[test]
+    fn fragment_length_uses_projected_read_ends() {
+        // Both mates are 50 bp, but the first/last 5 bases did not seed (e.g. a
+        // mismatch in the edge k-mer): the fragment still spans the full reads.
+        let l = MappingCandidate {
+            tid: 0,
+            is_fw: true,
+            chain: MemChain::new(vec![Mem::new(5, 105, 45)], 45.0, true),
+            read_len: 50,
+        };
+        let r = MappingCandidate {
+            tid: 0,
+            is_fw: false,
+            chain: MemChain::new(vec![Mem::new(0, 300, 45)], 45.0, false),
+            read_len: 50,
+        };
+        assert_eq!(l.proj_start(), 100);
+        assert_eq!(r.proj_end(), 350);
+        let j = join_reads_and_filter(vec![l], vec![r], &PairingConfig::default());
+        assert_eq!(j.len(), 1);
+        assert_eq!(j[0].fragment_len, 250);
     }
 
     #[test]

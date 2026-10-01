@@ -648,7 +648,7 @@ struct QuantArgs {
     /// Option-typed (default 16 at use) so passing it without Gibbs sampling
     /// can be reported rather than silently doing nothing — the sibling
     /// `--bamCompressThreads` without `--writeBam` already hard-errors.
-    #[arg(long = "thinningFactor")]
+    #[arg(long = "thinningFactor", value_parser = clap::value_parser!(u32).range(1..))]
     thinning_factor: Option<u32>,
     /// (Long reads) Oxford Nanopore model — not supported; use oarfish instead.
     #[arg(long = "ont")]
@@ -681,16 +681,22 @@ struct QuantArgs {
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
     /// Match score for selective alignment (reads mode; default 2).
-    #[arg(long = "ma")]
+    #[arg(long = "ma", value_parser = clap::value_parser!(i32).range(1..=127))]
     ma: Option<i32>,
-    /// Mismatch penalty for selective alignment (reads mode; default 4).
-    #[arg(long = "mp")]
+    /// Mismatch penalty for selective alignment (reads mode; default 4). The
+    /// magnitude is used, so salmon's negative convention (`--mp -4`) is also
+    /// accepted.
+    #[arg(
+        long = "mp",
+        allow_negative_numbers = true,
+        value_parser = clap::value_parser!(i32).range(-127..=127)
+    )]
     mp: Option<i32>,
     /// Gap-open penalty for selective alignment (reads mode; default 6).
-    #[arg(long = "go")]
+    #[arg(long = "go", value_parser = clap::value_parser!(i32).range(0..=127))]
     go: Option<i32>,
     /// Gap-extend penalty for selective alignment (reads mode; default 2).
-    #[arg(long = "ge")]
+    #[arg(long = "ge", value_parser = clap::value_parser!(i32).range(0..=127))]
     ge: Option<i32>,
     /// Consensus slack: a target is kept only if its best chain score is at least
     /// `(1 - slack)` of the max chain score for that mate (salmon default 0.35;
@@ -718,12 +724,12 @@ struct QuantArgs {
     /// a salmon RAD carries a baked distribution.
     // `Option` rather than `default_value_t` so salmon can tell a supplied value
     // from an inherited one, and warn only when a supplied one is ignored.
-    #[arg(long = "fldMean")]
+    #[arg(long = "fldMean", value_parser = parse_positive_f64)]
     fld_mean: Option<f64>,
     /// Standard deviation of the fragment-length distribution prior [default: 25].
     ///
     /// Same prior semantics as `--fldMean`.
-    #[arg(long = "fldSD")]
+    #[arg(long = "fldSD", value_parser = parse_positive_f64)]
     fld_sd: Option<f64>,
     /// Maximum fragment length tracked by the fragment-length distribution
     /// [default: 1000].
@@ -847,11 +853,11 @@ struct QuantArgs {
     #[arg(long = "numErrorBins")]
     num_error_bins: Option<usize>,
     /// Number of fragment-GC bins for the GC bias model. (salmon's --numGCBins)
-    #[arg(long = "numGCBins")]
+    #[arg(long = "numGCBins", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=101))]
     num_gc_bins: Option<usize>,
     /// Number of conditioning (context) bins for the GC bias model.
     /// (salmon's --conditionalGCBins)
-    #[arg(long = "conditionalGCBins")]
+    #[arg(long = "conditionalGCBins", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=101))]
     conditional_gc_bins: Option<usize>,
     /// Discard orphan (single-mate) alignments in a paired library
     /// (alignment mode). Reads mode uses --discardOrphansQuasi.
@@ -930,6 +936,16 @@ struct QuantArgs {
     /// the default mapping mode (use --sketch for pseudoalignment).
     #[arg(long = "validateMappings")]
     validate_mappings: bool,
+}
+
+/// clap value parser for a finite, strictly positive `f64` (`--fldMean`, `--fldSD`).
+fn parse_positive_f64(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if v.is_finite() && v > 0.0 {
+        Ok(v)
+    } else {
+        Err(format!("must be a positive number (got {s})"))
+    }
 }
 
 /// Resolve the `--sparseSeeds` / `--uniMEMs` / `--refMEMs` flags into a seeding
@@ -2931,7 +2947,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma.unwrap_or(2) as i8;
-    opts.map_config.align.mismatch_pen = args.mp.unwrap_or(4) as i8;
+    opts.map_config.align.mismatch_pen = args.mp.unwrap_or(4).unsigned_abs() as i8;
     opts.map_config.align.gap_open_pen = args.go.unwrap_or(6) as i8;
     opts.map_config.align.gap_extend_pen = args.ge.unwrap_or(2) as i8;
 

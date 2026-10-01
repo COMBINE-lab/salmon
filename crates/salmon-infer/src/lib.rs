@@ -240,8 +240,10 @@ pub struct EmResult {
 }
 
 /// Relative-difference convergence check, matching salmon: the max over
-/// transcripts (with `alpha_in` above the cutoff) of
-/// `|alpha_out - alpha_in| / alpha_out`.
+/// transcripts (with `alpha_out` above the cutoff) of
+/// `|alpha_out - alpha_in| / alpha_out`. Returns `-inf` when no transcript
+/// clears the cutoff (e.g. no fragments at all), which counts as converged —
+/// as in salmon, where `converged` starts `true`.
 ///
 /// The *maximum* rather than an average: convergence means every meaningful
 /// transcript has settled, and an average would let one large still-moving
@@ -251,16 +253,16 @@ const VECTOR_REDUCTION_CHUNK: usize = 2048;
 fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
     let mut max_d = f64::NEG_INFINITY;
     for i in 0..alpha_in.len() {
-        // Skip negligible transcripts (see `alpha_check_cutoff`) and guard the
-        // division against a zero denominator.
-        if alpha_in[i] > cutoff && alpha_out[i] > 0.0 {
+        // Skip negligible transcripts (see `alpha_check_cutoff`); a positive
+        // cutoff also keeps the denominator non-zero.
+        if alpha_out[i] > cutoff {
             let d = (alpha_out[i] - alpha_in[i]).abs() / alpha_out[i];
             if d > max_d {
                 max_d = d;
             }
         }
     }
-    // Stays -inf when no transcript qualified; callers test `is_finite()`.
+    // Stays -inf when no transcript qualified, which callers treat as converged.
     max_d
 }
 
@@ -598,7 +600,7 @@ pub(crate) fn run_em_counts(
                     // Swap rather than copy: the buffers just exchange roles, so
                     // no data movement is needed.
                     std::mem::swap(&mut alphas, &mut alphas_prime);
-                    if d.is_finite() && d < opts.rel_diff_tol {
+                    if d < opts.rel_diff_tol {
                         converged = true;
                         break;
                     }
@@ -779,7 +781,7 @@ fn squarem_loop(
                 rel_diff_partials,
             );
             std::mem::swap(x0, x_next);
-            if d.is_finite() && d < opts.rel_diff_tol {
+            if d < opts.rel_diff_tol {
                 return true;
             }
         } else {
@@ -1315,6 +1317,49 @@ mod tests {
     /// Effective length enters through the class weights, so a longer transcript
     /// needs *more* fragments to justify the same abundance and therefore receives
     /// a smaller share of identical evidence.
+    #[test]
+    fn empty_input_converges_immediately() {
+        // No fragments: nothing clears the convergence cutoff, which must count
+        // as converged (not run to `max_iter`).
+        let p = PackedEqClasses::from_collapsed(&CollapsedEqClasses::default(), 3);
+        for use_vbem in [false, true] {
+            let opts = EmOptions {
+                use_vbem,
+                ..Default::default()
+            };
+            let res = optimize_packed(&p, &opts, true);
+            assert!(res.converged);
+            assert!(res.iters <= opts.min_iter.max(1), "iters={}", res.iters);
+            assert!(res.alphas.iter().all(|&a| a == 0.0));
+        }
+    }
+
+    #[test]
+    fn parallel_and_sequential_em_agree() {
+        let eq = build(
+            &[
+                (vec![0, 1, 2], 50),
+                (vec![1, 2], 30),
+                (vec![2], 20),
+                (vec![0, 3], 7),
+                (vec![3], 1),
+            ],
+            4,
+        );
+        let p = PackedEqClasses::from_collapsed(&eq, 4);
+        for use_vbem in [false, true] {
+            let opts = EmOptions {
+                use_vbem,
+                ..Default::default()
+            };
+            let a = optimize_packed(&p, &opts, true).alphas;
+            let b = optimize_packed(&p, &opts, false).alphas;
+            for (x, y) in a.iter().zip(&b) {
+                assert!((x - y).abs() < 1e-6, "{a:?} vs {b:?}");
+            }
+        }
+    }
+
     #[test]
     fn effective_length_shifts_allocation() {
         // One shared class, equal weights, but t0 is 3x longer -> more of the
