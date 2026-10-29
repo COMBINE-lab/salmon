@@ -2800,6 +2800,7 @@ version = "2.8.0"
 dependencies = [
  "dashmap",
  "flate2",
+ "hashbrown 0.17.1",
  "salmon-core",
  "tempfile",
  "xxhash-rust",

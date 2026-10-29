@@ -73,7 +73,7 @@ use salmon_core::{
     ReadType,
 };
 use salmon_eqclass::{
-    range_factorize_bins, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement, TranscriptGroup,
+    range_factorize_bins_into, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement,
     NAIVE_NO_FMT,
 };
 use salmon_model::{
@@ -398,6 +398,11 @@ struct RadScratch {
     bias: TidOrdered<BiasPlacement>,
     /// per-group combined log weight, one per run of equal tid
     group_log: Vec<f64>,
+    /// plain path: this fragment's class label, weights and range bins, handed
+    /// to the builder by reference (it copies them only for a new class)
+    tids: Vec<u32>,
+    weights: Vec<f64>,
+    bins: Vec<u32>,
     /// bias pass only: per-group un-normalized posterior log-weight
     unnorm: Vec<f64>,
     /// bias pass only: per-group posterior probability
@@ -651,44 +656,53 @@ fn process_rad_fragment(
 
     // Aggregate by distinct transcript id (ascending), softmax over the
     // logsumexp'd per-transcript weights — identical to alignment mode's eq-class
-    // formation. `tids` and `weights` are freshly allocated because they are moved
-    // into the shared equivalence-class builder; everything else is scratch.
+    // formation. The label, weights and bins are built in worker scratch.
     scratch.core.group(&mut scratch.group_log);
-    let tids: Vec<u32> = scratch
-        .core
-        .as_slice()
-        .chunk_by(|a, b| a.tid == b.tid)
-        .map(|run| run[0].tid)
-        .collect();
-    let eq_log = &scratch.group_log;
+    let RadScratch {
+        core,
+        group_log: eq_log,
+        tids,
+        weights,
+        bins,
+        ..
+    } = scratch;
+    tids.clear();
+    tids.extend(
+        core.as_slice()
+            .chunk_by(|a, b| a.tid == b.tid)
+            .map(|run| run[0].tid),
+    );
     let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     // `exp(±0) = 1` exactly (IEEE 754 / C Annex F), so the maximum's own term —
-    // the only one for a uniquely mapped fragment — needs no `exp` call.
-    let mut weights: Vec<f64> = eq_log
-        .iter()
-        .map(|&l| {
-            let d = l - maxe;
-            if d == 0.0 {
-                1.0
-            } else {
-                d.exp()
+    // the only one for a uniquely mapped fragment — needs no `exp` call. And a
+    // fragment's transcripts often share a log weight exactly (same fragment
+    // length, same length class: sequence duplicates, near-identical
+    // isoforms), so the last `exp` is remembered by the bits of its argument.
+    let mut last_exp: Option<(u64, f64)> = None;
+    weights.clear();
+    weights.extend(eq_log.iter().map(|&l| {
+        let d = l - maxe;
+        if d == 0.0 {
+            return 1.0;
+        }
+        match last_exp {
+            Some((bits, v)) if bits == d.to_bits() => v,
+            _ => {
+                let v = d.exp();
+                last_exp = Some((d.to_bits(), v));
+                v
             }
-        })
-        .collect();
+        }
+    }));
     let wsum: f64 = weights.iter().sum();
     if wsum > 0.0 {
-        for w in &mut weights {
+        for w in weights.iter_mut() {
             *w /= wsum;
         }
     }
 
-    let group = if cfg.range_factorization_bins > 0 {
-        let bins = range_factorize_bins(&weights, cfg.range_factorization_bins);
-        TranscriptGroup::with_bins(tids, bins)
-    } else {
-        TranscriptGroup::from_sorted(tids)
-    };
-    cfg.eq_builder.add_group(group, weights, 1);
+    range_factorize_bins_into(weights, cfg.range_factorization_bins, bins);
+    cfg.eq_builder.add_slices(tids, bins, weights, 1);
     // Orphan only when nothing paired both mates: the most complete status
     // across a fragment's hits wins, as in the RAD fragment-level type.
     let outcome = if any_orphan && !any_pair {

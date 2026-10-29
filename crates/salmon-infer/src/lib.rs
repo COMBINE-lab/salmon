@@ -517,6 +517,9 @@ pub(crate) fn run_em_counts(
     // sums, so deriving them from `-p` made `quant.sf` depend on the thread
     // count — the one thing this mode exists to prevent. See `ShardPlan`.
     let plan = parallel.then(|| packed::ShardPlan::new(p));
+    // The parallel VBEM M-step's expectations, with their digamma cache; the
+    // sequential kernels use the plain `exp_theta` above.
+    let mut expectations = (parallel && opts.use_vbem).then(|| packed::Expectations::new(num_txps));
     let mut shards: Vec<Vec<f64>> = match &plan {
         Some(pl) => pl.allocate_buffers(),
         None => Vec::new(),
@@ -534,72 +537,82 @@ pub(crate) fn run_em_counts(
     // `with_ll` additionally returns the data term of the objective at `src`
     // (only DAAREM asks for it); the kernels are monomorphized on it, so the
     // plain and SQUAREM paths run exactly the code they always did.
-    let mut step = |src: &[f64], dst: &mut [f64], with_ll: bool| -> f64 {
-        macro_rules! dispatch {
-            ($ll:literal) => {
-                match (opts.use_vbem, parallel) {
-                    (false, true) => packed::em_step_par::<$ll>(
-                        p,
-                        counts,
-                        src,
-                        dst,
-                        &mut shards,
-                        plan.as_ref().expect("parallel implies a shard plan"),
-                    ),
-                    (false, false) => packed::em_step_seq::<$ll>(p, counts, src, dst, &mut scratch),
-                    (true, true) => packed::vbem_step_par::<$ll>(
-                        p,
-                        counts,
-                        &prior_alphas,
-                        src,
-                        dst,
-                        &mut exp_theta,
-                        &mut shards,
-                        plan.as_ref().expect("parallel implies a shard plan"),
-                    ),
-                    (true, false) => packed::vbem_step_seq::<$ll>(
-                        p,
-                        counts,
-                        &prior_alphas,
-                        src,
-                        dst,
-                        &mut exp_theta,
-                        &mut scratch,
-                    ),
-                }
+    //
+    // `rel_diff_cutoff` asks for the convergence criterion between `src` and
+    // `dst` as well, returned second (`-inf` when not asked for). The parallel
+    // kernels evaluate it on each output as they write it; the sequential ones
+    // in a pass afterwards.
+    let mut step =
+        |src: &[f64], dst: &mut [f64], with_ll: bool, rel_diff_cutoff: Option<f64>| -> (f64, f64) {
+            let check = rel_diff_cutoff.map(|cutoff| packed::RelDiffCheck {
+                alpha_in: src,
+                cutoff,
+            });
+            let seq_check = |dst: &[f64]| {
+                rel_diff_cutoff.map_or(f64::NEG_INFINITY, |c| max_rel_diff(src, dst, c))
             };
-        }
-        if with_ll {
-            dispatch!(true)
-        } else {
-            dispatch!(false)
-        }
-    };
+            macro_rules! dispatch {
+                ($ll:literal) => {
+                    match (opts.use_vbem, parallel) {
+                        (false, true) => packed::em_step_par::<$ll>(
+                            p,
+                            counts,
+                            src,
+                            dst,
+                            &mut shards,
+                            plan.as_ref().expect("parallel implies a shard plan"),
+                            check,
+                        ),
+                        (false, false) => {
+                            let ll = packed::em_step_seq::<$ll>(p, counts, src, dst, &mut scratch);
+                            (ll, seq_check(dst))
+                        }
+                        (true, true) => packed::vbem_step_par::<$ll>(
+                            p,
+                            counts,
+                            &prior_alphas,
+                            src,
+                            dst,
+                            expectations
+                                .as_mut()
+                                .expect("parallel VBEM has expectations"),
+                            &mut shards,
+                            plan.as_ref().expect("parallel implies a shard plan"),
+                            check,
+                        ),
+                        (true, false) => {
+                            let ll = packed::vbem_step_seq::<$ll>(
+                                p,
+                                counts,
+                                &prior_alphas,
+                                src,
+                                dst,
+                                &mut exp_theta,
+                                &mut scratch,
+                            );
+                            (ll, seq_check(dst))
+                        }
+                    }
+                };
+            }
+            if with_ll {
+                dispatch!(true)
+            } else {
+                dispatch!(false)
+            }
+        };
 
     let mut converged = false;
     let mut it = 0u32;
     match opts.accel {
         EmAccel::None => {
-            let mut f = |src: &[f64], dst: &mut [f64]| {
-                step(src, dst, false);
-            };
             // The textbook loop: one M-step, check whether anything moved, repeat.
+            // Once the check is due it rides along with the M-step.
             while it < opts.max_iter {
-                f(&alphas, &mut alphas_prime);
+                let check = (it + 1 >= min_iter).then_some(opts.alpha_check_cutoff);
+                let (_, d) = step(&alphas, &mut alphas_prime, false, check);
                 it += 1;
                 if it >= min_iter {
-                    // `alphas_prime` is an M-step output here, so the criterion
-                    // can skip transcripts no class references (see
-                    // `max_rel_diff_referenced`).
-                    let d = match &plan {
-                        Some(pl) => packed::max_rel_diff_referenced(
-                            pl,
-                            &alphas,
-                            &alphas_prime,
-                            opts.alpha_check_cutoff,
-                        ),
-                        None => max_rel_diff(&alphas, &alphas_prime, opts.alpha_check_cutoff),
-                    };
                     // Swap rather than copy: the buffers just exchange roles, so
                     // no data movement is needed.
                     std::mem::swap(&mut alphas, &mut alphas_prime);
@@ -614,7 +627,7 @@ pub(crate) fn run_em_counts(
         }
         EmAccel::Squarem => {
             let mut f = |src: &[f64], dst: &mut [f64]| {
-                step(src, dst, false);
+                step(src, dst, false, None);
             };
             converged = squarem_loop(
                 &mut f,
@@ -634,7 +647,7 @@ pub(crate) fn run_em_counts(
             // data term comes out of the kernel, the rest is O(num_txps).
             let n_total = counts.iter().sum::<u64>() as f64;
             let mut f = |src: &[f64], dst: &mut [f64]| -> f64 {
-                let data = step(src, dst, true);
+                let (data, _) = step(src, dst, true, None);
                 if opts.use_vbem {
                     data + vbem_objective_prior_term(src, &prior_alphas, parallel)
                 } else {
