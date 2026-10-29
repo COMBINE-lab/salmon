@@ -180,80 +180,113 @@ pub fn collect_read_unimems<'idx, R: RefProvider>(
     })
 }
 
+/// Groups `(tid, is_fw, Mem)` anchors by `(tid, is_fw)` in O(N + G log G)
+/// (N anchors, G distinct targets) without sorting the anchors themselves.
+///
+/// A direct `tid`-indexed slot table assigns each distinct target a counter
+/// pair (reverse, forward) in one load per anchor; only the G distinct target
+/// ids are then sorted, prefix offsets laid out in ascending `(tid, is_fw)`
+/// order (`false < true`), and the anchors scattered into one flat buffer.
+/// The resulting group order equals that of sorting by the `(tid, is_fw)` key.
+/// Within a group anchors keep their input order — irrelevant downstream:
+/// [`merge_same_diagonal`]'s output depends only on the group's set of anchors.
+///
+/// This replaced an LSD radix sort of the 20-byte tuples, whose 2–3 passes
+/// (transcript ids up to ~400k on multi-isoform references such as GENCODE)
+/// dominated mapping time. Unlike a linear-probe bucketing, the cost per anchor
+/// is O(1) regardless of how many targets a repetitive read hits.
+#[derive(Default)]
+struct TidGrouper {
+    /// `tid -> 1 + index into targets` for the current read; 0 = absent.
+    /// Sized to the reference count on first use (4 bytes per target per
+    /// thread); only touched entries are reset after each read.
+    slot_of: Vec<u32>,
+    /// `(tid, [reverse, forward])`: per-orientation counts, then (after
+    /// [`group`](Self::group)) per-orientation group END offsets in `grouped`.
+    /// Sorted by `tid` after `group`; the reverse group of `targets[i]` starts
+    /// where `targets[i - 1]`'s forward group ends (0 for `i == 0`), and its
+    /// forward group starts at its reverse end.
+    targets: Vec<(u32, [u32; 2])>,
+    /// Anchors laid out group-contiguously.
+    grouped: Vec<Mem>,
+}
+
+impl TidGrouper {
+    #[cold]
+    fn grow(&mut self, t: usize, num_refs: usize) {
+        // Allocate the full reference count once rather than growing (and
+        // freeing) a large buffer repeatedly; geometric growth only as a
+        // fallback for an implausible count or an id beyond it.
+        const MAX_PREALLOC: usize = 1 << 26;
+        let len = if t < num_refs && num_refs <= MAX_PREALLOC {
+            num_refs
+        } else {
+            (t + 1).next_power_of_two()
+        };
+        self.slot_of.resize(len, 0);
+    }
+
+    /// Bucket `flat` by `(tid, is_fw)`; see the type docs for the layout.
+    /// `num_refs` (the number of targets) only sizes the index.
+    fn group(&mut self, flat: &[(u32, bool, Mem)], num_refs: usize) {
+        self.targets.clear();
+        self.grouped.clear();
+        if flat.is_empty() {
+            return;
+        }
+        // Counting pass: resolve each anchor's target slot and count it.
+        for &(tid, fw, _) in flat {
+            let t = tid as usize;
+            if t >= self.slot_of.len() {
+                self.grow(t, num_refs);
+            }
+            let mut s = self.slot_of[t];
+            if s == 0 {
+                self.targets.push((tid, [0, 0]));
+                s = self.targets.len() as u32;
+                self.slot_of[t] = s;
+            }
+            self.targets[(s - 1) as usize].1[fw as usize] += 1;
+        }
+        // Order the G distinct targets (ids are distinct, so unstable is exact)
+        // and turn counts into start cursors.
+        self.targets.sort_unstable_by_key(|&(tid, _)| tid);
+        let mut off = 0u32;
+        for (i, (tid, c)) in self.targets.iter_mut().enumerate() {
+            self.slot_of[*tid as usize] = i as u32 + 1;
+            let (rev, fwd) = (c[0], c[1]);
+            c[0] = off;
+            c[1] = off + rev;
+            off += rev + fwd;
+        }
+        // Scatter pass; afterwards each cursor sits at its group's end.
+        // Placeholder fill: every slot is overwritten below (counts sum to N).
+        self.grouped.resize(flat.len(), flat[0].2);
+        for &(tid, fw, m) in flat {
+            let s = (self.slot_of[tid as usize] - 1) as usize;
+            let cur = &mut self.targets[s].1[fw as usize];
+            self.grouped[*cur as usize] = m;
+            *cur += 1;
+        }
+        for &(tid, _) in &self.targets {
+            self.slot_of[tid as usize] = 0;
+        }
+    }
+}
+
+/// Reused per-thread scratch for [`candidates_from_raw_hits_true_unimems`]: the
+/// flat `(tid, is_fw, extended uni-MEM)` buffer, its `(tid, is_fw)` grouper,
+/// and the merged-anchor output buffer (no per-read map or per-group `Vec`).
+#[derive(Default)]
+struct UnimemScratch {
+    flat: Vec<(u32, bool, Mem)>,
+    grouper: TidGrouper,
+    merged: Vec<Mem>,
+}
+
 thread_local! {
-    /// Reused per-thread scratch for [`candidates_from_raw_hits_true_unimems`]:
-    /// a flat `(tid, is_fw, extended-uni-MEM)` buffer (sorted to group by
-    /// target/orientation instead of a per-read `HashMap`), a per-group anchor
-    /// buffer, and the merged-anchor output buffer. Mirrors `collect`'s
-    /// `PROJ_SCRATCH`, eliminating the per-read map + per-group `HashSet`.
-    #[allow(clippy::type_complexity)]
-    static UNIMEM_SCRATCH: std::cell::RefCell<(
-        Vec<(u32, bool, Mem)>,
-        Vec<Mem>,
-        Vec<Mem>,
-        Vec<(u32, bool, Mem)>,
-    )> = const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new(), Vec::new())) };
-}
-
-/// Key ordering `(tid, is_fw)` as a single `u32` (tid dominant, `is_fw` in bit 0
-/// with `false < true`) — identical ordering to the `(tid, fw)` tuple.
-#[inline]
-fn tidfw_key(tid: u32, fw: bool) -> u32 {
-    (tid << 1) | fw as u32
-}
-
-/// Radix threshold: below this, `sort_unstable_by_key` wins (its overhead is
-/// lower for short lists); at/above it, the O(N) radix pays off. The hot,
-/// cost-dominant reads (repetitive, many hits across many targets) are large.
-const RADIX_THRESHOLD: usize = 256;
-
-/// LSD radix sort of `flat` by the `(tid, is_fw)` key — same ascending grouping
-/// as `sort_unstable_by_key(|&(tid,fw,_)| (tid,fw))` (within-key order differs
-/// but is irrelevant: `merge_same_diagonal` re-sorts each group by diagonal).
-/// O(N) and independent of the number of distinct targets, unlike a comparison
-/// sort's O(N log N). `tmp` is reused ping-pong scratch; result ends in `flat`.
-fn radix_sort_tidfw(flat: &mut Vec<(u32, bool, Mem)>, tmp: &mut Vec<(u32, bool, Mem)>) {
-    let n = flat.len();
-    if n < 2 {
-        return;
-    }
-    let maxk = flat
-        .iter()
-        .map(|&(t, f, _)| tidfw_key(t, f))
-        .max()
-        .unwrap_or(0);
-    let npass = if maxk == 0 {
-        1
-    } else {
-        (32 - maxk.leading_zeros()).div_ceil(8) as usize
-    };
-    tmp.clear();
-    // Scratch fill for the ping-pong buffer; every slot is overwritten by the
-    // counting-sort scatter below before it is ever read. Fill with a copy of a
-    // real element (`flat[0]`, valid since `n >= 2`) rather than constructing a
-    // zero-length `Mem`, which would violate `Mem`'s `len > 0` invariant (a
-    // `debug_assert` in `Mem::new`, panicking in debug builds).
-    tmp.resize(n, flat[0]);
-    let mut cnt = [0u32; 256];
-    for p in 0..npass {
-        let shift = (p * 8) as u32;
-        cnt.fill(0);
-        for &(t, f, _) in flat.iter() {
-            cnt[((tidfw_key(t, f) >> shift) & 0xff) as usize] += 1;
-        }
-        let mut sum = 0u32;
-        for c in cnt.iter_mut() {
-            let v = *c;
-            *c = sum;
-            sum += v;
-        }
-        for &e in flat.iter() {
-            let b = ((tidfw_key(e.0, e.1) >> shift) & 0xff) as usize;
-            tmp[cnt[b] as usize] = e;
-            cnt[b] += 1;
-        }
-        std::mem::swap(flat, tmp);
-    }
+    static UNIMEM_SCRATCH: std::cell::RefCell<UnimemScratch> =
+        std::cell::RefCell::new(UnimemScratch::default());
 }
 
 /// Collapse same-diagonal overlapping/abutting uni-MEMs into maximal anchors.
@@ -274,6 +307,10 @@ fn merge_same_diagonal(ext: &mut [Mem], out: &mut Vec<Mem>) {
         return;
     }
     // diagonal = ref_start - read_start; collinear (gap-free) anchors share it.
+    // The result depends only on the set of anchors, not their input order or
+    // how sort ties break: per diagonal the loop below takes the union of the
+    // intervals, and anchors with equal keys share their start, so whichever
+    // comes first, the next merges into it.
     ext.sort_unstable_by_key(|m| (m.ref_start - m.read_start, m.read_start));
     let mut cur = ext[0];
     for &m in &ext[1..] {
@@ -309,8 +346,17 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
     chain_cfg.seed_len = k;
 
     UNIMEM_SCRATCH.with(|cell| {
-        let (flat, group, merged, radix_tmp) = &mut *cell.borrow_mut();
+        let UnimemScratch {
+            flat,
+            grouper,
+            merged,
+        } = &mut *cell.borrow_mut();
         flat.clear();
+        // The previous (non-skipped) raw hit: (contig id, orientation on the
+        // contig, per-orientation uni-MEM cache, span index of the first
+        // occurrence of each orientation). See the duplicate check below.
+        type Cache = [Option<(i32, i32, i32)>; 2];
+        let mut prev: Option<(u32, bool, Cache, [usize; 2])> = None;
         // For each queried k-mer (one `ProjectedHits` = one unitig + all its
         // reference occurrences), extend the seed to its uni-MEM AT MOST ONCE PER
         // ORIENTATION, then project that uni-MEM to every occurrence.
@@ -328,65 +374,100 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
                 continue;
             }
             let contig_len = phit.contig_len() as i32;
-            // Per-orientation cache of the extended uni-MEM, as
-            // (read_start, contig_relative_start, len). Index 1 = forward.
-            let mut cache: [Option<(i32, i32, i32)>; 2] = [None, None];
-            for entry in phit.ref_range().iter() {
+            let span = phit.ref_range();
+            // Extend this hit's seed at occurrence `entry` to its uni-MEM, as
+            // (read_start, contig_relative_start, len).
+            let extend_at = |entry: u64| -> (bool, (i32, i32, i32)) {
                 let tid = encoding.transcript_id(entry);
                 let base_pos = encoding.pos(entry) as i32;
                 let rp = phit.decode_hit(entry, encoding);
-                let slot = rp.is_fw as usize;
+                let rs = if rp.is_fw {
+                    *read_pos
+                } else {
+                    read_len - (*read_pos + k)
+                };
+                let query: &[u8] = if rp.is_fw { read } else { &rc };
+                let seed = Mem::new(rs, rp.pos as i32, k);
+                let e = extend_mem_within(
+                    query,
+                    refs.ref_seq(tid),
+                    seed,
+                    base_pos,
+                    base_pos + contig_len,
+                );
+                (rp.is_fw, (e.read_start, e.ref_start - base_pos, e.len))
+            };
+            // Per-orientation cache of the extended uni-MEM (index 1 = forward),
+            // and the span index of the occurrence it was computed at (always
+            // the first occurrence with that orientation).
+            let mut cache: Cache = [None, None];
+            let mut first = [usize::MAX; 2];
+            // Duplicate hit: consecutive k-mers on the same unitig (same contig,
+            // same orientation on it) usually extend to the same uni-MEM. Then
+            // every anchor this hit would push — same occurrences, same
+            // `is_fw`, same `(read_start, crel, len)` — is already in `flat`, and
+            // a repeated anchor is a no-op for `merge_same_diagonal` (an interval
+            // union), so the hit is skipped. Each cached value is recomputed
+            // exactly as the loop below would (same first occurrence), so the
+            // comparison is exact; on a mismatch the values are reused.
+            if let Some((pc, po, pcache, pfirst)) = &prev {
+                if *pc == phit.contig_id() && *po == phit.hit_fw_on_contig() {
+                    let mut same = true;
+                    for slot in 0..2 {
+                        if let Some(pv) = pcache[slot] {
+                            let (_, v) = extend_at(span.get(pfirst[slot]));
+                            cache[slot] = Some(v);
+                            first[slot] = pfirst[slot];
+                            same &= v == pv;
+                        }
+                    }
+                    if same {
+                        continue;
+                    }
+                }
+            }
+            for (idx, entry) in span.iter().enumerate() {
+                let tid = encoding.transcript_id(entry);
+                let base_pos = encoding.pos(entry) as i32;
+                let is_fw = encoding.orientation(entry) == phit.hit_fw_on_contig();
+                let slot = is_fw as usize;
                 let (read_start, crel, len) = match cache[slot] {
                     Some(v) => v,
                     None => {
-                        let rs = if rp.is_fw {
-                            *read_pos
-                        } else {
-                            read_len - (*read_pos + k)
-                        };
-                        let query: &[u8] = if rp.is_fw { read } else { &rc };
-                        let seed = Mem::new(rs, rp.pos as i32, k);
-                        let e = extend_mem_within(
-                            query,
-                            refs.ref_seq(tid),
-                            seed,
-                            base_pos,
-                            base_pos + contig_len,
-                        );
-                        let v = (e.read_start, e.ref_start - base_pos, e.len);
+                        let (fw, v) = extend_at(entry);
+                        debug_assert_eq!(fw, is_fw);
                         cache[slot] = Some(v);
+                        first[slot] = idx;
                         v
                     }
                 };
-                flat.push((tid, rp.is_fw, Mem::new(read_start, base_pos + crel, len)));
+                flat.push((tid, is_fw, Mem::new(read_start, base_pos + crel, len)));
             }
-        }
-        // Group by (tid, is_fw): radix (O(N), target-count-independent) for the
-        // large repetitive reads where this sort's cost lives; comparison sort
-        // for short lists where its overhead is lower.
-        if flat.len() >= RADIX_THRESHOLD {
-            radix_sort_tidfw(flat, radix_tmp);
-        } else {
-            flat.sort_unstable_by_key(|&(tid, fw, _)| (tid, fw));
+            prev = Some((phit.contig_id(), phit.hit_fw_on_contig(), cache, first));
         }
 
+        // Group by (tid, is_fw) in ascending key order, then merge + chain each.
+        grouper.group(flat, refs.num_refs());
         let mut candidates = Vec::new();
-        let mut i = 0;
-        while i < flat.len() {
-            let (tid, is_fw, _) = flat[i];
-            group.clear();
-            let mut j = i;
-            while j < flat.len() && flat[j].0 == tid && flat[j].1 == is_fw {
-                group.push(flat[j].2);
-                j += 1;
+        let mut start = 0usize;
+        for &(tid, ends) in &grouper.targets {
+            for (fw, end) in [(false, ends[0]), (true, ends[1])] {
+                let end = end as usize;
+                if end > start {
+                    // Dedup duplicate uni-MEMs (same hit projected from several
+                    // k-mers) and stitch same-diagonal uni-MEMs that abut across
+                    // unitig junctions.
+                    merge_same_diagonal(&mut grouper.grouped[start..end], merged);
+                    for chain in chain_mems(merged, fw, &chain_cfg) {
+                        candidates.push(MappingCandidate {
+                            tid,
+                            is_fw: fw,
+                            chain,
+                        });
+                    }
+                }
+                start = end;
             }
-            // Dedup duplicate uni-MEMs (same hit projected from several k-mers) and
-            // stitch same-diagonal uni-MEMs that abut across unitig junctions.
-            merge_same_diagonal(group, merged);
-            for chain in chain_mems(merged, is_fw, &chain_cfg) {
-                candidates.push(MappingCandidate { tid, is_fw, chain });
-            }
-            i = j;
         }
         candidates
     })
@@ -423,30 +504,72 @@ mod tests {
     use piscem_rs::index::contig_table::{ContigTable, ContigTableBuilder};
     use piscem_rs::mapping::projected_hits::ProjectedHits;
 
+    /// Reference grouping: stable sort by `(tid, is_fw)`, split into runs.
+    fn sorted_groups(flat: &[(u32, bool, Mem)]) -> Vec<(u32, bool, Vec<Mem>)> {
+        let mut v = flat.to_vec();
+        v.sort_by_key(|&(t, f, _)| (t, f));
+        let mut out: Vec<(u32, bool, Vec<Mem>)> = Vec::new();
+        for (t, f, m) in v {
+            match out.last_mut() {
+                Some((lt, lf, ms)) if *lt == t && *lf == f => ms.push(m),
+                _ => out.push((t, f, vec![m])),
+            }
+        }
+        out
+    }
+
+    /// Groups as laid out by `TidGrouper` (after `group`).
+    fn grouper_groups(g: &TidGrouper) -> Vec<(u32, bool, Vec<Mem>)> {
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for &(tid, ends) in &g.targets {
+            for (fw, end) in [(false, ends[0]), (true, ends[1])] {
+                let end = end as usize;
+                if end > start {
+                    out.push((tid, fw, g.grouped[start..end].to_vec()));
+                }
+                start = end;
+            }
+        }
+        assert_eq!(start, g.grouped.len());
+        out
+    }
+
     #[test]
-    /// Anchors must end up grouped by (transcript, orientation): the chainer is run
-    /// per group, so a mis-sort would mix unrelated anchors into one candidate.
-    fn radix_sort_tidfw_groups_by_key() {
-        // Regression: the ping-pong scratch fill must be a valid `Mem` (len > 0).
-        // A zero-length placeholder tripped `Mem::new`'s `debug_assert!(len > 0)`
-        // and panicked every *debug*-build map of a read with >= 2 uni-MEMs (the
-        // path below), while being masked in release. Exercise it and confirm the
-        // LSD counting sort is stable by the `(tid, fw)` key.
-        let orig = vec![
-            (5u32, true, Mem::new(0, 10, 20)),
-            (1u32, false, Mem::new(3, 40, 15)),
-            (5u32, false, Mem::new(1, 22, 18)),
-            (1u32, true, Mem::new(0, 5, 31)),
-            (2u32, true, Mem::new(2, 60, 25)),
-            (1u32, false, Mem::new(7, 44, 12)),
-        ];
-        let mut flat = orig.clone();
-        let mut tmp = Vec::new();
-        radix_sort_tidfw(&mut flat, &mut tmp);
-        // A stable LSD radix by the full key equals a stable sort by that key.
-        let mut expected = orig;
-        expected.sort_by_key(|&(t, f, _)| tidfw_key(t, f));
-        assert_eq!(flat, expected);
+    /// Anchors must end up grouped by (transcript, orientation) in ascending key
+    /// order: the chainer is run per group, so a mis-grouping would mix
+    /// unrelated anchors into one candidate, and the group order is the
+    /// candidate order. Within a group the grouper keeps input order, so it must
+    /// equal a stable sort exactly — across reads that reuse the scratch.
+    fn tid_grouper_matches_stable_sort() {
+        let mut g = TidGrouper::default();
+        g.group(&[], 0);
+        assert!(g.targets.is_empty() && g.grouped.is_empty());
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = |m: u64| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) % m
+        };
+        for round in 0..200 {
+            let n = next(600) as usize;
+            // Small and large id ranges (forces on-demand growth of the index).
+            let tid_range = if round % 3 == 0 { 7 } else { 500_000 };
+            let flat: Vec<(u32, bool, Mem)> = (0..n)
+                .map(|_| {
+                    (
+                        next(tid_range) as u32,
+                        next(2) == 1,
+                        Mem::new(next(100) as i32, next(10_000) as i32, 1 + next(50) as i32),
+                    )
+                })
+                .collect();
+            // The size hint is only a hint: exercise growth past it.
+            g.group(&flat, (tid_range / 2) as usize);
+            assert_eq!(grouper_groups(&g), sorted_groups(&flat), "round {round}");
+            assert!(g.slot_of.iter().all(|&s| s == 0), "index not reset");
+        }
     }
 
     #[test]
