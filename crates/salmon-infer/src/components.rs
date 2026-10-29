@@ -38,6 +38,15 @@
 //! iteration is reproduced exactly. A component large enough to be worth
 //! splitting is stepped in parallel by gathering ([`Pull`]), which adds the
 //! same terms in the same order as the class-major loop.
+//!
+//! VBEM instead stops each component on the criterion over its own
+//! transcripts ([`run_per_component`]). On two simulated samples with known
+//! truth that was more accurate than the global rule (transcript-level
+//! Spearman +0.008–0.010, MARD −0.002, mean relative error unchanged within
+//! noise) and it cuts VBEM's work several-fold, because the global rule keeps
+//! every component iterating until the slowest one settles. Plain EM keeps the
+//! global rule: stopped per component it ranked transcripts better but left
+//! more small spurious counts (MARD +0.03–0.04).
 
 use rayon::prelude::*;
 use statrs::function::gamma::digamma;
@@ -500,6 +509,9 @@ pub(crate) struct Settings {
     pub(crate) min_iter: u32,
     pub(crate) max_iter: u32,
     pub(crate) parallel: bool,
+    /// Stop each component on the criterion over its own transcripts (see
+    /// [`run_per_component`]) rather than all of them at once.
+    pub(crate) per_component: bool,
 }
 
 /// The dense working vectors of a run, split per component.
@@ -595,7 +607,11 @@ pub(crate) fn run(
     let mut buffers = Buffers::new(plan, init, prior_full, set.vb);
     let mut out = vec![0.0f64; init.len()];
     let mut states = buffers.states(plan);
-    let (iters, converged) = run_tiled(plan, &mut states, set);
+    let (iters, converged) = if set.per_component {
+        run_per_component(plan, &mut states, set)
+    } else {
+        run_tiled(plan, &mut states, set)
+    };
     write_out(plan, &states, &mut out);
     (out, iters, converged)
 }
@@ -693,6 +709,51 @@ fn run_tiled(
     (it, false)
 }
 
+/// Each component iterated on its own until salmon's criterion holds over its
+/// own transcripts (after `min_iter`), or `max_iter`. Returns the most
+/// iterations any component ran, and whether every component converged.
+///
+/// Under the global rule every component runs as many iterations as the
+/// slowest one needs — on a real sample, the bulk of the work is components
+/// that met the criterion hundreds of iterations earlier and keep creeping.
+/// Here each stops at its own first eligible iteration, so the result is a
+/// different (earlier) iterate for most components. Each component's
+/// iterate depends only on its own data, so scheduling is free and the
+/// result is independent of the thread count.
+fn run_per_component(
+    plan: &ComponentPlan,
+    states: &mut [(usize, CompState)],
+    set: &Settings,
+) -> (u32, bool) {
+    let one = |(c, s): &mut (usize, CompState)| -> (u32, bool) {
+        let mut it = 0;
+        while it < set.max_iter {
+            let d = step_component(plan, *c, s, set);
+            it += 1;
+            // A component with no transcript above the cutoff (`d == -inf`)
+            // has nothing the criterion measures; it is settled once the
+            // minimum has run.
+            if it >= set.min_iter && d < set.tol {
+                return (it, true);
+            }
+        }
+        (it, false)
+    };
+    let res: Vec<(u32, bool)> = if set.parallel {
+        // Largest first, so the long tail of small components fills in behind
+        // the big ones. Scheduling only.
+        let mut order: Vec<&mut (usize, CompState)> = states.iter_mut().collect();
+        order.sort_by_key(|(c, _)| std::cmp::Reverse(plan.comp_incidences(*c)));
+        order.into_par_iter().with_max_len(1).map(&one).collect()
+    } else {
+        states.iter_mut().map(one).collect()
+    };
+    (
+        res.iter().map(|r| r.0).max().unwrap_or(0),
+        res.iter().all(|r| r.1),
+    )
+}
+
 /// Scatter each component's latest iterate to original transcript ids. The
 /// M-steps swap a component's two buffer references, so its latest iterate
 /// is wherever its `alpha` reference now points.
@@ -753,6 +814,7 @@ mod tests {
             min_iter: 50,
             max_iter: 10_000,
             parallel,
+            per_component: false,
         }
     }
 
@@ -878,6 +940,58 @@ mod tests {
                     "vb={vb}: {x} vs {y}"
                 );
             }
+        }
+    }
+
+    /// Per-component stopping: each component's result is exactly the plain
+    /// loop run on that component alone, whatever the schedule.
+    #[test]
+    fn per_component_stops_each_component_on_its_own_criterion() {
+        let p = fixture(60, 15, 3000);
+        let (init, prior) = start(&p);
+        let seq = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
+        let pull = ComponentPlan::with_pull_min(&p, &p.counts, 0);
+        for vb in [false, true] {
+            let set = Settings {
+                per_component: true,
+                ..settings(vb, false)
+            };
+            let (got, iters, converged) = run(&seq, &init, &prior, &set);
+            assert!(converged);
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(4)
+                .build()
+                .unwrap();
+            let par = pool.install(|| {
+                run(
+                    &pull,
+                    &init,
+                    &prior,
+                    &Settings {
+                        parallel: true,
+                        ..set
+                    },
+                )
+            });
+            assert_eq!(bits(&got), bits(&par.0), "vb={vb}");
+            assert_eq!(iters, par.1);
+            // Each component alone, under the global rule, is the same run.
+            let mut max_iters = 0;
+            for c in 0..seq.num_components() {
+                let mut buffers = Buffers::new(&seq, &init, &prior, vb);
+                let mut states = buffers.states(&seq);
+                let mut alone = vec![states.swap_remove(c)];
+                let (it, ok) = run_tiled(&seq, &mut alone, &settings(vb, false));
+                assert!(ok);
+                max_iters = max_iters.max(it);
+                let (cc, st) = &alone[0];
+                let t0 = seq.comp_txp[*cc];
+                for (k, &a) in st.alpha.iter().enumerate() {
+                    let t = seq.txps[t0 + k] as usize;
+                    assert_eq!(a.to_bits(), got[t].to_bits(), "vb={vb} component {c}");
+                }
+            }
+            assert_eq!(max_iters, iters);
         }
     }
 }

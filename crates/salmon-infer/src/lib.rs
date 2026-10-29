@@ -516,6 +516,9 @@ pub(crate) fn run_em_counts(
                 min_iter,
                 max_iter: opts.max_iter,
                 parallel,
+                // VBEM stops each component on its own criterion; plain EM
+                // keeps salmon's global rule (see the module documentation).
+                per_component: opts.use_vbem,
             };
             return components::run(&cplan, &alphas, &prior_alphas, &set);
         }
