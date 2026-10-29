@@ -60,11 +60,12 @@ use std::io::BufReader;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex};
 
 use anyhow::{Context, Result};
 use libradicl::header::RadPrelude;
 use libradicl::rad_types::{MappedFragmentOrientation, TagMap};
-use libradicl::readers::{ParallelRadReader, EMPTY_METACHUNK_CALLBACK};
+use libradicl::readers::{MetaChunk, MetaChunkStream, ParallelRadReader};
 use libradicl::record::{MappedRecord, PiscemBulkReadRecord, RecordContext};
 
 use salmon_core::{
@@ -702,6 +703,89 @@ fn open_prelude(path: &Path) -> Result<(BufReader<File>, RadPrelude, TagMap)> {
 }
 
 /// Reference lengths from the RAD `ref_lengths` file tag (one per reference).
+/// Parks the RAD producer while the work queue is full.
+///
+/// libradicl's producer waits for room by spinning on `is_full`. Whenever the
+/// workers are the bottleneck — the normal case, since parsing and weighting a
+/// chunk costs far more than reading it — that spin burns a core for the whole
+/// pass, and when the run is pinned to as many cores as workers it competes
+/// with them for one: at `-p 1` it took ~40% of the pass. The producer instead
+/// blocks here, from the callback it runs after every push, until a worker has
+/// taken a chunk. The next push then never finds the queue full, since the
+/// producer is the only thread that fills it.
+#[derive(Default)]
+struct QueueGate {
+    lock: Mutex<()>,
+    room: Condvar,
+}
+
+impl QueueGate {
+    /// Producer side: return once `queue` has room for another meta-chunk.
+    fn wait_for_room<T>(&self, queue: &crossbeam_queue::ArrayQueue<T>) {
+        let mut guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        while queue.is_full() {
+            guard = self.room.wait(guard).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Worker side: a meta-chunk was just taken. Passing through the lock
+    /// orders this after any check the producer made before going to sleep, so
+    /// the wakeup cannot be lost between its check and its wait.
+    fn took_one(&self) {
+        drop(self.lock.lock().unwrap_or_else(|e| e.into_inner()));
+        self.room.notify_one();
+    }
+}
+
+/// One worker's stream of meta-chunks, waking a waiting producer as each one is
+/// taken (see [`QueueGate`]).
+struct GatedChunks<'a, R: MappedRecord> {
+    chunks: MetaChunkStream<R>,
+    gate: &'a QueueGate,
+}
+
+impl<R: MappedRecord> Iterator for GatedChunks<'_, R> {
+    type Item = MetaChunk<R>;
+
+    fn next(&mut self) -> Option<MetaChunk<R>> {
+        let mc = self.chunks.next();
+        if mc.is_some() {
+            self.gate.took_one();
+        }
+        mc
+    }
+}
+
+/// Read every chunk of the RAD at `path` on `nthreads` worker threads, each
+/// running `worker` over its own stream of meta-chunks, while the calling
+/// thread runs the producer. `what` names the pass in a read error.
+fn read_rad_parallel<R, W>(path: &Path, nthreads: usize, what: &str, worker: W) -> Result<()>
+where
+    R: MappedRecord + Send,
+    R::ParsingContext: RecordContext + Clone + Send + Sync,
+    W: Fn(GatedChunks<'_, R>) + Sync,
+{
+    let (reader, prelude, file_tag_map) = open_prelude(path)?;
+    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
+    let mut prr =
+        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
+    let gate = QueueGate::default();
+    let queue = prr.get_queue();
+    std::thread::scope(|s| -> Result<()> {
+        for _ in 0..nz.get() {
+            let chunks = GatedChunks {
+                chunks: prr.chunk_iter(),
+                gate: &gate,
+            };
+            let worker = &worker;
+            s.spawn(move || worker(chunks));
+        }
+        // Producer: fill the queue until the file is exhausted.
+        prr.start_chunk_parsing(Some(|_, _| gate.wait_for_room(&queue)))
+            .with_context(|| format!("parsing RAD chunks ({what})"))
+    })
+}
+
 fn ref_lengths_from_tags(prelude: &RadPrelude, file_tag_map: &TagMap) -> Result<Vec<u32>> {
     use libradicl::rad_types::TagValue;
     let v = match file_tag_map.get("ref_lengths") {
@@ -1138,41 +1222,24 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
-    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
-    let mut prr =
-        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
-
-    std::thread::scope(|s| -> Result<()> {
-        for _ in 0..nthreads.max(1) {
-            let chunks = prr.chunk_iter();
-            s.spawn(move || {
-                // Reused for every record this worker sees, instead of a fresh
-                // allocation per fragment.
-                let mut pls: Vec<RadPlacement> = Vec::new();
-                let mut scratch = RadScratch::default();
-                let mut local = LocalTallies::default();
-                for mc in chunks {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            pls.clear();
-                            rec.placements_into(&mut pls);
-                            let (outcome, strand_judged, fmt_mask) = process_rad_fragment(
-                                &pls,
-                                PlacementOrder::Arrival,
-                                cfg,
-                                &mut scratch,
-                            );
-                            local.tally(outcome, strand_judged, fmt_mask);
-                        }
-                    }
+    read_rad_parallel::<R, _>(path, nthreads, "eq-class pass", |chunks| {
+        // Reused for every record this worker sees, instead of a fresh
+        // allocation per fragment.
+        let mut pls: Vec<RadPlacement> = Vec::new();
+        let mut scratch = RadScratch::default();
+        let mut local = LocalTallies::default();
+        for mc in chunks {
+            for chunk in mc.iter() {
+                for rec in &chunk.reads {
+                    pls.clear();
+                    rec.placements_into(&mut pls);
+                    let (outcome, strand_judged, fmt_mask) =
+                        process_rad_fragment(&pls, PlacementOrder::Arrival, cfg, &mut scratch);
+                    local.tally(outcome, strand_judged, fmt_mask);
                 }
-                local.merge_into(tallies);
-            });
+            }
         }
-        // Producer: fill the queue until the file is exhausted (blocks).
-        prr.start_chunk_parsing(EMPTY_METACHUNK_CALLBACK)
-            .context("parsing RAD chunks")
+        local.merge_into(tallies);
     })
 }
 
@@ -1207,63 +1274,49 @@ where
     // mapping pass uses, so a derived FLD and a baked one agree.
     let acc = DiscreteFld::new(fld_max);
 
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
-    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
-    let mut prr =
-        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
-    std::thread::scope(|s| -> Result<()> {
-        for _ in 0..nthreads.max(1) {
-            let chunks = prr.chunk_iter();
-            let acc = &acc;
-            s.spawn(move || {
-                let mut pls: Vec<RadPlacement> = Vec::new();
-                for mc in chunks {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            pls.clear();
-                            rec.placements_into(&mut pls);
-                            // Naive (kallisto-style) eq for the rough seed EM: the
-                            // compatible transcripts, orientation-tagged (so library-
-                            // incompatible placements can be dropped once the lib
-                            // type is known), no FLD/score weighting. Built in the
-                            // same read as the FLD counts; order-independent.
-                            if let Some(nb) = naive_eq {
-                                let sig: Vec<NaivePlacement> = pls
-                                    .iter()
-                                    .map(|p| {
-                                        let (obs, is_fw, status) = rad_frag_format(p);
-                                        NaivePlacement {
-                                            tid: p.tid,
-                                            fmt_id: obs
-                                                .map(|f| f.format_id())
-                                                .unwrap_or(NAIVE_NO_FMT),
-                                            is_fw,
-                                            status,
-                                        }
-                                    })
-                                    .collect();
-                                nb.add(sig);
-                            }
-                            // "unique" = exactly one placement; only proper pairs
-                            // carry a meaningful fragment length.
-                            if pls.len() != 1 {
-                                continue;
-                            }
-                            let p = &pls[0];
-                            if p.status != MateStatus::PairedEndPaired
-                                || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
-                                || p.frag_len == 0
-                            {
-                                continue;
-                            }
-                            acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
-                        }
+    read_rad_parallel::<R, _>(path, nthreads, "FLD estimation", |chunks| {
+        let mut pls: Vec<RadPlacement> = Vec::new();
+        for mc in chunks {
+            for chunk in mc.iter() {
+                for rec in &chunk.reads {
+                    pls.clear();
+                    rec.placements_into(&mut pls);
+                    // Naive (kallisto-style) eq for the rough seed EM: the
+                    // compatible transcripts, orientation-tagged (so library-
+                    // incompatible placements can be dropped once the lib
+                    // type is known), no FLD/score weighting. Built in the
+                    // same read as the FLD counts; order-independent.
+                    if let Some(nb) = naive_eq {
+                        let sig: Vec<NaivePlacement> = pls
+                            .iter()
+                            .map(|p| {
+                                let (obs, is_fw, status) = rad_frag_format(p);
+                                NaivePlacement {
+                                    tid: p.tid,
+                                    fmt_id: obs.map(|f| f.format_id()).unwrap_or(NAIVE_NO_FMT),
+                                    is_fw,
+                                    status,
+                                }
+                            })
+                            .collect();
+                        nb.add(sig);
                     }
+                    // "unique" = exactly one placement; only proper pairs
+                    // carry a meaningful fragment length.
+                    if pls.len() != 1 {
+                        continue;
+                    }
+                    let p = &pls[0];
+                    if p.status != MateStatus::PairedEndPaired
+                        || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
+                        || p.frag_len == 0
+                    {
+                        continue;
+                    }
+                    acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
                 }
-            });
+            }
         }
-        prr.start_chunk_parsing(EMPTY_METACHUNK_CALLBACK)
-            .context("scanning RAD chunks for FLD estimation")
     })?;
 
     let (fld, detected) = acc.finish(fld_mean, fld_sd);
@@ -1593,41 +1646,29 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
-    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
-    let mut prr =
-        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
     let merged = std::sync::Mutex::new(BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins));
 
-    std::thread::scope(|s| -> Result<()> {
-        for _ in 0..nthreads.max(1) {
-            let chunks = prr.chunk_iter();
-            let merged = &merged;
-            s.spawn(move || {
-                let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
-                // Reused for every record this worker sees.
-                let mut pls: Vec<RadPlacement> = Vec::new();
-                let mut scratch = RadScratch::default();
-                for mc in chunks {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            pls.clear();
-                            rec.placements_into(&mut pls);
-                            collect_bias_fragment(
-                                &pls,
-                                PlacementOrder::Arrival,
-                                cfg,
-                                &mut local,
-                                &mut scratch,
-                            );
-                        }
-                    }
+    read_rad_parallel::<R, _>(path, nthreads, "bias collection", |chunks| {
+        let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+        // Reused for every record this worker sees.
+        let mut pls: Vec<RadPlacement> = Vec::new();
+        let mut scratch = RadScratch::default();
+        for mc in chunks {
+            for chunk in mc.iter() {
+                for rec in &chunk.reads {
+                    pls.clear();
+                    rec.placements_into(&mut pls);
+                    collect_bias_fragment(
+                        &pls,
+                        PlacementOrder::Arrival,
+                        cfg,
+                        &mut local,
+                        &mut scratch,
+                    );
                 }
-                merged.lock().unwrap().merge(&local);
-            });
+            }
         }
-        prr.start_chunk_parsing(EMPTY_METACHUNK_CALLBACK)
-            .context("parsing RAD chunks for bias collection")
+        merged.lock().unwrap().merge(&local);
     })?;
 
     let merged = merged.into_inner().unwrap();
@@ -1662,54 +1703,38 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
-    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
-    let mut prr =
-        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
     let merged = std::sync::Mutex::new(BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins));
 
-    std::thread::scope(|s| -> Result<()> {
-        for _ in 0..nthreads.max(1) {
-            let chunks = prr.chunk_iter();
-            let merged = &merged;
-            s.spawn(move || {
-                let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
-                let mut local_tallies = LocalTallies::default();
-                // Reused for every record this worker sees.
-                let mut pls: Vec<RadPlacement> = Vec::new();
-                let mut scratch = RadScratch::default();
-                for mc in chunks {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            pls.clear();
-                            rec.placements_into(&mut pls);
-                            // Two consumers share these placements, so order them
-                            // once here and tell both. Neither then re-derives
-                            // what this sort already established.
-                            sort_placements_by_tid(&mut pls);
-                            let (outcome, strand_judged, fmt_mask) = process_rad_fragment(
-                                &pls,
-                                PlacementOrder::ByTid,
-                                cfg,
-                                &mut scratch,
-                            );
-                            local_tallies.tally(outcome, strand_judged, fmt_mask);
-                            collect_bias_fragment(
-                                &pls,
-                                PlacementOrder::ByTid,
-                                bias_cfg,
-                                &mut local,
-                                &mut scratch,
-                            );
-                        }
-                    }
+    read_rad_parallel::<R, _>(path, nthreads, "fused eq + bias", |chunks| {
+        let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+        let mut local_tallies = LocalTallies::default();
+        // Reused for every record this worker sees.
+        let mut pls: Vec<RadPlacement> = Vec::new();
+        let mut scratch = RadScratch::default();
+        for mc in chunks {
+            for chunk in mc.iter() {
+                for rec in &chunk.reads {
+                    pls.clear();
+                    rec.placements_into(&mut pls);
+                    // Two consumers share these placements, so order them
+                    // once here and tell both. Neither then re-derives
+                    // what this sort already established.
+                    sort_placements_by_tid(&mut pls);
+                    let (outcome, strand_judged, fmt_mask) =
+                        process_rad_fragment(&pls, PlacementOrder::ByTid, cfg, &mut scratch);
+                    local_tallies.tally(outcome, strand_judged, fmt_mask);
+                    collect_bias_fragment(
+                        &pls,
+                        PlacementOrder::ByTid,
+                        bias_cfg,
+                        &mut local,
+                        &mut scratch,
+                    );
                 }
-                local_tallies.merge_into(tallies);
-                merged.lock().unwrap().merge(&local);
-            });
+            }
         }
-        prr.start_chunk_parsing(EMPTY_METACHUNK_CALLBACK)
-            .context("parsing RAD chunks (fused eq + bias)")
+        local_tallies.merge_into(tallies);
+        merged.lock().unwrap().merge(&local);
     })?;
 
     let merged = merged.into_inner().unwrap();
