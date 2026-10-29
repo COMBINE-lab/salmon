@@ -819,19 +819,24 @@ pub(crate) fn vbem_step_par<const LL: bool>(
                 let mut denom = 0.0;
                 for (&tid, &w) in tids.iter().zip(ws) {
                     let et = exp_theta[tid as usize];
-                    if et > 0.0 {
-                        denom += et * w;
-                    }
+                    // Select the term, not the sum: `denom + 0.0 == denom` for
+                    // every value `denom` can hold (a sum started at `+0.0` is
+                    // never `-0.0`), so this is bit-identical to skipping the
+                    // add, but keeps the select off the loop-carried chain the
+                    // sum is bound by.
+                    denom += if et > 0.0 { et * w } else { 0.0 };
                 }
                 if LL {
                     ll += class_log_term(count, denom);
                 }
                 if denom > MIN_EQ_CLASS_WEIGHT {
                     let inv = count / denom;
-                    for i in 0..tids.len() {
-                        let et = exp_theta[tids[i] as usize];
+                    // Zipped rather than indexed, so the three aligned slices
+                    // are walked without a bounds check apiece.
+                    for ((&tid, &w), &local) in tids.iter().zip(ws).zip(locals) {
+                        let et = exp_theta[tid as usize];
                         if et > 0.0 {
-                            buf[locals[i] as usize] += et * ws[i] * inv;
+                            buf[local as usize] += et * w * inv;
                         }
                     }
                 }
