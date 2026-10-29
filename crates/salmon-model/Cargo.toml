@@ -13,7 +13,7 @@ salmon-core = { workspace = true }
 statrs = { workspace = true }
 flate2 = { workspace = true }
 rayon = { workspace = true }
-sux = "0.14.0"
+sux = "0.15"
 realfft = "3.5.0"
 
 [lints]
