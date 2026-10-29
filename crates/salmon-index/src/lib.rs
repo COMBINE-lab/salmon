@@ -872,7 +872,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         // Fixed seed: the hash function must be reproducible, or two builds of
         // the same reference would differ.
         seed: 1,
-        single_mphf: false,
+        mphf_build: Default::default(),
         emit_tiny: None,
         tmp_dir: Some(sshash_tmp.clone()),
         ram_limit_gib: opts.ram_limit_gib,
