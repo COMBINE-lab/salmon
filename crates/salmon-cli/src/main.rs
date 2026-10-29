@@ -1863,7 +1863,9 @@ fn preflight_fastq_complete(paths: &[PathBuf]) -> Result<()> {
             || (n >= 4 && magic[..4] == [0x28, 0xb5, 0x2f, 0xfd])                  // zstd
             || (n >= 3 && &magic[..3] == b"BZh")                                   // bzip2
             || (n >= 4 && magic[..4] == [0xfd, 0x37, 0x7a, 0x58]); // xz
-        if compressed || n == 0 {
+        // FASTA reads have no 4-line record structure to check (and a record
+        // may span several lines), so there is nothing to verify here.
+        if compressed || n == 0 || magic[0] == b'>' {
             continue;
         }
         use std::io::{BufReader, Seek, SeekFrom};
