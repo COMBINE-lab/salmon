@@ -33,6 +33,7 @@
 use rayon::prelude::*;
 use salmon_eqclass::CollapsedEqClasses;
 
+mod components;
 mod daarem;
 mod online;
 mod packed;
@@ -501,6 +502,27 @@ pub(crate) fn run_em_counts(
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
+    // Unaccelerated runs go through the component-decomposed engine: the
+    // same fixed-point iteration and stopping rule, laid out and scheduled by
+    // connected component (see `components`). The accelerators extrapolate
+    // over whole vectors between M-steps, so they keep the global kernels.
+    if opts.accel == EmAccel::None && opts.max_iter > 0 {
+        let cplan = components::ComponentPlan::new(p, counts, parallel);
+        if cplan.num_components() > 0 {
+            let set = components::Settings {
+                vb: opts.use_vbem,
+                cutoff: opts.alpha_check_cutoff,
+                tol: opts.rel_diff_tol,
+                min_iter,
+                max_iter: opts.max_iter,
+                parallel,
+                // VBEM stops each component on its own criterion; plain EM
+                // keeps salmon's global rule (see the module documentation).
+                per_component: opts.use_vbem,
+            };
+            return components::run(&cplan, &alphas, &prior_alphas, &set);
+        }
+    }
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut rel_diff_partials = Vec::new();
     let mut scratch: Vec<f64> = Vec::with_capacity(64);

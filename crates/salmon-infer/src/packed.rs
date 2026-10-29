@@ -38,7 +38,7 @@ use statrs::function::gamma::digamma;
 /// Minimum `alpha + prior` for which VBEM evaluates `digamma`.
 /// Below this the function heads to negative infinity and the result is
 /// indistinguishable from zero anyway, so it is short-circuited.
-const DIGAMMA_MIN: f64 = 1e-10;
+pub(crate) const DIGAMMA_MIN: f64 = 1e-10;
 
 /// Flat CSR equivalence classes (only `valid` groups are retained).
 #[derive(Debug, Clone)]
@@ -229,7 +229,7 @@ impl PackedEqClasses {
 
 /// Smallest denominator weight below which a class is treated as degenerate.
 /// Dividing by anything smaller would produce an infinity.
-const MIN_EQ_CLASS_WEIGHT: f64 = f64::MIN_POSITIVE;
+pub(crate) const MIN_EQ_CLASS_WEIGHT: f64 = f64::MIN_POSITIVE;
 
 /// Final masked M-step that redistributes truncated mass instead of rescaling.
 ///
