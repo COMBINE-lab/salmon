@@ -706,10 +706,16 @@ fn is_pure_acgt(seq: &[u8]) -> bool {
     })
 }
 
+/// Parallel gzip decoding of a reference stops paying off here: the single
+/// thread parsing the decoded FASTA is then the bottleneck, and more decoders
+/// only buffer more decoded data ahead of it.
+const MAX_DECODE_THREADS: usize = 4;
+
 /// Open a FASTA (optionally gzipped) for record-by-record reading.
 ///
-/// A gzipped regular file is decoded in parallel (up to `threads` workers);
-/// anything else goes through needletail's own (serial) decompression.
+/// A gzipped regular file is decoded in parallel (up to `threads` workers, at
+/// most [`MAX_DECODE_THREADS`]); anything else goes through needletail's own
+/// (serial) decompression.
 fn open_fasta(path: &Path, threads: usize) -> Result<Box<dyn needletail::FastxReader>> {
     use std::io::Read as _;
     let mut magic = [0u8; 2];
@@ -720,7 +726,7 @@ fn open_fasta(path: &Path, threads: usize) -> Result<Box<dyn needletail::FastxRe
         && path.metadata().is_ok_and(|m| m.is_file());
     let reader = if gzipped {
         let decoder = rapidgzip_core::Decoder::builder()
-            .decoder_threads(threads.max(1))
+            .decoder_threads(threads.clamp(1, MAX_DECODE_THREADS))
             .build()
             .map_err(|e| anyhow::anyhow!("creating gzip decoder: {e}"))?;
         let decoded = decoder
