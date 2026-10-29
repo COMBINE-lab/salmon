@@ -481,176 +481,228 @@ fn preprocess_fasta(
     // Deterministic on purpose: the same FASTA must always produce the same
     // index, so a real random source would be wrong here.
     let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
-    let mut out = std::io::BufWriter::new(
-        std::fs::File::create(out_path)
-            .with_context(|| format!("creating {}", out_path.display()))?,
-    );
-    let mut replaced = 0u64;
-    let mut polya_clipped = 0u64;
-    let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
-    let mut short_decoys_dropped: Vec<Vec<u8>> = Vec::new();
-    let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    // Tracks whether a decoy has been seen, to enforce the "decoys last" rule.
-    let mut saw_decoy = false;
-    // Exact original (pure-ACGT) sequence -> name of the first transcript that
-    // carried it. salmon collapses transcripts whose *processed* sequences match;
-    // because it randomizes non-ACGT bases with a position-advancing RNG, two
-    // identical sequences that contain any non-ACGT base never compare equal and
-    // so are never collapsed — we mirror that by only deduplicating pure-ACGT
-    // sequences (keyed on the exact original bytes, matching salmon's pre-process
-    // XXH64 over the unmodified sequence). Populated in both modes so duplicates
-    // are detected for `duplicate_clusters.tsv` even under --keepDuplicates.
-    //
-    // Keyed by a 128-bit XXH3 digest rather than the sequence itself: holding a
-    // copy of every distinct transcript would cost as much memory as the whole
-    // transcriptome. salmon itself keys on a 64-bit digest; at 128 bits an
-    // accidental collision among even 10^9 sequences has probability ~10^-21.
-    let mut seen: ahash::AHashMap<u128, Vec<u8>> = ahash::AHashMap::new();
-    for path in inputs {
-        let mut reader = open_fasta(path, threads)?;
-        while let Some(rec) = reader.next() {
-            let rec = rec.context("reading FASTA record")?;
-            // Processed name: header up to the first space/tab (salmon's sepStr),
-            // and the first `|` too under `--gencode`.
-            let id = rec.id();
-            let name = processed_name(id, gencode);
-            let orig = rec.seq();
-            let is_decoy = decoy_names.contains(name);
-            // salmon requires every decoy record to appear, contiguously, at the
-            // end of the input — reject a real transcript after any decoy.
-            //
-            // This is what ultimately guarantees the contiguous decoy id block;
-            // failing here is far better than discovering the violation later,
-            // when the only symptom is wrong abundances.
-            if is_decoy {
-                saw_decoy = true;
-            } else if saw_decoy {
-                anyhow::bail!(
-                    "non-decoy reference {:?} appears after a decoy; decoy records must be \
+    let out_file = std::fs::File::create(out_path)
+        .with_context(|| format!("creating {}", out_path.display()))?;
+
+    // The cleaned FASTA and the refseq store are written by threads of their
+    // own, fed batches of processed records, so this thread only parses and
+    // cleans: the two writes cost as much as everything else here combined.
+    type Batch = std::sync::Arc<Vec<(Vec<u8>, Vec<u8>)>>;
+    const BATCH_BASES: usize = 1 << 22;
+    std::thread::scope(|scope| {
+        let (fasta_tx, fasta_rx) = std::sync::mpsc::sync_channel::<Batch>(4);
+        let (refseq_tx, refseq_rx) = std::sync::mpsc::sync_channel::<Batch>(4);
+        let fasta_writer = scope.spawn(move || -> Result<()> {
+            let mut out = std::io::BufWriter::with_capacity(1 << 20, out_file);
+            for batch in fasta_rx {
+                for (name, seq) in batch.iter() {
+                    // The record in canonical two-line form (header, then the whole
+                    // sequence unwrapped), which is what the downstream builder expects.
+                    out.write_all(b">")?;
+                    out.write_all(name)?;
+                    out.write_all(b"\n")?;
+                    out.write_all(seq)?;
+                    out.write_all(b"\n")?;
+                }
+            }
+            out.flush()?;
+            Ok(())
+        });
+        let refseq_writer = scope.spawn(move || -> Result<StagedRefseq> {
+            for batch in refseq_rx {
+                for (name, seq) in batch.iter() {
+                    refseq.push(name, seq)?;
+                }
+            }
+            refseq.finish()
+        });
+        // Hand a batch to both writers; `false` once either has stopped (failed).
+        let send = |batch: Vec<(Vec<u8>, Vec<u8>)>| {
+            let batch = std::sync::Arc::new(batch);
+            fasta_tx.send(batch.clone()).is_ok() && refseq_tx.send(batch).is_ok()
+        };
+        let mut batch = Vec::new();
+        let mut batch_bases = 0usize;
+        let mut replaced = 0u64;
+        let mut polya_clipped = 0u64;
+        let mut polya_dropped: Vec<Vec<u8>> = Vec::new();
+        let mut short_decoys_dropped: Vec<Vec<u8>> = Vec::new();
+        let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        // Tracks whether a decoy has been seen, to enforce the "decoys last" rule.
+        let mut saw_decoy = false;
+        // Exact original (pure-ACGT) sequence -> name of the first transcript that
+        // carried it. salmon collapses transcripts whose *processed* sequences match;
+        // because it randomizes non-ACGT bases with a position-advancing RNG, two
+        // identical sequences that contain any non-ACGT base never compare equal and
+        // so are never collapsed — we mirror that by only deduplicating pure-ACGT
+        // sequences (keyed on the exact original bytes, matching salmon's pre-process
+        // XXH64 over the unmodified sequence). Populated in both modes so duplicates
+        // are detected for `duplicate_clusters.tsv` even under --keepDuplicates.
+        //
+        // Keyed by a 128-bit XXH3 digest rather than the sequence itself: holding a
+        // copy of every distinct transcript would cost as much memory as the whole
+        // transcriptome. salmon itself keys on a 64-bit digest; at 128 bits an
+        // accidental collision among even 10^9 sequences has probability ~10^-21.
+        let mut seen: ahash::AHashMap<u128, Vec<u8>> = ahash::AHashMap::new();
+        'records: for path in inputs {
+            let mut reader = open_fasta(path, threads)?;
+            while let Some(rec) = reader.next() {
+                let rec = rec.context("reading FASTA record")?;
+                // Processed name: header up to the first space/tab (salmon's sepStr),
+                // and the first `|` too under `--gencode`.
+                let id = rec.id();
+                let name = processed_name(id, gencode);
+                let orig = rec.seq();
+                let is_decoy = decoy_names.contains(name);
+                // salmon requires every decoy record to appear, contiguously, at the
+                // end of the input — reject a real transcript after any decoy.
+                //
+                // This is what ultimately guarantees the contiguous decoy id block;
+                // failing here is far better than discovering the violation later,
+                // when the only symptom is wrong abundances.
+                if is_decoy {
+                    saw_decoy = true;
+                } else if saw_decoy {
+                    anyhow::bail!(
+                        "non-decoy reference {:?} appears after a decoy; decoy records must be \
                      contiguous at the end of the FASTA input",
-                    String::from_utf8_lossy(name)
-                );
-            }
-
-            // Detect exact-sequence duplicates (pure-ACGT only — salmon hashes the
-            // unmodified sequence, and because it randomizes any non-ACGT base
-            // per-position, sequences containing one never compare equal). The
-            // cluster is recorded for `duplicate_clusters.tsv` in BOTH modes,
-            // matching salmon (which reports duplicates even with --keepDuplicates);
-            // without --keepDuplicates the duplicate is additionally dropped
-            // (collapsed onto the first occurrence).
-            let pure_acgt = is_pure_acgt(&orig);
-            if pure_acgt {
-                let digest = xxhash_rust::xxh3::xxh3_128(&orig);
-                if let Some(retained_name) = seen.get(&digest) {
-                    duplicate_clusters.push((retained_name.clone(), name.to_vec()));
-                    if !keep_duplicates {
-                        // `continue` skips the write below, so the duplicate never
-                        // reaches the index.
-                        continue;
-                    }
-                } else {
-                    seen.insert(digest, name.to_vec());
+                        String::from_utf8_lossy(name)
+                    );
                 }
-            }
 
-            let mut seq = orig.into_owned();
-            // Transcripts: replace non-ACGT bases with pseudo-random ACGT so the
-            // processed sequence is fully k-mer-able (salmon FixFasta behavior).
-            // DECOYS: leave non-ACGT bases (e.g. genome N-runs) in place — cf1-rs
-            // splits the de Bruijn graph on them natively (and records the N-gaps in
-            // the tiling), yielding a far less tangled, smaller, faster-to-build
-            // cDBG than seeding spurious k-mers from random replacements across
-            // assembly gaps. The refseq store keeps the raw bytes and the aligner
-            // encodes N as a mismatch (dna5 code 4), so a read aligning over a decoy
-            // N-run simply scores it as a mismatch.
-            //
-            // A pure-ACGT sequence (nearly every transcript) has nothing to replace.
-            if !is_decoy && !pure_acgt {
-                for b in seq.iter_mut() {
-                    if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
-                        // A linear congruential generator: multiply, add, and take
-                        // high bits. `wrapping_*` means overflow wraps around
-                        // rather than panicking, which is the intended arithmetic.
-                        x = x
-                            .wrapping_mul(6364136223846793005)
-                            .wrapping_add(1442695040888963407);
-                        *b = B[((x >> 33) & 3) as usize];
-                        replaced += 1;
+                // Detect exact-sequence duplicates (pure-ACGT only — salmon hashes the
+                // unmodified sequence, and because it randomizes any non-ACGT base
+                // per-position, sequences containing one never compare equal). The
+                // cluster is recorded for `duplicate_clusters.tsv` in BOTH modes,
+                // matching salmon (which reports duplicates even with --keepDuplicates);
+                // without --keepDuplicates the duplicate is additionally dropped
+                // (collapsed onto the first occurrence).
+                let pure_acgt = is_pure_acgt(&orig);
+                if pure_acgt {
+                    let digest = xxhash_rust::xxh3::xxh3_128(&orig);
+                    if let Some(retained_name) = seen.get(&digest) {
+                        duplicate_clusters.push((retained_name.clone(), name.to_vec()));
+                        if !keep_duplicates {
+                            // `continue` skips the write below, so the duplicate never
+                            // reaches the index.
+                            continue;
+                        }
+                    } else {
+                        seen.insert(digest, name.to_vec());
                     }
                 }
-            }
-            // Kallisto-esque poly-A clipping (salmon/pufferfish FixFasta): if the
-            // (cleaned) sequence ends in a run of >= POLYA_CLIP_LEN `A`s, trim all
-            // trailing `A`s. This runs after non-ACGT replacement (matching salmon's
-            // order); the reference hashes are computed pre-clip, so provenance is
-            // unaffected.
-            if clip_polya
-                && seq.len() > POLYA_CLIP_LEN
-                && seq[seq.len() - POLYA_CLIP_LEN..]
-                    .iter()
-                    .all(|&b| matches!(b, b'A' | b'a'))
-            {
-                // `rposition` finds the last non-`A`, i.e. where the tail begins.
-                match seq.iter().rposition(|&b| !matches!(b, b'A' | b'a')) {
-                    Some(last) => {
-                        seq.truncate(last + 1);
-                        polya_clipped += 1;
+
+                let mut seq = orig.into_owned();
+                // Transcripts: replace non-ACGT bases with pseudo-random ACGT so the
+                // processed sequence is fully k-mer-able (salmon FixFasta behavior).
+                // DECOYS: leave non-ACGT bases (e.g. genome N-runs) in place — cf1-rs
+                // splits the de Bruijn graph on them natively (and records the N-gaps in
+                // the tiling), yielding a far less tangled, smaller, faster-to-build
+                // cDBG than seeding spurious k-mers from random replacements across
+                // assembly gaps. The refseq store keeps the raw bytes and the aligner
+                // encodes N as a mismatch (dna5 code 4), so a read aligning over a decoy
+                // N-run simply scores it as a mismatch.
+                //
+                // A pure-ACGT sequence (nearly every transcript) has nothing to replace.
+                if !is_decoy && !pure_acgt {
+                    for b in seq.iter_mut() {
+                        if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+                            // A linear congruential generator: multiply, add, and take
+                            // high bits. `wrapping_*` means overflow wraps around
+                            // rather than panicking, which is the intended arithmetic.
+                            x = x
+                                .wrapping_mul(6364136223846793005)
+                                .wrapping_add(1442695040888963407);
+                            *b = B[((x >> 33) & 3) as usize];
+                            replaced += 1;
+                        }
                     }
-                    None => {
-                        // All `A`s: drop the reference entirely (not written, not
-                        // counted as retained), matching salmon.
-                        polya_clipped += 1;
-                        polya_dropped.push(name.to_vec());
-                        continue;
+                }
+                // Kallisto-esque poly-A clipping (salmon/pufferfish FixFasta): if the
+                // (cleaned) sequence ends in a run of >= POLYA_CLIP_LEN `A`s, trim all
+                // trailing `A`s. This runs after non-ACGT replacement (matching salmon's
+                // order); the reference hashes are computed pre-clip, so provenance is
+                // unaffected.
+                if clip_polya
+                    && seq.len() > POLYA_CLIP_LEN
+                    && seq[seq.len() - POLYA_CLIP_LEN..]
+                        .iter()
+                        .all(|&b| matches!(b, b'A' | b'a'))
+                {
+                    // `rposition` finds the last non-`A`, i.e. where the tail begins.
+                    match seq.iter().rposition(|&b| !matches!(b, b'A' | b'a')) {
+                        Some(last) => {
+                            seq.truncate(last + 1);
+                            polya_clipped += 1;
+                        }
+                        None => {
+                            // All `A`s: drop the reference entirely (not written, not
+                            // counted as retained), matching salmon.
+                            polya_clipped += 1;
+                            polya_dropped.push(name.to_vec());
+                            continue;
+                        }
+                    }
+                }
+
+                // Drop a decoy that Cuttlefish cannot tile. A reference carries a k-mer
+                // (and so a unitig) iff it has a run of >= k consecutive ACGT bases — a
+                // run of exactly k has one k-mer (validated empirically). A decoy with
+                // no such run (too short, or fragmented into sub-k pieces by N-runs)
+                // can never be seeded or catch a read, and keeping it would let the
+                // builder relocate it into the trailing sub-`k`/untiled block, breaking
+                // the contiguity that the O(1) decoy check relies on. Sub-`k`/N-broken
+                // *transcripts* are kept (reported at 0 reads); after the replacement
+                // above transcripts have no N-runs, so only decoys are affected here.
+                if is_decoy && longest_acgt_run(&seq) < k {
+                    short_decoys_dropped.push(name.to_vec());
+                    continue;
+                }
+
+                batch_bases += seq.len();
+                batch.push((name.to_vec(), seq));
+                if batch_bases >= BATCH_BASES {
+                    batch_bases = 0;
+                    if !send(std::mem::take(&mut batch)) {
+                        // A writer failed; its error is reported below.
+                        break 'records;
                     }
                 }
             }
-
-            // Drop a decoy that Cuttlefish cannot tile. A reference carries a k-mer
-            // (and so a unitig) iff it has a run of >= k consecutive ACGT bases — a
-            // run of exactly k has one k-mer (validated empirically). A decoy with
-            // no such run (too short, or fragmented into sub-k pieces by N-runs)
-            // can never be seeded or catch a read, and keeping it would let the
-            // builder relocate it into the trailing sub-`k`/untiled block, breaking
-            // the contiguity that the O(1) decoy check relies on. Sub-`k`/N-broken
-            // *transcripts* are kept (reported at 0 reads); after the replacement
-            // above transcripts have no N-runs, so only decoys are affected here.
-            if is_decoy && longest_acgt_run(&seq) < k {
-                short_decoys_dropped.push(name.to_vec());
-                continue;
-            }
-
-            // Write the record in canonical two-line form (header, then the whole
-            // sequence unwrapped), which is what the downstream builder expects.
-            out.write_all(b">")?;
-            out.write_all(name)?;
-            out.write_all(b"\n")?;
-            out.write_all(&seq)?;
-            out.write_all(b"\n")?;
-            refseq.push(name, &seq)?;
         }
-    }
-    out.flush()?;
-    Ok(PreprocessResult {
-        replaced,
-        duplicate_clusters,
-        polya_clipped,
-        polya_dropped,
-        short_decoys_dropped,
-        refseq: refseq.finish()?,
+        send(batch);
+        drop((fasta_tx, refseq_tx));
+        // A writer panic is re-raised here rather than reported as an error.
+        fasta_writer
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            .with_context(|| format!("writing {}", out_path.display()))?;
+        let refseq = refseq_writer
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+        Ok(PreprocessResult {
+            replaced,
+            duplicate_clusters,
+            polya_clipped,
+            polya_dropped,
+            short_decoys_dropped,
+            refseq,
+        })
     })
 }
 
 /// Whether `seq` consists only of `ACGTacgt`.
 ///
-/// Branch-free per 64-byte block so the compiler vectorizes it: `b & 0xDF`
-/// upper-cases exactly the bytes `acgt` and maps no other byte onto `ACGT`.
+/// Written so the compiler vectorizes it even for baseline x86-64 (a `matches!`
+/// on the bytes lowers to a per-byte table test instead): `b & 0xDF` upper-cases
+/// exactly the bytes `acgt` and maps no other byte onto `ACGT`, and each 64-byte
+/// block is folded branch-free, with one early-exit test per block.
 fn is_pure_acgt(seq: &[u8]) -> bool {
     seq.chunks(64).all(|block| {
-        block.iter().fold(true, |ok, &b| {
-            ok & matches!(b & 0xDF, b'A' | b'C' | b'G' | b'T')
-        })
+        block.iter().fold(0u8, |bad, &b| {
+            let u = b & 0xDF;
+            bad | !((u == b'A') | (u == b'C') | (u == b'G') | (u == b'T')) as u8
+        }) == 0
     })
 }
 
