@@ -517,6 +517,9 @@ pub(crate) fn run_em_counts(
     // sums, so deriving them from `-p` made `quant.sf` depend on the thread
     // count — the one thing this mode exists to prevent. See `ShardPlan`.
     let plan = parallel.then(|| packed::ShardPlan::new(p));
+    // The parallel VBEM M-step's expectations, with their digamma cache; the
+    // sequential kernels use the plain `exp_theta` above.
+    let mut expectations = (parallel && opts.use_vbem).then(|| packed::Expectations::new(num_txps));
     let mut shards: Vec<Vec<f64>> = match &plan {
         Some(pl) => pl.allocate_buffers(),
         None => Vec::new(),
@@ -570,7 +573,9 @@ pub(crate) fn run_em_counts(
                             &prior_alphas,
                             src,
                             dst,
-                            &mut exp_theta,
+                            expectations
+                                .as_mut()
+                                .expect("parallel VBEM has expectations"),
                             &mut shards,
                             plan.as_ref().expect("parallel implies a shard plan"),
                             check,

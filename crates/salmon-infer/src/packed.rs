@@ -909,6 +909,36 @@ fn fill_exp_theta_seq(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f
     }
 }
 
+/// The VBEM expectations `exp_theta` of the parallel M-step, with the digamma
+/// of each transcript's last `alpha + prior` kept beside them.
+///
+/// Near convergence many live transcripts' abundances stop changing in the
+/// last bit from one iteration to the next, so their digamma argument repeats.
+/// Remembering `digamma(alpha + prior)` against the exact bits of its argument
+/// turns those into a compare, leaving only the `exp` — which `log_norm` moves
+/// every iteration — to recompute. Same function of the same bits, so every
+/// value is unchanged.
+pub(crate) struct Expectations {
+    /// `exp_theta`, indexed by transcript id
+    pub(crate) exp_theta: Vec<f64>,
+    /// bits of the digamma argument last computed for each transcript
+    arg_bits: Vec<u64>,
+    /// that argument's digamma; meaningless until `arg_bits` is first set
+    digamma: Vec<f64>,
+}
+
+impl Expectations {
+    pub(crate) fn new(num_txps: usize) -> Self {
+        Self {
+            exp_theta: vec![0.0; num_txps],
+            // Not the bits of any argument the fill caches: those are above
+            // `DIGAMMA_MIN`, and this is a NaN.
+            arg_bits: vec![u64::MAX; num_txps],
+            digamma: vec![0.0; num_txps],
+        }
+    }
+}
+
 /// Parallel VBEM expectation fill used by the point estimate. Its sum remains
 /// sequential and therefore pool-independent; the element-wise map is parallel.
 ///
@@ -922,17 +952,10 @@ fn fill_exp_theta_par(
     alpha_in: &[f64],
     prior_alphas: &[f64],
     plan: &ShardPlan,
-    exp_theta: &mut [f64],
+    ex: &mut Expectations,
 ) {
     let alpha_sum: f64 = alpha_in.iter().zip(prior_alphas).map(|(a, p)| a + p).sum();
     let log_norm = digamma(alpha_sum);
-    let expectation = |ap: f64| {
-        if ap > DIGAMMA_MIN {
-            (digamma(ap) - log_norm).exp()
-        } else {
-            0.0
-        }
-    };
     // Under VBEM's sparse prior most referenced transcripts are driven to an
     // abundance so small that `alpha + prior` rounds to the prior itself — on a
     // human sample, over half of them within a few dozen iterations. With the
@@ -940,23 +963,30 @@ fn fill_exp_theta_par(
     // remembered (per block of the index) and reused rather than recomputed
     // through a `digamma` and an `exp` for each. It is the same function of the
     // same bits, so every entry is unchanged.
-    exp_theta
+    ex.exp_theta
         .par_chunks_mut(REFERENCED_CHUNK)
+        .zip(ex.arg_bits.par_chunks_mut(REFERENCED_CHUNK))
+        .zip(ex.digamma.par_chunks_mut(REFERENCED_CHUNK))
         .enumerate()
-        .for_each(|(chunk, et)| {
+        .for_each(|(chunk, ((et, arg_bits), dg))| {
             let base = chunk * REFERENCED_CHUNK;
             let mut at_prior: Option<(u64, f64)> = None;
             for i in plan.referenced_in(chunk) {
                 let ap = alpha_in[base + i] + prior_alphas[base + i];
                 et[i] = match at_prior {
                     Some((bits, v)) if bits == ap.to_bits() => v,
-                    _ => {
-                        let v = expectation(ap);
+                    _ if ap > DIGAMMA_MIN => {
+                        if arg_bits[i] != ap.to_bits() {
+                            arg_bits[i] = ap.to_bits();
+                            dg[i] = digamma(ap);
+                        }
+                        let v = (dg[i] - log_norm).exp();
                         if ap == prior_alphas[base + i] {
                             at_prior = Some((ap.to_bits(), v));
                         }
                         v
                     }
+                    _ => 0.0,
                 };
             }
         });
@@ -1024,16 +1054,15 @@ pub(crate) fn vbem_step_par<const LL: bool>(
     prior_alphas: &[f64],
     alpha_in: &[f64],
     alpha_out: &mut [f64],
-    exp_theta: &mut [f64],
+    expectations: &mut Expectations,
     shards: &mut [Vec<f64>],
     plan: &ShardPlan,
     check: Option<RelDiffCheck>,
 ) -> (f64, f64) {
     // Computed once, before the parallel region: it depends on a global sum over
     // all transcripts, so it cannot be sharded.
-    fill_exp_theta_par(alpha_in, prior_alphas, plan, exp_theta);
-    // Reborrow as immutable so the closure below can share it across threads.
-    let exp_theta: &[f64] = exp_theta;
+    fill_exp_theta_par(alpha_in, prior_alphas, plan, expectations);
+    let exp_theta: &[f64] = &expectations.exp_theta;
     let out = DisjointOut::new(alpha_out);
     let parts = shards.par_iter_mut().enumerate().map(|(s, buf)| {
         let mut ll = 0.0;
@@ -1276,8 +1305,9 @@ mod shard_plan_determinism {
         alpha_in: &[f64],
         plan: &ShardPlan,
     ) -> Vec<f64> {
-        let mut exp_theta = vec![0.0; p.num_txps];
-        fill_exp_theta_par(alpha_in, prior, plan, &mut exp_theta);
+        let mut ex = Expectations::new(p.num_txps);
+        fill_exp_theta_par(alpha_in, prior, plan, &mut ex);
+        let exp_theta = ex.exp_theta;
         let mut shards = vec![vec![0.0; p.num_txps]; plan.num_shards()];
         for (s, buf) in shards.iter_mut().enumerate() {
             let (start, end) = plan.range(s);
@@ -1456,7 +1486,7 @@ mod shard_plan_determinism {
 
         let vb_reference = dense_vbem_reference(&packed, &packed.counts, &prior, &alpha, &plan);
         let mut vb_out = vec![0.0; packed.num_txps];
-        let mut exp_theta = vec![0.0; packed.num_txps];
+        let mut expectations = Expectations::new(packed.num_txps);
         let mut vb_shards = plan.allocate_buffers();
         vbem_step_par::<false>(
             &packed,
@@ -1464,7 +1494,7 @@ mod shard_plan_determinism {
             &prior,
             &alpha,
             &mut vb_out,
-            &mut exp_theta,
+            &mut expectations,
             &mut vb_shards,
             &plan,
             None,
