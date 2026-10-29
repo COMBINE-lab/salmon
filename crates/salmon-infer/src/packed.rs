@@ -723,17 +723,42 @@ fn fill_exp_theta_par(
 ) {
     let alpha_sum: f64 = alpha_in.iter().zip(prior_alphas).map(|(a, p)| a + p).sum();
     let log_norm = digamma(alpha_sum);
-    exp_theta.par_iter_mut().enumerate().for_each(|(i, et)| {
-        if !plan.is_referenced(i) {
-            return;
-        }
-        let ap = alpha_in[i] + prior_alphas[i];
-        *et = if ap > DIGAMMA_MIN {
+    let expectation = |ap: f64| {
+        if ap > DIGAMMA_MIN {
             (digamma(ap) - log_norm).exp()
         } else {
             0.0
-        };
-    });
+        }
+    };
+    // Under VBEM's sparse prior most referenced transcripts are driven to an
+    // abundance so small that `alpha + prior` rounds to the prior itself — on a
+    // human sample, over half of them within a few dozen iterations. With the
+    // default flat prior they then all share one `exp_theta`, so that value is
+    // remembered (per Rayon split) and reused rather than recomputed through a
+    // `digamma` and an `exp` for each. It is the same function of the same bits,
+    // so every entry is unchanged.
+    exp_theta
+        .par_iter_mut()
+        .enumerate()
+        .for_each_init(
+            || None::<(u64, f64)>,
+            |at_prior, (i, et)| {
+                if !plan.is_referenced(i) {
+                    return;
+                }
+                let ap = alpha_in[i] + prior_alphas[i];
+                *et = match *at_prior {
+                    Some((bits, v)) if bits == ap.to_bits() => v,
+                    _ => {
+                        let v = expectation(ap);
+                        if ap == prior_alphas[i] {
+                            *at_prior = Some((ap.to_bits(), v));
+                        }
+                        v
+                    }
+                };
+            },
+        );
 }
 
 /// One sequential VBEM M-step (uses `exp_theta` in place of `alpha`).
