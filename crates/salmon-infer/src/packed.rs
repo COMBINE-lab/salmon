@@ -436,7 +436,21 @@ pub(crate) struct ShardPlan {
     /// Contributing shards in ascending shard order, with the local buffer index
     /// needed to read each compressed accumulator directly.
     contributors: Vec<Contributor>,
+    /// The transcripts some class references, ascending.
+    ///
+    /// On a large index most transcripts are in no class at all (over 40% of
+    /// GENCODE on a real sample), yet every per-transcript pass of the M-step
+    /// used to visit all of them, branching on each to find the ones that
+    /// matter — a branch on effectively random data. Those passes now walk this
+    /// list, one [`REFERENCED_CHUNK`]-sized block of the index at a time.
+    referenced: Vec<u32>,
+    /// Offsets into `referenced`, one range per block of `REFERENCED_CHUNK`
+    /// transcript ids, length `num_txps.div_ceil(REFERENCED_CHUNK) + 1`.
+    referenced_start: Vec<usize>,
 }
+
+/// Block size, in transcript ids, of the M-step's per-transcript passes.
+const REFERENCED_CHUNK: usize = 4096;
 
 impl ShardPlan {
     /// Logical parallelism is derived only from the packed data, never the Rayon
@@ -546,12 +560,22 @@ impl ShardPlan {
             }
         }
 
+        let referenced: Vec<u32> = (0..num_txps)
+            .filter(|&t| contrib_start[t] != contrib_start[t + 1])
+            .map(|t| u32::try_from(t).expect("transcript ids are u32"))
+            .collect();
+        let referenced_start = (0..=num_txps.div_ceil(REFERENCED_CHUNK))
+            .map(|c| referenced.partition_point(|&t| (t as usize) < c * REFERENCED_CHUNK))
+            .collect();
+
         Self {
             boundaries,
             local_lens,
             entry_local,
             contrib_start,
             contributors,
+            referenced,
+            referenced_start,
         }
     }
 
@@ -569,11 +593,14 @@ impl ShardPlan {
         (self.boundaries[s], self.boundaries[s + 1])
     }
 
-    /// Whether any class references transcript `tid`, i.e. whether some shard
-    /// contributes to it.
+    /// The referenced transcripts in block `chunk` of `REFERENCED_CHUNK` ids,
+    /// ascending, as offsets from the block's first id.
     #[inline]
-    fn is_referenced(&self, tid: usize) -> bool {
-        self.contrib_start[tid] != self.contrib_start[tid + 1]
+    fn referenced_in(&self, chunk: usize) -> impl Iterator<Item = usize> + '_ {
+        let lo = chunk * REFERENCED_CHUNK;
+        self.referenced[self.referenced_start[chunk]..self.referenced_start[chunk + 1]]
+            .iter()
+            .map(move |&t| t as usize - lo)
     }
 
     fn entry_locals(&self, p: &PackedEqClasses, ci: usize) -> &[u32] {
@@ -591,16 +618,59 @@ impl ShardPlan {
 /// ascending shard order from the plan's inverted index. Total work is
 /// `Σ|touched|` — on the order of the eq-class entry count — where the previous
 /// dense reduction cost `nshards × num_txps` regardless of the data.
+///
+/// A transcript no shard contributes to sums to `+0.0`; those are written by
+/// clearing each block first, and only the referenced ones are summed.
 fn reduce_shards_sparse(shards: &[Vec<f64>], plan: &ShardPlan, alpha_out: &mut [f64]) {
-    alpha_out.par_iter_mut().enumerate().for_each(|(tid, out)| {
-        let lo = plan.contrib_start[tid] as usize;
-        let hi = plan.contrib_start[tid + 1] as usize;
-        let mut s = 0.0;
-        for contributor in &plan.contributors[lo..hi] {
-            s += shards[contributor.shard as usize][contributor.local as usize];
-        }
-        *out = s;
-    });
+    alpha_out
+        .par_chunks_mut(REFERENCED_CHUNK)
+        .enumerate()
+        .for_each(|(chunk, out)| {
+            out.fill(0.0);
+            let base = chunk * REFERENCED_CHUNK;
+            for i in plan.referenced_in(chunk) {
+                let tid = base + i;
+                let lo = plan.contrib_start[tid] as usize;
+                let hi = plan.contrib_start[tid + 1] as usize;
+                let mut s = 0.0;
+                for contributor in &plan.contributors[lo..hi] {
+                    s += shards[contributor.shard as usize][contributor.local as usize];
+                }
+                out[i] = s;
+            }
+        });
+}
+
+/// [`crate::max_rel_diff`] over the output of a parallel M-step.
+///
+/// A transcript no class references always comes out of the M-step at `0.0`,
+/// which the criterion skips (`alpha_out > 0` fails), so only the referenced
+/// ones can qualify and only they are visited. Valid only when `alpha_out` is
+/// an M-step's output, as in the plain fixed-point loop. A maximum does not
+/// round, so neither the subset nor the order of the blocks can change it.
+pub(crate) fn max_rel_diff_referenced(
+    plan: &ShardPlan,
+    alpha_in: &[f64],
+    alpha_out: &[f64],
+    cutoff: f64,
+) -> f64 {
+    (0..alpha_out.len().div_ceil(REFERENCED_CHUNK))
+        .into_par_iter()
+        .map(|chunk| {
+            let base = chunk * REFERENCED_CHUNK;
+            let mut max_d = f64::NEG_INFINITY;
+            for i in plan.referenced_in(chunk) {
+                let (a_in, a_out) = (alpha_in[base + i], alpha_out[base + i]);
+                if a_in > cutoff && a_out > 0.0 {
+                    let d = (a_out - a_in).abs() / a_out;
+                    if d > max_d {
+                        max_d = d;
+                    }
+                }
+            }
+            max_d
+        })
+        .reduce(|| f64::NEG_INFINITY, |a, b| if b > a { b } else { a })
 }
 
 /// Parallel EM M-step. Each shard owns a private compressed buffer containing
@@ -713,8 +783,8 @@ fn fill_exp_theta_seq(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f
 /// `exp_theta` solely through class labels, so an entry for a transcript in no
 /// class is computed and never read — and that is typically a quarter of the
 /// index on a real sample, each costing a `digamma` and an `exp` per iteration.
-/// Those entries keep whatever they held; the sum above still runs over every
-/// transcript, so the normalization is unchanged.
+/// Those entries keep whatever they held; the normalizing sum still runs over
+/// every transcript, so it is unchanged.
 fn fill_exp_theta_par(
     alpha_in: &[f64],
     prior_alphas: &[f64],
@@ -734,31 +804,29 @@ fn fill_exp_theta_par(
     // abundance so small that `alpha + prior` rounds to the prior itself — on a
     // human sample, over half of them within a few dozen iterations. With the
     // default flat prior they then all share one `exp_theta`, so that value is
-    // remembered (per Rayon split) and reused rather than recomputed through a
-    // `digamma` and an `exp` for each. It is the same function of the same bits,
-    // so every entry is unchanged.
+    // remembered (per block of the index) and reused rather than recomputed
+    // through a `digamma` and an `exp` for each. It is the same function of the
+    // same bits, so every entry is unchanged.
     exp_theta
-        .par_iter_mut()
+        .par_chunks_mut(REFERENCED_CHUNK)
         .enumerate()
-        .for_each_init(
-            || None::<(u64, f64)>,
-            |at_prior, (i, et)| {
-                if !plan.is_referenced(i) {
-                    return;
-                }
-                let ap = alpha_in[i] + prior_alphas[i];
-                *et = match *at_prior {
+        .for_each(|(chunk, et)| {
+            let base = chunk * REFERENCED_CHUNK;
+            let mut at_prior: Option<(u64, f64)> = None;
+            for i in plan.referenced_in(chunk) {
+                let ap = alpha_in[base + i] + prior_alphas[base + i];
+                et[i] = match at_prior {
                     Some((bits, v)) if bits == ap.to_bits() => v,
                     _ => {
                         let v = expectation(ap);
-                        if ap == prior_alphas[i] {
-                            *at_prior = Some((ap.to_bits(), v));
+                        if ap == prior_alphas[base + i] {
+                            at_prior = Some((ap.to_bits(), v));
                         }
                         v
                     }
                 };
-            },
-        );
+            }
+        });
 }
 
 /// One sequential VBEM M-step (uses `exp_theta` in place of `alpha`).
