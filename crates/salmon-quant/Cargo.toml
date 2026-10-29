@@ -27,13 +27,13 @@ tracing = { workspace = true }
 flate2 = { workspace = true }
 rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
-noodles-bgzf = "0.51"
+noodles-bgzf = "0.52"
 jiff = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-noodles-bam = "0.95"
-noodles-sam = "0.90"
+noodles-bam = "0.98"
+noodles-sam = "0.93"
 # reading back RAD output in the end-to-end test
 libradicl = { workspace = true }
 
