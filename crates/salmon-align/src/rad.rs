@@ -663,15 +663,25 @@ fn process_rad_fragment(
     let eq_log = &scratch.group_log;
     let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     // `exp(±0) = 1` exactly (IEEE 754 / C Annex F), so the maximum's own term —
-    // the only one for a uniquely mapped fragment — needs no `exp` call.
+    // the only one for a uniquely mapped fragment — needs no `exp` call. And a
+    // fragment's transcripts often share a log weight exactly (same fragment
+    // length, same length class: sequence duplicates, near-identical
+    // isoforms), so the last `exp` is remembered by the bits of its argument.
+    let mut last_exp: Option<(u64, f64)> = None;
     let mut weights: Vec<f64> = eq_log
         .iter()
         .map(|&l| {
             let d = l - maxe;
             if d == 0.0 {
-                1.0
-            } else {
-                d.exp()
+                return 1.0;
+            }
+            match last_exp {
+                Some((bits, v)) if bits == d.to_bits() => v,
+                _ => {
+                    let v = d.exp();
+                    last_exp = Some((d.to_bits(), v));
+                    v
+                }
             }
         })
         .collect();
