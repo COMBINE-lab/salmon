@@ -299,9 +299,20 @@ const WEIGHT_SCALE: f64 = (1u64 << 40) as f64;
 
 /// Convert one probability into the fixed-point representation described on
 /// [`WEIGHT_SCALE`]. `.max(0.0)` clamps floating-point noise below zero.
+///
+/// The float-to-`u128` conversion is a software routine (`__fixunsdfti`) on
+/// x86-64, called once per transcript per fragment. A weight is at most 1, so
+/// its fixed-point value fits a `u64`, whose conversion is one instruction; the
+/// two conversions agree on every value below 2^64 (and on NaN), and anything
+/// larger still takes the wide one.
 #[inline]
 fn weight_to_fixed(w: f64) -> u128 {
-    (w.max(0.0) * WEIGHT_SCALE).round() as u128
+    let x = (w.max(0.0) * WEIGHT_SCALE).round();
+    if x < u64::MAX as f64 {
+        x as u64 as u128
+    } else {
+        x as u128
+    }
 }
 
 /// The aggregated value for an equivalence class: how many fragments landed in

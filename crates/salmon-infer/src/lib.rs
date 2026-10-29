@@ -588,13 +588,18 @@ pub(crate) fn run_em_counts(
                 f(&alphas, &mut alphas_prime);
                 it += 1;
                 if it >= min_iter {
-                    let d = max_rel_diff_mode(
-                        &alphas,
-                        &alphas_prime,
-                        opts.alpha_check_cutoff,
-                        parallel,
-                        &mut rel_diff_partials,
-                    );
+                    // `alphas_prime` is an M-step output here, so the criterion
+                    // can skip transcripts no class references (see
+                    // `max_rel_diff_referenced`).
+                    let d = match &plan {
+                        Some(pl) => packed::max_rel_diff_referenced(
+                            pl,
+                            &alphas,
+                            &alphas_prime,
+                            opts.alpha_check_cutoff,
+                        ),
+                        None => max_rel_diff(&alphas, &alphas_prime, opts.alpha_check_cutoff),
+                    };
                     // Swap rather than copy: the buffers just exchange roles, so
                     // no data movement is needed.
                     std::mem::swap(&mut alphas, &mut alphas_prime);

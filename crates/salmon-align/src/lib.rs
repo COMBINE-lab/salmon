@@ -563,6 +563,28 @@ where
     m + xs.map(|x| (x - m).exp()).sum::<f64>().ln()
 }
 
+/// [`logsumexp_iter`] of a single value, without its `exp` and `ln`.
+///
+/// For one finite `x` the general form is `x + ln(exp(x − x)) = x + ln(1)`,
+/// and `exp(0) = 1` and `ln(1) = +0` exactly (IEEE 754 / C Annex F special
+/// cases, which every libm honours), so it is `x + 0.0` — written as such,
+/// since that also turns `-0.0` into `+0.0` the way the general form does. The
+/// non-finite cases follow the general form's own: no finite maximum gives
+/// `-inf` (`f64::max` skips a NaN), and `+inf` gives `inf − inf`, a NaN.
+///
+/// A RAD fragment almost always has one placement per transcript, so this is
+/// the common case of the per-transcript grouping, where it saved an `exp` and
+/// an `ln` per placement.
+pub(crate) fn logsumexp_one(x: f64) -> f64 {
+    if x.is_nan() || x == f64::NEG_INFINITY {
+        f64::NEG_INFINITY
+    } else if x == f64::INFINITY {
+        f64::NAN
+    } else {
+        x + 0.0
+    }
+}
+
 /// `log(Σ exp(xs))`, numerically stable. `xs` is non-empty.
 fn logsumexp(xs: &[f64]) -> f64 {
     let m = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -3481,7 +3503,46 @@ mod tests {
 
 #[cfg(test)]
 mod logsumexp_tests {
-    use super::{logsumexp, logsumexp_iter};
+    use super::{logsumexp, logsumexp_iter, logsumexp_one};
+
+    /// The single-value shortcut has to be the general form, bit for bit, on
+    /// every input — signed zeros and non-finite values included.
+    #[test]
+    fn one_value_shortcut_agrees_with_the_general_form() {
+        let mut cases = vec![
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            -1e-300,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE / 4.0,
+            f64::MAX,
+            f64::MIN,
+            -745.2,
+            -23.998_158_637_57,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..10_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            cases.push(f64::from_bits(x));
+            cases.push(-((x % 1_000_000) as f64) / 997.0);
+        }
+        for x in cases {
+            let general = logsumexp_iter(std::iter::once(x));
+            let one = logsumexp_one(x);
+            if general.is_nan() {
+                assert!(one.is_nan(), "x={x:e}: general NaN, shortcut {one}");
+            } else {
+                assert_eq!(general.to_bits(), one.to_bits(), "x={x:e}");
+            }
+        }
+    }
 
     /// `logsumexp_iter` exists so a caller holding a run of records can avoid
     /// copying their weights into a scratch slice. It is only safe to use in
