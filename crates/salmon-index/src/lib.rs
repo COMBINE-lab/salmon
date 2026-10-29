@@ -87,7 +87,13 @@ const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 ///   hasher guard). Format-v1 indices (every salmon release from 2.1.0 up to
 ///   this format change) cannot be loaded and must be rebuilt. `info.json` now records `sshash_format_version` so
 ///   future dictionary format breaks are diagnosable from the index dir.
-pub const INDEX_FORMAT_VERSION: u32 = 2;
+/// - **3** — sshash-rs 0.8: the minimizer MPHF is sux's PHastR (in place of
+///   `ph`'s PHast) and sux moved to epserde 0.13, so the `.ssi` dictionary format
+///   is 6.0 and the MPHF container 3.0. Format-v2 indices (salmon 2.7.0 – 2.8.0)
+///   cannot be loaded and must be rebuilt. Contigs are now numbered by first
+///   appearance in the reference tilings, which makes index builds
+///   byte-reproducible.
+pub const INDEX_FORMAT_VERSION: u32 = 3;
 
 /// Minimum index format version this build can load. Indices below this are
 /// rejected with an actionable rebuild message (their decoy / short-transcript
@@ -95,11 +101,11 @@ pub const INDEX_FORMAT_VERSION: u32 = 2;
 ///
 /// Refusing to load is deliberate: silently producing subtly wrong abundances is
 /// far worse than telling the user to spend ten minutes rebuilding.
-pub const MIN_READABLE_INDEX_VERSION: u32 = 2;
+pub const MIN_READABLE_INDEX_VERSION: u32 = 3;
 
 /// The sshash `.ssi` dictionary format major version this salmon builds
 /// against (recorded in `info.json` as `sshash_format_version`).
-pub const SSHASH_FORMAT_VERSION_MAJOR: u32 = 5;
+pub const SSHASH_FORMAT_VERSION_MAJOR: u32 = 6;
 
 /// Default minimizer length for a given k (used when `m == 0`).
 ///
@@ -1415,11 +1421,10 @@ impl SalmonIndex {
             anyhow::bail!(
                 "{} was built by {} (index format v{}), which this salmon cannot read \
                  (requires index format v{}+).\n\
-                 Index format v1 (salmon releases before this format change) predates \
-                 the unified sshash \
-                 minimizer scheme, and formats before v1 could mis-handle decoy and \
-                 short (sub-k) transcript references; rebuild it with \
-                 `salmon index -t <transcripts> [-d <decoys>] -i {}`.",
+                 Index format v2 used an older sshash dictionary format, v1 predates \
+                 the unified sshash minimizer scheme, and formats before v1 could \
+                 mis-handle decoy and short (sub-k) transcript references; rebuild it \
+                 with `salmon index -t <transcripts> [-d <decoys>] -i {}`.",
                 dir.display(),
                 built_by,
                 info.index_version,
