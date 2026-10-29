@@ -569,6 +569,13 @@ impl ShardPlan {
         (self.boundaries[s], self.boundaries[s + 1])
     }
 
+    /// Whether any class references transcript `tid`, i.e. whether some shard
+    /// contributes to it.
+    #[inline]
+    fn is_referenced(&self, tid: usize) -> bool {
+        self.contrib_start[tid] != self.contrib_start[tid + 1]
+    }
+
     fn entry_locals(&self, p: &PackedEqClasses, ci: usize) -> &[u32] {
         let lo = p.starts[ci] as usize;
         let hi = p.starts[ci + 1] as usize;
@@ -701,10 +708,25 @@ fn fill_exp_theta_seq(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f
 
 /// Parallel VBEM expectation fill used by the point estimate. Its sum remains
 /// sequential and therefore pool-independent; the element-wise map is parallel.
-fn fill_exp_theta_par(alpha_in: &[f64], prior_alphas: &[f64], exp_theta: &mut [f64]) {
+///
+/// Only transcripts some class references are filled. The M-step reads
+/// `exp_theta` solely through class labels, so an entry for a transcript in no
+/// class is computed and never read — and that is typically a quarter of the
+/// index on a real sample, each costing a `digamma` and an `exp` per iteration.
+/// Those entries keep whatever they held; the sum above still runs over every
+/// transcript, so the normalization is unchanged.
+fn fill_exp_theta_par(
+    alpha_in: &[f64],
+    prior_alphas: &[f64],
+    plan: &ShardPlan,
+    exp_theta: &mut [f64],
+) {
     let alpha_sum: f64 = alpha_in.iter().zip(prior_alphas).map(|(a, p)| a + p).sum();
     let log_norm = digamma(alpha_sum);
     exp_theta.par_iter_mut().enumerate().for_each(|(i, et)| {
+        if !plan.is_referenced(i) {
+            return;
+        }
         let ap = alpha_in[i] + prior_alphas[i];
         *et = if ap > DIGAMMA_MIN {
             (digamma(ap) - log_norm).exp()
@@ -782,7 +804,7 @@ pub(crate) fn vbem_step_par<const LL: bool>(
 ) -> f64 {
     // Computed once, before the parallel region: it depends on a global sum over
     // all transcripts, so it cannot be sharded.
-    fill_exp_theta_par(alpha_in, prior_alphas, exp_theta);
+    fill_exp_theta_par(alpha_in, prior_alphas, plan, exp_theta);
     // Reborrow as immutable so the closure below can share it across threads.
     let exp_theta: &[f64] = exp_theta;
     let parts = shards.par_iter_mut().enumerate().map(|(s, buf)| {
@@ -1022,7 +1044,7 @@ mod shard_plan_determinism {
         plan: &ShardPlan,
     ) -> Vec<f64> {
         let mut exp_theta = vec![0.0; p.num_txps];
-        fill_exp_theta_par(alpha_in, prior, &mut exp_theta);
+        fill_exp_theta_par(alpha_in, prior, plan, &mut exp_theta);
         let mut shards = vec![vec![0.0; p.num_txps]; plan.num_shards()];
         for (s, buf) in shards.iter_mut().enumerate() {
             let (start, end) = plan.range(s);
