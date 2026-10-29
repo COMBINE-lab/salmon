@@ -420,6 +420,8 @@ struct PreprocessResult {
     /// decoy region that decoy classification relies on. (Sub-`k` *transcripts*
     /// are kept — they are still reported in `quant.sf` with 0 reads.)
     short_decoys_dropped: Vec<Vec<u8>>,
+    /// the reference sequence store, written alongside the cleaned FASTA
+    refseq: StagedRefseq,
 }
 
 /// salmon/pufferfish `FixFasta` clips a reference iff its (cleaned) sequence ends
@@ -459,9 +461,14 @@ fn longest_acgt_run(seq: &[u8]) -> usize {
 /// The rules, applied per record in this order: reject a transcript that follows
 /// a decoy, drop exact duplicates, randomize non-ACGT bases (transcripts only),
 /// clip poly-A tails, drop untileable decoys.
+///
+/// Every reference written to the cleaned FASTA is also staged into `refseq`.
+#[allow(clippy::too_many_arguments)]
 fn preprocess_fasta(
     inputs: &[PathBuf],
     out_path: &Path,
+    mut refseq: RefseqWriter,
+    threads: usize,
     keep_duplicates: bool,
     decoy_names: &ahash::AHashSet<Vec<u8>>,
     gencode: bool,
@@ -493,10 +500,14 @@ fn preprocess_fasta(
     // sequences (keyed on the exact original bytes, matching salmon's pre-process
     // XXH64 over the unmodified sequence). Populated in both modes so duplicates
     // are detected for `duplicate_clusters.tsv` even under --keepDuplicates.
-    let mut seen: ahash::AHashMap<Vec<u8>, Vec<u8>> = ahash::AHashMap::new();
+    //
+    // Keyed by a 128-bit XXH3 digest rather than the sequence itself: holding a
+    // copy of every distinct transcript would cost as much memory as the whole
+    // transcriptome. salmon itself keys on a 64-bit digest; at 128 bits an
+    // accidental collision among even 10^9 sequences has probability ~10^-21.
+    let mut seen: ahash::AHashMap<u128, Vec<u8>> = ahash::AHashMap::new();
     for path in inputs {
-        let mut reader = needletail::parse_fastx_file(path)
-            .with_context(|| format!("opening {}", path.display()))?;
+        let mut reader = open_fasta(path, threads)?;
         while let Some(rec) = reader.next() {
             let rec = rec.context("reading FASTA record")?;
             // Processed name: header up to the first space/tab (salmon's sepStr),
@@ -528,11 +539,10 @@ fn preprocess_fasta(
             // matching salmon (which reports duplicates even with --keepDuplicates);
             // without --keepDuplicates the duplicate is additionally dropped
             // (collapsed onto the first occurrence).
-            let pure_acgt = orig
-                .iter()
-                .all(|&b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'));
+            let pure_acgt = is_pure_acgt(&orig);
             if pure_acgt {
-                if let Some(retained_name) = seen.get(orig.as_ref()) {
+                let digest = xxhash_rust::xxh3::xxh3_128(&orig);
+                if let Some(retained_name) = seen.get(&digest) {
                     duplicate_clusters.push((retained_name.clone(), name.to_vec()));
                     if !keep_duplicates {
                         // `continue` skips the write below, so the duplicate never
@@ -540,7 +550,7 @@ fn preprocess_fasta(
                         continue;
                     }
                 } else {
-                    seen.insert(orig.to_vec(), name.to_vec());
+                    seen.insert(digest, name.to_vec());
                 }
             }
 
@@ -554,7 +564,9 @@ fn preprocess_fasta(
             // assembly gaps. The refseq store keeps the raw bytes and the aligner
             // encodes N as a mismatch (dna5 code 4), so a read aligning over a decoy
             // N-run simply scores it as a mismatch.
-            if !is_decoy {
+            //
+            // A pure-ACGT sequence (nearly every transcript) has nothing to replace.
+            if !is_decoy && !pure_acgt {
                 for b in seq.iter_mut() {
                     if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
                         // A linear congruential generator: multiply, add, and take
@@ -616,6 +628,7 @@ fn preprocess_fasta(
             out.write_all(b"\n")?;
             out.write_all(&seq)?;
             out.write_all(b"\n")?;
+            refseq.push(name, &seq)?;
         }
     }
     out.flush()?;
@@ -625,7 +638,162 @@ fn preprocess_fasta(
         polya_clipped,
         polya_dropped,
         short_decoys_dropped,
+        refseq: refseq.finish()?,
     })
+}
+
+/// Whether `seq` consists only of `ACGTacgt`.
+///
+/// Branch-free per 64-byte block so the compiler vectorizes it: `b & 0xDF`
+/// upper-cases exactly the bytes `acgt` and maps no other byte onto `ACGT`.
+fn is_pure_acgt(seq: &[u8]) -> bool {
+    seq.chunks(64).all(|block| {
+        block.iter().fold(true, |ok, &b| {
+            ok & matches!(b & 0xDF, b'A' | b'C' | b'G' | b'T')
+        })
+    })
+}
+
+/// Open a FASTA (optionally gzipped) for record-by-record reading.
+///
+/// A gzipped regular file is decoded in parallel (up to `threads` workers);
+/// anything else goes through needletail's own (serial) decompression.
+fn open_fasta(path: &Path, threads: usize) -> Result<Box<dyn needletail::FastxReader>> {
+    use std::io::Read as _;
+    let mut magic = [0u8; 2];
+    let gzipped = std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok()
+        && magic == [0x1f, 0x8b]
+        && path.metadata().is_ok_and(|m| m.is_file());
+    let reader = if gzipped {
+        let decoder = rapidgzip_core::Decoder::builder()
+            .decoder_threads(threads.max(1))
+            .build()
+            .map_err(|e| anyhow::anyhow!("creating gzip decoder: {e}"))?;
+        let decoded = decoder
+            .open(path)
+            .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?;
+        needletail::parse_fastx_reader(decoded)
+    } else {
+        needletail::parse_fastx_file(path)
+    };
+    reader.with_context(|| format!("opening {}", path.display()))
+}
+
+/// The reference sequence store (`refseq.bin`) as staged during preprocessing,
+/// in the order the index is expected to number the references.
+struct StagedRefseq {
+    /// reference names in expected index order
+    names: Vec<Vec<u8>>,
+    /// `names.len() + 1` offsets into `refseq.bin`
+    offsets: Vec<u64>,
+}
+
+/// Writes `refseq.bin` while the references are being preprocessed, so the
+/// build never has to read the cleaned FASTA back to produce it.
+///
+/// The index numbers references in cleaned-FASTA order, except that references
+/// shorter than `k` (which carry no k-mers and so never enter the de Bruijn
+/// graph) are moved, in order, to the end. The writer mirrors that: long
+/// references stream straight to disk, short ones are held back and appended
+/// on [`finish`](Self::finish). Whether the built index really used this order
+/// is checked against its reference names afterwards ([`finish_refseq_store`]).
+struct RefseqWriter {
+    file: std::io::BufWriter<std::fs::File>,
+    k: usize,
+    names: Vec<Vec<u8>>,
+    offsets: Vec<u64>,
+    /// sub-`k` references, held back to be appended last
+    shorts: Vec<(Vec<u8>, Vec<u8>)>,
+    /// upper-casing scratch, reused across records
+    upper: Vec<u8>,
+}
+
+impl RefseqWriter {
+    fn create(path: &Path, k: usize) -> Result<Self> {
+        let file =
+            std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+        Ok(Self {
+            file: std::io::BufWriter::with_capacity(1 << 20, file),
+            k,
+            names: Vec::new(),
+            offsets: vec![0],
+            shorts: Vec::new(),
+            upper: Vec::new(),
+        })
+    }
+
+    /// Append one processed reference (stored upper-cased, as the aligner reads
+    /// it: soft-masking is irrelevant to alignment).
+    fn push(&mut self, name: &[u8], seq: &[u8]) -> Result<()> {
+        if seq.len() < self.k {
+            self.shorts.push((name.to_vec(), seq.to_ascii_uppercase()));
+            return Ok(());
+        }
+        self.upper.clear();
+        self.upper.extend_from_slice(seq);
+        self.upper.make_ascii_uppercase();
+        self.write(name.to_vec(), seq.len())
+    }
+
+    fn write(&mut self, name: Vec<u8>, len: usize) -> Result<()> {
+        use std::io::Write as _;
+        self.file
+            .write_all(&self.upper)
+            .with_context(|| format!("writing {REFSEQ_FILE}"))?;
+        let end = self.offsets.last().copied().unwrap_or(0) + len as u64;
+        self.offsets.push(end);
+        self.names.push(name);
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<StagedRefseq> {
+        use std::io::Write as _;
+        for (name, seq) in std::mem::take(&mut self.shorts) {
+            self.upper = seq;
+            let len = self.upper.len();
+            self.write(name, len)?;
+        }
+        self.file
+            .flush()
+            .with_context(|| format!("writing {REFSEQ_FILE}"))?;
+        Ok(StagedRefseq {
+            names: self.names,
+            offsets: self.offsets,
+        })
+    }
+}
+
+/// Complete the reference sequence store staged during preprocessing: if the
+/// built index numbers its references exactly as staged (the normal case), only
+/// the offset table remains to be written; otherwise the store is rebuilt in the
+/// index's order from the cleaned FASTA.
+fn finish_refseq_store(
+    dir: &Path,
+    staged: StagedRefseq,
+    cleaned: &Path,
+    idx: &ReferenceIndex,
+) -> Result<()> {
+    let in_order = staged.names.len() == idx.num_refs()
+        && staged
+            .names
+            .iter()
+            .enumerate()
+            .all(|(tid, name)| idx.ref_name(tid).as_bytes() == name.as_slice());
+    if !in_order {
+        warn!(
+            "index reference order differs from the preprocessed order; \
+             rebuilding {REFSEQ_FILE} from the cleaned FASTA"
+        );
+        return write_refseq_store(dir, std::slice::from_ref(&cleaned.to_path_buf()), idx);
+    }
+    std::fs::write(
+        dir.join(REFSEQ_OFFSETS_FILE),
+        serde_json::to_vec(&staged.offsets)?,
+    )
+    .with_context(|| format!("writing {REFSEQ_OFFSETS_FILE}"))?;
+    Ok(())
 }
 
 /// Read a decoy-names file (one name per line; blank lines ignored) into a set,
@@ -737,254 +905,269 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         None => ahash::AHashSet::new(),
     };
 
-    // Preprocess the references into the cleaned FASTA that feeds both the cDBG
-    // build and the refseq store (the hashes below use the original input):
-    // transcripts get non-ACGT bases replaced with pseudo-random ACGT (salmon
-    // FixFasta behavior); decoys keep their non-ACGT bases (e.g. genome N-runs) so
-    // Cuttlefish splits the graph on them instead of tiling random replacements.
-    let cleaned = intermediate_dir.join("cleaned_refs.fa");
-    let pre = preprocess_fasta(
-        &opts.transcripts,
-        &cleaned,
-        opts.keep_duplicates,
-        &decoy_names,
-        opts.gencode,
-        opts.clip_polya,
-        opts.k,
-    )
-    .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
-    // Everything below reports what the preprocessing did. Silent transformation
-    // of a user's reference would be indefensible, so each rule that fired is
-    // logged, with the destructive ones (dropped references) as warnings.
-    if pre.replaced > 0 {
-        info!(
-            "replaced {} non-ACGT base(s) with random bases",
-            pre.replaced
-        );
-    }
-    if pre.polya_clipped > 0 {
-        info!(
-            "clipped poly-A tails from {} transcripts",
-            pre.polya_clipped
-        );
-    }
-    for dropped in &pre.polya_dropped {
-        warn!(
-            "transcript {:?} was all A's after cleaning; dropped from the index",
-            String::from_utf8_lossy(dropped)
-        );
-    }
-    if !pre.short_decoys_dropped.is_empty() {
-        warn!(
-            "dropped {} decoy reference(s) with no run of >= k={} consecutive ACGT bases \
-             (too short, or fragmented by N-runs): they carry no k-mers and can never be \
-             seeded or catch a read: {}",
-            pre.short_decoys_dropped.len(),
+    // The reference digests cover the *input* FASTA and nothing reads them
+    // until `info.json` is written, so they are computed on their own thread,
+    // overlapping the whole build instead of adding a second full pass over the
+    // (typically gzipped) input plus SHA-256/SHA-512 passes at the end. The
+    // scope joins that thread even if the build fails.
+    std::thread::scope(|scope| {
+        let ref_hashes =
+            scope.spawn(|| compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode));
+
+        // Preprocess the references into the cleaned FASTA that feeds both the cDBG
+        // build and the refseq store (the hashes below use the original input):
+        // transcripts get non-ACGT bases replaced with pseudo-random ACGT (salmon
+        // FixFasta behavior); decoys keep their non-ACGT bases (e.g. genome N-runs) so
+        // Cuttlefish splits the graph on them instead of tiling random replacements.
+        let cleaned = intermediate_dir.join("cleaned_refs.fa");
+        let refseq = RefseqWriter::create(&opts.output_dir.join(REFSEQ_FILE), opts.k)?;
+        let pre = preprocess_fasta(
+            &opts.transcripts,
+            &cleaned,
+            refseq,
+            threads,
+            opts.keep_duplicates,
+            &decoy_names,
+            opts.gencode,
+            opts.clip_polya,
             opts.k,
-            pre.short_decoys_dropped
-                .iter()
-                .map(|n| String::from_utf8_lossy(n).into_owned())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-    if !pre.duplicate_clusters.is_empty() {
-        if opts.keep_duplicates {
+        )
+        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
+        // Everything below reports what the preprocessing did. Silent transformation
+        // of a user's reference would be indefensible, so each rule that fired is
+        // logged, with the destructive ones (dropped references) as warnings.
+        if pre.replaced > 0 {
             info!(
-                "detected {} exact-sequence-duplicate transcripts; retained them \
-                 (--keepDuplicates) and recorded them in duplicate_clusters.tsv",
-                pre.duplicate_clusters.len()
-            );
-        } else {
-            info!(
-                "removed {} transcripts that were exact sequence duplicates \
-                 (use --keepDuplicates to retain them)",
-                pre.duplicate_clusters.len()
+                "replaced {} non-ACGT base(s) with random bases",
+                pre.replaced
             );
         }
-    }
-    // Always emit duplicate_clusters.tsv (header + one row per duplicate), matching
-    // salmon — downstream tooling expects it, and with --keepDuplicates it is the
-    // record of which retained transcripts are exact duplicates of each other.
-    write_duplicate_clusters(&opts.output_dir, &pre.duplicate_clusters)
-        .context("writing duplicate_clusters.tsv")?;
-
-    // Stage 1: compacted de Bruijn graph / reference tiling.
-    info!("building compacted dBG (k={}, threads={})", opts.k, threads);
-    let cf = cf_build()
-        .input(CfInput::Files(vec![cleaned.clone()]))
-        .output_prefix(cdbg_prefix.clone())
-        .k(opts.k)
-        .threads(threads)
-        // Emit references in input order so the decoy block (always last in the
-        // input) stays contiguous in the built index — letting `is_decoy` be a
-        // single O(1) range test and making the build deterministic.
-        .synchronize_output(true)
-        .call()
-        .context("cf1-rs cDBG construction failed")?;
-    info!(
-        "cDBG: {} unitigs, {} distinct k-mers",
-        cf.unitig_count, cf.vertex_count
-    );
-    // Authoritative cross-check of our pre-detection against Cuttlefish's own
-    // tiling: having dropped every decoy with no >= k ACGT run at preprocess,
-    // Cuttlefish should report no untiled sequence (transcripts have no N-runs
-    // after replacement; sub-k transcripts are "short", not "untiled"). A
-    // non-empty list means our longest-ACGT-run criterion disagreed with
-    // Cuttlefish for some reference — warn here; the decoy-contiguity guard below
-    // is the hard backstop against any resulting mis-classification.
-    if !cf.untiled_seqs.is_empty() {
-        warn!(
-            "Cuttlefish reported {} untiled reference(s) not dropped at preprocess: {:?}. \
-             This is unexpected (decoys with no >= k ACGT run should already be dropped); \
-             please report.",
-            cf.untiled_seqs.len(),
-            cf.untiled_seqs
-                .iter()
-                .map(|(n, _)| n.as_str())
-                .collect::<Vec<_>>()
-        );
-    }
-
-    // sshash sorts its minimizer tuples through an on-disk scratch directory.
-    // Left to its default it writes to `sshash_tmp` relative to the *current
-    // working directory* and leaves the (emptied) directory behind. Anchor it
-    // under our build-intermediate dir instead (a `sshash_tmp` subdir of
-    // `--tmpdir`, or the output dir when unset), or wherever the caller asked,
-    // so the scratch is co-located with the other intermediates and we can
-    // remove it cleanly afterwards.
-    let sshash_tmp = opts
-        .sshash_tmp
-        .clone()
-        .unwrap_or_else(|| intermediate_dir.join("sshash_tmp"));
-    std::fs::create_dir_all(&sshash_tmp)
-        .with_context(|| format!("creating sshash scratch dir {}", sshash_tmp.display()))?;
-
-    // Stage 2: piscem SSHash + contig-table index over the tiling.
-    info!("building piscem index (m={})", m);
-    let config = BuildConfig {
-        input_prefix: cdbg_prefix.clone(),
-        output_prefix: index_prefix.clone(),
-        k: opts.k,
-        m,
-        build_ec_table: opts.build_ec_table,
-        num_threads: opts.threads,
-        // Fixed seed: the hash function must be reproducible, or two builds of
-        // the same reference would differ.
-        seed: 1,
-        mphf_build: Default::default(),
-        emit_tiny: None,
-        tmp_dir: Some(sshash_tmp.clone()),
-        ram_limit_gib: opts.ram_limit_gib,
-    };
-    build_index(&config).context("piscem index construction failed")?;
-
-    // Load once to capture reference count and confirm the index is usable.
-    // Better to fail here, during the build, than at the start of a quant run.
-    let idx = ReferenceIndex::load(&index_prefix, opts.build_ec_table, false)
-        .context("loading freshly built index")?;
-    // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
-    let h = compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode)
-        .context("hashing reference sequences/names")?;
-    // Locate the decoy block in the *built* index's reference numbering. We
-    // cannot reuse the preprocess `retained` count (`pre.first_decoy_index`):
-    // piscem moves sub-`k` "short" references — which carry no k-mers and so
-    // never tile into the de Bruijn graph — to the *end* of the reference list,
-    // after the decoy block. The preprocess count includes those shorts among
-    // the transcripts, so it overshoots the decoys' true start by the number of
-    // shorts. Scan the actual names instead; this keeps `is_decoy`, the
-    // bias-model bounds, and decoy-read accounting correct, and prevents a 250 Mb
-    // genome decoy from being swept as a "transcript" in the expected-bias build.
-    //
-    // Decoys form one contiguous block `[first_decoy_index, first_decoy_index +
-    // num_decoys)` (the genome sits after all transcripts, before the trailing
-    // sub-`k` shorts). Dropping sub-`k` decoys at preprocess is what keeps that
-    // block contiguous: a relocated short decoy would otherwise scatter into the
-    // trailing block. We rely on contiguity so the per-fragment decoy check is a
-    // single O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`),
-    // rather than a per-mapping set lookup. As a build-time safety net we verify
-    // contiguity here and fail loudly if it is ever violated, rather than silently
-    // mis-classifying a transcript as a decoy (or vice-versa) at quant time.
-    let (first_decoy_index, num_decoys) = if decoy_names.is_empty() {
-        (None, 0usize)
-    } else {
-        let n = idx.num_refs();
-        // Which reference ids ended up being decoys, in index order.
-        let decoy_tids: Vec<usize> = (0..n)
-            .filter(|&t| decoy_names.contains(idx.ref_name(t).as_bytes()))
-            .collect();
-        match decoy_tids.first().copied() {
-            // Named decoys existed but none survived preprocessing.
-            None => (None, 0usize),
-            Some(first) => {
-                let count = decoy_tids.len();
-                // contiguous iff the decoy tids are exactly first..first+count
-                let contiguous = decoy_tids.iter().enumerate().all(|(i, &t)| t == first + i);
-                if !contiguous {
-                    anyhow::bail!(
-                        "decoy references are not contiguous in the built index \
-                         (first decoy at {first}, {count} decoys, but they do not occupy \
-                         {first}..{}). This is unexpected after sub-k decoys are dropped at \
-                         preprocess — please report, including your decoy set. Built-index \
-                         decoy indices: {decoy_tids:?}",
-                        first + count
-                    );
-                }
-                (Some(first), count)
+        if pre.polya_clipped > 0 {
+            info!(
+                "clipped poly-A tails from {} transcripts",
+                pre.polya_clipped
+            );
+        }
+        for dropped in &pre.polya_dropped {
+            warn!(
+                "transcript {:?} was all A's after cleaning; dropped from the index",
+                String::from_utf8_lossy(dropped)
+            );
+        }
+        if !pre.short_decoys_dropped.is_empty() {
+            warn!(
+                "dropped {} decoy reference(s) with no run of >= k={} consecutive ACGT bases \
+                 (too short, or fragmented by N-runs): they carry no k-mers and can never be \
+                 seeded or catch a read: {}",
+                pre.short_decoys_dropped.len(),
+                opts.k,
+                pre.short_decoys_dropped
+                    .iter()
+                    .map(|n| String::from_utf8_lossy(n).into_owned())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if !pre.duplicate_clusters.is_empty() {
+            if opts.keep_duplicates {
+                info!(
+                    "detected {} exact-sequence-duplicate transcripts; retained them \
+                     (--keepDuplicates) and recorded them in duplicate_clusters.tsv",
+                    pre.duplicate_clusters.len()
+                );
+            } else {
+                info!(
+                    "removed {} transcripts that were exact sequence duplicates \
+                     (use --keepDuplicates to retain them)",
+                    pre.duplicate_clusters.len()
+                );
             }
         }
-    };
-    if let Some(fdi) = first_decoy_index {
-        // Everything after the decoy block is a short (sub-k) transcript.
-        let n_short = idx.num_refs() - (fdi + num_decoys);
+        // Always emit duplicate_clusters.tsv (header + one row per duplicate), matching
+        // salmon — downstream tooling expects it, and with --keepDuplicates it is the
+        // record of which retained transcripts are exact duplicates of each other.
+        write_duplicate_clusters(&opts.output_dir, &pre.duplicate_clusters)
+            .context("writing duplicate_clusters.tsv")?;
+
+        // Stage 1: compacted de Bruijn graph / reference tiling.
+        info!("building compacted dBG (k={}, threads={})", opts.k, threads);
+        let cf = cf_build()
+            .input(CfInput::Files(vec![cleaned.clone()]))
+            .output_prefix(cdbg_prefix.clone())
+            .k(opts.k)
+            .threads(threads)
+            // Emit references in input order so the decoy block (always last in the
+            // input) stays contiguous in the built index — letting `is_decoy` be a
+            // single O(1) range test and making the build deterministic.
+            .synchronize_output(true)
+            .call()
+            .context("cf1-rs cDBG construction failed")?;
         info!(
-            "{num_decoys} decoy reference(s) (first decoy index {fdi}); \
-             {n_short} short (sub-k, 0-count) transcript(s) recorded after the decoys"
+            "cDBG: {} unitigs, {} distinct k-mers",
+            cf.unitig_count, cf.vertex_count
         );
-    }
-    let info = IndexInfo {
-        k: opts.k,
-        m,
-        canonical: true,
-        has_ec_table: idx.has_ec_table(),
-        num_refs: idx.num_refs(),
-        first_decoy_index,
-        num_decoys,
-        index_version: INDEX_FORMAT_VERSION,
-        sshash_format_version: SSHASH_FORMAT_VERSION_MAJOR,
-        keep_duplicates: Some(opts.keep_duplicates),
-        // `env!` reads an environment variable at compile time; Cargo sets this
-        // one from Cargo.toml, so the recorded version is always this build's.
-        salmon_version: env!("CARGO_PKG_VERSION").to_string(),
-        seq_hash: h.seq_hash,
-        name_hash: h.name_hash,
-        seq_hash512: h.seq_hash512,
-        name_hash512: h.name_hash512,
-        decoy_seq_hash: h.decoy_seq_hash,
-        decoy_name_hash: h.decoy_name_hash,
-    };
-    write_info(&opts.output_dir, &info)?;
-
-    // Persist the (cleaned) reference sequences (piscem does not retain them) so
-    // the selective-alignment step fetches windows matching the indexed k-mers.
-    write_refseq_store(&opts.output_dir, std::slice::from_ref(&cleaned), &idx)
-        .context("writing reference sequence store")?;
-
-    if !opts.keep_intermediate {
-        remove_cdbg_intermediates(&cdbg_prefix);
-        if !opts.keep_fixed_fasta {
-            // `let _ =` deliberately ignores the result: failing to delete a
-            // temporary file must not fail an otherwise successful build.
-            let _ = std::fs::remove_file(&cleaned);
+        // Authoritative cross-check of our pre-detection against Cuttlefish's own
+        // tiling: having dropped every decoy with no >= k ACGT run at preprocess,
+        // Cuttlefish should report no untiled sequence (transcripts have no N-runs
+        // after replacement; sub-k transcripts are "short", not "untiled"). A
+        // non-empty list means our longest-ACGT-run criterion disagreed with
+        // Cuttlefish for some reference — warn here; the decoy-contiguity guard below
+        // is the hard backstop against any resulting mis-classification.
+        if !cf.untiled_seqs.is_empty() {
+            warn!(
+                "Cuttlefish reported {} untiled reference(s) not dropped at preprocess: {:?}. \
+                 This is unexpected (decoys with no >= k ACGT run should already be dropped); \
+                 please report.",
+                cf.untiled_seqs.len(),
+                cf.untiled_seqs
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+            );
         }
-        // sshash removes its own scratch files but leaves the directory. Prune
-        // it: `remove_dir` only succeeds on an empty directory, so a caller-
-        // supplied override that is shared / pre-populated is left untouched.
-        let _ = std::fs::remove_dir(&sshash_tmp);
-    }
 
-    info!("index built: {} references", info.num_refs);
-    Ok(info)
+        // sshash sorts its minimizer tuples through an on-disk scratch directory.
+        // Left to its default it writes to `sshash_tmp` relative to the *current
+        // working directory* and leaves the (emptied) directory behind. Anchor it
+        // under our build-intermediate dir instead (a `sshash_tmp` subdir of
+        // `--tmpdir`, or the output dir when unset), or wherever the caller asked,
+        // so the scratch is co-located with the other intermediates and we can
+        // remove it cleanly afterwards.
+        let sshash_tmp = opts
+            .sshash_tmp
+            .clone()
+            .unwrap_or_else(|| intermediate_dir.join("sshash_tmp"));
+        std::fs::create_dir_all(&sshash_tmp)
+            .with_context(|| format!("creating sshash scratch dir {}", sshash_tmp.display()))?;
+
+        // Stage 2: piscem SSHash + contig-table index over the tiling.
+        info!("building piscem index (m={})", m);
+        let config = BuildConfig {
+            input_prefix: cdbg_prefix.clone(),
+            output_prefix: index_prefix.clone(),
+            k: opts.k,
+            m,
+            build_ec_table: opts.build_ec_table,
+            num_threads: opts.threads,
+            // Fixed seed: the hash function must be reproducible, or two builds of
+            // the same reference would differ.
+            seed: 1,
+            mphf_build: Default::default(),
+            emit_tiny: None,
+            tmp_dir: Some(sshash_tmp.clone()),
+            ram_limit_gib: opts.ram_limit_gib,
+        };
+        build_index(&config).context("piscem index construction failed")?;
+
+        // Load once to capture reference count and confirm the index is usable.
+        // Better to fail here, during the build, than at the start of a quant run.
+        let idx = ReferenceIndex::load(&index_prefix, opts.build_ec_table, false)
+            .context("loading freshly built index")?;
+        // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
+        let h = ref_hashes
+            .join()
+            .map_err(|_| anyhow::anyhow!("reference hashing thread panicked"))?
+            .context("hashing reference sequences/names")?;
+        // Locate the decoy block in the *built* index's reference numbering. We
+        // cannot reuse the preprocess `retained` count (`pre.first_decoy_index`):
+        // piscem moves sub-`k` "short" references — which carry no k-mers and so
+        // never tile into the de Bruijn graph — to the *end* of the reference list,
+        // after the decoy block. The preprocess count includes those shorts among
+        // the transcripts, so it overshoots the decoys' true start by the number of
+        // shorts. Scan the actual names instead; this keeps `is_decoy`, the
+        // bias-model bounds, and decoy-read accounting correct, and prevents a 250 Mb
+        // genome decoy from being swept as a "transcript" in the expected-bias build.
+        //
+        // Decoys form one contiguous block `[first_decoy_index, first_decoy_index +
+        // num_decoys)` (the genome sits after all transcripts, before the trailing
+        // sub-`k` shorts). Dropping sub-`k` decoys at preprocess is what keeps that
+        // block contiguous: a relocated short decoy would otherwise scatter into the
+        // trailing block. We rely on contiguity so the per-fragment decoy check is a
+        // single O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`),
+        // rather than a per-mapping set lookup. As a build-time safety net we verify
+        // contiguity here and fail loudly if it is ever violated, rather than silently
+        // mis-classifying a transcript as a decoy (or vice-versa) at quant time.
+        let (first_decoy_index, num_decoys) = if decoy_names.is_empty() {
+            (None, 0usize)
+        } else {
+            let n = idx.num_refs();
+            // Which reference ids ended up being decoys, in index order.
+            let decoy_tids: Vec<usize> = (0..n)
+                .filter(|&t| decoy_names.contains(idx.ref_name(t).as_bytes()))
+                .collect();
+            match decoy_tids.first().copied() {
+                // Named decoys existed but none survived preprocessing.
+                None => (None, 0usize),
+                Some(first) => {
+                    let count = decoy_tids.len();
+                    // contiguous iff the decoy tids are exactly first..first+count
+                    let contiguous = decoy_tids.iter().enumerate().all(|(i, &t)| t == first + i);
+                    if !contiguous {
+                        anyhow::bail!(
+                            "decoy references are not contiguous in the built index \
+                             (first decoy at {first}, {count} decoys, but they do not occupy \
+                             {first}..{}). This is unexpected after sub-k decoys are dropped at \
+                             preprocess — please report, including your decoy set. Built-index \
+                             decoy indices: {decoy_tids:?}",
+                            first + count
+                        );
+                    }
+                    (Some(first), count)
+                }
+            }
+        };
+        if let Some(fdi) = first_decoy_index {
+            // Everything after the decoy block is a short (sub-k) transcript.
+            let n_short = idx.num_refs() - (fdi + num_decoys);
+            info!(
+                "{num_decoys} decoy reference(s) (first decoy index {fdi}); \
+                 {n_short} short (sub-k, 0-count) transcript(s) recorded after the decoys"
+            );
+        }
+        let info = IndexInfo {
+            k: opts.k,
+            m,
+            canonical: true,
+            has_ec_table: idx.has_ec_table(),
+            num_refs: idx.num_refs(),
+            first_decoy_index,
+            num_decoys,
+            index_version: INDEX_FORMAT_VERSION,
+            sshash_format_version: SSHASH_FORMAT_VERSION_MAJOR,
+            keep_duplicates: Some(opts.keep_duplicates),
+            // `env!` reads an environment variable at compile time; Cargo sets this
+            // one from Cargo.toml, so the recorded version is always this build's.
+            salmon_version: env!("CARGO_PKG_VERSION").to_string(),
+            seq_hash: h.seq_hash,
+            name_hash: h.name_hash,
+            seq_hash512: h.seq_hash512,
+            name_hash512: h.name_hash512,
+            decoy_seq_hash: h.decoy_seq_hash,
+            decoy_name_hash: h.decoy_name_hash,
+        };
+        write_info(&opts.output_dir, &info)?;
+
+        // Persist the (cleaned) reference sequences (piscem does not retain them) so
+        // the selective-alignment step fetches windows matching the indexed k-mers.
+        finish_refseq_store(&opts.output_dir, pre.refseq, &cleaned, &idx)
+            .context("writing reference sequence store")?;
+
+        if !opts.keep_intermediate {
+            remove_cdbg_intermediates(&cdbg_prefix);
+            if !opts.keep_fixed_fasta {
+                // `let _ =` deliberately ignores the result: failing to delete a
+                // temporary file must not fail an otherwise successful build.
+                let _ = std::fs::remove_file(&cleaned);
+            }
+            // sshash removes its own scratch files but leaves the directory. Prune
+            // it: `remove_dir` only succeeds on an empty directory, so a caller-
+            // supplied override that is shared / pre-populated is left untouched.
+            let _ = std::fs::remove_dir(&sshash_tmp);
+        }
+
+        info!("index built: {} references", info.num_refs);
+        Ok(info)
+    })
 }
 
 /// Serialize [`IndexInfo`] to `info.json` (pretty-printed, since users read it).
