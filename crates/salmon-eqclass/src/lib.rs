@@ -178,19 +178,29 @@ impl TranscriptGroup {
 ///
 /// With `bins == 0` factorization is disabled and an empty vector is returned.
 pub fn range_factorize_bins(weights: &[f64], bins: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    range_factorize_bins_into(weights, bins, &mut out);
+    out
+}
+
+/// [`range_factorize_bins`] into a caller-owned buffer, which is cleared first,
+/// so a per-fragment caller can reuse one allocation.
+pub fn range_factorize_bins_into(weights: &[f64], bins: u32, out: &mut Vec<u32>) {
+    out.clear();
     if bins == 0 {
-        return Vec::new();
+        return;
     }
     let n = weights.len();
     // `as i64` on a float truncates toward zero, which for a non-negative
     // sqrt is the same as floor.
     let range_count = (n as f64).sqrt() as i64 + bins as i64;
-    weights
-        .iter()
-        // `.max(0)` guards against a tiny negative weight arriving from
-        // floating-point noise; a negative bin index would be meaningless.
-        .map(|&w| ((w * range_count as f64) as i64).max(0) as u32)
-        .collect()
+    out.extend(
+        weights
+            .iter()
+            // `.max(0)` guards against a tiny negative weight arriving from
+            // floating-point noise; a negative bin index would be meaningless.
+            .map(|&w| ((w * range_count as f64) as i64).max(0) as u32),
+    );
 }
 
 /// Reinterpret a `&[u32]` as `&[u8]` (view the same memory as raw bytes)
@@ -351,6 +361,16 @@ impl TGValue {
         }
     }
 
+    /// Seed a class from its first observation's borrowed weights.
+    fn from_slice(weights: &[f64], count: u64) -> Self {
+        Self {
+            acc: weights.iter().map(|&w| weight_to_fixed(w)).collect(),
+            weights: Vec::new(),
+            combined_weights: Vec::new(),
+            count,
+        }
+    }
+
     /// Accumulate another observation's weights and count into this class.
     fn accumulate(&mut self, weights: &[f64], count: u64) {
         debug_assert_eq!(self.acc.len(), weights.len());
@@ -374,15 +394,19 @@ impl TGValue {
     }
 }
 
-/// Concurrent equivalence-class builder backed by a sharded concurrent hash map.
+/// Concurrent equivalence-class builder backed by a sharded hash table.
 ///
-/// Worker threads call [`add_group`](Self::add_group) with `&self` (a shared,
-/// non-exclusive reference) while mapping reads. `dashmap` splits the table into
-/// many independently locked shards, so two threads touching different classes
-/// never block each other.
+/// Worker threads call [`add_group`](Self::add_group) (or
+/// [`add_slices`](Self::add_slices)) with `&self` (a shared, non-exclusive
+/// reference) while mapping reads. The table is split into many independently
+/// locked shards, so two threads touching different classes rarely wait on
+/// each other.
 pub struct EquivalenceClassBuilder {
-    map: dashmap::DashMap<TranscriptGroup, TGValue, IdentityBuildHasher>,
+    shards: Box<[std::sync::Mutex<hashbrown::HashTable<(TranscriptGroup, TGValue)>>]>,
 }
+
+/// Number of independently locked shards (a power of two).
+const NUM_SHARDS: usize = 256;
 
 // `Default` lets callers write `EquivalenceClassBuilder::default()`; Rust's
 // linter asks for it whenever a type has a no-argument `new`.
@@ -393,34 +417,87 @@ impl Default for EquivalenceClassBuilder {
 }
 
 impl EquivalenceClassBuilder {
-    /// Create an empty builder using the passthrough hasher.
+    /// Create an empty builder.
     pub fn new() -> Self {
         Self {
-            map: dashmap::DashMap::with_hasher(IdentityBuildHasher),
+            shards: (0..NUM_SHARDS)
+                .map(|_| std::sync::Mutex::new(hashbrown::HashTable::new()))
+                .collect(),
         }
+    }
+
+    /// The shard a label's hash belongs to. Taken from the middle of the
+    /// digest: the table inside a shard uses the low bits to place an entry and
+    /// the top seven to filter probes, and every entry in one shard sharing
+    /// those would defeat it.
+    fn shard(
+        &self,
+        hash: u64,
+    ) -> std::sync::MutexGuard<'_, hashbrown::HashTable<(TranscriptGroup, TGValue)>> {
+        self.shards[(hash >> 32) as usize % NUM_SHARDS]
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// Add one fragment's worth of evidence: the transcript group, its
     /// per-transcript weights, and a count (usually 1). Thread-safe.
     pub fn add_group(&self, group: TranscriptGroup, weights: Vec<f64>, count: u64) {
         debug_assert_eq!(group.txps.len(), weights.len());
-        // One map operation does both cases: if the class already exists add to
-        // it (`and_modify`), otherwise create it (`or_insert_with`). Doing it in
-        // one call holds the shard lock once and avoids the race where two
-        // threads both see "absent" and both insert.
-        self.map
-            .entry(group)
-            .and_modify(|v| v.accumulate(&weights, count))
-            .or_insert_with(|| TGValue::new(weights, count));
+        let hash = group.hash;
+        let mut shard = self.shard(hash);
+        // The lookup and the insert happen under one lock, so two threads
+        // cannot both see "absent" and both insert.
+        if let Some((_, v)) = shard.find_mut(hash, |(g, _)| *g == group) {
+            v.accumulate(&weights, count);
+        } else {
+            shard.insert_unique(hash, (group, TGValue::new(weights, count)), |(g, _)| g.hash);
+        }
+    }
+
+    /// [`add_group`](Self::add_group) from borrowed parts: `txps` ascending
+    /// and duplicate-free, `bins` aligned to it (empty when range
+    /// factorization is off), `weights` aligned to it.
+    ///
+    /// A fragment whose class has been seen before — almost every fragment —
+    /// then costs no allocation at all: the label and weights are copied only
+    /// when the class is new.
+    pub fn add_slices(&self, txps: &[u32], bins: &[u32], weights: &[f64], count: u64) {
+        debug_assert!(
+            txps.windows(2).all(|w| w[0] < w[1]),
+            "txps must be strictly increasing"
+        );
+        debug_assert!(bins.is_empty() || bins.len() == txps.len());
+        debug_assert_eq!(txps.len(), weights.len());
+        let hash = TranscriptGroup::hash_label(txps, bins);
+        let mut shard = self.shard(hash);
+        if let Some((_, v)) = shard.find_mut(hash, |(g, _)| {
+            g.hash == hash && g.txps == txps && g.bins == bins
+        }) {
+            v.accumulate(weights, count);
+        } else {
+            let group = TranscriptGroup {
+                txps: txps.to_vec(),
+                bins: bins.to_vec(),
+                hash,
+            };
+            shard.insert_unique(
+                hash,
+                (group, TGValue::from_slice(weights, count)),
+                |(g, _)| g.hash,
+            );
+        }
     }
 
     /// Number of distinct equivalence classes accumulated so far.
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.shards
+            .iter()
+            .map(|s| s.lock().unwrap_or_else(|e| e.into_inner()).len())
+            .sum()
     }
     /// Whether no class has been recorded yet.
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.len() == 0
     }
 
     /// Finalize into a flat, index-stable collection for inference.
@@ -430,26 +507,21 @@ impl EquivalenceClassBuilder {
     /// class *indices* — which the EM uses everywhere — are identical on every
     /// run, no matter what order the threads happened to insert them in.
     pub fn finish(self) -> CollapsedEqClasses {
-        // Move the entries out of the concurrent map rather than cloning them.
-        // `self` is owned here, so the map is dropped either way; cloning would
+        // Move the entries out of the shards rather than cloning them. `self` is
+        // owned here, so the table is dropped either way; cloning would
         // deep-copy every `txps`/`bins`/`acc` vector and hold two full copies of
-        // the largest structure in the run at once.
+        // the largest structure in the run at once. Reserved first, so the
+        // vector is not grown by doubling (a realloc and a memcpy of every
+        // element at each step).
         //
-        // Reserve first: `dashmap`'s owning iterator implements neither
-        // `size_hint` nor `ExactSizeIterator`, so `collect` would report `(0,
-        // None)` and grow this vector from empty by doubling — a realloc and a
-        // memcpy of every element at each step, plus a transient ~1.5x peak at
-        // the last one. At 144 bytes per entry that is the same cost this change
-        // removes from `PackedEqClasses::from_collapsed`. `len` has to be read
-        // before `into_iter` consumes the map.
-        //
-        // Iteration order of a hash map is arbitrary, hence the sort below.
-        let num_classes = self.map.len();
-        let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::with_capacity(num_classes);
-        classes.extend(self.map);
+        // Iteration order of a hash table is arbitrary, hence the sort below.
+        let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::with_capacity(self.len());
+        for shard in self.shards.into_vec() {
+            classes.extend(shard.into_inner().unwrap_or_else(|e| e.into_inner()));
+        }
         // `bins` is part of class identity, so it must also break ties between
         // groups with the same transcript ids. Sorting only `txps` left those
-        // ties in DashMap iteration order; the resulting class permutation
+        // ties in hash-table iteration order; the resulting class permutation
         // changed deterministic EM shard boundaries across thread counts.
         classes.sort_by(|a, b| {
             a.0.txps
