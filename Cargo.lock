@@ -373,20 +373,6 @@ name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a1f896587b6f2c069c73d2f0913e2d590c3990285cd2f0b6aa02b786b4c679c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.6",
-]
 
 [[package]]
 name = "byteorder"
@@ -936,17 +922,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derivative"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "derive-new"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1377,38 +1352,14 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "impl-tools"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ae314a99afb5821e2fda288387546d4a04aace674551e854e6216b892ec3208"
-dependencies = [
- "autocfg",
- "impl-tools-lib 0.11.4",
- "proc-macro-error2",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "impl-tools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b03e37277215a23886b25b386775553bf5f380691ea0b5fad6e74a6c2a8617a2"
 dependencies = [
  "autocfg",
- "impl-tools-lib 0.13.0",
+ "impl-tools-lib",
  "proc-macro-error3",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "impl-tools-lib"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab699036df31c1f7d3561bfa6e9cb9bc3bb0fd2e2cd9bf121c31cb961d049ddf"
-dependencies = [
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -1477,15 +1428,6 @@ name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
 ]
@@ -1590,33 +1532,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "lambert_w"
-version = "1.2.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5f0846ee4f0299ca4c5b9ca06ff55cf88b3430a763bf591474cc734479c9b24"
-dependencies = [
- "num-complex",
- "num-traits",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
-name = "lender"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeed4888de4544bf3ba2e111326978dbcc37f57bf2c7d6a6a78ed6c01f77ef93"
-dependencies = [
- "aliasable",
- "fallible-iterator",
- "lender-derive",
- "maybe-dangling",
- "stable_try_trait_v2",
-]
 
 [[package]]
 name = "lender"
@@ -2390,13 +2309,13 @@ dependencies = [
  "serde_json",
  "smallvec",
  "sshash-lib",
- "sux 0.15.3",
+ "sux",
  "sysinfo",
  "thread-broker",
  "tiny-dict",
  "tracing",
  "tracing-subscriber",
- "value-traits 0.3.1",
+ "value-traits",
 ]
 
 [[package]]
@@ -2487,32 +2406,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "proc-macro-error-attr3"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e564d14133360e1ae169ffde5da25881b5fa47261665b8e5713c212c27799da"
 dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
  "proc-macro2",
  "quote",
 ]
@@ -2914,7 +2812,7 @@ dependencies = [
  "realfft",
  "salmon-core",
  "statrs",
- "sux 0.14.0",
+ "sux",
 ]
 
 [[package]]
@@ -3162,18 +3060,18 @@ dependencies = [
  "anyhow",
  "dsi-progress-logger",
  "epserde",
- "lender 0.8.0",
+ "lender",
  "mem_dbg",
  "memmap2",
  "needletail",
  "rapidhash",
  "rayon",
  "seq-macro",
- "sux 0.15.3",
+ "sux",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
- "value-traits 0.3.1",
+ "value-traits",
 ]
 
 [[package]]
@@ -3234,59 +3132,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "succinctly"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efed1dfd86bb1bafeba986d5cb77f0f38924438b833c5cc3977a2afbd7e26536"
-dependencies = [
- "bytemuck",
- "indexmap",
- "libm",
-]
-
-[[package]]
-name = "sux"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c7bb0732ef419ea39063a3f345cd5feea30765842354d52d709e28fb04cceec"
-dependencies = [
- "ambassador",
- "anyhow",
- "arbitrary-chunks",
- "arrayvec",
- "atomic-primitive",
- "bitflags 2.13.2",
- "crossbeam-channel",
- "derivative",
- "derive_setters",
- "dsi-progress-logger",
- "env_logger",
- "fallible-iterator",
- "flate2",
- "impl-tools 0.11.4",
- "itertools 0.14.0",
- "jiff",
- "lambert_w",
- "lender 0.6.2",
- "libc",
- "log",
- "mem_dbg",
- "num-primitive",
- "rand",
- "rayon",
- "rdst",
- "succinctly",
- "sync-cell-slice",
- "tempfile",
- "thiserror 2.0.20",
- "thread-priority",
- "value-traits 0.2.1",
- "xxhash-rust",
- "zerocopy",
- "zstd 0.13.3",
-]
-
-[[package]]
 name = "sux"
 version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3302,8 +3147,8 @@ dependencies = [
  "epserde",
  "fallible-iterator",
  "flate2",
- "impl-tools 0.13.0",
- "lender 0.8.0",
+ "impl-tools",
+ "lender",
  "log",
  "mem_dbg",
  "num-primitive",
@@ -3314,21 +3159,10 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "thread-priority",
- "value-traits 0.3.1",
+ "value-traits",
  "xxhash-rust",
  "zerocopy",
  "zstd 0.13.3",
-]
-
-[[package]]
-name = "syn"
-version = "1.0.109"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-ident",
 ]
 
 [[package]]
@@ -3685,31 +3519,11 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "value-traits"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17e73c7053d8fa8e9c3c6b16c32d079ed5642a7156514820486a9c4e109cf48d"
-dependencies = [
- "value-traits-derive 0.2.1",
-]
-
-[[package]]
-name = "value-traits"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7af225b5d51f7e3660b23d053cd437559d441d5127df1394754bda8c9e5ded9d"
 dependencies = [
- "value-traits-derive 0.3.1",
-]
-
-[[package]]
-name = "value-traits-derive"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d301d1ee4b3eced3e73aa5740a303c7e068f1d4450c5dae4c8cf6bfa266954f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "value-traits-derive",
 ]
 
 [[package]]
