@@ -83,8 +83,8 @@ use salmon_model::{
 use salmon_rad::{RadInputProfile, SalmonBulkRecord};
 
 use crate::{
-    asctime_now, logsumexp, logsumexp_iter, AlignQuantOptions, AlignQuantResult, ExplicitFldArgs,
-    FldPolicy,
+    asctime_now, logsumexp, logsumexp_iter, logsumexp_one, AlignQuantOptions, AlignQuantResult,
+    ExplicitFldArgs, FldPolicy,
 };
 
 /// Floor for abundances feeding the bias-collection posterior (avoid `ln(0)`).
@@ -375,7 +375,10 @@ impl<T: Grouped> TidOrdered<T> {
         group_log.extend(
             self.items
                 .chunk_by(|a, b| a.tid() == b.tid())
-                .map(|run| logsumexp_iter(run.iter().map(|p| p.log_w()))),
+                .map(|run| match run {
+                    [one] => logsumexp_one(one.log_w()),
+                    _ => logsumexp_iter(run.iter().map(|p| p.log_w())),
+                }),
         );
     }
 }
@@ -659,7 +662,19 @@ fn process_rad_fragment(
         .collect();
     let eq_log = &scratch.group_log;
     let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let mut weights: Vec<f64> = eq_log.iter().map(|&l| (l - maxe).exp()).collect();
+    // `exp(±0) = 1` exactly (IEEE 754 / C Annex F), so the maximum's own term —
+    // the only one for a uniquely mapped fragment — needs no `exp` call.
+    let mut weights: Vec<f64> = eq_log
+        .iter()
+        .map(|&l| {
+            let d = l - maxe;
+            if d == 0.0 {
+                1.0
+            } else {
+                d.exp()
+            }
+        })
+        .collect();
     let wsum: f64 = weights.iter().sum();
     if wsum > 0.0 {
         for w in &mut weights {
