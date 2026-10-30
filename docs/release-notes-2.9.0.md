@@ -1,40 +1,43 @@
 # salmon 2.9.0
 
-A performance release. `--sketch` quantification is up to **2.4× faster**,
-selective alignment up to **1.4× faster** on isoform-rich references, and
-`salmon index` up to **3.7× faster**, with indexes that are now byte-for-byte
-reproducible. Two things change for users:
+A performance release. `--sketch` quantification is up to **2.5× faster**,
+selective alignment up to **1.6× faster** on isoform-rich references, and
+`salmon index` up to **4.9× faster** with less memory, and indexes are now
+byte-for-byte reproducible. Two things change for users:
 
 - **Indexes must be rebuilt.** The index format moves to v3 (a new sshash
   dictionary format); salmon refuses older indexes with the command to rebuild
   them.
-- **VBEM now converges each independent group of transcripts separately.**
-  Abundances shift, mostly between near-identical isoforms, and are more
-  accurate on simulated data. Plain EM (`--useEM`) results are unchanged.
+- **VBEM now decides convergence for each independent group of transcripts
+  separately**, and keeps iterating slowly mixing groups of near-identical
+  isoforms until they have actually settled. Abundances shift, mostly within
+  those families, and are more accurate on realistic simulations. Plain EM
+  (`--useEM`) results are unchanged.
 
 <!-- TODO(release): confirm version number (index format break; 2.7.0 set the
 precedent of a minor bump for one). -->
 
 ## Speed
 
-Full quantification (`salmon quant --sketch`, wall time, median of 3,
-interleaved runs on one machine), against salmon 2.8.0 and kallistors 0.6.0
-on the same reads and reference:
+Full quantification (`salmon quant --sketch`, wall time in seconds, median
+of 3 interleaved runs, 2 at one thread; one machine, AMD EPYC 9575F), against
+salmon 2.8.0 (built from its release tag) and kallistors 0.6.0 on the same
+reads and reference:
 
 | workload | threads | 2.8.0 | 2.9.0 | kallistors 0.6.0 |
 |---|---|---|---|---|
-| muscle (SRR13638690, 4.4M × 2×170 bp), GENCODE v50 | 1 | 106.4 s | 43.3 s | 41.0 s |
-| | 8 | 14.8 s | 6.1 s | 9.2 s |
-| | 16 | 9.2 s | 3.9 s | 6.6 s |
-| GEUVADIS (ERR188044, 10M × 2×75 bp), Ensembl cDNA | 1 | 84.3 s | 58.0 s | 63.2 s |
-| | 8 | 11.0 s | 8.1 s | 11.5 s |
-| | 16 | 6.7 s | 5.0 s | 7.5 s |
+| muscle (SRR13638690, 4.4M × 2×170 bp, trimmed as in kallistors' benchmark), GENCODE v50 | 1 | 105.9 | 43.1 | 42.1 |
+| | 8 | 14.6 | 6.1 | 9.2 |
+| | 16 | 8.9 | 3.7 | 6.7 |
+| GEUVADIS (ERR188044, first 10M × 2×75 bp), Ensembl GRCh38 cDNA | 1 | 82.4 | 53.3 | 58.9 |
+| | 8 | 10.9 | 7.7 | 11.3 |
+| | 16 | 6.3 | 4.4 | 7.3 |
 
-Peak memory is unchanged (0.3–1.3 GB on these runs; kallistors used 1.0–3.7 GB).
-
-<!-- TODO(release): the 2.8.0 column is develop + the dependency upgrades
-(piscem-rs 0.11.1 / sshash-lib 0.8), which leaves results byte-identical to
-2.8.0; re-run against the released 2.8.0 binary for the final table. -->
+Peak memory is unchanged from 2.8.0 (0.3–1.4 GB on these runs; kallistors
+used 1.0–3.7 GB). Selective alignment at 8 threads: muscle 34.2 → 21.2 s,
+GEUVADIS 29.2 → 25.0 s. Building the index at 16 threads: GENCODE v50
+64.0 → 13.2 s (kallistors 13.8 s), Ensembl cDNA 17.6 → 4.6 s (kallistors
+6.0 s).
 
 Where the time went:
 
@@ -56,13 +59,13 @@ Where the time went:
   and building equivalence classes is also cheaper.
 - **Selective alignment.** Grouping candidate anchors by transcript is now
   linear, and repeated hits that extend to an already-seen anchor are skipped:
-  on the muscle run, full quantification at 8 threads goes from 31.8 s to
-  22.9 s (Ensembl/GEUVADIS: 29.7 s → 25.7 s).
+  on the muscle run, full quantification at 8 threads goes from 34.2 s to
+  21.2 s (Ensembl/GEUVADIS: 29.2 s → 25.0 s).
 - **Index construction.** cf1-rs batches and prefetches its MPHF lookups, uses
   a faster MPHF for in-memory builds, and skips work repeated across the
   isoforms of a gene; piscem-rs and salmon parse and hash their inputs in one
-  parallel pass. GENCODE v50 at 16 threads: 47 s → 12.8 s; Ensembl cDNA:
-  13.0 s → 4.7 s.
+  parallel pass. GENCODE v50 at 16 threads: 64.0 s → 13.2 s; Ensembl cDNA:
+  17.6 s → 4.6 s.
 
 ## What changes in the results
 
@@ -95,7 +98,16 @@ Results remain deterministic and identical at any `-p`. With `--useEM`, and
 with `--emAccel squarem` or `daarem`, results are unchanged from 2.8.0 (to
 within floating-point rounding, which does not show at the printed precision).
 
-<!-- TODO(release): add the SQUAREM tolerance finding once measured. -->
+### A note on `--emAccel squarem`
+
+SQUAREM is not a faster route to the default answer. Its stopping test is
+applied across each three-step cycle, extrapolation included, so at the
+default tolerance it ends far closer to the optimum than unaccelerated
+iteration does. On simulated data, converging that far makes
+transcript-level rankings slightly *worse* for any algorithm (more truly
+low-expressed transcripts are driven to zero), and even when SQUAREM is
+stopped at the same distance from the optimum as the default, it is slower.
+The default (no acceleration) is the recommended setting.
 
 ### Mapping order within RAD records
 
@@ -149,10 +161,10 @@ paired-end without orphans).
   built by salmon 2.7.0–2.8.0 (format v2) are refused with a rebuild command.
 - **Reproducible builds.** Contigs are numbered by their first appearance in
   the reference, so building the same index twice gives identical files.
-- **Memory.** Peak RSS of `salmon index` falls on GENCODE v50
-  (6.8 GB → 4.3–4.8 GB) but rises on smaller references, e.g. Ensembl cDNA
-  1.9 GB → 2.5 GB, from the faster in-memory MPHF construction.
-  <!-- TODO(release): update after the cf1-rs sux-PHastR evaluation. -->
+- **Memory.** Peak RSS of `salmon index` is lower than 2.8.0's: GENCODE v50
+  6.5 → 5.0 GB, Ensembl cDNA 3.1 → 2.6 GB (16 threads). cf1-rs now uses
+  sux's PHastR minimal perfect hash for both in-memory and external-memory
+  builds; genome-scale (decoy) cDBG construction is about 1.5–1.9× faster.
 
 ## Fixes
 
