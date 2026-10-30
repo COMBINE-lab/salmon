@@ -201,6 +201,11 @@ impl FragmentLengthDistribution {
         // Centring the kernel on `len` means the observation contributes most to
         // its own bin and progressively less to its neighbours.
         let start = len as isize - half as isize;
+        // Accumulate the fragment's total and length-weighted mass locally and
+        // publish them with one atomic update each: `sum`/`tot_mass` are shared
+        // by every worker, so per-kernel-entry CAS loops on them contend.
+        let mut local_sum = LOG_0;
+        let mut local_tot = LOG_0;
         for (offset, &k) in (start..).zip(self.kernel.iter()) {
             if offset > 0 && (offset as usize) < self.hist.len() {
                 let o = offset as usize;
@@ -208,9 +213,13 @@ impl FragmentLengthDistribution {
                 // weight.
                 let k_mass = mass + k;
                 self.hist[o].log_add_assign(k_mass);
-                self.sum.log_add_assign((o as f64).ln() + k_mass);
-                self.tot_mass.log_add_assign(k_mass);
+                local_sum = log_add(local_sum, (o as f64).ln() + k_mass);
+                local_tot = log_add(local_tot, k_mass);
             }
+        }
+        if local_tot > LOG_0 {
+            self.sum.log_add_assign(local_sum);
+            self.tot_mass.log_add_assign(local_tot);
         }
     }
 

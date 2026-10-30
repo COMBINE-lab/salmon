@@ -83,6 +83,27 @@ pub struct MappingCandidate {
     pub is_fw: bool,
     /// the supporting MEM chain (in the reference-forward frame)
     pub chain: MemChain,
+    /// length of the read the chain was built from
+    pub read_len: i32,
+}
+
+impl MappingCandidate {
+    /// Projected reference position of the read's first base (in the
+    /// reference-forward frame): the chain's first anchor extended back over the
+    /// unmatched read prefix (pufferfish's `approxReadStartPos`). May be negative
+    /// when the read overhangs the transcript start.
+    #[inline]
+    pub fn proj_start(&self) -> i32 {
+        self.chain.ref_start() - self.chain.read_start()
+    }
+
+    /// One past the projected reference position of the read's last base: the
+    /// chain's last anchor extended over the unmatched read suffix. May exceed
+    /// the transcript length when the read overhangs its end.
+    #[inline]
+    pub fn proj_end(&self) -> i32 {
+        self.chain.ref_end() + (self.read_len - self.chain.read_end())
+    }
 }
 
 /// Project raw k-mer hits onto reference anchors, grouped by `(tid, is_fw)`.
@@ -178,7 +199,12 @@ pub fn candidates_from_raw_hits(
                 j += 1;
             }
             for chain in chain_mems(group, is_fw, &chain_cfg) {
-                candidates.push(MappingCandidate { tid, is_fw, chain });
+                candidates.push(MappingCandidate {
+                    tid,
+                    is_fw,
+                    chain,
+                    read_len,
+                });
             }
             i = j;
         }

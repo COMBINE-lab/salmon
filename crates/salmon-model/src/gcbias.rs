@@ -614,7 +614,7 @@ where
         let mut model = GcFragModel::new(cond_bins, gc_bins);
         for frag_start in 0..(ref_len - k) {
             let mut prev = cond(sp);
-            let mut fl = fld_low as i32;
+            let mut fl = fld_low.max(1) as i32; // a zero-length fragment has no end base
             while fl <= fld_high as i32 {
                 let frag_end = frag_start as i32 + fl - 1;
                 if (frag_end as usize) < ref_len {
