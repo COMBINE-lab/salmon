@@ -1689,11 +1689,26 @@ fn build_rad_record(placements: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecor
             // proper pair → real fragment_len; orphan/SE → the mapped mate's
             // read_len in the slot, so the reader recovers the bounded-CMF orphan
             // weight rather than a flat penalty.
+            //
+            // `pos` is the fragment's leftmost base for a proper pair and the
+            // mapped read's LEFTMOST base for an orphan / single-end hit: the
+            // reader derives a reverse read's 5' end as `pos + read_len - 1` and
+            // its ambiguous-length bound as `pos + read_len`. `ref_pos` is the
+            // read's 5' end (the rightmost base for a reverse read), so it must
+            // not be written for unpaired hits; `fw_pos`/`rc_pos` carry the
+            // leftmost on the read's own strand.
+            let pos = if paired {
+                m.ref_pos
+            } else if m.is_fw {
+                m.fw_pos
+            } else {
+                m.rc_pos
+            };
             salmon_rad::RadHit::for_placement(
                 m.tid,
                 m.is_fw,
                 m.r2_fw,
-                m.ref_pos,
+                pos,
                 paired,
                 m.fragment_len,
                 m.read_len,
@@ -1721,4 +1736,64 @@ fn flush_rad(proc: &mut QuantProcessor) -> paraseq::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod rad_record_tests {
+    use super::*;
+
+    fn mapping(status: MateStatus, is_fw: bool, leftmost: i32, read_len: i32) -> ScoredMapping {
+        ScoredMapping {
+            tid: 3,
+            is_fw,
+            status,
+            score: 150,
+            fragment_len: 0,
+            read_len,
+            weight: 1.0,
+            // the 5' end: leftmost if forward, rightmost (inclusive) if reverse
+            ref_pos: if is_fw {
+                leftmost
+            } else {
+                leftmost + read_len - 1
+            },
+            fw_pos: if is_fw { leftmost } else { -1 },
+            rc_pos: if is_fw { -1 } else { leftmost },
+            format: None,
+            r1_pos: leftmost,
+            r2_pos: -1,
+            r2_fw: false,
+            r1_score: 150,
+        }
+    }
+
+    /// An unpaired hit's RAD `pos` is the read's LEFTMOST base whatever its
+    /// strand (the convention on `salmon_rad::RadHit::pos`, shared with piscem),
+    /// never its 5' end; the read length rides in `frag_len`.
+    #[test]
+    fn unpaired_hits_store_the_leftmost_base() {
+        for status in [
+            MateStatus::SingleEnd,
+            MateStatus::PairedEndLeft,
+            MateStatus::PairedEndRight,
+        ] {
+            for is_fw in [true, false] {
+                let rec = build_rad_record(&[mapping(status, is_fw, 300, 76)]);
+                assert_eq!(rec.hits[0].pos, 300, "{status:?} fw={is_fw}");
+                assert_eq!(rec.hits[0].frag_len, 76);
+            }
+        }
+    }
+
+    /// A proper pair keeps the fragment's leftmost base and its length.
+    #[test]
+    fn proper_pairs_store_the_fragment_start() {
+        let mut m = mapping(MateStatus::PairedEndPaired, false, 0, 0);
+        m.ref_pos = 120;
+        m.fragment_len = 250;
+        m.fw_pos = 120;
+        m.rc_pos = 369;
+        let rec = build_rad_record(&[m]);
+        assert_eq!((rec.hits[0].pos, rec.hits[0].frag_len), (120, 250));
+    }
 }

@@ -182,6 +182,12 @@ pub struct AlignQuantOptions {
     /// Used only to warn when a baked FLD makes them ineffective, so that a
     /// default-valued run stays quiet.
     pub explicit_fld_args: ExplicitFldArgs,
+    /// `--fldMean`/`--fldSD` were supplied by the user -- to this run or, for a
+    /// deterministic run's phase 2, to the mapping pass that baked the RAD.
+    /// When `false` and the library is single-end, the FLD is only salmon's
+    /// default guess, and the RAD quantifier widens it for the single-end
+    /// length term.
+    pub fld_prior_user_supplied: bool,
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
     /// initialize the EM uniformly instead of with the online-estimate-blended
@@ -321,6 +327,7 @@ impl AlignQuantOptions {
             fld_max: 1000,
             fld_policy: FldPolicy::default(),
             explicit_fld_args: ExplicitFldArgs::default(),
+            fld_prior_user_supplied: false,
             forgetting_factor: 0.65,
             init_uniform: false,
             prior_seconds: 0.0,

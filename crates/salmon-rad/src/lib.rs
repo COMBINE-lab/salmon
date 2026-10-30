@@ -444,9 +444,17 @@ pub struct RadHit {
     pub is_fw: bool,
     /// mate (read-2) forward orientation; meaningful only for proper pairs.
     pub mate_fw: bool,
-    /// leftmost reference position of the fragment.
+    /// Leftmost reference position, clamped to `>= 0`. **The `pos`
+    /// convention** (shared with piscem's bulk writer, so salmon reads both):
+    /// for a proper pair, the fragment's leftmost base; for an orphan or
+    /// single-end hit, the *mapped read's* leftmost base whatever its strand —
+    /// never its 5' end. A reader recovers a reverse read's 5' end as
+    /// `pos + read_len - 1` (read length from `frag_len`, below) and bounds its
+    /// unseen mate by `pos + read_len`.
     pub pos: u32,
-    /// fragment length, or [`FRAG_LEN_UNPAIRED`] for orphan / single-end.
+    /// fragment length for a proper pair; for an orphan / single-end hit the
+    /// mapped read's length (salmon) or [`FRAG_LEN_UNPAIRED`] (piscem, which does
+    /// not record it). See [`Self::for_placement`].
     pub frag_len: u16,
     /// alignment score (only meaningful / written for [`RadProfile::SelectiveAlignment`]).
     pub score: i32,
@@ -485,8 +493,10 @@ impl RadHit {
     /// "the true fragment was at least this long", rather than falling back to a
     /// flat penalty.
     ///
-    /// `pos` is clamped to `>= 0` (a soft-clipped alignment can compute a
-    /// negative start). `mate_fw` is meaningful only for proper pairs, and is
+    /// `pos` must follow the convention documented on [`RadHit::pos`]: the
+    /// fragment's leftmost base for a pair, the read's leftmost base (NOT its 5'
+    /// end) for an orphan / single-end hit. It is clamped to `>= 0` (a
+    /// soft-clipped alignment can compute a negative start). `mate_fw` is meaningful only for proper pairs, and is
     /// forced to `false` otherwise so the encoded bit is deterministic.
     pub fn for_placement(
         tid: u32,

@@ -105,13 +105,43 @@ before reverse for the same transcript) instead of hash order. The set of
 mappings and their contents are unchanged, paired-end records were already in
 this order, and quantification is unaffected.
 
+### Single-end reads and orphans
+
+How a single-end read or an orphan (one mate mapped) is weighted by the
+fragments that could have produced it was wrong in the default two-pass path,
+and depended on how `-l` was spelled:
+
+- The intermediate RAD stored a reverse-strand read's *right* end where the
+  quantifier expects its leftmost base (piscem's convention, which salmon now
+  follows explicitly), so the "unseen mate must fit" bound and the read's
+  5'-end sequence-bias context were a read length off. Reconstructed 5' ends
+  on simulated reads: reverse single-end 0% → 98% exact, orphans 60% → 98%.
+- Whether that bound applied was decided by `-l` (`-l A` applied it, `-l U`,
+  `SF` and `SR` did not); it now follows each read's actual mapping type, so
+  `-l A` and an explicit single-end type give the same result.
+- **Departures from C++ salmon.** For single-end libraries the bound now uses
+  the `--fldMean`/`--fldSD` default prior widened to an SD of at least 0.4×
+  the mean, unless you pass `--fldMean`/`--fldSD`, which are then used as
+  given; a narrow default that is too long for the library otherwise crushes
+  every read near a transcript end. For orphans the bound is mixed 50/50 with
+  "the mate lies off the transcript" (the reason it did not map), capping the
+  penalty at ln 2.
+
+Against simulated truth (fragment lengths 180±40, 250±25 and 320±60) at
+default settings, single-end Spearman improves on every library type, e.g.
+0.774 → 0.809 (stranded, `-l SR`) and 0.753 → 0.800 (unstranded, `-l U`),
+and is never significantly worse than 2.8.0 with `-l A`; paired-end results
+change only through orphans (MARD −0.0006). If you know your library's
+fragment-length distribution, passing it improves single-end accuracy
+further.
+
 ### Everything else
 
-Apart from the two changes above, results are byte-identical to 2.8.0:
+Apart from the changes above, results are byte-identical to 2.8.0:
 selective-alignment mapping output, the mappings themselves in `--sketch`
 mode (only their order within single-end/orphan records changes), equivalence
 classes, and `quant.sf` under `--useEM` (verified on GENCODE v50 and Ensembl,
-paired- and single-end).
+paired-end without orphans).
 
 ## Indexes
 

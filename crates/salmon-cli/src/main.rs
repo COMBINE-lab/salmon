@@ -1257,6 +1257,7 @@ fn requant_options(
     q.fld_mean = map_opts.fld_mean;
     q.fld_sd = map_opts.fld_sd;
     q.fld_max = map_opts.fld_max;
+    q.fld_prior_user_supplied = map_opts.fld_prior_user_supplied;
     q.gc_bins = map_opts.gc_bins;
     q.cond_gc_bins = map_opts.cond_gc_bins;
     q.num_bootstraps = map_opts.num_bootstraps;
@@ -3066,6 +3067,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
     opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
     opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
+    opts.fld_prior_user_supplied = args.fld_mean.is_some() || args.fld_sd.is_some();
     warn_unsupported_fld_policy(args.fld_policy, "reads mode");
     opts.forgetting_factor = args.forgetting_factor.unwrap_or(0.65);
     opts.init_uniform = args.init_uniform;
@@ -3539,6 +3541,7 @@ mod tests {
         map_opts.fld_mean = 271.0;
         map_opts.fld_sd = 33.0;
         map_opts.fld_max = 777;
+        map_opts.fld_prior_user_supplied = true;
         map_opts.gc_bins = 17;
         map_opts.cond_gc_bins = 5;
         map_opts.num_bootstraps = 11;
@@ -3576,6 +3579,7 @@ mod tests {
         assert_eq!(q.fld_mean, 271.0);
         assert_eq!(q.fld_sd, 33.0);
         assert_eq!(q.fld_max, 777);
+        assert!(q.fld_prior_user_supplied);
         assert_eq!(q.gc_bins, 17);
         assert_eq!(q.cond_gc_bins, 5);
         assert_eq!(q.num_bootstraps, 11);

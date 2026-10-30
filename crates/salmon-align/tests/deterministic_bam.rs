@@ -507,14 +507,17 @@ fn discard_orphans_is_honoured_on_the_deterministic_path() {
 /// *fragment*, so a fragment cannot be a proper pair on one transcript and an
 /// orphan on another; and an orphan's modelled weight only differs between
 /// transcripts when the length it bounds falls inside the FLD's support — at
-/// position 1050 of a 1200-base transcript only ~150 bases remain, which
+/// position 3850 of a 4000-base transcript only ~150 bases remain, which
 /// cannot host a ~300-base fragment, while the long transcript is unbounded.
+/// The two lengths are close enough (effective lengths within 2x) that the
+/// orphan term — which caps an orphan's penalty at `ln 2`, since its mate may
+/// lie off the transcript — still decides the contest.
 fn write_sam_contested_orphans(dir: &Path) -> PathBuf {
     let path = dir.join("contested.sam");
     let mut f = std::fs::File::create(&path).unwrap();
     writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
     writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
-    writeln!(f, "@SQ\tSN:txB\tLN:1200").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:4000").unwrap();
     writeln!(f, "@SQ\tSN:txC\tLN:5000").unwrap();
     let mut pos = 1usize;
     for i in 0..60 {
@@ -527,7 +530,7 @@ fn write_sam_contested_orphans(dir: &Path) -> PathBuf {
         // flag 73 / 329: paired, mate unmapped, first segment (329 adds
         // secondary) — a genuine orphan placement on each transcript.
         let a = (i * 13) % 500 + 1;
-        let b = 1050 + (i % 40);
+        let b = 3850 + (i % 40);
         writeln!(f, "o{i}\t73\ttxA\t{a}\t60\t100M\t*\t0\t0\t*\t*").unwrap();
         writeln!(f, "o{i}\t329\ttxB\t{b}\t60\t100M\t*\t0\t0\t*\t*").unwrap();
     }
@@ -540,7 +543,8 @@ fn write_sam_contested_orphans(dir: &Path) -> PathBuf {
 ///
 /// Modelled, an orphan's bounded-CMF weight knows that txB's remaining ~150
 /// bases cannot hold this library's ~300-base fragments, so the contested mass
-/// goes to txA. With the flag, both placements take the same flat penalty and
+/// goes to txA (the penalty is capped at `ln 2`, which still outweighs the
+/// two transcripts' effective-length difference). With the flag, both placements take the same flat penalty and
 /// the split falls back to effective length, which favours the shorter txB.
 /// The flag flipping the answer this completely is the point: it was silently
 /// doing nothing.
