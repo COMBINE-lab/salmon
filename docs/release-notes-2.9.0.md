@@ -14,9 +14,6 @@ byte-for-byte reproducible. Two things change for users:
   those families, and are more accurate on realistic simulations. Plain EM
   (`--useEM`) results are unchanged.
 
-<!-- TODO(release): confirm version number (index format break; 2.7.0 set the
-precedent of a minor bump for one). -->
-
 ## Speed
 
 Full quantification (`salmon quant --sketch`, wall time in seconds, median
