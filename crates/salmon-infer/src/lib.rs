@@ -544,6 +544,7 @@ pub(crate) fn run_em_counts(
                 min_iter,
                 max_iter: opts.max_iter,
                 parallel,
+                guard_zero_et: true,
                 stop: if opts.use_vbem {
                     opts.vb_stop
                 } else {

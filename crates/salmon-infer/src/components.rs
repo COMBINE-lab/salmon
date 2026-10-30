@@ -27,8 +27,9 @@
 //! component-separable at all — with it, every component would have to wait on
 //! a global sum each iteration. Over the range VBEM visits (`α + prior ≥ prior
 //! = 0.01` for any referenced transcript under the default prior), `exp(ψ(·))`
-//! neither overflows nor underflows. `e_t` then depends on `α_t + prior_t`
-//! alone, so it is remembered against the bits of that argument.
+//! neither overflows nor underflows. It is evaluated by [`exp_digamma`], a
+//! branch-free form whose loop vectorizes (and is dispatched to AVX2/AVX-512
+//! at run time on x86-64, with bit-identical results).
 //!
 //! **Schedule.** The stopping rule is salmon's: after `min_iter`, stop at the
 //! first iteration where the relative-change criterion holds over all
@@ -48,7 +49,6 @@
 //! global rule.
 
 use rayon::prelude::*;
-use statrs::function::gamma::digamma;
 
 use crate::packed::{PackedEqClasses, DIGAMMA_MIN, MIN_EQ_CLASS_WEIGHT};
 use crate::EmStop;
@@ -310,13 +310,12 @@ struct CompView<'a> {
 }
 
 /// Per-component mutable state: abundances, the next M-step's output, and
-/// (VBEM) the expectations with their argument cache.
+/// (VBEM) the expectations.
 struct CompState<'a> {
     alpha: &'a mut [f64],
     next: &'a mut [f64],
     prior: &'a [f64],
     et: &'a mut [f64],
-    et_bits: &'a mut [u64],
     /// whether the criterion over this component last failed (tiling's
     /// witness choice; scheduling only)
     changed: bool,
@@ -324,31 +323,132 @@ struct CompState<'a> {
     scale: Vec<f64>,
 }
 
-/// VBEM expectations `exp(ψ(α + prior))`, recomputed only where the argument's
-/// bits changed.
-#[inline]
-fn fill_et(et: &mut [f64], bits: &mut [u64], alpha: &[f64], prior: &[f64]) {
-    for (((et, bits), &a), &pr) in et.iter_mut().zip(bits.iter_mut()).zip(alpha).zip(prior) {
+/// Smallest prior for which every VBEM expectation is a positive normal:
+/// `α ≥ 0`, so `α + prior ≥ 0.002` and [`exp_digamma`] is at least
+/// `exp(ψ(0.002)) ≈ 1e-217` (it flushes to `0` only below about `0.0014`).
+const POSITIVE_PRIOR_MIN: f64 = 0.002;
+
+/// `e^z` for `z ≤ 0`, branch-free (so a loop over it vectorizes): Cody–Waite
+/// reduction by `ln 2`, a degree-13 Taylor polynomial on `|r| ≤ ln2/2`
+/// (truncation below 4e-18), and the power of two set in the exponent bits.
+/// Results below the smallest normal double (`z < −708`) are `0`.
+#[inline(always)]
+fn exp_nonpos(z: f64) -> f64 {
+    // ln 2 split as fdlibm does: the high part has 32 trailing zero bits, so
+    // `k·LN2_HI` is exact for every `k` used here.
+    const LN2_HI: f64 = f64::from_bits(0x3fe6_2e42_fee0_0000);
+    const LN2_LO: f64 = f64::from_bits(0x3dea_39ef_3579_3c76);
+    // 1.5·2⁵²: adding it rounds to an integer, held in the low mantissa bits.
+    const SHIFTER: f64 = 6_755_399_441_055_744.0;
+    let zc = if z < -708.0 { -708.0 } else { z };
+    let t = zc * std::f64::consts::LOG2_E + SHIFTER;
+    let k = t - SHIFTER;
+    let r = (zc - k * LN2_HI) - k * LN2_LO;
+    let (r2, r4) = (r * r, r * r * r * r);
+    let pair = |a: f64, b: f64| a + r * b;
+    let q0 = pair(1.0, 1.0) + r2 * pair(1.0 / 2.0, 1.0 / 6.0);
+    let q1 = pair(1.0 / 24.0, 1.0 / 120.0) + r2 * pair(1.0 / 720.0, 1.0 / 5040.0);
+    let q2 =
+        pair(1.0 / 40_320.0, 1.0 / 362_880.0) + r2 * pair(1.0 / 3_628_800.0, 1.0 / 39_916_800.0);
+    let q3 = pair(1.0 / 479_001_600.0, 1.0 / 6_227_020_800.0);
+    let poly = (q0 + r4 * q1) + (r4 * r4) * (q2 + r4 * q3);
+    let ki = t.to_bits() as i64 - SHIFTER.to_bits() as i64;
+    let v = poly * f64::from_bits(((ki + 1023) as u64) << 52);
+    if z < -708.0 {
+        0.0
+    } else {
+        v
+    }
+}
+
+/// `exp(ψ(x))`, the VBEM expectation, for `x > 0`; branch-free, without `ln`
+/// and with one inline exponential.
+///
+/// `ψ(x) = ln y + u(y) − S`, where `y = x + 10` and `S = Σ_{j<10} 1/(x + j)`
+/// when `x < 10` (the recurrence; `y = x`, `S = 0` otherwise), and `u` is the
+/// asymptotic series of `ψ(y) − ln y` with Bernoulli terms through `y⁻¹²`
+/// (truncation below 1e-15 at `y = 10`). So `exp(ψ(x)) = y·e^{u − S}`, with
+/// `S` formed as one ratio of pairwise terms. Against 30-digit mpmath on
+/// `[1e-2, 1e8]` the relative error is at most 4.5e-14 (below 0.1), 6.5e-15
+/// (0.1–1), 1.7e-15 (1–10) and 9.3e-16 (≥ 10) — no worse than `statrs`'s
+/// `digamma(x).exp()` in each range and within ~2× the conditioning floor
+/// `|ψ(x)|·2⁻⁵²`. Where `exp(ψ(x))` is subnormal (`x` below about `0.0014`,
+/// reachable only with `--vbPrior` < 0.01) it returns `0`.
+#[inline(always)]
+fn exp_digamma(x: f64) -> f64 {
+    let small = x < 10.0;
+    let (mut num, mut den, mut j) = (0.0f64, 1.0f64, 0.0f64);
+    while j < 10.0 {
+        let a = x + j;
+        let b = a + 1.0;
+        num = num * (a * b) + (a + b) * den;
+        den *= a * b;
+        j += 2.0;
+    }
+    let y = if small { x + 10.0 } else { x };
+    let s = if small { num / den } else { 0.0 };
+    let r = 1.0 / y;
+    let r2 = r * r;
+    let u = -0.5 * r
+        - r2 * (1.0 / 12.0
+            - r2 * (1.0 / 120.0
+                - r2 * (1.0 / 252.0
+                    - r2 * (1.0 / 240.0 - r2 * (1.0 / 132.0 - r2 * (691.0 / 32_760.0))))));
+    y * exp_nonpos(u - s)
+}
+
+/// VBEM expectations `exp(ψ(α + prior))`, `0` where `α + prior` is not above
+/// [`DIGAMMA_MIN`]. Branch-free, so the loop vectorizes.
+#[inline(always)]
+fn fill_et_body(et: &mut [f64], alpha: &[f64], prior: &[f64]) {
+    for ((et, &a), &pr) in et.iter_mut().zip(alpha).zip(prior) {
         let ap = a + pr;
-        if *bits != ap.to_bits() {
-            *bits = ap.to_bits();
-            *et = if ap > DIGAMMA_MIN {
-                digamma(ap).exp()
-            } else {
-                0.0
-            };
+        let e = exp_digamma(ap);
+        *et = if ap > DIGAMMA_MIN { e } else { 0.0 };
+    }
+}
+
+/// [`fill_et_body`] compiled for AVX-512F. The same IEEE operations in the
+/// same order (Rust never contracts into FMA), so the same bits.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+fn fill_et_avx512(et: &mut [f64], alpha: &[f64], prior: &[f64]) {
+    fill_et_body(et, alpha, prior)
+}
+
+/// [`fill_et_body`] compiled for AVX2; see [`fill_et_avx512`].
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+fn fill_et_avx2(et: &mut [f64], alpha: &[f64], prior: &[f64]) {
+    fill_et_body(et, alpha, prior)
+}
+
+/// The expectations for one component (or one chunk of it), on the widest
+/// vector unit available.
+#[allow(unsafe_code)]
+fn fill_et(et: &mut [f64], alpha: &[f64], prior: &[f64]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx512f") {
+            // SAFETY: the CPU supports AVX-512F (checked just above).
+            return unsafe { fill_et_avx512(et, alpha, prior) };
+        }
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: the CPU supports AVX2 (checked just above).
+            return unsafe { fill_et_avx2(et, alpha, prior) };
         }
     }
+    fill_et_body(et, alpha, prior)
 }
 
 /// A class's denominator `Σ basis[t]·w_t` (VBEM: over positive expectations).
 #[inline]
-fn class_denom<const VB: bool>(tids: &[u32], ws: &[f64], basis: &[f64]) -> f64 {
+fn class_denom<const VB: bool, const G: bool>(tids: &[u32], ws: &[f64], basis: &[f64]) -> f64 {
     let mut denom = 0.0;
     if VB {
         for (&t, &w) in tids.iter().zip(ws) {
             let e = basis[t as usize];
-            denom += if e > 0.0 { e * w } else { 0.0 };
+            denom += if !G || e > 0.0 { e * w } else { 0.0 };
         }
     } else {
         for (&t, &w) in tids.iter().zip(ws) {
@@ -382,27 +482,31 @@ impl CompView<'_> {
     /// One M-step `next = F(alpha)` of this component; returns the convergence
     /// criterion over its transcripts (`-inf` if none is above the cutoff).
     #[inline]
-    fn step<const VB: bool>(
+    fn step<const VB: bool, const G: bool>(
         &self,
         pull: Option<&Pull>,
         s: &mut CompState,
         cutoff: f64,
     ) -> (f64, f64) {
         match pull {
-            Some(pl) => self.step_pull::<VB>(pl, s, cutoff),
-            None => self.step_push::<VB>(s, cutoff),
+            Some(pl) => self.step_pull::<VB, G>(pl, s, cutoff),
+            None => self.step_push::<VB, G>(s, cutoff),
         }
     }
 
     /// [`Self::step_push`], parallel: the same terms in the same order.
-    fn step_pull<const VB: bool>(&self, pl: &Pull, s: &mut CompState, cutoff: f64) -> (f64, f64) {
+    fn step_pull<const VB: bool, const G: bool>(
+        &self,
+        pl: &Pull,
+        s: &mut CompState,
+        cutoff: f64,
+    ) -> (f64, f64) {
         const CH: usize = 2048;
         if VB {
             s.et.par_chunks_mut(CH)
-                .zip(s.et_bits.par_chunks_mut(CH))
                 .zip(s.alpha.par_chunks(CH))
                 .zip(s.prior.par_chunks(CH))
-                .for_each(|(((et, bits), al), pr)| fill_et(et, bits, al, pr));
+                .for_each(|((et, al), pr)| fill_et(et, al, pr));
         }
         let basis: &[f64] = if VB { s.et } else { s.alpha };
         s.scale
@@ -416,7 +520,7 @@ impl CompView<'_> {
                         self.cls_start[k + 1] - self.base,
                     );
                     let denom =
-                        class_denom::<VB>(&self.labels[lo..hi], &self.weights[lo..hi], basis);
+                        class_denom::<VB, G>(&self.labels[lo..hi], &self.weights[lo..hi], basis);
                     // A class the push step skips is marked NaN, which a valid
                     // scale (a count over a positive denominator) never is.
                     *out = if denom > MIN_EQ_CLASS_WEIGHT {
@@ -438,7 +542,7 @@ impl CompView<'_> {
                     let t = chunk * CH + j;
                     let b = basis[t];
                     let mut acc = self.singleton[t];
-                    if !VB || b > 0.0 {
+                    if !(VB && G) || b > 0.0 {
                         for e in pl.start[t]..pl.start[t + 1] {
                             let inv = scale[pl.cls[e] as usize];
                             if inv.is_nan() {
@@ -466,9 +570,13 @@ impl CompView<'_> {
     }
 
     #[inline]
-    fn step_push<const VB: bool>(&self, s: &mut CompState, cutoff: f64) -> (f64, f64) {
+    fn step_push<const VB: bool, const G: bool>(
+        &self,
+        s: &mut CompState,
+        cutoff: f64,
+    ) -> (f64, f64) {
         if VB {
-            fill_et(s.et, s.et_bits, s.alpha, s.prior);
+            fill_et(s.et, s.alpha, s.prior);
         }
         let basis: &[f64] = if VB { s.et } else { s.alpha };
         let next = &mut *s.next;
@@ -479,13 +587,13 @@ impl CompView<'_> {
             let tids = &self.labels[lo..hi];
             let ws = &self.weights[lo..hi];
             lo = hi;
-            let denom = class_denom::<VB>(tids, ws, basis);
+            let denom = class_denom::<VB, G>(tids, ws, basis);
             if denom > MIN_EQ_CLASS_WEIGHT {
                 let inv = count / denom;
                 for (&t, &w) in tids.iter().zip(ws) {
                     let v = basis[t as usize] * w;
                     if VB {
-                        if basis[t as usize] > 0.0 {
+                        if !G || basis[t as usize] > 0.0 {
                             next[t as usize] += v * inv;
                         }
                     } else if !v.is_nan() {
@@ -532,6 +640,11 @@ pub(crate) struct Settings {
     pub(crate) min_iter: u32,
     pub(crate) max_iter: u32,
     pub(crate) parallel: bool,
+    /// VBEM: whether an expectation can be `0` (some prior below
+    /// [`POSITIVE_PRIOR_MIN`]), so that the M-step must skip zero terms. Set
+    /// by [`run`]; when `false` every expectation is a positive normal and the
+    /// skips, always taken, are compiled out (bit-identical either way).
+    pub(crate) guard_zero_et: bool,
     /// When a run stops: [`EmStop::Global`] runs [`run_tiled`],
     /// [`EmStop::Projected`] [`run_projected`].
     pub(crate) stop: EmStop,
@@ -623,7 +736,6 @@ struct Buffers {
     next: Vec<f64>,
     prior: Vec<f64>,
     et: Vec<f64>,
-    et_bits: Vec<u64>,
 }
 
 impl Buffers {
@@ -635,7 +747,6 @@ impl Buffers {
             next: vec![0.0; nd],
             prior: plan.txps.iter().map(|&t| prior_full[t as usize]).collect(),
             et: vec![0.0; nv],
-            et_bits: vec![u64::MAX; nv],
         }
     }
 
@@ -649,9 +760,8 @@ impl Buffers {
             .into_iter()
             .zip(split_at_bounds(&mut self.next, bounds))
             .zip(split_at_bounds(&mut self.et, vb_bounds))
-            .zip(split_at_bounds(&mut self.et_bits, vb_bounds))
             .enumerate()
-            .map(|(c, (((alpha, next), et), et_bits))| {
+            .map(|(c, ((alpha, next), et))| {
                 let scale = if plan.pull[c].is_some() {
                     vec![0.0; plan.comp_cls[c + 1] - plan.comp_cls[c]]
                 } else {
@@ -662,7 +772,6 @@ impl Buffers {
                     next,
                     prior: &prior[bounds[c]..bounds[c + 1]],
                     et,
-                    et_bits,
                     changed: true,
                     scale,
                 };
@@ -689,10 +798,10 @@ fn step_component_l1(
 ) -> (f64, f64) {
     let v = plan.view(c);
     let pull = plan.pull[c].as_ref();
-    let d = if set.vb {
-        v.step::<true>(pull, s, set.cutoff)
-    } else {
-        v.step::<false>(pull, s, set.cutoff)
+    let d = match (set.vb, set.guard_zero_et) {
+        (true, true) => v.step::<true, true>(pull, s, set.cutoff),
+        (true, false) => v.step::<true, false>(pull, s, set.cutoff),
+        (false, _) => v.step::<false, false>(pull, s, set.cutoff),
     };
     std::mem::swap(&mut s.alpha, &mut s.next);
     d
@@ -722,6 +831,10 @@ pub(crate) fn run(
     set: &Settings,
 ) -> (Vec<f64>, u32, bool, ComponentSummary) {
     let mut buffers = Buffers::new(plan, init, prior_full, set.vb);
+    let set = &Settings {
+        guard_zero_et: !buffers.prior.iter().all(|&p| p >= POSITIVE_PRIOR_MIN),
+        ..*set
+    };
     let mut out = vec![0.0f64; init.len()];
     let mut states = buffers.states(plan);
     let reads: Vec<f64> = (0..plan.num_components())
@@ -1026,6 +1139,9 @@ mod tests {
             min_iter: 50,
             max_iter: 10_000,
             parallel,
+            // Guarded here; `run` drops the guard for these priors, so the
+            // tests below also check that dropping it changes no bit.
+            guard_zero_et: true,
             stop: EmStop::Global,
         }
     }
@@ -1269,5 +1385,48 @@ mod tests {
         };
         let (_, _, converged, summary) = run(&plan, &init, &prior, &short);
         assert!(!converged && summary.num_unconverged >= 1);
+    }
+
+    /// `exp_digamma` agrees with `statrs`'s `digamma(x).exp()` over the range
+    /// VBEM visits under any prior ≥ 0.01, to within the conditioning of
+    /// `exp(ψ(x))` (relative `|ψ(x)|·ε`; both sides carry about twice that).
+    #[test]
+    fn exp_digamma_matches_statrs() {
+        use statrs::function::gamma::digamma;
+        let n = 200_000;
+        let mut worst = 0.0f64;
+        for k in 0..n {
+            let x = 10f64.powf(-2.0 + 10.0 * (k as f64 + 0.5) / n as f64);
+            let (got, want) = (exp_digamma(x), digamma(x).exp());
+            let rel = (got - want).abs() / want;
+            let bound = 8.0 * f64::EPSILON * (digamma(x).abs() + 4.0);
+            assert!(
+                rel <= bound,
+                "x={x:e}: {got:e} vs {want:e} (rel {rel:e} > {bound:e})"
+            );
+            worst = worst.max(rel / bound);
+        }
+        assert!(worst > 0.0);
+    }
+
+    /// The vectorized dispatch computes the same bits as the portable loop.
+    #[test]
+    fn fill_et_dispatch_is_bit_identical() {
+        let n = 10_007;
+        let alpha: Vec<f64> = (0..n)
+            .map(|i| match i % 4 {
+                0 => 0.0,
+                1 => 1e-9 * i as f64,
+                2 => (i as f64 * 0.618_033_988_7).fract() * 20.0,
+                _ => 1e6 * (i as f64).sqrt(),
+            })
+            .collect();
+        for pr in [0.0, 1e-12, 1e-3, 1e-2, 7.5] {
+            let prior = vec![pr; n];
+            let (mut a, mut b) = (vec![0.0; n], vec![0.0; n]);
+            fill_et(&mut a, &alpha, &prior);
+            fill_et_body(&mut b, &alpha, &prior);
+            assert_eq!(bits(&a), bits(&b), "prior {pr}");
+        }
     }
 }
