@@ -9,8 +9,8 @@ reproducible. Two things change for users:
   dictionary format); salmon refuses older indexes with the command to rebuild
   them.
 - **VBEM now converges each independent group of transcripts separately.**
-  Abundances shift slightly, mostly between near-identical isoforms, and are
-  more accurate on simulated data. Plain EM (`--useEM`) results are unchanged.
+  Abundances shift, mostly between near-identical isoforms, and are more
+  accurate on simulated data. Plain EM (`--useEM`) results are unchanged.
 
 <!-- TODO(release): confirm version number (index format break; 2.7.0 set the
 precedent of a minor bump for one). -->
@@ -42,8 +42,13 @@ Where the time went:
   equivalence-class graph: transcripts are renumbered densely by component,
   single-transcript classes are folded into constants, and each component is
   iterated in cache-sized blocks. This schedule is kallistors' (see
-  Acknowledgements). On the muscle run, VBEM falls from 46.6 s to 0.6 s
-  single-threaded, and plain EM costs the same per iteration as kallistors'.
+  Acknowledgements). VBEM's expectations `exp(ψ(·))` are computed by a
+  vectorized, branch-free routine instead of a library digamma, so a VBEM
+  iteration now costs within 15% of a plain-EM one. Inference time (from the
+  intermediate mapping file, 1 / 8 / 16 threads): muscle VBEM 46.6 s → 0.88 /
+  0.15 / 0.13 s, GEUVADIS VBEM 3.7 / 0.76 / 0.55 s; plain EM costs about
+  what kallistors' does (muscle 5.8 / 0.80 / 0.47 s vs 5.4 / 1.0 / 0.64 s;
+  GEUVADIS 3.9 / 0.87 / 0.59 s vs 3.9 / 0.82 / 0.78 s).
 - **Mapping (`--sketch`).** piscem-rs 0.12 stops tracking a transcript as
   soon as it misses a hit (it could no longer be accepted), instead of keeping
   a hash-map entry for every occurrence of every k-mer hit; the accepted
@@ -64,20 +69,27 @@ Where the time went:
 ### VBEM convergence (default optimizer)
 
 VBEM used to iterate every transcript until the *slowest* group of
-transcripts converged. It now stops each connected component — a set of
-transcripts linked by shared reads — when that component meets the usual
-criterion (same tolerance, same minimum iterations). Components are
-independent problems, so this is still the same model; it simply stops doing
-extra iterations on groups that have already converged.
+transcripts converged. It now iterates each connected component — a set of
+transcripts linked by shared reads — on its own, and stops it once the usual
+criterion holds over the component (same tolerance, same minimum iterations)
+**and** the movement still to come, projected from how fast its steps are
+shrinking, is below 0.1% of the component's fragments. The second condition
+matters for families of near-identical isoforms (e.g. *TTN*, *NEB*): their
+steps are tiny long before they settle, so the criterion alone would stop them
+far from converged. Components are independent problems, so this is still the
+same model.
 
-On two polyester simulations (76 bp and 50 bp), accuracy against the true
-counts improves: Spearman +0.010 / +0.008, mean absolute relative difference
-−0.0022 / −0.0018 (95% bootstrap intervals exclude zero). Against 2.8.0's
-output on real data, transcript-level Spearman is 0.93 (GENCODE v50, muscle)
-and 0.985 (Ensembl, GEUVADIS); the largest differences are between
-near-identical isoforms of very large genes (e.g. *NEB*, *TTN*), where the
-reads cannot tell them apart. Gene-level estimates agree closely (Spearman
-0.998 on muscle).
+On six simulations with realistic expression profiles (three profiles,
+GENCODE v50, selective alignment and `--sketch`), the total absolute error
+against the true counts falls on every sample, by up to 31% (L1 error 0.145 →
+0.101 of all fragments; 95% bootstrap intervals exclude zero), concentrated in
+those isoform families; transcript-level Spearman and mean absolute relative
+difference are unchanged (within ±0.001) and gene-level estimates are
+unchanged. `meta_info.json` reports how the components ended
+(`em_components`; see the output-format reference): a handful of very slowly
+mixing families can reach the iteration cap after meeting the criterion,
+which is reported there and in the log, and `em_converged` stays `true`. The
+expert flag `--stopRule global` reproduces 2.8.0's VBEM results.
 
 Results remain deterministic and identical at any `-p`. With `--useEM`, and
 with `--emAccel squarem` or `daarem`, results are unchanged from 2.8.0 (to
