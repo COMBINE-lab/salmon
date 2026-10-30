@@ -468,14 +468,15 @@ struct FragCfg<'a> {
     expected_format: Option<LibraryFormat>,
     ignore_incompat: bool,
     incompat_prior: f64,
-    paired_lib: bool,
     /// `--noFragLengthDist`: leave the fragment-length term out of the weight.
     no_frag_length_dist: bool,
-    /// `--noSingleFragProb` (inverted): model an orphan's fragment length.
+    /// `--noSingleFragProb` (inverted): model the fragment length of an orphan
+    /// or single-end read (salmon's ambiguous bounded-CMF probability).
     model_single_frag_prob: bool,
     /// `--hardFilter`: keep only best-scoring placements, at weight 1.
     hard_filter: bool,
-    /// `--discardOrphans`: drop half-mapped fragments in a paired library.
+    /// `--discardOrphans`: drop half-mapped (orphan) fragments. Judged by each
+    /// record's mapping type, so single-end reads are never dropped.
     discard_orphans: bool,
     range_factorization_bins: u32,
     eq_builder: &'a EquivalenceClassBuilder,
@@ -488,6 +489,52 @@ struct FragCfg<'a> {
 /// than merely disfavour it. Same value the reads path uses
 /// (`salmon_quant::processor::LOG_EPSILON`).
 const ORPHAN_LOG_EPSILON: f64 = -23.998_158_637_57;
+
+/// Whether a placement is half of a paired fragment (one mate mapped).
+#[inline]
+fn is_orphan(status: MateStatus) -> bool {
+    matches!(
+        status,
+        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+    )
+}
+
+/// The mapped read's length for an orphan / single-end placement, carried in
+/// the `frag_len` slot by salmon's writer; `None` when the writer did not
+/// record it (piscem's [`salmon_rad::FRAG_LEN_UNPAIRED`]).
+#[inline]
+fn unpaired_read_len(p: &RadPlacement) -> Option<i32> {
+    (p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED).then_some(p.frag_len as i32)
+}
+
+/// Fragment-length log-probability of a placement that is not a proper pair:
+/// an orphan, or a read of a single-end library. Mirrors salmon (C++
+/// `SalmonQuantify` / `SalmonQuantifyAlignments`): with `modelSingleFragProb`
+/// (the default) both get the bounded-CMF *ambiguous* probability — the unseen
+/// mate must fit between the read and the transcript end; under
+/// `--noSingleFragProb` an orphan takes the flat `LOG_EPSILON` penalty and a
+/// single-end read nothing. Single-end vs orphan is the record's own mapping
+/// type, so the rule does not depend on how `-l` was spelled.
+///
+/// `p.pos` is the read's leftmost base ([`salmon_rad::RadHit::pos`]); without
+/// a recorded read length (piscem) a reverse read's bound is `pos`, a
+/// conservative under-estimate by one read length.
+#[inline]
+fn unpaired_log_frag_prob(
+    p: &RadPlacement,
+    cmf: &[f64],
+    model_single_frag_prob: bool,
+    rl: i32,
+) -> f64 {
+    if model_single_frag_prob {
+        let read_len = unpaired_read_len(p).unwrap_or(0);
+        salmon_model::ambig_frag_log_prob(cmf, p.is_fw, p.pos as i32, read_len, rl)
+    } else if is_orphan(p.status) {
+        ORPHAN_LOG_EPSILON
+    } else {
+        0.0
+    }
+}
 
 /// The eq-class log-weight basis for one hit, given the file's score
 /// interpretation. Uniform (`0`) when the profile is unscored; for a raw AS
@@ -553,7 +600,7 @@ fn process_rad_fragment(
         // dropped outright, the same rule the alignment writer applies when it
         // builds the RAD — so requantifying a RAD agrees with the run that
         // wrote it (#1140).
-        if cfg.discard_orphans && cfg.paired_lib && p.status != MateStatus::PairedEndPaired {
+        if cfg.discard_orphans && is_orphan(p.status) {
             continue;
         }
         // `--hardFilter`: keep only the best-scoring placement(s), at weight 1,
@@ -585,38 +632,10 @@ fn process_rad_fragment(
             // support. Matches the direct/reads path the round-trip is compared to.
             let flen = (p.frag_len as i32).min(rl.max(1));
             at(cfg.pmf, flen as usize) - at(cfg.cmf, rl.max(1) as usize)
-        } else if cfg.paired_lib && !cfg.model_single_frag_prob {
-            // `--noSingleFragProb`: do not model an orphan's fragment length —
-            // a flat penalty for an unexpected orphan, nothing for a
-            // single-end read, exactly as `processor::frag_log_prob` does on
-            // the reads path. The flag used to stop at the mapping pass, so it
-            // was inert on every RAD path including the 2.6.0 default (#1140,
-            // audit D14).
-            if matches!(
-                p.status,
-                MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-            ) {
-                ORPHAN_LOG_EPSILON
-            } else {
-                0.0
-            }
-        } else if cfg.paired_lib {
-            // Orphan / single-end in a paired library: bounded-CMF ambiguous
-            // fragment-length probability (salmon's `getAmbigFragLengthProb`), the
-            // same orphan weight the one-pass path uses, NOT a flat penalty. The
-            // mapped mate's position + orientation + transcript length bound the
-            // possible fragment lengths; a forward read is exact from `txp_len −
-            // pos`, a reverse read uses the mate's read length carried in the
-            // orphan `frag_len` slot (salmon RAD) or `0` (piscem RAD ⇒ forward
-            // bound only).
-            let read_len = if p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED {
-                p.frag_len as i32
-            } else {
-                0
-            };
-            salmon_model::ambig_frag_log_prob(cfg.cmf, p.is_fw, p.pos as i32, read_len, rl)
         } else {
-            0.0
+            // Orphan in a paired library, or a read of a single-end library —
+            // decided by the record's own mapping type, not by `-l`.
+            unpaired_log_frag_prob(p, cfg.cmf, cfg.model_single_frag_prob, rl)
         };
         let mut aux = basis + log_frag_prob;
         let (obs, is_fw, status) = rad_frag_format(p);
@@ -1420,7 +1439,6 @@ struct BiasCfg<'a> {
     expected_format: Option<LibraryFormat>,
     ignore_incompat: bool,
     incompat_prior: f64,
-    paired_lib: bool,
     /// `--noFragLengthDist`: leave the fragment-length term out of the posterior
     /// this bias pass weights its observations by, as the eq-class pass does.
     no_frag_length_dist: bool,
@@ -1470,7 +1488,7 @@ fn collect_bias_fragment(
     for p in placements {
         let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
         // Same placement set as the eq-class pass (see there).
-        if cfg.discard_orphans && cfg.paired_lib && p.status != MateStatus::PairedEndPaired {
+        if cfg.discard_orphans && is_orphan(p.status) {
             continue;
         }
         if cfg.hard_filter && cfg.scored && p.score != best {
@@ -1485,25 +1503,9 @@ fn collect_bias_fragment(
             0.0
         } else if proper {
             at(cfg.pmf, flen as usize) - at(cfg.cmf, rl.max(1) as usize)
-        } else if cfg.paired_lib && !cfg.model_single_frag_prob {
-            // `--noSingleFragProb`, as in the eq-class pass above.
-            if matches!(
-                p.status,
-                MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-            ) {
-                ORPHAN_LOG_EPSILON
-            } else {
-                0.0
-            }
-        } else if cfg.paired_lib {
-            let read_len = if p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED {
-                p.frag_len as i32
-            } else {
-                0
-            };
-            salmon_model::ambig_frag_log_prob(cfg.cmf, p.is_fw, p.pos as i32, read_len, rl)
         } else {
-            0.0
+            // as in the eq-class pass above
+            unpaired_log_frag_prob(p, cfg.cmf, cfg.model_single_frag_prob, rl)
         };
         let start_pos = if proper && flen <= rl {
             -(((rl - flen + 1) as f64).ln())
@@ -1530,12 +1532,14 @@ fn collect_bias_fragment(
         } else if p.is_fw {
             (fs, Some(fs), None)
         } else {
-            let read_len = if p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED {
-                p.frag_len as usize
-            } else {
-                0
-            };
-            (fs, None, Some(fs + read_len.saturating_sub(1)))
+            // `pos` is the read's leftmost base (see `RadHit::pos`), so a
+            // reverse read's 5' end is `pos + read_len - 1`. Without a read
+            // length (piscem RAD) the 5' end is unknown: contribute no context
+            // rather than a wrong one.
+            let five = unpaired_read_len(p)
+                .filter(|&l| l > 0)
+                .map(|l| fs + l as usize - 1);
+            (fs, None, five)
         };
         scratch.bias.push_in(
             order,
@@ -1870,8 +1874,14 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         }
     );
 
-    // Library-type handling (same as alignment mode).
-    let paired_lib = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
+    // Library layout, for the FLD policy below (whether there are fragment
+    // lengths to derive, and whether a baked FLD is observed data or a prior).
+    // Taken from the data — the RAD header's `is_paired`, which the reads-mode
+    // writer and piscem set from the actual input — unless `-l` names a
+    // single-end type. (Per-fragment weighting does not use this at all: it
+    // follows each record's own mapping type.)
+    let paired_lib =
+        prelude.hdr.is_paired != 0 && !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
     let auto_lib = opts.lib_type.as_str() == "A";
     let mut expected_format = match opts.lib_type.as_str() {
         "A" => None,
@@ -2101,7 +2111,6 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             expected_format,
             ignore_incompat,
             incompat_prior: opts.incompat_prior,
-            paired_lib,
             no_frag_length_dist: opts.no_frag_length_dist,
             model_single_frag_prob: opts.model_single_frag_prob,
             hard_filter: opts.hard_filter,
@@ -2121,7 +2130,6 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 expected_format,
                 ignore_incompat,
                 incompat_prior: opts.incompat_prior,
-                paired_lib,
                 no_frag_length_dist: opts.no_frag_length_dist,
                 model_single_frag_prob: opts.model_single_frag_prob,
                 hard_filter: opts.hard_filter,
@@ -2297,7 +2305,6 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 expected_format,
                 ignore_incompat,
                 incompat_prior: opts.incompat_prior,
-                paired_lib,
                 no_frag_length_dist: opts.no_frag_length_dist,
                 model_single_frag_prob: opts.model_single_frag_prob,
                 hard_filter: opts.hard_filter,
@@ -2710,5 +2717,97 @@ mod group_tests {
         assert_eq!(p[1].tid, 5);
         assert_eq!(p[1].frag, (10, 20));
         assert_eq!(group_log, vec![-2.0, -1.0]);
+    }
+}
+
+#[cfg(test)]
+mod unpaired_tests {
+    use super::*;
+
+    /// Log-CMF of a uniform FLD on `1..=n` (`cmf[l] = ln(l/n)`), long enough
+    /// that every bound below is in range.
+    fn uniform_cmf(n: usize) -> Vec<f64> {
+        (0..=n)
+            .map(|l| {
+                if l == 0 {
+                    f64::NEG_INFINITY
+                } else {
+                    (l.min(n) as f64 / n as f64).ln()
+                }
+            })
+            .collect()
+    }
+
+    fn hit(status: MateStatus, is_fw: bool, pos: u32, frag_len: u16) -> RadPlacement {
+        RadPlacement {
+            tid: 0,
+            score: 0,
+            is_fw,
+            mate_fw: false,
+            status,
+            pos,
+            frag_len,
+        }
+    }
+
+    /// A reverse unpaired read at leftmost `pos` with read length `rl` leaves
+    /// room for a fragment of at most `pos + rl` bases — the bound must come
+    /// from the leftmost base the writer stores, for single-end reads and
+    /// orphans alike, and must not depend on `-l`.
+    #[test]
+    fn reverse_unpaired_bound_is_leftmost_plus_read_length() {
+        let cmf = uniform_cmf(1000);
+        let txp = 900;
+        for status in [
+            MateStatus::SingleEnd,
+            MateStatus::PairedEndLeft,
+            MateStatus::PairedEndRight,
+        ] {
+            let p = hit(status, false, 100, 76);
+            let got = unpaired_log_frag_prob(&p, &cmf, true, txp);
+            let want = (176.0f64 / 1000.0).ln() - (900.0f64 / 1000.0).ln();
+            assert!((got - want).abs() < 1e-12, "{status:?}: {got} vs {want}");
+            // a forward read is bounded by the transcript end instead
+            let f = hit(status, true, 100, 76);
+            let want_f = (800.0f64 / 1000.0).ln() - (900.0f64 / 1000.0).ln();
+            assert!((unpaired_log_frag_prob(&f, &cmf, true, txp) - want_f).abs() < 1e-12);
+        }
+    }
+
+    /// `--noSingleFragProb`: an orphan takes salmon's flat penalty, a
+    /// single-end read nothing.
+    #[test]
+    fn no_single_frag_prob_penalizes_only_orphans() {
+        let cmf = uniform_cmf(1000);
+        let se = hit(MateStatus::SingleEnd, false, 100, 76);
+        let orphan = hit(MateStatus::PairedEndRight, false, 100, 76);
+        assert_eq!(unpaired_log_frag_prob(&se, &cmf, false, 900), 0.0);
+        assert_eq!(
+            unpaired_log_frag_prob(&orphan, &cmf, false, 900),
+            ORPHAN_LOG_EPSILON
+        );
+        assert!(!is_orphan(MateStatus::SingleEnd));
+        assert!(!is_orphan(MateStatus::PairedEndPaired));
+        assert!(is_orphan(MateStatus::PairedEndLeft) && is_orphan(MateStatus::PairedEndRight));
+    }
+
+    /// piscem records no read length (`FRAG_LEN_UNPAIRED`): the reverse bound
+    /// falls back to `pos` alone, and the read length reads as unknown.
+    #[test]
+    fn piscem_unpaired_hit_has_no_read_length() {
+        let cmf = uniform_cmf(1000);
+        let p = hit(
+            MateStatus::SingleEnd,
+            false,
+            100,
+            salmon_rad::FRAG_LEN_UNPAIRED,
+        );
+        assert_eq!(unpaired_read_len(&p), None);
+        let want = (100.0f64 / 1000.0).ln() - (900.0f64 / 1000.0).ln();
+        assert!((unpaired_log_frag_prob(&p, &cmf, true, 900) - want).abs() < 1e-12);
+        assert_eq!(
+            unpaired_read_len(&hit(MateStatus::SingleEnd, false, 1, 76)),
+            Some(76)
+        );
     }
 }
