@@ -41,12 +41,13 @@ Where the time went:
 - **Inference.** The EM and VBEM now work on the connected components of the
   equivalence-class graph: transcripts are renumbered densely by component,
   single-transcript classes are folded into constants, and each component is
-  iterated in cache-sized blocks. On the muscle run, VBEM falls from 46.6 s to
-  0.6 s single-threaded, and plain EM costs the same per iteration as
-  kallistors'.
+  iterated in cache-sized blocks. This schedule is kallistors' (see
+  Acknowledgements). On the muscle run, VBEM falls from 46.6 s to 0.6 s
+  single-threaded, and plain EM costs the same per iteration as kallistors'.
 - **Mapping (`--sketch`).** piscem-rs 0.12 tracks only the transcripts a read
-  can still map to, instead of a hash map entry for every occurrence of every
-  k-mer hit; 12–20% faster mapping. Reading the intermediate mapping file back
+  can still map to — kallisto's running intersection of compatible
+  transcripts, applied to piscem's position-aware hits — instead of a hash map
+  entry for every occurrence of every k-mer hit; 12–20% faster mapping. Reading the intermediate mapping file back
   and building equivalence classes is also cheaper.
 - **Selective alignment.** Grouping candidate anchors by transcript is now
   linear, and repeated hits that extend to an already-seen anchor are skipped:
@@ -155,6 +156,28 @@ paired- and single-end).
   transcript is now scored with the overhang clipped, as the option
   promises; default scoring (no soft-clipping) is unchanged.
 
+
+## Acknowledgements
+
+This release was prompted by, and borrows from,
+[kallistors](https://github.com/deminden/kallistors) (Denis Demin), a Rust
+reimplementation of kallisto whose 0.6.0 release reported quantification 2–3×
+faster than salmon 2.8.0's `--sketch` mode on some datasets. We used its
+published benchmark setup (SRR13638690 trimmed with its fastp settings,
+GENCODE v50) to reproduce that comparison, and studied its implementation:
+
+- **The EM schedule is kallistors'.** Iterating each connected component in
+  cache-sized tiles while reproducing the global stopping iteration, folding
+  single-transcript classes into constants, and renumbering active
+  transcripts densely — we found this was the whole of its EM speed advantage
+  and adopted it in `salmon-infer` (`components` module).
+- **The sketch-mode collector applies kallisto's principle** (Bray et al.,
+  *Nature Biotechnology* 2016): a read is compatible only with the
+  transcripts common to all of its k-mer hits, so only those need tracking.
+  kallistors' fast implementation of this intersection is what showed us
+  how much it saves.
+
+Thanks also to Benjamin Demaille for the #1231 and #1239 fixes.
 
 ## Dependencies
 
