@@ -464,6 +464,9 @@ struct FragCfg<'a> {
     /// fixed log-CMF of the FLD, indexed by raw length (also passed whole to the
     /// orphan ambiguous-length term).
     cmf: &'a [f64],
+    /// log-CMF the single-end length term is read from: `cmf`, broadened when
+    /// the FLD is only the default prior (see [`unpaired_log_frag_prob`]).
+    se_cmf: &'a [f64],
     lengths: &'a [u32],
     expected_format: Option<LibraryFormat>,
     ignore_incompat: bool,
@@ -507,14 +510,36 @@ fn unpaired_read_len(p: &RadPlacement) -> Option<i32> {
     (p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED).then_some(p.frag_len as i32)
 }
 
+/// Floor on the coefficient of variation of the distribution the single-end
+/// length term is computed from, when that distribution is salmon's built-in
+/// `--fldMean`/`--fldSD` default rather than something the user supplied. See
+/// [`unpaired_log_frag_prob`].
+const SE_DEFAULT_PRIOR_MIN_CV: f64 = 0.4;
+
+/// Weight of the "unseen mate lies off the transcript" alternative in an
+/// orphan's length term. See [`unpaired_log_frag_prob`].
+const ORPHAN_OFF_TRANSCRIPT_WEIGHT: f64 = 0.5;
+
 /// Fragment-length log-probability of a placement that is not a proper pair:
-/// an orphan, or a read of a single-end library. Mirrors salmon (C++
-/// `SalmonQuantify` / `SalmonQuantifyAlignments`): with `modelSingleFragProb`
-/// (the default) both get the bounded-CMF *ambiguous* probability — the unseen
-/// mate must fit between the read and the transcript end; under
-/// `--noSingleFragProb` an orphan takes the flat `LOG_EPSILON` penalty and a
-/// single-end read nothing. Single-end vs orphan is the record's own mapping
-/// type, so the rule does not depend on how `-l` was spelled.
+/// an orphan, or a read of a single-end library, decided by the record's own
+/// mapping type (not by how `-l` was spelled). With `modelSingleFragProb` (the
+/// default) both use salmon's bounded-CMF *ambiguous* probability -- the unseen
+/// mate must fit between the read and the transcript end -- with two deliberate
+/// departures from C++ salmon, each chosen against simulated truth:
+///
+/// * **single-end reads** read the bound from `se_cmf`, which the caller widens
+///   (SD at least [`SE_DEFAULT_PRIOR_MIN_CV`] x mean) when the FLD is only
+///   salmon's default prior: a single-end library has no observed lengths, and
+///   a narrow guess that is too long crushes every placement near the
+///   transcript end the read points at. A user-supplied prior is used as given.
+/// * **orphans** mix the bound with an unconstrained alternative at weight
+///   [`ORPHAN_OFF_TRANSCRIPT_WEIGHT`]: an orphan's mate failed to map, which is
+///   itself evidence it may lie past the annotated transcript end, where the
+///   bound's premise (the fragment fits inside the transcript) is false. The
+///   penalty is thereby capped at `ln 2` instead of being unbounded.
+///
+/// Under `--noSingleFragProb` an orphan takes the flat `LOG_EPSILON` penalty
+/// and a single-end read nothing, as in salmon.
 ///
 /// `p.pos` is the read's leftmost base ([`salmon_rad::RadHit::pos`]); without
 /// a recorded read length (piscem) a reverse read's bound is `pos`, a
@@ -523,16 +548,28 @@ fn unpaired_read_len(p: &RadPlacement) -> Option<i32> {
 fn unpaired_log_frag_prob(
     p: &RadPlacement,
     cmf: &[f64],
+    se_cmf: &[f64],
     model_single_frag_prob: bool,
     rl: i32,
 ) -> f64 {
-    if model_single_frag_prob {
-        let read_len = unpaired_read_len(p).unwrap_or(0);
-        salmon_model::ambig_frag_log_prob(cmf, p.is_fw, p.pos as i32, read_len, rl)
-    } else if is_orphan(p.status) {
-        ORPHAN_LOG_EPSILON
-    } else {
-        0.0
+    if !model_single_frag_prob {
+        return if is_orphan(p.status) {
+            ORPHAN_LOG_EPSILON
+        } else {
+            0.0
+        };
+    }
+    let read_len = unpaired_read_len(p).unwrap_or(0);
+    let bound =
+        |c: &[f64]| salmon_model::ambig_frag_log_prob(c, p.is_fw, p.pos as i32, read_len, rl);
+    match p.status {
+        MateStatus::SingleEnd => bound(se_cmf),
+        MateStatus::PairedEndLeft | MateStatus::PairedEndRight => {
+            let w = ORPHAN_OFF_TRANSCRIPT_WEIGHT;
+            ((1.0 - w) * bound(cmf).exp() + w).ln()
+        }
+        // a pair record with no usable length: the plain bound, as before
+        MateStatus::PairedEndPaired => bound(cmf),
     }
 }
 
@@ -635,7 +672,7 @@ fn process_rad_fragment(
         } else {
             // Orphan in a paired library, or a read of a single-end library —
             // decided by the record's own mapping type, not by `-l`.
-            unpaired_log_frag_prob(p, cfg.cmf, cfg.model_single_frag_prob, rl)
+            unpaired_log_frag_prob(p, cfg.cmf, cfg.se_cmf, cfg.model_single_frag_prob, rl)
         };
         let mut aux = basis + log_frag_prob;
         let (obs, is_fw, status) = rad_frag_format(p);
@@ -1435,6 +1472,9 @@ struct BiasCfg<'a> {
     score_kind: u8,
     pmf: &'a [f64],
     cmf: &'a [f64],
+    /// log-CMF the single-end length term is read from: `cmf`, broadened when
+    /// the FLD is only the default prior (see [`unpaired_log_frag_prob`]).
+    se_cmf: &'a [f64],
     lengths: &'a [u32],
     expected_format: Option<LibraryFormat>,
     ignore_incompat: bool,
@@ -1505,7 +1545,7 @@ fn collect_bias_fragment(
             at(cfg.pmf, flen as usize) - at(cfg.cmf, rl.max(1) as usize)
         } else {
             // as in the eq-class pass above
-            unpaired_log_frag_prob(p, cfg.cmf, cfg.model_single_frag_prob, rl)
+            unpaired_log_frag_prob(p, cfg.cmf, cfg.se_cmf, cfg.model_single_frag_prob, rl)
         };
         let start_pos = if proper && flen <= rl {
             -(((rl - flen + 1) as f64).ln())
@@ -2005,6 +2045,30 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // PMF *is* the cached normalized log-PMF; the CMF is its cumulative companion.
     let pmf: Vec<f64> = fld.log_pmf().to_vec();
     let cmf: Vec<f64> = (0..pmf.len()).map(|l| fld.cmf(l)).collect();
+    // The single-end length term's distribution. When the FLD is nothing but
+    // salmon's built-in default prior (a single-end run, no `--fldMean`/`--fldSD`
+    // from the user, here or in the mapping run that baked it), widen it to an
+    // SD of at least `SE_DEFAULT_PRIOR_MIN_CV` x mean: the default is a guess
+    // about this library, and the bound is only as good as its lower tail.
+    let user_prior =
+        opts.fld_prior_user_supplied || opts.explicit_fld_args.mean || opts.explicit_fld_args.sd;
+    let default_prior_only = matches!(
+        fld_source,
+        FragLengthSource::Prior | FragLengthSource::RadBakedPrior
+    ) && !user_prior;
+    let se_cmf: Vec<f64> = if default_prior_only {
+        let (mean, sd) = (fld.mean(), fld.sd());
+        let wide_sd = sd.max(SE_DEFAULT_PRIOR_MIN_CV * mean);
+        tracing::info!(
+            "single-end fragment-length term: default prior widened to mean={mean:.1}, \
+             sd={wide_sd:.1} (pass --fldMean/--fldSD to use a known distribution as given)"
+        );
+        let mut wide = FragmentLengthDistribution::new(1.0, opts.fld_max, mean, wide_sd, 4, 0.5, 1);
+        wide.cache();
+        (0..pmf.len()).map(|l| wide.cmf(l)).collect()
+    } else {
+        cmf.clone()
+    };
 
     // Base effective lengths from the fixed FLD (used by the rough seed EM below
     // and by the final inference); bias correction mutates them in place later.
@@ -2107,6 +2171,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             score_kind,
             pmf: &pmf,
             cmf: &cmf,
+            se_cmf: &se_cmf,
             lengths: &lengths,
             expected_format,
             ignore_incompat,
@@ -2126,6 +2191,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 score_kind,
                 pmf: &pmf,
                 cmf: &cmf,
+                se_cmf: &se_cmf,
                 lengths: &lengths,
                 expected_format,
                 ignore_incompat,
@@ -2301,6 +2367,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 score_kind,
                 pmf: &pmf,
                 cmf: &cmf,
+                se_cmf: &se_cmf,
                 lengths: &lengths,
                 expected_format,
                 ignore_incompat,
@@ -2753,24 +2820,40 @@ mod unpaired_tests {
     /// A reverse unpaired read at leftmost `pos` with read length `rl` leaves
     /// room for a fragment of at most `pos + rl` bases — the bound must come
     /// from the leftmost base the writer stores, for single-end reads and
-    /// orphans alike, and must not depend on `-l`.
+    /// orphans alike, and must not depend on `-l`. A single-end read reads the
+    /// bound from `se_cmf`; an orphan mixes it with the off-transcript
+    /// alternative at even odds.
     #[test]
     fn reverse_unpaired_bound_is_leftmost_plus_read_length() {
         let cmf = uniform_cmf(1000);
-        let txp = 900;
-        for status in [
-            MateStatus::SingleEnd,
-            MateStatus::PairedEndLeft,
-            MateStatus::PairedEndRight,
-        ] {
+        let wide = uniform_cmf(500);
+        let txp = 400;
+        let r_rev = (176.0f64 / 1000.0) / (400.0 / 1000.0);
+        let r_fw = (300.0f64 / 1000.0) / (400.0 / 1000.0);
+        let se_rev = (176.0f64 / 500.0) / (400.0 / 500.0);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        // single-end: the bound, from `se_cmf`
+        let p = hit(MateStatus::SingleEnd, false, 100, 76);
+        assert!(close(
+            unpaired_log_frag_prob(&p, &cmf, &wide, true, txp),
+            se_rev.ln()
+        ));
+        let p = hit(MateStatus::SingleEnd, true, 100, 76);
+        assert!(close(
+            unpaired_log_frag_prob(&p, &cmf, &cmf, true, txp),
+            r_fw.ln()
+        ));
+        // orphans: ln(0.5 * bound + 0.5), from the observed `cmf`
+        for status in [MateStatus::PairedEndLeft, MateStatus::PairedEndRight] {
             let p = hit(status, false, 100, 76);
-            let got = unpaired_log_frag_prob(&p, &cmf, true, txp);
-            let want = (176.0f64 / 1000.0).ln() - (900.0f64 / 1000.0).ln();
-            assert!((got - want).abs() < 1e-12, "{status:?}: {got} vs {want}");
-            // a forward read is bounded by the transcript end instead
+            let got = unpaired_log_frag_prob(&p, &cmf, &wide, true, txp);
+            assert!(close(got, (0.5 * r_rev + 0.5).ln()), "{status:?}: {got}");
             let f = hit(status, true, 100, 76);
-            let want_f = (800.0f64 / 1000.0).ln() - (900.0f64 / 1000.0).ln();
-            assert!((unpaired_log_frag_prob(&f, &cmf, true, txp) - want_f).abs() < 1e-12);
+            let got = unpaired_log_frag_prob(&f, &cmf, &wide, true, txp);
+            assert!(close(got, (0.5 * r_fw + 0.5).ln()));
+            // never penalized by more than ln 2, however tight the room
+            let tight = hit(status, false, 0, 1);
+            assert!(unpaired_log_frag_prob(&tight, &cmf, &wide, true, txp) >= 0.5f64.ln() - 1e-12);
         }
     }
 
@@ -2781,9 +2864,9 @@ mod unpaired_tests {
         let cmf = uniform_cmf(1000);
         let se = hit(MateStatus::SingleEnd, false, 100, 76);
         let orphan = hit(MateStatus::PairedEndRight, false, 100, 76);
-        assert_eq!(unpaired_log_frag_prob(&se, &cmf, false, 900), 0.0);
+        assert_eq!(unpaired_log_frag_prob(&se, &cmf, &cmf, false, 900), 0.0);
         assert_eq!(
-            unpaired_log_frag_prob(&orphan, &cmf, false, 900),
+            unpaired_log_frag_prob(&orphan, &cmf, &cmf, false, 900),
             ORPHAN_LOG_EPSILON
         );
         assert!(!is_orphan(MateStatus::SingleEnd));
@@ -2804,7 +2887,7 @@ mod unpaired_tests {
         );
         assert_eq!(unpaired_read_len(&p), None);
         let want = (100.0f64 / 1000.0).ln() - (900.0f64 / 1000.0).ln();
-        assert!((unpaired_log_frag_prob(&p, &cmf, true, 900) - want).abs() < 1e-12);
+        assert!((unpaired_log_frag_prob(&p, &cmf, &cmf, true, 900) - want).abs() < 1e-12);
         assert_eq!(
             unpaired_read_len(&hit(MateStatus::SingleEnd, false, 1, 76)),
             Some(76)

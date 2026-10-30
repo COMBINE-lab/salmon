@@ -169,6 +169,10 @@ pub struct QuantOptions {
     pub fld_mean: f64,
     pub fld_sd: f64,
     pub fld_max: usize,
+    /// whether the user supplied `--fldMean`/`--fldSD` (rather than taking the
+    /// defaults); forwarded to the deterministic requant, which widens a merely
+    /// default single-end prior for the single-end length term.
+    pub fld_prior_user_supplied: bool,
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
     /// significant digits for the EffectiveLength and NumReads columns of
@@ -259,6 +263,7 @@ impl QuantOptions {
             fld_mean: 250.0,
             fld_sd: 25.0,
             fld_max: 1000,
+            fld_prior_user_supplied: false,
             forgetting_factor: 0.65,
             sig_digits: 3,
             max_read_occ: 250,
