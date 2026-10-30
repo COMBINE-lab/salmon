@@ -229,7 +229,7 @@ available, and to Benjamin Demaille for the #1231 and #1239 fixes.
 ## Dependencies
 
 piscem-rs 0.12, sshash-lib 0.8 (sux 0.15 / epserde 0.13), cf1-rs
-<!-- TODO(release): version -->, bramble-rs 0.2, noodles 0.119
+0.6, bramble-rs 0.2, noodles 0.119
 (noodles-bam 0.98, noodles-sam 0.93, noodles-bgzf 0.52), paraseq-temp
 0.6.2-pre.1, plus semver-compatible updates. Each noodles crate now appears
 once in the dependency graph.
