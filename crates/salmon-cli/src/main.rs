@@ -39,7 +39,7 @@ use salmon_align::{
     ExplicitFldArgs, FldPolicy, GenomeProjectOptions,
 };
 use salmon_index::{build as build_index, IndexBuildOptions};
-use salmon_quant::{quantify, ChunkCodec, EmAccel, ProgressCounters, QuantOptions};
+use salmon_quant::{quantify, ChunkCodec, EmAccel, EmStop, ProgressCounters, QuantOptions};
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -194,6 +194,34 @@ impl From<EmAccelArg> for EmAccel {
             EmAccelArg::Squarem => EmAccel::Squarem,
             EmAccelArg::Daarem => EmAccel::Daarem,
         }
+    }
+}
+
+/// CLI surface for [`EmStop`]: when an unaccelerated EM/VBEM run stops.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum EmStopArg {
+    /// salmon's rule: the whole problem at once (salmon ≤ 2.8).
+    Global,
+    /// Each connected component on its own, once its projected remaining
+    /// movement is small.
+    Projected,
+}
+
+impl From<EmStopArg> for EmStop {
+    fn from(a: EmStopArg) -> Self {
+        match a {
+            EmStopArg::Global => EmStop::Global,
+            EmStopArg::Projected => EmStop::Projected,
+        }
+    }
+}
+
+/// Apply `--stopRule` to whichever optimizer will run; without it each keeps
+/// its default.
+fn apply_stop_rule(em: &mut salmon_quant::EmOptions, rule: Option<EmStopArg>) {
+    if let Some(r) = rule {
+        em.vb_stop = r.into();
+        em.em_stop = r.into();
     }
 }
 
@@ -716,6 +744,12 @@ struct QuantArgs {
     /// the default `none`.
     #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
     em_accel: EmAccelArg,
+    /// When unaccelerated EM/VBEM stops (expert): `projected` stops each
+    /// connected component once salmon's criterion holds over it and its
+    /// projected remaining movement is small; `global` is salmon ≤ 2.8's rule
+    /// over all transcripts at once, and reproduces its results.
+    #[arg(long = "stopRule", value_enum, hide = true)]
+    stop_rule: Option<EmStopArg>,
     /// Mean of the fragment-length distribution prior [default: 250].
     ///
     /// A prior, not an override: wherever fragment lengths are observed, this
@@ -1879,8 +1913,8 @@ fn preflight_fastq_complete(paths: &[PathBuf]) -> Result<()> {
             || (n >= 4 && magic[..4] == [0x28, 0xb5, 0x2f, 0xfd])                  // zstd
             || (n >= 3 && &magic[..3] == b"BZh")                                   // bzip2
             || (n >= 4 && magic[..4] == [0xfd, 0x37, 0x7a, 0x58]); // xz
-        // FASTA reads have no 4-line record structure to check (and a record
-        // may span several lines), so there is nothing to verify here.
+                                                                   // FASTA reads have no 4-line record structure to check (and a record
+                                                                   // may span several lines), so there is nothing to verify here.
         if compressed || n == 0 || magic[0] == b'>' {
             continue;
         }
@@ -2372,6 +2406,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.em.accel = args.em_accel.into();
+        apply_stop_rule(&mut opts.em, args.stop_rule);
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
         opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
@@ -2647,6 +2682,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.em.accel = args.em_accel.into();
+        apply_stop_rule(&mut opts.em, args.stop_rule);
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
         opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
@@ -3024,6 +3060,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.em.vb_prior = args.vb_prior;
     opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
     opts.em.accel = args.em_accel.into();
+    apply_stop_rule(&mut opts.em, args.stop_rule);
     opts.sig_digits = args.sig_digits;
     opts.max_read_occ = args.max_read_occ.unwrap_or(250);
     opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);

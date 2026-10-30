@@ -39,6 +39,7 @@ mod online;
 mod packed;
 pub mod uncertainty;
 
+pub use components::ComponentSummary;
 pub use online::OnlineInference;
 pub use packed::{PackedEqClasses, PosteriorMethod};
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
@@ -71,6 +72,20 @@ pub enum EmAccel {
     /// byte-identical to `None`. **Plain EM only**: rejected with VBEM (see
     /// [`EmOptions::validate`]). See the `daarem` module.
     Daarem,
+}
+
+/// When an unaccelerated EM/VBEM run stops. (The accelerators always use
+/// salmon's global rule.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmStop {
+    /// Each connected component on its own, once salmon's relative-change
+    /// criterion holds over it and its projected remaining movement is below
+    /// 0.1% of its fragments. Default.
+    #[default]
+    Projected,
+    /// salmon's rule: after `min_iter`, the first iteration at which the
+    /// criterion holds over all transcripts at once. Reproduces salmon ≤ 2.8.
+    Global,
 }
 
 /// Effective lengths, one per transcript, or their absence.
@@ -182,6 +197,10 @@ pub struct EmOptions {
     pub per_nucleotide_prior: bool,
     /// convergence acceleration scheme (default [`EmAccel::None`]).
     pub accel: EmAccel,
+    /// stopping rule of unaccelerated VBEM (default [`EmStop::Projected`])
+    pub vb_stop: EmStop,
+    /// stopping rule of unaccelerated plain EM (default [`EmStop::Global`])
+    pub em_stop: EmStop,
 }
 
 impl Default for EmOptions {
@@ -196,6 +215,8 @@ impl Default for EmOptions {
             vb_prior: 1e-2,
             per_nucleotide_prior: false,
             accel: EmAccel::None,
+            vb_stop: EmStop::Projected,
+            em_stop: EmStop::Global,
         }
     }
 }
@@ -232,7 +253,11 @@ pub struct EmResult {
     /// iterations actually run
     pub iters: u32,
     /// whether the relative-difference criterion was met before `max_iter`
+    /// (under [`EmStop::Projected`]: by every connected component)
     pub converged: bool,
+    /// how each connected component's iteration ended; `None` when the run
+    /// did not use the component engine (an accelerator, or nothing to fit)
+    pub components: Option<ComponentSummary>,
     /// total count in equivalence classes whose every transcript was truncated
     /// below `min_alpha` in the final redistribution step — mass that could not be
     /// reassigned to any surviving transcript (reported, not rescaled away). 0 in
@@ -403,7 +428,7 @@ pub fn optimize_packed_with_init(
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
 ) -> EmResult {
-    let (alphas, iters, converged) = run_em_counts(
+    let (alphas, iters, converged, components) = run_em_counts(
         p,
         &p.counts,
         opts,
@@ -422,6 +447,7 @@ pub fn optimize_packed_with_init(
         alphas,
         iters,
         converged,
+        components,
         dropped_mass,
     }
 }
@@ -477,7 +503,7 @@ pub(crate) fn run_em_counts(
     min_iter: u32,
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
-) -> (Vec<f64>, u32, bool) {
+) -> (Vec<f64>, u32, bool, Option<ComponentSummary>) {
     if let Err(e) = opts.validate() {
         // Callers are expected to validate up front (the CLI does); reaching
         // here is a programming error, not a data condition.
@@ -518,11 +544,15 @@ pub(crate) fn run_em_counts(
                 min_iter,
                 max_iter: opts.max_iter,
                 parallel,
-                // VBEM stops each component on its own criterion; plain EM
-                // keeps salmon's global rule (see the module documentation).
-                per_component: opts.use_vbem,
+                stop: if opts.use_vbem {
+                    opts.vb_stop
+                } else {
+                    opts.em_stop
+                },
             };
-            return components::run(&cplan, &alphas, &prior_alphas, &set);
+            let (alphas, iters, converged, summary) =
+                components::run(&cplan, &alphas, &prior_alphas, &set);
+            return (alphas, iters, converged, Some(summary));
         }
     }
     let mut exp_theta = vec![0.0f64; num_txps];
@@ -690,7 +720,7 @@ pub(crate) fn run_em_counts(
             );
         }
     }
-    (alphas, it, converged)
+    (alphas, it, converged, None)
 }
 
 /// SQUAREM (SqS3) acceleration of the fixed-point iteration.

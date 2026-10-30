@@ -817,7 +817,7 @@ mod tests {
             accel: crate::EmAccel::Daarem,
             ..EmOptions::default()
         };
-        let (alphas, _, converged) = crate::run_em_counts(
+        let (alphas, _, converged, _) = crate::run_em_counts(
             &p,
             &p.counts,
             &opts,

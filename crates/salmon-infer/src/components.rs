@@ -39,19 +39,19 @@
 //! splitting is stepped in parallel by gathering ([`Pull`]), which adds the
 //! same terms in the same order as the class-major loop.
 //!
-//! VBEM instead stops each component on the criterion over its own
-//! transcripts ([`run_per_component`]). On two simulated samples with known
-//! truth that was more accurate than the global rule (transcript-level
-//! Spearman +0.008–0.010, MARD −0.002, mean relative error unchanged within
-//! noise) and it cuts VBEM's work several-fold, because the global rule keeps
-//! every component iterating until the slowest one settles. Plain EM keeps the
-//! global rule: stopped per component it ranked transcripts better but left
-//! more small spurious counts (MARD +0.03–0.04).
+//! VBEM by default instead stops each component on its own ([`run_projected`]):
+//! once salmon's criterion holds over the component and its projected
+//! remaining movement is small. The global rule keeps every component
+//! iterating until the slowest settles, which is most of VBEM's work on a real
+//! sample; the criterion alone, applied per component, stops slowly mixing
+//! isoform families (*TTN*, *NEB*) far from their fixpoint. Plain EM keeps the
+//! global rule.
 
 use rayon::prelude::*;
 use statrs::function::gamma::digamma;
 
 use crate::packed::{PackedEqClasses, DIGAMMA_MIN, MIN_EQ_CLASS_WEIGHT};
+use crate::EmStop;
 
 /// The component-ordered eq-classes.
 pub(crate) struct ComponentPlan {
@@ -373,10 +373,21 @@ fn fold_d(max_d: f64, a_in: f64, a_out: f64, cutoff: f64) -> f64 {
 }
 
 impl CompView<'_> {
+    /// The component's fragments: its multi-transcript class counts, then its
+    /// single-transcript totals (each summed in layout order).
+    fn reads(&self) -> f64 {
+        self.counts.iter().sum::<f64>() + self.singleton.iter().sum::<f64>()
+    }
+
     /// One M-step `next = F(alpha)` of this component; returns the convergence
     /// criterion over its transcripts (`-inf` if none is above the cutoff).
     #[inline]
-    fn step<const VB: bool>(&self, pull: Option<&Pull>, s: &mut CompState, cutoff: f64) -> f64 {
+    fn step<const VB: bool>(
+        &self,
+        pull: Option<&Pull>,
+        s: &mut CompState,
+        cutoff: f64,
+    ) -> (f64, f64) {
         match pull {
             Some(pl) => self.step_pull::<VB>(pl, s, cutoff),
             None => self.step_push::<VB>(s, cutoff),
@@ -384,7 +395,7 @@ impl CompView<'_> {
     }
 
     /// [`Self::step_push`], parallel: the same terms in the same order.
-    fn step_pull<const VB: bool>(&self, pl: &Pull, s: &mut CompState, cutoff: f64) -> f64 {
+    fn step_pull<const VB: bool>(&self, pl: &Pull, s: &mut CompState, cutoff: f64) -> (f64, f64) {
         const CH: usize = 2048;
         if VB {
             s.et.par_chunks_mut(CH)
@@ -422,6 +433,7 @@ impl CompView<'_> {
             .enumerate()
             .map(|(chunk, (nx, al))| {
                 let mut max_d = f64::NEG_INFINITY;
+                let mut l1 = 0.0f64;
                 for (j, (o, &a_in)) in nx.iter_mut().zip(al).enumerate() {
                     let t = chunk * CH + j;
                     let b = basis[t];
@@ -440,14 +452,21 @@ impl CompView<'_> {
                     }
                     *o = acc;
                     max_d = fold_d(max_d, a_in, acc, cutoff);
+                    l1 += (acc - a_in).abs();
                 }
-                max_d
+                (max_d, l1)
             })
-            .reduce(|| f64::NEG_INFINITY, |a, b| if b > a { b } else { a })
+            // Collected in chunk order and folded sequentially, so the L1 sum
+            // (unlike a rayon reduce tree) does not depend on the thread count.
+            .collect::<Vec<_>>()
+            .into_iter()
+            .fold((f64::NEG_INFINITY, 0.0), |a, b| {
+                (if b.0 > a.0 { b.0 } else { a.0 }, a.1 + b.1)
+            })
     }
 
     #[inline]
-    fn step_push<const VB: bool>(&self, s: &mut CompState, cutoff: f64) -> f64 {
+    fn step_push<const VB: bool>(&self, s: &mut CompState, cutoff: f64) -> (f64, f64) {
         if VB {
             fill_et(s.et, s.et_bits, s.alpha, s.prior);
         }
@@ -476,10 +495,12 @@ impl CompView<'_> {
             }
         }
         let mut max_d = f64::NEG_INFINITY;
+        let mut l1 = 0.0f64;
         for (&a_in, &a_out) in s.alpha.iter().zip(next.iter()) {
             max_d = fold_d(max_d, a_in, a_out, cutoff);
+            l1 += (a_out - a_in).abs();
         }
-        max_d
+        (max_d, l1)
     }
 }
 
@@ -511,9 +532,89 @@ pub(crate) struct Settings {
     pub(crate) min_iter: u32,
     pub(crate) max_iter: u32,
     pub(crate) parallel: bool,
-    /// Stop each component on the criterion over its own transcripts (see
-    /// [`run_per_component`]) rather than all of them at once.
-    pub(crate) per_component: bool,
+    /// When a run stops: [`EmStop::Global`] runs [`run_tiled`],
+    /// [`EmStop::Projected`] [`run_projected`].
+    pub(crate) stop: EmStop,
+}
+
+/// How a component-engine run ended, per component.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ComponentSummary {
+    /// the stopping rule the run used
+    pub stop: EmStop,
+    /// connected components iterated
+    pub num_components: usize,
+    /// components that never met salmon's relative-change criterion
+    pub num_unconverged: usize,
+    /// components stopped by `max_iter` rather than by the stopping rule
+    pub num_at_max_iter: usize,
+    /// fragments (class counts) in the components stopped by `max_iter`
+    pub reads_at_max_iter: f64,
+    /// fragments in all components
+    pub total_reads: f64,
+    /// median, over components, of the iterations each ran
+    pub median_iters: u32,
+}
+
+impl ComponentSummary {
+    /// The `meta_info.json` record of this run.
+    pub fn to_meta(&self) -> salmon_core::EmComponentsMeta {
+        salmon_core::EmComponentsMeta {
+            stop_rule: match self.stop {
+                EmStop::Projected => "projected",
+                EmStop::Global => "global",
+            }
+            .to_string(),
+            num_components: self.num_components,
+            num_unconverged: self.num_unconverged,
+            num_at_max_iter: self.num_at_max_iter,
+            fraction_reads_at_max_iter: self.fraction_at_max_iter(),
+            median_iterations: self.median_iters,
+        }
+    }
+
+    /// Fraction of the fragments held by components cut off by `max_iter`.
+    pub fn fraction_at_max_iter(&self) -> f64 {
+        if self.total_reads > 0.0 {
+            self.reads_at_max_iter / self.total_reads
+        } else {
+            0.0
+        }
+    }
+
+    /// One line for the run log, given the most iterations any component ran;
+    /// `true` when it deserves a warning (some component never met salmon's
+    /// criterion).
+    pub fn describe(&self, iters: u32) -> (String, bool) {
+        let pct = |n: f64| 100.0 * n / self.total_reads.max(1.0);
+        let mut line = match self.stop {
+            EmStop::Global => format!(
+                "EM: {} iterations over {} connected components (stopping rule: global)",
+                iters, self.num_components
+            ),
+            EmStop::Projected => format!(
+                "EM: {} connected components, each iterated until it converged \
+                 (median {} iterations, most {})",
+                self.num_components, self.median_iters, iters
+            ),
+        };
+        if self.num_unconverged > 0 {
+            line += &format!(
+                "; {} component(s) never met the convergence criterion",
+                self.num_unconverged
+            );
+        } else if self.num_at_max_iter > 0 {
+            line += &format!(
+                "; {} slowly mixing component(s) ({:.2}% of fragments) met the \
+                 convergence criterion but were still shifting mass between \
+                 near-identical transcripts at the {}-iteration cap, and stop there",
+                self.num_at_max_iter,
+                pct(self.reads_at_max_iter),
+                iters
+            );
+        }
+        (line, self.num_unconverged > 0)
+    }
 }
 
 /// The dense working vectors of a run, split per component.
@@ -575,6 +676,17 @@ impl Buffers {
 /// new iterate; returns the convergence criterion over the component.
 #[inline]
 fn step_component(plan: &ComponentPlan, c: usize, s: &mut CompState, set: &Settings) -> f64 {
+    step_component_l1(plan, c, s, set).0
+}
+
+/// [`step_component`], also returning the L1 size of the step.
+#[inline]
+fn step_component_l1(
+    plan: &ComponentPlan,
+    c: usize,
+    s: &mut CompState,
+    set: &Settings,
+) -> (f64, f64) {
     let v = plan.view(c);
     let pull = plan.pull[c].as_ref();
     let d = if set.vb {
@@ -598,24 +710,58 @@ fn max_of(a: f64, b: f64) -> f64 {
 
 /// Run EM or VBEM to convergence over the component plan, starting from
 /// `init` (full length, indexed by original transcript id). Returns
-/// `(alphas, iterations, converged)`, with every transcript no class
-/// references at `0.0`, as the M-step leaves it.
+/// `(alphas, iterations, converged, summary)`, with every transcript no class
+/// references at `0.0`, as the M-step leaves it. `iterations` is the most any
+/// component ran; `converged` says whether salmon's criterion was met (over
+/// all transcripts under [`EmStop::Global`], over every component under
+/// [`EmStop::Projected`]).
 pub(crate) fn run(
     plan: &ComponentPlan,
     init: &[f64],
     prior_full: &[f64],
     set: &Settings,
-) -> (Vec<f64>, u32, bool) {
+) -> (Vec<f64>, u32, bool, ComponentSummary) {
     let mut buffers = Buffers::new(plan, init, prior_full, set.vb);
     let mut out = vec![0.0f64; init.len()];
     let mut states = buffers.states(plan);
-    let (iters, converged) = if set.per_component {
-        run_per_component(plan, &mut states, set)
-    } else {
-        run_tiled(plan, &mut states, set)
+    let reads: Vec<f64> = (0..plan.num_components())
+        .map(|c| plan.view(c).reads())
+        .collect();
+    let total_reads = reads.iter().sum();
+    let (iters, converged, summary) = match set.stop {
+        EmStop::Global => {
+            let (it, ok) = run_tiled(plan, &mut states, set);
+            let summary = ComponentSummary {
+                stop: set.stop,
+                num_components: plan.num_components(),
+                num_unconverged: if ok { 0 } else { plan.num_components() },
+                num_at_max_iter: if ok { 0 } else { plan.num_components() },
+                reads_at_max_iter: if ok { 0.0 } else { total_reads },
+                total_reads,
+                median_iters: it,
+            };
+            (it, ok, summary)
+        }
+        EmStop::Projected => {
+            let ends = run_projected(plan, &mut states, set);
+            let mut iters: Vec<u32> = ends.iter().map(|e| e.iters).collect();
+            iters.sort_unstable();
+            let capped = ends.iter().filter(|e| !e.stopped);
+            let summary = ComponentSummary {
+                stop: set.stop,
+                num_components: ends.len(),
+                num_unconverged: ends.iter().filter(|e| !e.met).count(),
+                num_at_max_iter: capped.clone().count(),
+                reads_at_max_iter: capped.map(|e| reads[e.comp]).sum(),
+                total_reads,
+                median_iters: iters.get(iters.len() / 2).copied().unwrap_or(0),
+            };
+            let max = iters.last().copied().unwrap_or(0);
+            (max, summary.num_unconverged == 0, summary)
+        }
     };
     write_out(plan, &states, &mut out);
-    (out, iters, converged)
+    (out, iters, converged, summary)
 }
 
 /// The global loop, scheduled component-major in tiles of up to [`TILE`]
@@ -715,33 +861,101 @@ fn run_tiled(
 /// own transcripts (after `min_iter`), or `max_iter`. Returns the most
 /// iterations any component ran, and whether every component converged.
 ///
+/// Successive step-size ratios the contraction-rate estimate is taken over.
+const RATE_WINDOW: usize = 5;
+
+/// Cap on the estimated contraction rate, so `1 / (1 − ρ)` stays finite.
+const RATE_CAP: f64 = 1.0 - 1e-4;
+
+/// Largest projected remaining movement at which a component may stop, as a
+/// fraction of its fragments.
+const PROJECTED_EPS: f64 = 1e-3;
+
+/// How one component's iteration ended under [`EmStop::Projected`].
+struct CompEnd {
+    comp: usize,
+    iters: u32,
+    /// salmon's criterion held over the component at some eligible iteration
+    met: bool,
+    /// the stopping rule (not `max_iter`) ended it
+    stopped: bool,
+}
+
+/// Each component iterated on its own until salmon's criterion holds over its
+/// transcripts (after `min_iter`) **and** its projected remaining movement is
+/// below [`PROJECTED_EPS`] of its fragments, or until `max_iter`.
+///
 /// Under the global rule every component runs as many iterations as the
-/// slowest one needs — on a real sample, the bulk of the work is components
-/// that met the criterion hundreds of iterations earlier and keep creeping.
-/// Here each stops at its own first eligible iteration, so the result is a
-/// different (earlier) iterate for most components. Each component's
-/// iterate depends only on its own data, so scheduling is free and the
-/// result is independent of the thread count.
-fn run_per_component(
+/// slowest one needs; most of that work is on components that met the
+/// criterion long before. Stopping each component on the criterion alone is
+/// not enough, though: a family of near-identical isoforms (*TTN*, *NEB*)
+/// trades mass so slowly that each step is tiny — the criterion holds — while
+/// the family is still far from its fixpoint. For a linearly convergent
+/// iteration with contraction rate `ρ`, the movement still to come after a
+/// step of L1 size `l` is about `l·ρ/(1 − ρ)`; `ρ` is estimated as the largest
+/// ratio of successive step sizes over the last [`RATE_WINDOW`] steps (capped
+/// at [`RATE_CAP`]), and `l/(1 − ρ)` must be small next to the component's
+/// fragment count. Fast-mixing components stop where the criterion alone
+/// would; slow ones keep iterating.
+///
+/// A component's iterate depends only on its own data and its stopping test
+/// only on its own step sizes (each summed in a data-defined order), so
+/// scheduling is free and the result is independent of the thread count.
+fn run_projected(
     plan: &ComponentPlan,
     states: &mut [(usize, CompState)],
     set: &Settings,
-) -> (u32, bool) {
-    let one = |(c, s): &mut (usize, CompState)| -> (u32, bool) {
+) -> Vec<CompEnd> {
+    let one = |(c, s): &mut (usize, CompState)| -> CompEnd {
+        let mass = plan.view(*c).reads();
+        let mut ratios = [f64::INFINITY; RATE_WINDOW];
+        let mut prev_l1 = f64::NAN;
+        let mut met = false;
         let mut it = 0;
         while it < set.max_iter {
-            let d = step_component(plan, *c, s, set);
+            let (d, l1) = step_component_l1(plan, *c, s, set);
+            ratios[it as usize % RATE_WINDOW] = if prev_l1 > 0.0 {
+                l1 / prev_l1
+            } else if l1 == 0.0 {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+            prev_l1 = l1;
             it += 1;
-            // A component with no transcript above the cutoff (`d == -inf`)
-            // has nothing the criterion measures; it is settled once the
-            // minimum has run.
-            if it >= set.min_iter && d < set.tol {
-                return (it, true);
+            if it < set.min_iter {
+                continue;
+            }
+            // No transcript above the cutoff: nothing the criterion measures.
+            if d == f64::NEG_INFINITY {
+                return CompEnd {
+                    comp: *c,
+                    iters: it,
+                    met: true,
+                    stopped: true,
+                };
+            }
+            if d < set.tol {
+                met = true;
+                let rho = ratios.iter().copied().fold(0.0f64, f64::max).min(RATE_CAP);
+                if l1 / (1.0 - rho) < PROJECTED_EPS * mass {
+                    return CompEnd {
+                        comp: *c,
+                        iters: it,
+                        met,
+                        stopped: true,
+                    };
+                }
             }
         }
-        (it, false)
+        CompEnd {
+            comp: *c,
+            iters: it,
+            met,
+            stopped: false,
+        }
     };
-    let res: Vec<(u32, bool)> = if set.parallel {
+    if set.parallel {
         // Largest first, so the long tail of small components fills in behind
         // the big ones. Scheduling only.
         let mut order: Vec<&mut (usize, CompState)> = states.iter_mut().collect();
@@ -749,11 +963,7 @@ fn run_per_component(
         order.into_par_iter().with_max_len(1).map(&one).collect()
     } else {
         states.iter_mut().map(one).collect()
-    };
-    (
-        res.iter().map(|r| r.0).max().unwrap_or(0),
-        res.iter().all(|r| r.1),
-    )
+    }
 }
 
 /// Scatter each component's latest iterate to original transcript ids. The
@@ -816,7 +1026,7 @@ mod tests {
             min_iter: 50,
             max_iter: 10_000,
             parallel,
-            per_component: false,
+            stop: EmStop::Global,
         }
     }
 
@@ -866,7 +1076,7 @@ mod tests {
         assert!(plan.num_components() > 100);
         for vb in [false, true] {
             let set = settings(vb, false);
-            let (a, ia, ca) = run(&plan, &init, &prior, &set);
+            let (a, ia, ca, _) = run(&plan, &init, &prior, &set);
             let (b, ib, cb) = untiled(&plan, &init, &prior, &set);
             assert_eq!((ia, ca), (ib, cb), "vb={vb}");
             assert!(ia > TILE, "the run must span several tiles");
@@ -907,7 +1117,7 @@ mod tests {
         let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
         for vb in [false, true] {
             let set = settings(vb, false);
-            let (got, iters, converged) = run(&plan, &init, &prior, &set);
+            let (got, iters, converged, _) = run(&plan, &init, &prior, &set);
             let mut a = init.clone();
             let mut b = vec![0.0; p.num_txps];
             let mut et = vec![0.0; p.num_txps];
@@ -945,55 +1155,119 @@ mod tests {
         }
     }
 
-    /// Per-component stopping: each component's result is exactly the plain
-    /// loop run on that component alone, whatever the schedule.
+    /// The projected rule: neither the pool size nor stepping by gathering
+    /// changes a bit or the summary.
     #[test]
-    fn per_component_stops_each_component_on_its_own_criterion() {
+    fn projected_stop_is_independent_of_threads_and_stepping() {
         let p = fixture(60, 15, 3000);
         let (init, prior) = start(&p);
         let seq = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
         let pull = ComponentPlan::with_pull_min(&p, &p.counts, 0);
         for vb in [false, true] {
             let set = Settings {
-                per_component: true,
+                stop: EmStop::Projected,
                 ..settings(vb, false)
             };
-            let (got, iters, converged) = run(&seq, &init, &prior, &set);
+            let (got, iters, converged, summary) = run(&seq, &init, &prior, &set);
             assert!(converged);
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(4)
-                .build()
-                .unwrap();
-            let par = pool.install(|| {
-                run(
-                    &pull,
-                    &init,
-                    &prior,
-                    &Settings {
-                        parallel: true,
-                        ..set
-                    },
-                )
-            });
-            assert_eq!(bits(&got), bits(&par.0), "vb={vb}");
-            assert_eq!(iters, par.1);
-            // Each component alone, under the global rule, is the same run.
-            let mut max_iters = 0;
-            for c in 0..seq.num_components() {
-                let mut buffers = Buffers::new(&seq, &init, &prior, vb);
-                let mut states = buffers.states(&seq);
-                let mut alone = vec![states.swap_remove(c)];
-                let (it, ok) = run_tiled(&seq, &mut alone, &settings(vb, false));
-                assert!(ok);
-                max_iters = max_iters.max(it);
-                let (cc, st) = &alone[0];
-                let t0 = seq.comp_txp[*cc];
-                for (k, &a) in st.alpha.iter().enumerate() {
-                    let t = seq.txps[t0 + k] as usize;
-                    assert_eq!(a.to_bits(), got[t].to_bits(), "vb={vb} component {c}");
-                }
+            assert_eq!(summary.num_components, seq.num_components());
+            assert_eq!(summary.num_at_max_iter, 0);
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap();
+                let par = pool.install(|| {
+                    run(
+                        &pull,
+                        &init,
+                        &prior,
+                        &Settings {
+                            parallel: true,
+                            ..set
+                        },
+                    )
+                });
+                assert_eq!(bits(&got), bits(&par.0), "vb={vb} t{threads}");
+                assert_eq!((iters, converged, &summary), (par.1, par.2, &par.3));
             }
-            assert_eq!(max_iters, iters);
         }
+    }
+
+    /// Two near-identical transcripts that differ by a handful of unique
+    /// reads: each step moves little, so salmon's criterion holds long before
+    /// the split is near its fixpoint. The projected rule keeps iterating and
+    /// lands far closer to it.
+    #[test]
+    fn projected_stop_keeps_a_slowly_mixing_pair_iterating() {
+        let b = EquivalenceClassBuilder::new();
+        b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 100_000);
+        b.add_group(TranscriptGroup::new(vec![0]), vec![1.0], 60);
+        b.add_group(TranscriptGroup::new(vec![1]), vec![1.0], 20);
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[1000.0, 1000.0]);
+        let p = PackedEqClasses::from_collapsed(&eq, 2);
+        let (init, prior) = start(&p);
+        let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
+        for vb in [false, true] {
+            let global = run(&plan, &init, &prior, &settings(vb, false));
+            let fixpoint = run(
+                &plan,
+                &init,
+                &prior,
+                &Settings {
+                    tol: 1e-12,
+                    max_iter: 1_000_000,
+                    ..settings(vb, false)
+                },
+            );
+            let set = Settings {
+                stop: EmStop::Projected,
+                ..settings(vb, false)
+            };
+            let (got, iters, converged, summary) = run(&plan, &init, &prior, &set);
+            assert!(converged && summary.num_at_max_iter == 0, "vb={vb}");
+            assert!(iters > global.1, "vb={vb}: {iters} vs {}", global.1);
+            let err = |a: &[f64]| (a[0] - fixpoint.0[0]).abs();
+            assert!(err(&got) * 10.0 < err(&global.0), "vb={vb}");
+            assert!(err(&got) < PROJECTED_EPS * 100_080.0, "vb={vb}");
+        }
+    }
+
+    /// A component cut off by `max_iter` is counted with its fragments, and
+    /// still counts as converged once salmon's criterion has held over it.
+    #[test]
+    fn projected_stop_reports_components_cut_off_by_max_iter() {
+        let b = EquivalenceClassBuilder::new();
+        b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 100_000);
+        b.add_group(TranscriptGroup::new(vec![0]), vec![1.0], 60);
+        b.add_group(TranscriptGroup::new(vec![1]), vec![1.0], 20);
+        b.add_group(TranscriptGroup::new(vec![2, 3]), vec![1.0, 1.0], 50);
+        b.add_group(TranscriptGroup::new(vec![2]), vec![1.0], 40);
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[1000.0; 4]);
+        let p = PackedEqClasses::from_collapsed(&eq, 4);
+        let (init, prior) = start(&p);
+        let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
+        let set = Settings {
+            stop: EmStop::Projected,
+            max_iter: 200,
+            ..settings(false, false)
+        };
+        let (_, iters, converged, summary) = run(&plan, &init, &prior, &set);
+        assert_eq!(iters, 200);
+        assert!(converged, "the criterion held over both components");
+        assert_eq!(summary.num_components, 2);
+        assert_eq!(summary.num_unconverged, 0);
+        assert_eq!(summary.num_at_max_iter, 1);
+        assert_eq!(summary.reads_at_max_iter, 100_080.0);
+        assert_eq!(summary.total_reads, 100_170.0);
+        // Cut off before the criterion is even checked: not converged.
+        let short = Settings {
+            max_iter: 10,
+            ..set
+        };
+        let (_, _, converged, summary) = run(&plan, &init, &prior, &short);
+        assert!(!converged && summary.num_unconverged >= 1);
     }
 }

@@ -431,6 +431,9 @@ pub struct AlignQuantResult {
     /// criterion was met before `max_iter`
     pub em_iters: u32,
     pub em_converged: bool,
+    /// how each connected component's iteration ended (see
+    /// [`salmon_infer::ComponentSummary`]); `None` off the component engine
+    pub em_components: Option<salmon_infer::ComponentSummary>,
     /// library format observed for these alignments (baked/auto-detected), for
     /// provenance and the strandedness sanity check; `None` if not observed
     pub detected_library_type: Option<String>,
@@ -2477,6 +2480,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            components: None,
             dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
@@ -2538,6 +2542,15 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     }
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
+    let em_components = em.components.clone();
+    if let Some(c) = &em_components {
+        let (line, warn) = c.describe(em_iters);
+        if warn {
+            tracing::warn!("{line}");
+        } else {
+            tracing::info!("{line}");
+        }
+    }
     let counts = em.alphas;
     // Bias correction + EM/VBEM point estimate.
     timer.mark("em_bias");
@@ -2671,6 +2684,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         bootstraps,
         em_iters,
         em_converged,
+        em_components,
         detected_library_type,
         total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
@@ -2867,6 +2881,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         alignment_provenance: Vec<SourceProgram>,
         num_em_iterations: u32,
         em_converged: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        em_components: Option<salmon_core::EmComponentsMeta>,
         detected_library_type: Option<String>,
         /// which inference path produced these results: `deterministic` (RAD
         /// input — including `--deterministic`'s phase 2) or `online` (the
@@ -3131,6 +3147,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
+        em_components: res.em_components.as_ref().map(|c| c.to_meta()),
         detected_library_type: res.detected_library_type.clone(),
         inference_path: match res.source {
             FragmentSource::Rad => "deterministic",

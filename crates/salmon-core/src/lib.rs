@@ -48,7 +48,8 @@ pub mod timing;
 // modules later without breaking every caller.
 pub use atomic::AtomicF64;
 pub use diagnostics::{
-    free_disk_bytes, input_diagnostics, peak_rss_kb, Diagnostic, MetaFieldSource, MissingMetaField,
+    free_disk_bytes, input_diagnostics, peak_rss_kb, Diagnostic, EmComponentsMeta, MetaFieldSource,
+    MissingMetaField,
 };
 pub use libtype::{
     compatible_paired, compatible_single, is_compatible, observed_paired_format,

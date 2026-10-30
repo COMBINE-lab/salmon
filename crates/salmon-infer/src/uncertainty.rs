@@ -141,7 +141,7 @@ pub fn bootstrap(
             // first attempt at this fix did exactly that — the prior stayed
             // flat AND every replicate warm-started from the effective-length
             // vector. Keep `None` explicit for the uniform start.
-            let (alphas, _, _) =
+            let (alphas, _, _, _) =
                 run_em_counts(p, &resampled, opts, false, 50, InitAlphas::NONE, eff_lens);
             // Finalize like the point estimate: truncate the negligible
             // abundances, then redistribute that mass to eq-class co-members via a

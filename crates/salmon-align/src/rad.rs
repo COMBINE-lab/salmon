@@ -2237,6 +2237,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            components: None,
             dropped_mass: 0.0,
         }
     } else if let Some((seq_obs, gc_obs, pos_obs)) = fused_bias_obs {
@@ -2363,6 +2364,15 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     };
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
+    let em_components = em.components.clone();
+    if let Some(c) = &em_components {
+        let (line, warn) = c.describe(em_iters);
+        if warn {
+            tracing::warn!("{line}");
+        } else {
+            tracing::info!("{line}");
+        }
+    }
     let counts = em.alphas;
     // Bias correction + EM/VBEM point estimate (matches the reads driver's phase).
     timer.mark("em_bias");
@@ -2490,6 +2500,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         bootstraps,
         em_iters,
         em_converged,
+        em_components,
         detected_library_type,
         total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
