@@ -523,6 +523,11 @@ fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool
         return 0;
     }
     if tf.is_empty() {
+        // No reference left: the whole flank overhangs the transcript end, which
+        // is exactly what both soft-clip modes clip for free.
+        if cfg.softclip || cfg.softclip_overhangs {
+            return 0;
+        }
         return -(cfg.gap_open_pen as i32 + qf.len() as i32 * cfg.gap_extend_pen as i32);
     }
     let mat = dna5_mat(cfg);
@@ -808,6 +813,13 @@ mod tests {
         assert!(s_oh >= s_none, "overhang {s_oh} >= none {s_none}");
         assert!(s_full >= 0, "full soft-clip never negative: {s_full}");
         assert!(s_full >= s_oh, "full {s_full} >= overhang {s_oh}");
+
+        // The MEM ends exactly at the transcript end, so the reference flank is
+        // empty and the whole read flank overhangs (e.g. a miRNA 3' tail).
+        let tail = b"AAAA";
+        assert!(ksw2_flank_extend(tail, b"", &none, false) < 0);
+        assert_eq!(ksw2_flank_extend(tail, b"", &overhang, false), 0);
+        assert_eq!(ksw2_flank_extend(tail, b"", &full, true), 0);
     }
 
     fn gen_seq(n: usize, seed: u64) -> Vec<u8> {
