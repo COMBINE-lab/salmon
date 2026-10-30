@@ -116,13 +116,32 @@ paired- and single-end).
 - **FASTA reads.** Uncompressed FASTA read files were refused in reads mode
   as truncated FASTQ (the truncation check assumed four-line records). They
   are accepted again, and give the same results as the equivalent FASTQ.
-- <!-- TODO(release): #1239 (soft-clip scoring when a read overhangs the
-  transcript end), and the #1231 fixes taken (paired sequence-bias contexts
-  under --online, refseq length check, u64 ambiguity counts, no 0M CIGAR ops,
-  fld_low guard, Ensembl GFF3 gene resolution, Gibbs prior under
-  --perNucleotidePrior, EM "nothing above cutoff" convergence, quant argument
-  validation) — and the position-derivation commits if the simulation check
-  passes. -->
+- **Read and fragment positions in selective alignment** (#1231, Benjamin
+  Demaille). Positions are now derived from each read's projected ends rather
+  than from its first and last matching k-mer, which cut a fragment short
+  whenever a mismatch or indel fell near a read end. On simulated reads with
+  known coordinates, reverse-strand mate positions go from 70% to 98% exact,
+  fragment lengths from −2.0 bp mean error to +0.02 bp, and positions of
+  reads overhanging a transcript end from ~65% to 98.5% exact; dovetailed
+  fragments are now detected at the true rate. Quantification accuracy
+  against truth improves slightly (MARD −0.001, with or without `--seqBias`).
+  Visible effect on real data: the estimated fragment-length mean is
+  ~2–3 bp higher (e.g. 170.1 → 172.7 on GEUVADIS). This is the estimator,
+  not the positions: salmon learns the distribution from uniquely mapping
+  pairs, which are longer on average than all fragments; the old positions'
+  downward bias happened to cancel that. `--sketch` is unaffected.
+- **Other fixes from #1231:** paired-end sequence-bias contexts under
+  `--online` used mate 1's orientation for the whole fragment; reverse
+  single-end reads used an off-by-one end coordinate; the reference sequence
+  store is checked against the index; ambiguity counts no longer overflow
+  (u64); no zero-length `0M` CIGAR operations in `--writeMappings` output;
+  bias convolutions guard a zero lower fragment-length bound; Ensembl GFF3
+  transcripts resolve to genes via `Parent`; the Gibbs prior honours
+  `--perNucleotidePrior`; an EM in which nothing is above the cutoff counts
+  as converged; numeric `quant` arguments are validated (and C++'s negative
+  `--mp` is accepted).
+<!-- TODO(release): #1239 (soft-clip scoring when a read overhangs the
+  transcript end) if merged. -->
 
 ## Dependencies
 
