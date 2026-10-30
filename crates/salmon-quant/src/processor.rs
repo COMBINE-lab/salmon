@@ -1689,11 +1689,26 @@ fn build_rad_record(placements: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecor
             // proper pair → real fragment_len; orphan/SE → the mapped mate's
             // read_len in the slot, so the reader recovers the bounded-CMF orphan
             // weight rather than a flat penalty.
+            //
+            // `pos` is the fragment's leftmost base for a proper pair and the
+            // mapped read's LEFTMOST base for an orphan / single-end hit: the
+            // reader derives a reverse read's 5' end as `pos + read_len - 1` and
+            // its ambiguous-length bound as `pos + read_len`. `ref_pos` is the
+            // read's 5' end (the rightmost base for a reverse read), so it must
+            // not be written for unpaired hits; `fw_pos`/`rc_pos` carry the
+            // leftmost on the read's own strand.
+            let pos = if paired {
+                m.ref_pos
+            } else if m.is_fw {
+                m.fw_pos
+            } else {
+                m.rc_pos
+            };
             salmon_rad::RadHit::for_placement(
                 m.tid,
                 m.is_fw,
                 m.r2_fw,
-                m.ref_pos,
+                pos,
                 paired,
                 m.fragment_len,
                 m.read_len,
