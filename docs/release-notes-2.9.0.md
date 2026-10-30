@@ -130,18 +130,31 @@ paired- and single-end).
   not the positions: salmon learns the distribution from uniquely mapping
   pairs, which are longer on average than all fragments; the old positions'
   downward bias happened to cancel that. `--sketch` is unaffected.
-- **Other fixes from #1231:** paired-end sequence-bias contexts under
-  `--online` used mate 1's orientation for the whole fragment; reverse
-  single-end reads used an off-by-one end coordinate; the reference sequence
-  store is checked against the index; ambiguity counts no longer overflow
-  (u64); no zero-length `0M` CIGAR operations in `--writeMappings` output;
-  bias convolutions guard a zero lower fragment-length bound; Ensembl GFF3
-  transcripts resolve to genes via `Parent`; the Gibbs prior honours
-  `--perNucleotidePrior`; an EM in which nothing is above the cutoff counts
-  as converged; numeric `quant` arguments are validated (and C++'s negative
-  `--mp` is accepted).
-<!-- TODO(release): #1239 (soft-clip scoring when a read overhangs the
-  transcript end) if merged. -->
+- **Other fixes from #1231 (Benjamin Demaille):**
+  - Paired-end sequence-bias contexts under `--online` used mate 1's
+    orientation for the whole fragment, putting the reverse model at the
+    fragment's leftmost base whenever mate 1 was the reverse read (half of
+    `IU` pairs, all of `ISR`).
+  - Reverse-strand single-end reads used an off-by-one (exclusive) end
+    coordinate, and reverse orphans used their leftmost base as the 5' end.
+  - Recovered orphan pairs (`--recoverOrphans`) now get correct positions.
+  - The reference sequence store is checked against the index when loaded.
+  - Ambiguity counts are accumulated in 64 bits.
+  - `--writeMappings` no longer emits zero-length `0M` CIGAR operations.
+  - The bias convolutions guard a zero lower fragment-length bound.
+  - Ensembl GFF3 transcripts resolve to genes through `Parent`.
+  - The Gibbs sampler's prior honours `--perNucleotidePrior`.
+  - An EM in which no transcript is above the cutoff counts as converged,
+    and the convergence check uses the new iterate, as C++ salmon does.
+  - Numeric `quant` arguments are validated, and C++'s negative `--mp` form
+    is accepted.
+  - Gibbs sampling reuses its buffers between rounds, and the
+    fragment-length distribution is updated once per fragment (speed only).
+- **Soft-clipping at transcript ends** (#1239, Benjamin Demaille). With
+  `--softclip` / `--softclipOverhangs`, a read overhanging the end of a
+  transcript is now scored with the overhang clipped, as the option
+  promises; default scoring (no soft-clipping) is unchanged.
+
 
 ## Dependencies
 
