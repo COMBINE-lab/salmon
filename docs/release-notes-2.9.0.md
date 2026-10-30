@@ -172,7 +172,8 @@ GENCODE v50) to reproduce that comparison, and studied its implementation.
   transcripts densely — we found this was the whole of its EM speed advantage
   and adopted it in `salmon-infer` (`components` module).
 
-Thanks also to Benjamin Demaille for the #1231 and #1239 fixes.
+Thanks to Denis Demin for making kallistors and its benchmarks openly
+available, and to Benjamin Demaille for the #1231 and #1239 fixes.
 
 ## Dependencies
 
