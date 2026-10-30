@@ -9,6 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "adler32furious"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67753fa0e5e56fa79255f125be5bb94b2f3570537bd1c66e9b146858f53cd298"
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2249,9 +2255,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0e6dbe9c9c6690808d4a1b06506d5feaec1a35525a4c71cb0c4c9c3aed7e3d5"
+checksum = "1b5932be0a89215403a0eeaa325e787a4d651c70a4d6032afc12af93377992d5"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2272,6 +2278,7 @@ dependencies = [
  "seq_geom_parser",
  "serde",
  "serde_json",
+ "sirocco",
  "smallvec",
  "sshash-lib",
  "sux",
@@ -2987,6 +2994,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sirocco"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d7c47e1d59501b383fc09e6d00a26d72ceca841cf5c25458762f7006acb39f"
+dependencies = [
+ "adler32furious",
+ "crc32fast",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3006,9 +3023,9 @@ checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
 name = "sshash-lib"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9547b4612d43612c58c67185ee6596d4d8a9e9cb404d5cfbce7b16e8a70d97b3"
+checksum = "71ea4a34780f39a2a0ac04eb5d2f5c42a6f2ab69f6430f3c2d846df4fc744c36"
 dependencies = [
  "anyhow",
  "dsi-progress-logger",
@@ -3099,7 +3116,6 @@ dependencies = [
  "dsi-progress-logger",
  "epserde",
  "fallible-iterator",
- "flate2",
  "impl-tools",
  "lender",
  "log",
@@ -3115,7 +3131,6 @@ dependencies = [
  "value-traits",
  "xxhash-rust",
  "zerocopy",
- "zstd 0.13.3",
 ]
 
 [[package]]
