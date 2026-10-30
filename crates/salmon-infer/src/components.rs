@@ -361,7 +361,9 @@ fn class_denom<const VB: bool>(tids: &[u32], ws: &[f64], basis: &[f64]) -> f64 {
 /// `max_d` folded with transcript `t`'s relative change, as salmon's criterion.
 #[inline]
 fn fold_d(max_d: f64, a_in: f64, a_out: f64, cutoff: f64) -> f64 {
-    if a_in > cutoff && a_out > 0.0 {
+    // Filter on `a_out`, as salmon (and `crate::max_rel_diff`) does; a positive
+    // cutoff also keeps the denominator non-zero.
+    if a_out > cutoff {
         let d = (a_out - a_in).abs() / a_out;
         if d > max_d {
             return d;
@@ -702,7 +704,7 @@ fn run_tiled(
         };
         it += taken;
         let d = max_of(dw, others);
-        if it >= set.min_iter && d.is_finite() && d < set.tol {
+        if it >= set.min_iter && d < set.tol {
             return (it, true);
         }
     }
@@ -841,7 +843,7 @@ mod tests {
                 d = max_of(d, step_component(plan, *c, s, set));
             }
             it += 1;
-            if it >= set.min_iter && d.is_finite() && d < set.tol {
+            if it >= set.min_iter && d < set.tol {
                 converged = true;
                 break;
             }
@@ -928,7 +930,7 @@ mod tests {
                 it += 1;
                 let d = crate::max_rel_diff(&a, &b, set.cutoff);
                 std::mem::swap(&mut a, &mut b);
-                if it >= set.min_iter && d.is_finite() && d < set.tol {
+                if it >= set.min_iter && d < set.tol {
                     break;
                 }
             }
