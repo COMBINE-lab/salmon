@@ -469,7 +469,7 @@ fn dna5_mat(cfg: &AlignConfig) -> [i8; 25] {
 /// Global DP score of an inter-MEM gap (both substrings fully consumed). The
 /// band is widened to guarantee the alignment can reach the corner.
 fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
-    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
+    use ksw2rs::{Extz2Input, KSW_EZ_NO_MAX, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qg.is_empty() {
         return -(cfg.gap_open_pen as i32 + tg.len() as i32 * cfg.gap_extend_pen as i32);
     }
@@ -499,8 +499,9 @@ fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
             zdrop: -1,
             end_bonus: 0,
             // Mapping only needs the score, not the CIGAR — score-only mode skips
-            // the O(qlen·tlen) traceback-matrix fill and backtrack pass.
-            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
+            // the O(qlen·tlen) traceback-matrix fill and backtrack pass; and only
+            // `score` is read, so the overall maximum is not tracked either.
+            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY | KSW_EZ_NO_MAX,
         };
         aligner.align(&input).score
     });
@@ -518,7 +519,7 @@ fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
 /// 5' flank (`anchor_right`) the sequences are reversed so the anchor is on the
 /// left, matching ksw2's left-anchored extension.
 fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool) -> i32 {
-    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
+    use ksw2rs::{Extz2Input, KSW_EZ_NO_MAX, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qf.is_empty() {
         return 0;
     }
@@ -531,35 +532,50 @@ fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool
         return -(cfg.gap_open_pen as i32 + qf.len() as i32 * cfg.gap_extend_pen as i32);
     }
     let mat = dna5_mat(cfg);
-    let (mqe, mte, max_score) = KSW_SCRATCH.with(|cell| {
-        let KswScratch {
-            aligner,
-            query,
-            target,
-        } = &mut *cell.borrow_mut();
-        if anchor_right {
-            dna5_encode_rev_into(qf, query);
-            dna5_encode_rev_into(tf, target);
-        } else {
-            dna5_encode_into(qf, query);
-            dna5_encode_into(tf, target);
-        }
-        let input = Extz2Input {
-            query,
-            target,
-            m: 5,
-            mat: &mat,
-            q: cfg.gap_open_pen,
-            e: cfg.gap_extend_pen,
-            w: cfg.bandwidth.max(qf.len() as i32),
-            zdrop: -1,
-            end_bonus: 0,
-            // Score-only: we read `mqe`/`max`, never the CIGAR (see ksw2_gap_global).
-            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
-        };
-        let ez = aligner.align(&input);
-        (ez.mqe, ez.mte, ez.max as i32)
-    });
+    // `max` is only the fallback for a flank with no valid extension; skip
+    // tracking it, and run again with it in the (band-clipped) case that
+    // needs it.
+    let run = |flag: u32| {
+        KSW_SCRATCH.with(|cell| {
+            let KswScratch {
+                aligner,
+                query,
+                target,
+            } = &mut *cell.borrow_mut();
+            if anchor_right {
+                dna5_encode_rev_into(qf, query);
+                dna5_encode_rev_into(tf, target);
+            } else {
+                dna5_encode_into(qf, query);
+                dna5_encode_into(tf, target);
+            }
+            let input = Extz2Input {
+                query,
+                target,
+                m: 5,
+                mat: &mat,
+                q: cfg.gap_open_pen,
+                e: cfg.gap_extend_pen,
+                w: cfg.bandwidth.max(qf.len() as i32),
+                zdrop: -1,
+                end_bonus: 0,
+                // Score-only: we read `mqe`/`mte`/`max`, never the CIGAR (see
+                // ksw2_gap_global).
+                flag,
+            };
+            let ez = aligner.align(&input);
+            (ez.mqe, ez.mte, ez.max as i32)
+        })
+    };
+    let (mut mqe, mut mte, mut max_score) = run(KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY | KSW_EZ_NO_MAX);
+    let extended = if cfg.softclip || cfg.softclip_overhangs {
+        mqe.max(mte)
+    } else {
+        mqe
+    };
+    if extended <= KSW_NEG_INF {
+        (mqe, mte, max_score) = run(KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY);
+    }
     // Soft-clip semantics mirror PuffAligner's flank `part_score` (mqe = read
     // flank fully consumed, reference free to overhang; mte = reference fully
     // consumed, read free to overhang the transcript end):
@@ -608,6 +624,9 @@ fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: boo
     if qf.is_empty() {
         return 0;
     }
+    if let Some(s) = ungapped_flank_score(qf, tf, cfg, anchor_right) {
+        return s;
+    }
     // The anchor side selects a different DP, so it is part of the key.
     let kind = if anchor_right {
         GapKind::FlankRightAnchored
@@ -622,6 +641,60 @@ fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: boo
         c.borrow_mut().insert(kind, qf, tf, s);
         s
     })
+}
+
+/// A flank's score without DP, when the ungapped (diagonal) extension from the
+/// anchor is provably optimal; `None` otherwise.
+///
+/// Every flank alignment starts at the anchor and consumes the whole read
+/// flank (`mqe`), or, in the soft-clip modes, may instead consume the whole
+/// reference side (`mte`). The only gap-free such path is the diagonal, so any
+/// other path contains a gap and scores at most `match·L − (gap_open +
+/// gap_extend)` for a flank of `L` bases: each read base adds at most `match`,
+/// and a gap costs at least `open + extend`. (A path ending on the reference's
+/// last column before the read's last row needs a deletion when the reference
+/// side is at least `L` long, so it is bounded the same way.) When the
+/// diagonal scores at least that bound, it is the DP optimum for `mqe` and for
+/// `max(mqe, mte)` alike. With salmon's default scores (+2 / −4 / 6 / 2) that
+/// is a flank with at most one mismatch, the common case next to an exact
+/// match. A flank with an ambiguous base (`N`) is left to the DP.
+#[inline]
+fn ungapped_flank_score(
+    qf: &[u8],
+    tf: &[u8],
+    cfg: &AlignConfig,
+    anchor_right: bool,
+) -> Option<i32> {
+    let l = qf.len();
+    if tf.len() < l {
+        return None;
+    }
+    let (ma, mp) = (cfg.match_score as i32, cfg.mismatch_pen as i32);
+    let floor = ma * l as i32 - (cfg.gap_open_pen as i32 + cfg.gap_extend_pen as i32);
+    // The anchor is the flank's MEM-adjacent end: its right end for a 5' flank.
+    let t = if anchor_right {
+        &tf[tf.len() - l..]
+    } else {
+        &tf[..l]
+    };
+    // Each base scores at most `ma`, so once the deficit below a perfect score
+    // exceeds what the bound allows, no later base can recover it.
+    let max_deficit = ma * l as i32 - floor;
+    let mut deficit = 0i32;
+    for (&a, &b) in qf.iter().zip(t) {
+        let (ca, cb) = (DNA5_LUT[a as usize], DNA5_LUT[b as usize]);
+        // ksw2's SIMD kernels score an ambiguous base with their own rule
+        // rather than the matrix entry, so leave any `N` to the DP.
+        if ca == 4 || cb == 4 {
+            return None;
+        }
+        deficit += if ca != cb { ma + mp } else { 0 };
+        if deficit > max_deficit {
+            return None;
+        }
+    }
+    let s = ma * l as i32 - deficit;
+    Some(if cfg.softclip { s.max(0) } else { s })
 }
 
 /// DNA5 lookup table: `DNA5_LUT[b]` is the 2-bit code for ACGT (upper/lower) and
@@ -783,6 +856,83 @@ pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option
 
 #[cfg(test)]
 mod tests {
+
+    /// The ungapped shortcut returns exactly what the flank DP does whenever it
+    /// fires, in all three soft-clip modes and for both anchors. A small
+    /// xorshift drives it (no extra dependency); the cases are biased towards
+    /// near-matches, where the shortcut fires, but also cover indels near the
+    /// anchor (where the diagonal must lose) and `N`/lowercase bases.
+    #[test]
+    fn ungapped_flank_shortcut_matches_dp() {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = |n: u64| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x % n
+        };
+        let modes = [(false, false), (false, true), (true, true)];
+        let mut fired = 0usize;
+        for case in 0..60_000 {
+            let l = 1 + rnd(40) as usize;
+            let extra = rnd(6) as usize;
+            let mut t: Vec<u8> = (0..l + extra)
+                .map(|_| b"ACGTN"[rnd(5) as usize % 5])
+                .collect();
+            if rnd(10) < 7 {
+                for b in t.iter_mut() {
+                    if *b == b'N' {
+                        *b = b"ACGT"[rnd(4) as usize];
+                    }
+                }
+            }
+            let anchor_right = case % 2 == 1;
+            let diag = if anchor_right { t.len() - l } else { 0 };
+            let mut q: Vec<u8> = t[diag..diag + l].to_vec();
+            match rnd(4) {
+                0 => {}
+                1 => {
+                    let p = rnd(l as u64) as usize;
+                    q[p] = b"ACGTN"[rnd(5) as usize];
+                }
+                2 => {
+                    for _ in 0..1 + rnd(3) {
+                        let p = rnd(l as u64) as usize;
+                        q[p] = b"ACGTN"[rnd(5) as usize];
+                    }
+                }
+                _ => {
+                    // an indel somewhere: shift the rest of the read by one
+                    let p = rnd(l as u64) as usize;
+                    q.insert(p, b"ACGT"[rnd(4) as usize]);
+                    q.truncate(l);
+                }
+            }
+            if rnd(5) == 0 {
+                q.make_ascii_lowercase();
+            }
+            for (softclip, softclip_overhangs) in modes {
+                let cfg = AlignConfig {
+                    softclip,
+                    softclip_overhangs,
+                    ..AlignConfig::default()
+                };
+                if let Some(fast) = ungapped_flank_score(&q, &t, &cfg, anchor_right) {
+                    fired += 1;
+                    let dp = ksw2_flank_extend(&q, &t, &cfg, anchor_right);
+                    assert_eq!(
+                        fast,
+                        dp,
+                        "q={} t={} anchor_right={anchor_right} softclip={softclip} overhangs={softclip_overhangs}",
+                        String::from_utf8_lossy(&q),
+                        String::from_utf8_lossy(&t)
+                    );
+                }
+            }
+        }
+        assert!(fired > 50_000, "the shortcut fired only {fired} times");
+    }
+
     use super::*;
     use crate::mem::Mem;
 
