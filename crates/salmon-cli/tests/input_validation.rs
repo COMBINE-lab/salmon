@@ -195,42 +195,44 @@ fn single_end_and_paired_inputs_cannot_be_mixed() {
     );
 }
 
-/// Bias correction adjusts effective lengths; `--noLengthCorrection` turns that
-/// off. Every driver resolved the contradiction by silently dropping the bias
-/// request — and then reported `gc_bias_correct: true` for a run that did no
-/// bias correction at all.
+/// Bias correction adjusts effective lengths; `--noLengthCorrection` and
+/// `--noEffectiveLengthCorrection` turn that off. Every driver resolved the
+/// contradiction by silently dropping the bias request — and then reported
+/// `gc_bias_correct: true` for a run that did no bias correction at all.
 #[test]
 fn no_length_correction_conflicts_with_bias_correction() {
     let dir = tempfile::tempdir().unwrap();
     let fx = fixture(dir.path());
     let out = dir.path().join("q");
-    for bias in ["--seqBias", "--gcBias", "--posBias"] {
-        let o = run(&[
-            os("quant"),
-            os("-i"),
-            fx.index.as_os_str(),
-            os("-l"),
-            os("IU"),
-            os("-1"),
-            fx.r1.as_os_str(),
-            os("-2"),
-            fx.r2.as_os_str(),
-            os("--noLengthCorrection"),
-            os(bias),
-            os("-p"),
-            os("2"),
-            os("-o"),
-            out.as_os_str(),
-        ]);
-        assert!(
-            !o.status.success(),
-            "--noLengthCorrection {bias} must be refused, not silently resolved"
-        );
-        let err = String::from_utf8_lossy(&o.stderr);
-        assert!(
-            err.contains("--noLengthCorrection cannot be combined with") && err.contains(bias),
-            "the error must name both sides:\n{err}"
-        );
+    for flag in ["--noLengthCorrection", "--noEffectiveLengthCorrection"] {
+        for bias in ["--seqBias", "--gcBias", "--posBias"] {
+            let o = run(&[
+                os("quant"),
+                os("-i"),
+                fx.index.as_os_str(),
+                os("-l"),
+                os("IU"),
+                os("-1"),
+                fx.r1.as_os_str(),
+                os("-2"),
+                fx.r2.as_os_str(),
+                os(flag),
+                os(bias),
+                os("-p"),
+                os("2"),
+                os("-o"),
+                out.as_os_str(),
+            ]);
+            assert!(
+                !o.status.success(),
+                "{flag} {bias} must be refused, not silently resolved"
+            );
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert!(
+                err.contains(&format!("{flag} cannot be combined with")) && err.contains(bias),
+                "the error must name both sides:\n{err}"
+            );
+        }
     }
 
     // Control: --noLengthCorrection alone is a legitimate request.
@@ -323,6 +325,25 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
     assert!(
         quant(&fx.se, &out).status.success(),
         "intact FASTQ must run"
+    );
+
+    // FASTA reads have no 4-line records, so the check must not apply to them:
+    // the same reads as FASTA, wrapped onto several lines so the line count is
+    // not a multiple of 4, must run.
+    let fasta = dir.path().join("reads.fa");
+    let mut fa = String::new();
+    for rec in lines.chunks(4) {
+        let (name, seq) = (&rec[0][1..], rec[1]);
+        let mid = seq.len() / 2;
+        fa.push_str(&format!(">{name}\n{}\n{}\n", &seq[..mid], &seq[mid..]));
+    }
+    fa.push_str(">odd\nACGTACGTACGTACGTACGTACGTACGTACGTACGT\n");
+    std::fs::write(&fasta, fa).unwrap();
+    let o = quant(&fasta, &out);
+    assert!(
+        o.status.success(),
+        "FASTA reads must run:\n{}",
+        String::from_utf8_lossy(&o.stderr)
     );
 }
 

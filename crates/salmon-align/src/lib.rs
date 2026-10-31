@@ -182,6 +182,12 @@ pub struct AlignQuantOptions {
     /// Used only to warn when a baked FLD makes them ineffective, so that a
     /// default-valued run stays quiet.
     pub explicit_fld_args: ExplicitFldArgs,
+    /// `--fldMean`/`--fldSD` were supplied by the user -- to this run or, for a
+    /// deterministic run's phase 2, to the mapping pass that baked the RAD.
+    /// When `false` and the library is single-end, the FLD is only salmon's
+    /// default guess, and the RAD quantifier widens it for the single-end
+    /// length term.
+    pub fld_prior_user_supplied: bool,
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
     /// initialize the EM uniformly instead of with the online-estimate-blended
@@ -222,15 +228,21 @@ pub struct AlignQuantOptions {
     /// `--dumpEqWeights`: the same file with each class's per-transcript
     /// combined weights, and without collapsing range-factorized sub-classes.
     pub dump_eq_weights: bool,
-    /// `--noLengthCorrection`: use the raw reference length as the effective
-    /// length, instead of the fragment-length-derived one.
+    /// `--noLengthCorrection`: give every transcript the same constant effective
+    /// length ([`salmon_model::NO_LENGTH_CORRECTION_EFF_LEN`], as salmon 1.x
+    /// did), instead of the fragment-length-derived one.
     ///
-    /// For protocols where a fragment does not sample a transcript's interior
-    /// uniformly (3' tagged-end libraries above all), the usual correction
-    /// describes something the data never did, and the raw length is the honest
-    /// divisor. Bias correction is disabled with it, for the same reason: its
-    /// whole job is to adjust an effective length this mode is not computing.
+    /// For protocols whose read count does not grow with transcript length (3'
+    /// tagged-end libraries above all), any length-dependent divisor, the raw
+    /// length included, puts back a dependence the data does not have (#1243).
+    /// Bias correction is disabled with it, for the same reason: its whole job
+    /// is to adjust an effective length this mode is not computing.
     pub no_length_correction: bool,
+    /// `--noEffectiveLengthCorrection`: divide by the raw reference length
+    /// instead of the fragment-length-derived effective length (C++ salmon's
+    /// flag of the same name). `no_length_correction` wins if both are set.
+    /// Bias correction is disabled with it too.
+    pub no_effective_length_correction: bool,
     /// `--noFragLengthDist`: drop the fragment-length term from a placement's
     /// weight, leaving score and compatibility to decide it.
     pub no_frag_length_dist: bool,
@@ -299,6 +311,15 @@ pub struct AlignQuantOptions {
 }
 
 impl AlignQuantOptions {
+    /// The effective-length mode `--noLengthCorrection` and
+    /// `--noEffectiveLengthCorrection` select.
+    pub fn length_correction(&self) -> salmon_model::LengthCorrection {
+        salmon_model::LengthCorrection::from_flags(
+            self.no_length_correction,
+            self.no_effective_length_correction,
+        )
+    }
+
     pub fn new(bam: PathBuf, output_dir: PathBuf) -> Self {
         Self {
             bam,
@@ -321,6 +342,7 @@ impl AlignQuantOptions {
             fld_max: 1000,
             fld_policy: FldPolicy::default(),
             explicit_fld_args: ExplicitFldArgs::default(),
+            fld_prior_user_supplied: false,
             forgetting_factor: 0.65,
             init_uniform: false,
             prior_seconds: 0.0,
@@ -331,6 +353,7 @@ impl AlignQuantOptions {
             dump_eq: false,
             dump_eq_weights: false,
             no_length_correction: false,
+            no_effective_length_correction: false,
             no_frag_length_dist: false,
             hard_filter: false,
             model_single_frag_prob: true,
@@ -423,7 +446,7 @@ pub struct AlignQuantResult {
     pub start_time: String,
     pub bias_dump: salmon_model::dumps::BiasDump,
     /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
-    pub ambig: (Vec<u32>, Vec<u32>),
+    pub ambig: (Vec<u64>, Vec<u64>),
     /// posterior samples (bootstrap or Gibbs), one abundance vector each; empty
     /// when neither was requested. Length is `num_refs`, matching `quant.sf` rows.
     pub bootstraps: Vec<Vec<f64>>,
@@ -431,6 +454,9 @@ pub struct AlignQuantResult {
     /// criterion was met before `max_iter`
     pub em_iters: u32,
     pub em_converged: bool,
+    /// how each connected component's iteration ended (see
+    /// [`salmon_infer::ComponentSummary`]); `None` off the component engine
+    pub em_components: Option<salmon_infer::ComponentSummary>,
     /// library format observed for these alignments (baked/auto-detected), for
     /// provenance and the strandedness sanity check; `None` if not observed
     pub detected_library_type: Option<String>,
@@ -561,6 +587,28 @@ where
         return f64::NEG_INFINITY;
     }
     m + xs.map(|x| (x - m).exp()).sum::<f64>().ln()
+}
+
+/// [`logsumexp_iter`] of a single value, without its `exp` and `ln`.
+///
+/// For one finite `x` the general form is `x + ln(exp(x − x)) = x + ln(1)`,
+/// and `exp(0) = 1` and `ln(1) = +0` exactly (IEEE 754 / C Annex F special
+/// cases, which every libm honours), so it is `x + 0.0` — written as such,
+/// since that also turns `-0.0` into `+0.0` the way the general form does. The
+/// non-finite cases follow the general form's own: no finite maximum gives
+/// `-inf` (`f64::max` skips a NaN), and `+inf` gives `inf − inf`, a NaN.
+///
+/// A RAD fragment almost always has one placement per transcript, so this is
+/// the common case of the per-transcript grouping, where it saved an `exp` and
+/// an `ln` per placement.
+pub(crate) fn logsumexp_one(x: f64) -> f64 {
+    if x.is_nan() || x == f64::NEG_INFINITY {
+        f64::NEG_INFINITY
+    } else if x == f64::INFINITY {
+        f64::NAN
+    } else {
+        x + 0.0
+    }
 }
 
 /// `log(Σ exp(xs))`, numerically stable. `xs` is non-empty.
@@ -956,6 +1004,9 @@ struct PassCfg<'a> {
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
+    /// `--noLengthCorrection`: no start-position (length) term in the online
+    /// posterior
+    no_length_correction: bool,
     /// drop single-mate (orphan) placements in a paired library (`--discardOrphans`)
     discard_orphans: bool,
     /// fragments processed before the FLD aux model is applied (`--numPreAuxModelSamples`)
@@ -1133,6 +1184,7 @@ where
                         ignore_incompat: cfg.ignore_incompat,
                         incompat_prior: cfg.incompat_prior,
                         paired_lib: cfg.paired_lib,
+                        no_length_correction: cfg.no_length_correction,
                         discard_orphans: cfg.discard_orphans,
                         pre_burnin: cfg.pre_burnin,
                         range_factorization_bins: cfg.range_factorization_bins,
@@ -1345,6 +1397,9 @@ struct FragCtx<'a> {
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
+    /// `--noLengthCorrection`: no start-position (length) term in the online
+    /// posterior
+    no_length_correction: bool,
     /// drop single-mate (orphan) placements in a paired library (`--discardOrphans`)
     discard_orphans: bool,
     /// fragments processed before the FLD aux model is applied (`--numPreAuxModelSamples`)
@@ -1565,7 +1620,10 @@ fn process_fragment(
         let proper = idxs.len() >= 2 && flen > 0;
         let frag_start = recs[idxs[0]].pos;
         let frag_end = frag_start + (flen.max(1) as usize) - 1;
-        let start_pos = if proper && flen <= rl {
+        // A constant under --noLengthCorrection, as in salmon 1.x.
+        let start_pos = if ctx.no_length_correction {
+            0.0
+        } else if proper && flen <= rl {
             -(((rl - flen + 1) as f64).ln())
         } else {
             -((rl.max(1) as f64).ln())
@@ -2202,7 +2260,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     // The error model and bias models need the transcriptome (salmon requires `-t`).
     let use_error_model = opts.transcripts.is_some() && !opts.no_error_model;
-    let bias_on = opts.seq_bias || opts.gc_bias || opts.pos_bias;
+    let bias_on =
+        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && opts.length_correction().is_effective();
     anyhow::ensure!(
         !bias_on || opts.transcripts.is_some(),
         "--seqBias/--gcBias/--posBias in alignment mode require -t/--targets (the transcriptome FASTA)"
@@ -2337,6 +2396,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             ignore_incompat,
             incompat_prior: opts.incompat_prior,
             paired_lib,
+            no_length_correction: opts.no_length_correction,
             discard_orphans: opts.discard_orphans,
             pre_burnin: opts.num_pre_aux_model_samples,
             range_factorization_bins: opts.range_factorization_bins,
@@ -2394,9 +2454,10 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // ---- base effective lengths --------------------------------------------
     fld.cache();
     let cond_means = fld.conditional_means();
+    let length_correction = opts.length_correction();
     let mut eff_lengths = vec![0f64; num_refs];
     for (tid, len) in lengths.iter().enumerate() {
-        eff_lengths[tid] = salmon_model::smoothed_effective_length(&cond_means, *len as usize);
+        eff_lengths[tid] = length_correction.effective_length(&cond_means, *len as usize);
     }
 
     let mut collapsed = eq_builder.finish();
@@ -2455,6 +2516,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            components: None,
             dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
@@ -2516,6 +2578,15 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     }
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
+    let em_components = em.components.clone();
+    if let Some(c) = &em_components {
+        let (line, warn) = c.describe(em_iters);
+        if warn {
+            tracing::warn!("{line}");
+        } else {
+            tracing::info!("{line}");
+        }
+    }
     let counts = em.alphas;
     // Bias correction + EM/VBEM point estimate.
     timer.mark("em_bias");
@@ -2649,6 +2720,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         bootstraps,
         em_iters,
         em_converged,
+        em_components,
         detected_library_type,
         total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
@@ -2845,6 +2917,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         alignment_provenance: Vec<SourceProgram>,
         num_em_iterations: u32,
         em_converged: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        em_components: Option<salmon_core::EmComponentsMeta>,
         detected_library_type: Option<String>,
         /// which inference path produced these results: `deterministic` (RAD
         /// input — including `--deterministic`'s phase 2) or `online` (the
@@ -3109,6 +3183,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
+        em_components: res.em_components.as_ref().map(|c| c.to_meta()),
         detected_library_type: res.detected_library_type.clone(),
         inference_path: match res.source {
             FragmentSource::Rad => "deterministic",
@@ -3481,7 +3556,46 @@ mod tests {
 
 #[cfg(test)]
 mod logsumexp_tests {
-    use super::{logsumexp, logsumexp_iter};
+    use super::{logsumexp, logsumexp_iter, logsumexp_one};
+
+    /// The single-value shortcut has to be the general form, bit for bit, on
+    /// every input — signed zeros and non-finite values included.
+    #[test]
+    fn one_value_shortcut_agrees_with_the_general_form() {
+        let mut cases = vec![
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            -1e-300,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE / 4.0,
+            f64::MAX,
+            f64::MIN,
+            -745.2,
+            -23.998_158_637_57,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..10_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            cases.push(f64::from_bits(x));
+            cases.push(-((x % 1_000_000) as f64) / 997.0);
+        }
+        for x in cases {
+            let general = logsumexp_iter(std::iter::once(x));
+            let one = logsumexp_one(x);
+            if general.is_nan() {
+                assert!(one.is_nan(), "x={x:e}: general NaN, shortcut {one}");
+            } else {
+                assert_eq!(general.to_bits(), one.to_bits(), "x={x:e}");
+            }
+        }
+    }
 
     /// `logsumexp_iter` exists so a caller holding a run of records can avoid
     /// copying their weights into a scratch slice. It is only safe to use in

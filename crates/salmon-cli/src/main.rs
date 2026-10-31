@@ -39,7 +39,7 @@ use salmon_align::{
     ExplicitFldArgs, FldPolicy, GenomeProjectOptions,
 };
 use salmon_index::{build as build_index, IndexBuildOptions};
-use salmon_quant::{quantify, ChunkCodec, EmAccel, ProgressCounters, QuantOptions};
+use salmon_quant::{quantify, ChunkCodec, EmAccel, EmStop, ProgressCounters, QuantOptions};
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -194,6 +194,34 @@ impl From<EmAccelArg> for EmAccel {
             EmAccelArg::Squarem => EmAccel::Squarem,
             EmAccelArg::Daarem => EmAccel::Daarem,
         }
+    }
+}
+
+/// CLI surface for [`EmStop`]: when an unaccelerated EM/VBEM run stops.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum EmStopArg {
+    /// salmon's rule: the whole problem at once (salmon ≤ 2.8).
+    Global,
+    /// Each connected component on its own, once its projected remaining
+    /// movement is small.
+    Projected,
+}
+
+impl From<EmStopArg> for EmStop {
+    fn from(a: EmStopArg) -> Self {
+        match a {
+            EmStopArg::Global => EmStop::Global,
+            EmStopArg::Projected => EmStop::Projected,
+        }
+    }
+}
+
+/// Apply `--stopRule` to whichever optimizer will run; without it each keeps
+/// its default.
+fn apply_stop_rule(em: &mut salmon_quant::EmOptions, rule: Option<EmStopArg>) {
+    if let Some(r) = rule {
+        em.vb_stop = r.into();
+        em.em_stop = r.into();
     }
 }
 
@@ -648,14 +676,23 @@ struct QuantArgs {
     /// Option-typed (default 16 at use) so passing it without Gibbs sampling
     /// can be reported rather than silently doing nothing — the sibling
     /// `--bamCompressThreads` without `--writeBam` already hard-errors.
-    #[arg(long = "thinningFactor")]
+    #[arg(long = "thinningFactor", value_parser = clap::value_parser!(u32).range(1..))]
     thinning_factor: Option<u32>,
     /// (Long reads) Oxford Nanopore model — not supported; use oarfish instead.
     #[arg(long = "ont")]
     ont: bool,
-    /// Disable effective-length correction (use raw reference length).
+    /// Disable length correction entirely: every transcript gets the same
+    /// constant effective length (100, as in salmon 1.x). For protocols where a
+    /// transcript's read count does not depend on its length, such as 3'
+    /// tagged-end (QuantSeq) libraries.
     #[arg(long = "noLengthCorrection")]
     no_length_correction: bool,
+    /// Divide by each transcript's raw length instead of its effective length
+    /// (length minus the expected fragment length), as C++ salmon's flag of the
+    /// same name does. This was what --noLengthCorrection did in salmon
+    /// 2.0–2.8. --noLengthCorrection takes precedence if both are given.
+    #[arg(long = "noEffectiveLengthCorrection")]
+    no_effective_length_correction: bool,
     /// Minimum alignment score as a fraction of the perfect score (default 0.65).
     /// Option-typed so passing it under `--sketch` — which computes no alignment
     /// scores — can warn instead of being silently inert (#1140).
@@ -681,16 +718,22 @@ struct QuantArgs {
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
     /// Match score for selective alignment (reads mode; default 2).
-    #[arg(long = "ma")]
+    #[arg(long = "ma", value_parser = clap::value_parser!(i32).range(1..=127))]
     ma: Option<i32>,
-    /// Mismatch penalty for selective alignment (reads mode; default 4).
-    #[arg(long = "mp")]
+    /// Mismatch penalty for selective alignment (reads mode; default 4). The
+    /// magnitude is used, so salmon's negative convention (`--mp -4`) is also
+    /// accepted.
+    #[arg(
+        long = "mp",
+        allow_negative_numbers = true,
+        value_parser = clap::value_parser!(i32).range(-127..=127)
+    )]
     mp: Option<i32>,
     /// Gap-open penalty for selective alignment (reads mode; default 6).
-    #[arg(long = "go")]
+    #[arg(long = "go", value_parser = clap::value_parser!(i32).range(0..=127))]
     go: Option<i32>,
     /// Gap-extend penalty for selective alignment (reads mode; default 2).
-    #[arg(long = "ge")]
+    #[arg(long = "ge", value_parser = clap::value_parser!(i32).range(0..=127))]
     ge: Option<i32>,
     /// Consensus slack: a target is kept only if its best chain score is at least
     /// `(1 - slack)` of the max chain score for that mate (salmon default 0.35;
@@ -710,6 +753,12 @@ struct QuantArgs {
     /// the default `none`.
     #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
     em_accel: EmAccelArg,
+    /// When unaccelerated EM/VBEM stops (expert): `projected` stops each
+    /// connected component once salmon's criterion holds over it and its
+    /// projected remaining movement is small; `global` is salmon ≤ 2.8's rule
+    /// over all transcripts at once, and reproduces its results.
+    #[arg(long = "stopRule", value_enum, hide = true)]
+    stop_rule: Option<EmStopArg>,
     /// Mean of the fragment-length distribution prior [default: 250].
     ///
     /// A prior, not an override: wherever fragment lengths are observed, this
@@ -718,12 +767,12 @@ struct QuantArgs {
     /// a salmon RAD carries a baked distribution.
     // `Option` rather than `default_value_t` so salmon can tell a supplied value
     // from an inherited one, and warn only when a supplied one is ignored.
-    #[arg(long = "fldMean")]
+    #[arg(long = "fldMean", value_parser = parse_positive_f64)]
     fld_mean: Option<f64>,
     /// Standard deviation of the fragment-length distribution prior [default: 25].
     ///
     /// Same prior semantics as `--fldMean`.
-    #[arg(long = "fldSD")]
+    #[arg(long = "fldSD", value_parser = parse_positive_f64)]
     fld_sd: Option<f64>,
     /// Maximum fragment length tracked by the fragment-length distribution
     /// [default: 1000].
@@ -847,11 +896,11 @@ struct QuantArgs {
     #[arg(long = "numErrorBins")]
     num_error_bins: Option<usize>,
     /// Number of fragment-GC bins for the GC bias model. (salmon's --numGCBins)
-    #[arg(long = "numGCBins")]
+    #[arg(long = "numGCBins", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=101))]
     num_gc_bins: Option<usize>,
     /// Number of conditioning (context) bins for the GC bias model.
     /// (salmon's --conditionalGCBins)
-    #[arg(long = "conditionalGCBins")]
+    #[arg(long = "conditionalGCBins", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=101))]
     conditional_gc_bins: Option<usize>,
     /// Discard orphan (single-mate) alignments in a paired library
     /// (alignment mode). Reads mode uses --discardOrphansQuasi.
@@ -930,6 +979,16 @@ struct QuantArgs {
     /// the default mapping mode (use --sketch for pseudoalignment).
     #[arg(long = "validateMappings")]
     validate_mappings: bool,
+}
+
+/// clap value parser for a finite, strictly positive `f64` (`--fldMean`, `--fldSD`).
+fn parse_positive_f64(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if v.is_finite() && v > 0.0 {
+        Ok(v)
+    } else {
+        Err(format!("must be a positive number (got {s})"))
+    }
 }
 
 /// Resolve the `--sparseSeeds` / `--uniMEMs` / `--refMEMs` flags into a seeding
@@ -1207,6 +1266,7 @@ fn requant_options(
     q.fld_mean = map_opts.fld_mean;
     q.fld_sd = map_opts.fld_sd;
     q.fld_max = map_opts.fld_max;
+    q.fld_prior_user_supplied = map_opts.fld_prior_user_supplied;
     q.gc_bins = map_opts.gc_bins;
     q.cond_gc_bins = map_opts.cond_gc_bins;
     q.num_bootstraps = map_opts.num_bootstraps;
@@ -1241,6 +1301,7 @@ fn requant_options(
     // reads mode, so `--deterministic` accepted them and quantified as though
     // they had not been passed.
     q.no_length_correction = map_opts.no_length_correction;
+    q.no_effective_length_correction = map_opts.no_effective_length_correction;
     q.no_frag_length_dist = map_opts.no_frag_length_dist;
     q
 }
@@ -1863,7 +1924,9 @@ fn preflight_fastq_complete(paths: &[PathBuf]) -> Result<()> {
             || (n >= 4 && magic[..4] == [0x28, 0xb5, 0x2f, 0xfd])                  // zstd
             || (n >= 3 && &magic[..3] == b"BZh")                                   // bzip2
             || (n >= 4 && magic[..4] == [0xfd, 0x37, 0x7a, 0x58]); // xz
-        if compressed || n == 0 {
+                                                                   // FASTA reads have no 4-line record structure to check (and a record
+                                                                   // may span several lines), so there is nothing to verify here.
+        if compressed || n == 0 || magic[0] == b'>' {
             continue;
         }
         use std::io::{BufReader, Seek, SeekFrom};
@@ -2129,12 +2192,21 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         );
     }
 
-    // `--noLengthCorrection` and bias correction cannot both apply: every
-    // driver computes `bias_on = (seq||gc||pos) && !no_length_correction`, so
-    // the bias request was silently discarded — and `meta_info.json` went on
-    // reporting `gc_bias_correct: true` for a run that did no such thing. The
-    // conflict is fully known at invocation, so say so instead (#1140).
-    if args.no_length_correction && (args.seq_bias || args.gc_bias || args.pos_bias) {
+    // `--noLengthCorrection` / `--noEffectiveLengthCorrection` and bias
+    // correction cannot both apply: every driver computes `bias_on` only under
+    // the default length correction, so the bias request was silently
+    // discarded — and `meta_info.json` went on reporting `gc_bias_correct: true`
+    // for a run that did no such thing. The conflict is fully known at
+    // invocation, so say so instead (#1140).
+    let length_flag = if args.no_length_correction {
+        Some("--noLengthCorrection")
+    } else if args.no_effective_length_correction {
+        Some("--noEffectiveLengthCorrection")
+    } else {
+        None
+    };
+    if let (Some(length_flag), true) = (length_flag, args.seq_bias || args.gc_bias || args.pos_bias)
+    {
         let asked: Vec<&str> = [
             ("--seqBias", args.seq_bias),
             ("--gcBias", args.gc_bias),
@@ -2144,9 +2216,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         .filter_map(|&(n, on)| on.then_some(n))
         .collect();
         anyhow::bail!(
-            "--noLengthCorrection cannot be combined with {}: bias correction works by \
-             adjusting effective lengths, which is exactly what --noLengthCorrection turns \
-             off. Drop whichever you did not mean.",
+            "{length_flag} cannot be combined with {}: bias correction works by adjusting \
+             effective lengths, which is exactly what {length_flag} turns off. Drop \
+             whichever you did not mean.",
             asked.join(" / ")
         );
     }
@@ -2354,6 +2426,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.em.accel = args.em_accel.into();
+        apply_stop_rule(&mut opts.em, args.stop_rule);
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
         opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
@@ -2373,6 +2446,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.dump_eq_weights = args.dump_eq_weights;
         opts.dump_bias_models = args.dump_bias_models;
         opts.no_length_correction = args.no_length_correction;
+        opts.no_effective_length_correction = args.no_effective_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
         opts.num_aux_model_samples = args.num_aux_model_samples.unwrap_or(5_000_000);
@@ -2462,14 +2536,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             );
         }
 
-        // The online alignment path never supported these two (C++ did); the
-        // deterministic default honours them, so under `--online` they warn
-        // rather than silently doing nothing (#1140: no parity work for a path
-        // scheduled for removal).
-        if args.no_length_correction || args.no_frag_length_dist {
+        // The online alignment path never supported --noFragLengthDist (C++
+        // did); the deterministic default honours it, so under `--online` it
+        // warns rather than silently doing nothing (#1140: no parity work for a
+        // path scheduled for removal). The length-correction flags only set the
+        // effective lengths, which this path shares, so they apply here too.
+        if args.no_frag_length_dist {
             tracing::warn!(
-                "--noLengthCorrection/--noFragLengthDist are not supported on the deprecated \
-                 online alignment path: ignored. The default (deterministic) mode honours them."
+                "--noFragLengthDist is not supported on the deprecated online alignment \
+                 path: ignored. The default (deterministic) mode honours it."
             );
         }
         // The online alignment path writes no RAD, so the flags that place or
@@ -2629,6 +2704,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.em.accel = args.em_accel.into();
+        apply_stop_rule(&mut opts.em, args.stop_rule);
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
         opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
@@ -2660,6 +2736,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.no_length_correction = args.no_length_correction;
+        opts.no_effective_length_correction = args.no_effective_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
@@ -2895,6 +2972,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.num_gibbs_samples = args.num_gibbs_samples;
     opts.thinning_factor = args.thinning_factor.unwrap_or(16);
     opts.no_length_correction = args.no_length_correction;
+    opts.no_effective_length_correction = args.no_effective_length_correction;
     opts.model_single_frag_prob = !args.no_single_frag_prob;
     opts.no_frag_length_dist = args.no_frag_length_dist;
     opts.map_config.align.min_score_fraction = args.min_score_fraction.unwrap_or(0.65);
@@ -2931,7 +3009,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma.unwrap_or(2) as i8;
-    opts.map_config.align.mismatch_pen = args.mp.unwrap_or(4) as i8;
+    opts.map_config.align.mismatch_pen = args.mp.unwrap_or(4).unsigned_abs() as i8;
     opts.map_config.align.gap_open_pen = args.go.unwrap_or(6) as i8;
     opts.map_config.align.gap_extend_pen = args.ge.unwrap_or(2) as i8;
 
@@ -3006,11 +3084,13 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.em.vb_prior = args.vb_prior;
     opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
     opts.em.accel = args.em_accel.into();
+    apply_stop_rule(&mut opts.em, args.stop_rule);
     opts.sig_digits = args.sig_digits;
     opts.max_read_occ = args.max_read_occ.unwrap_or(250);
     opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
     opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
     opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
+    opts.fld_prior_user_supplied = args.fld_mean.is_some() || args.fld_sd.is_some();
     warn_unsupported_fld_policy(args.fld_policy, "reads mode");
     opts.forgetting_factor = args.forgetting_factor.unwrap_or(0.65);
     opts.init_uniform = args.init_uniform;
@@ -3484,6 +3564,7 @@ mod tests {
         map_opts.fld_mean = 271.0;
         map_opts.fld_sd = 33.0;
         map_opts.fld_max = 777;
+        map_opts.fld_prior_user_supplied = true;
         map_opts.gc_bins = 17;
         map_opts.cond_gc_bins = 5;
         map_opts.num_bootstraps = 11;
@@ -3497,6 +3578,7 @@ mod tests {
         map_opts.dump_bias_models = true;
         map_opts.model_single_frag_prob = false;
         map_opts.no_length_correction = true;
+        map_opts.no_effective_length_correction = true;
         map_opts.no_frag_length_dist = true;
 
         let q = requant_options(
@@ -3521,6 +3603,7 @@ mod tests {
         assert_eq!(q.fld_mean, 271.0);
         assert_eq!(q.fld_sd, 33.0);
         assert_eq!(q.fld_max, 777);
+        assert!(q.fld_prior_user_supplied);
         assert_eq!(q.gc_bins, 17);
         assert_eq!(q.cond_gc_bins, 5);
         assert_eq!(q.num_bootstraps, 11);
@@ -3534,6 +3617,7 @@ mod tests {
         assert!(q.dump_bias_models);
         assert!(!q.model_single_frag_prob);
         assert!(q.no_length_correction);
+        assert!(q.no_effective_length_correction);
         assert!(q.no_frag_length_dist);
     }
 
@@ -3555,6 +3639,10 @@ mod tests {
         assert_eq!(q.dump_eq, defaults.dump_eq);
         assert_eq!(q.dump_eq_weights, defaults.dump_eq_weights);
         assert_eq!(q.no_length_correction, defaults.no_length_correction);
+        assert_eq!(
+            q.no_effective_length_correction,
+            defaults.no_effective_length_correction
+        );
         assert_eq!(q.no_frag_length_dist, defaults.no_frag_length_dist);
     }
 

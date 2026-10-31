@@ -50,8 +50,8 @@ use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::SalmonIndex;
-pub use salmon_infer::EmAccel;
-use salmon_infer::{optimize_packed_with_init, EmOptions};
+use salmon_infer::optimize_packed_with_init;
+pub use salmon_infer::{EmAccel, EmOptions, EmStop};
 use salmon_map::MapConfig;
 use salmon_model::dumps::{dump_bias_models_to_file, BiasDump};
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
@@ -154,9 +154,14 @@ pub struct QuantOptions {
     pub num_gibbs_samples: u32,
     /// Gibbs thinning factor (`--thinningFactor`, salmon default 16)
     pub thinning_factor: u32,
-    /// disable effective-length correction; use the raw reference length
+    /// disable length correction: every transcript gets the same constant
+    /// effective length, [`salmon_model::NO_LENGTH_CORRECTION_EFF_LEN`]
     /// (`--noLengthCorrection`)
     pub no_length_correction: bool,
+    /// divide by the raw reference length instead of the fragment-length-derived
+    /// effective length (`--noEffectiveLengthCorrection`); `no_length_correction`
+    /// wins if both are set
+    pub no_effective_length_correction: bool,
     /// model the fragment-length probability of orphan / single-end mappings via
     /// the bounded-CMF "ambiguous" weight (salmon default `true`); `false` =
     /// `--noSingleFragProb`.
@@ -169,6 +174,10 @@ pub struct QuantOptions {
     pub fld_mean: f64,
     pub fld_sd: f64,
     pub fld_max: usize,
+    /// whether the user supplied `--fldMean`/`--fldSD` (rather than taking the
+    /// defaults); forwarded to the deterministic requant, which widens a merely
+    /// default single-end prior for the single-end length term.
+    pub fld_prior_user_supplied: bool,
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
     /// significant digits for the EffectiveLength and NumReads columns of
@@ -218,6 +227,15 @@ pub struct QuantOptions {
 }
 
 impl QuantOptions {
+    /// The effective-length mode `--noLengthCorrection` and
+    /// `--noEffectiveLengthCorrection` select.
+    pub fn length_correction(&self) -> salmon_model::LengthCorrection {
+        salmon_model::LengthCorrection::from_flags(
+            self.no_length_correction,
+            self.no_effective_length_correction,
+        )
+    }
+
     /// Options with salmon-like defaults for the given index and output dir.
     pub fn new(index_dir: PathBuf, output_dir: PathBuf) -> Self {
         Self {
@@ -254,11 +272,13 @@ impl QuantOptions {
             num_gibbs_samples: 0,
             thinning_factor: 16,
             no_length_correction: false,
+            no_effective_length_correction: false,
             model_single_frag_prob: true,
             no_frag_length_dist: false,
             fld_mean: 250.0,
             fld_sd: 25.0,
             fld_max: 1000,
+            fld_prior_user_supplied: false,
             forgetting_factor: 0.65,
             sig_digits: 3,
             max_read_occ: 250,
@@ -378,7 +398,7 @@ pub struct QuantResult {
     /// when neither was requested
     pub bootstraps: Vec<Vec<f64>>,
     /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
-    pub ambig: (Vec<u32>, Vec<u32>),
+    pub ambig: (Vec<u64>, Vec<u64>),
     /// observed/expected bias-model tables for the aux dumps; each component is
     /// empty unless the corresponding `--seqBias`/`--gcBias`/`--posBias` ran
     pub bias_dump: BiasDump,
@@ -386,6 +406,9 @@ pub struct QuantResult {
     /// relative-difference criterion was met before `max_iter`
     pub em_iters: u32,
     pub em_converged: bool,
+    /// how each connected component's iteration ended (see
+    /// [`salmon_infer::ComponentSummary`]); `None` off the component engine
+    pub em_components: Option<salmon_infer::ComponentSummary>,
     /// total wall-clock seconds for the quantification call
     pub total_seconds: f64,
     /// peak resident set size in KiB (Linux `VmHWM`); 0 if unavailable
@@ -568,7 +591,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // rough end-of-mapping EM can bake `initial_abundances` to seed the requant's
     // bias model — letting the requant be a single fused RAD read.
     let want_rough_abund = discrete_fld.is_some()
-        && !opts.no_length_correction
+        && opts.length_correction().is_effective()
         && (opts.seq_bias || opts.gc_bias || opts.pos_bias);
     // Orientation-tagged naive eq-classes for the rough seed EM (filtered by the
     // resolved library type at end of mapping; see `processor::record_discrete`).
@@ -594,7 +617,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // the full GcRank bitvector over the reference concatenation and
     // per-fragment model updates on the mapping hot path, all discarded
     // (#1140, computed-but-unused).
-    let observe_bias = !opts.skip_quant && !opts.no_length_correction;
+    let observe_bias = !opts.skip_quant && opts.length_correction().is_effective();
 
     // Shared observed sequence-bias models (merged per-thread) for `--seqBias`.
     let seqbias_obs = (opts.seq_bias && observe_bias)
@@ -714,6 +737,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             paired_lib: opts.is_paired(),
             model_single_frag_prob: opts.model_single_frag_prob,
             no_frag_length_dist: opts.no_frag_length_dist,
+            no_length_correction: opts.no_length_correction,
             // Assemble eq-classes only if something consumes them: the EM (unless
             // `--skipQuant`) or an eq-class dump. A map-only `--writeRad` run skips
             // assembly but still trains the FLD (to bake) — see `processor::record`.
@@ -938,13 +962,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     fld.cache();
     let log_pmf = fld.log_pmf();
     let cond_means = fld.conditional_means();
+    let length_correction = opts.length_correction();
     let mut eff_lengths = vec![0f64; num_refs];
     for tid in 0..num_refs {
-        eff_lengths[tid] = if opts.no_length_correction {
-            salmon.ref_len(tid) as f64
-        } else {
-            salmon_model::smoothed_effective_length(&cond_means, salmon.ref_len(tid) as usize)
-        };
+        eff_lengths[tid] =
+            length_correction.effective_length(&cond_means, salmon.ref_len(tid) as usize);
     }
 
     // ---- inference ----------------------------------------------------------
@@ -968,7 +990,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         )
         .context("writing eq_classes.txt.gz")?;
     }
-    let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
+    let bias_on =
+        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && length_correction.is_effective();
     // salmon runs a *single* offline EM: after a short burn-in (`targetIt = 10`
     // iterations) it corrects effective lengths in place using that early
     // abundance estimate to weight the expected bias models, then continues the
@@ -1031,6 +1054,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            components: None,
             dropped_mass: 0.0,
         }
     } else if bias_on {
@@ -1277,6 +1301,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // mass in fully-truncated classes (`dropped_mass`, normally 0). No rescale.
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
+    let em_components = em.components.clone();
+    if let Some(c) = &em_components {
+        let (line, warn) = c.describe(em_iters);
+        if warn {
+            tracing::warn!("{line}");
+        } else {
+            tracing::info!("{line}");
+        }
+    }
     let counts = em.alphas;
 
     // Finalize RAD output now that the FLD and abundances are known: bake the
@@ -1340,8 +1373,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         salmon_infer::PosteriorMethod::Gibbs { samples } => {
             // Gibbs prior follows the main optimizer (salmon): with VBEM and a
             // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
-            // 1e-3 per transcript. The rust VBEM uses a constant per-transcript prior.
-            let prior = if opts.em.use_vbem {
+            // 1e-3 per transcript. Under `--perNucleotidePrior` (a VBEM option)
+            // it is `vbPrior` per nucleotide, scaled by effective length,
+            // matching the point estimate.
+            let per_nucleotide = opts.em.use_vbem && opts.em.per_nucleotide_prior;
+            let prior = if per_nucleotide {
+                opts.em.vb_prior
+            } else if opts.em.use_vbem {
                 opts.em.vb_prior.max(1.0)
             } else {
                 1e-3
@@ -1353,7 +1391,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 // Honour --perNucleotidePrior here as the EM does; hardcoding a
                 // per-transcript prior made the flag a no-op for Gibbs on every
                 // path (#1140, audit D13).
-                per_transcript_prior: !opts.em.per_nucleotide_prior,
+                per_transcript_prior: !per_nucleotide,
             };
             salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
         }
@@ -1465,6 +1503,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         bias_dump,
         em_iters,
         em_converged,
+        em_components,
         total_seconds: run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
         detected_library_type,

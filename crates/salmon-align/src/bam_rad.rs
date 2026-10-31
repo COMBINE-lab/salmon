@@ -108,11 +108,12 @@ pub fn write_alignment_rad(
     let num_refs = names.len();
     anyhow::ensure!(num_refs > 0, "BAM header has no reference sequences");
 
-    // Gated on `!no_length_correction` like the reads-mode twin: without
-    // length correction the requant disables bias, so baking bias seeds here
+    // Gated on the default length correction like the reads-mode twin: without
+    // it the requant disables bias, so baking bias seeds here
     // would spend a naive eq-class pass + seed EM on abundances nothing can
     // ever consume (#1140).
-    let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
+    let bias_on =
+        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && opts.length_correction().is_effective();
     // Paired unless the library type is explicitly single-end (matches the
     // alignment-mode `paired_lib` derivation in `quantify_alignments`).
     let is_paired = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");

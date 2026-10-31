@@ -201,6 +201,11 @@ impl FragmentLengthDistribution {
         // Centring the kernel on `len` means the observation contributes most to
         // its own bin and progressively less to its neighbours.
         let start = len as isize - half as isize;
+        // Accumulate the fragment's total and length-weighted mass locally and
+        // publish them with one atomic update each: `sum`/`tot_mass` are shared
+        // by every worker, so per-kernel-entry CAS loops on them contend.
+        let mut local_sum = LOG_0;
+        let mut local_tot = LOG_0;
         for (offset, &k) in (start..).zip(self.kernel.iter()) {
             if offset > 0 && (offset as usize) < self.hist.len() {
                 let o = offset as usize;
@@ -208,9 +213,13 @@ impl FragmentLengthDistribution {
                 // weight.
                 let k_mass = mass + k;
                 self.hist[o].log_add_assign(k_mass);
-                self.sum.log_add_assign((o as f64).ln() + k_mass);
-                self.tot_mass.log_add_assign(k_mass);
+                local_sum = log_add(local_sum, (o as f64).ln() + k_mass);
+                local_tot = log_add(local_tot, k_mass);
             }
+        }
+        if local_tot > LOG_0 {
+            self.sum.log_add_assign(local_sum);
+            self.tot_mass.log_add_assign(local_tot);
         }
     }
 
@@ -501,6 +510,66 @@ pub fn ambig_frag_log_prob(cmf: &[f64], fwd: bool, pos: i32, read_len: i32, txp_
     // fits in the transcript at all.
     cmf_at(cmf, max_frag_len) - ref_cm
 }
+
+/// How quantification turns a transcript's length into the effective length the
+/// EM divides its abundance by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LengthCorrection {
+    /// salmon's default: the fragment-length-derived
+    /// [`smoothed_effective_length`].
+    #[default]
+    Effective,
+    /// `--noEffectiveLengthCorrection`: the raw reference length. Estimates
+    /// still scale with length, but without the fragment-length adjustment.
+    Raw,
+    /// `--noLengthCorrection`: the same constant,
+    /// [`NO_LENGTH_CORRECTION_EFF_LEN`], for every transcript, which takes
+    /// length out of the model.
+    None,
+}
+
+impl LengthCorrection {
+    /// The mode for the two flags. `--noLengthCorrection` wins when both are
+    /// given, as in C++ salmon.
+    pub fn from_flags(no_length_correction: bool, no_effective_length_correction: bool) -> Self {
+        if no_length_correction {
+            Self::None
+        } else if no_effective_length_correction {
+            Self::Raw
+        } else {
+            Self::Effective
+        }
+    }
+
+    /// Whether this is the default, fragment-length-derived correction. Bias
+    /// correction works by adjusting that effective length, so it applies only
+    /// here.
+    pub fn is_effective(self) -> bool {
+        self == Self::Effective
+    }
+
+    /// The effective length of a transcript of `ref_len` bases. `cond_means`
+    /// is [`FragmentLengthDistribution::conditional_means`].
+    pub fn effective_length(self, cond_means: &[f64], ref_len: usize) -> f64 {
+        match self {
+            Self::Effective => smoothed_effective_length(cond_means, ref_len),
+            Self::Raw => ref_len as f64,
+            Self::None => NO_LENGTH_CORRECTION_EFF_LEN,
+        }
+    }
+}
+
+/// The effective length of every transcript under `--noLengthCorrection`.
+///
+/// salmon 1.x set every effective length to this constant: in the EM, in
+/// `quant.sf`'s `EffectiveLength` column and in the TPM. A constant divisor
+/// takes transcript length out of the model entirely, which is what 3'
+/// tagged-end protocols (QuantSeq and similar) need, since their read count
+/// does not grow with transcript length. The raw reference length would put it
+/// back (#1243). The value itself only matters where an effective length is
+/// used as a magnitude rather than a ratio, such as the EM's warm start and
+/// `--perNucleotidePrior`, so it is kept at salmon's 100.
+pub const NO_LENGTH_CORRECTION_EFF_LEN: f64 = 100.0;
 
 /// salmon's base effective length (`computeSmoothedEffectiveLengths`):
 /// `effLen = refLen − E[L | L ≤ refLen]`, clamped back to `refLen` if it would

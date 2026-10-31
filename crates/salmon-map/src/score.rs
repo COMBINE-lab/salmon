@@ -39,7 +39,11 @@ pub struct RawMapping {
     /// applicable.
     pub read_len: i32,
     pub is_decoy: bool,
-    /// leftmost fragment position on the reference (for sequence-bias context)
+    /// Sequence-bias anchor. A proper pair: the fragment's leftmost base. An
+    /// orphan / single-end read: the read's 5' end — its leftmost base if
+    /// forward, its rightmost base (inclusive) if reverse. NOT the leftmost of
+    /// an unpaired reverse read (that is `rc_pos`); the RAD writer must not
+    /// store this for unpaired hits (see `salmon_rad::RadHit::pos`).
     pub ref_pos: i32,
     /// leftmost reference position of the forward-strand mate/read (for
     /// positional bias); `-1` if there is no forward-strand contributor
@@ -71,11 +75,15 @@ pub struct ScoredMapping {
     pub fragment_len: i32,
     /// length of the mapped (anchor) read; used for the ambiguous
     /// fragment-length probability of orphans / single-end reads (the reverse-
-    /// strand bound is `ref_pos + read_len`). `0` when not applicable.
+    /// strand bound is `rc_pos + read_len`). `0` when not applicable.
     pub read_len: i32,
     /// equivalence-class weight (`1.0` for best-scoring; decays below)
     pub weight: f64,
-    /// leftmost fragment position on the reference (for sequence-bias context)
+    /// Sequence-bias anchor. A proper pair: the fragment's leftmost base. An
+    /// orphan / single-end read: the read's 5' end — its leftmost base if
+    /// forward, its rightmost base (inclusive) if reverse. NOT the leftmost of
+    /// an unpaired reverse read (that is `rc_pos`); the RAD writer must not
+    /// store this for unpaired hits (see `salmon_rad::RadHit::pos`).
     pub ref_pos: i32,
     /// leftmost reference position of the forward-strand mate/read (positional
     /// bias); `-1` if none

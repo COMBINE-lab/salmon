@@ -64,7 +64,8 @@ misbehaves.
 | `--skipQuant` | ✅ | Skips EM + Gibbs/bootstrap + quant.sf; still emits eq-classes/metadata. |
 | `-g/--geneMap`, `--genes` | ✅ | Gene-level aggregation. Rust also adds `--ignoreTxVersion` (no C++ equivalent) for Ensembl cDNA + GTF identifier mismatches. |
 | `-q/--quiet` | ✅ | |
-| `--noLengthCorrection` | ✅ | (`--noEffectiveLengthCorrection`). |
+| `--noLengthCorrection` | ✅ | Constant effective length (100) for every transcript, as in C++. 2.0–2.8 used the raw reference length instead, which is C++'s `--noEffectiveLengthCorrection` (#1243). |
+| `--noEffectiveLengthCorrection` | ✅ | Raw reference length as the effective length, as in C++ (new in 2.9.0). Refused with bias correction, like `--noLengthCorrection`. |
 | `--minAssignedFrags` | ⛔ | |
 | `--alternativeInitMode`, `--bootstrapReproject`, `--noGammaDraw` | ⛔ | Inference niche. |
 | `--eqclasses` | ⚠️ | Quantify-from-eq-class-file *input* mode (≠ `--dumpEq`); not yet implemented. |
