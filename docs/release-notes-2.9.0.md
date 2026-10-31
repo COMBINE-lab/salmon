@@ -174,6 +174,20 @@ paired-end without orphans).
 
 ## Fixes
 
+- **`--noLengthCorrection` takes length out of the model again** (#1243).
+  Since 2.0 the flag used each transcript's raw length as its effective
+  length, so estimates still depended on length, just through a different
+  divisor. This is the opposite of what the flag is for: 3' tagged-end
+  protocols such as QuantSeq, where a transcript's read count does not grow
+  with its length. It also moved reads between isoforms: with a short isoform
+  sharing a long one's 3' end, 2.8.0 gave the short isoform 3750 of 5000
+  reads where salmon 1.x gives it none. Every transcript now gets the same
+  effective length, 100, as in salmon 1.x. This holds in the EM, in
+  `quant.sf`'s `EffectiveLength` and TPM, and in the online phase's
+  position term, for reads, `--sketch`, `--deterministic`, `--rad` and `-a`
+  input. On GEUVADIS (10M pairs, `--noLengthCorrection`), agreement with
+  C++ salmon goes from Pearson 0.59 to 0.97 on read counts. Runs without the
+  flag are unchanged.
 - **Security advisories in zstd.** RustSec published advisories against the
   zstd crates on 2026-10-16. salmon now uses zstd 0.14.3 / zstd-safe 8.2.0 /
   zstd-sys 2.1.2 throughout: for RAD chunk compression (libradicl 0.21.1),
@@ -217,10 +231,13 @@ paired-end without orphans).
     is accepted.
   - Gibbs sampling reuses its buffers between rounds, and the
     fragment-length distribution is updated once per fragment (speed only).
-- **Soft-clipping at transcript ends** (#1239, Benjamin Demaille). With
-  `--softclip` / `--softclipOverhangs`, a read overhanging the end of a
-  transcript is now scored with the overhang clipped, as the option
-  promises; default scoring (no soft-clipping) is unchanged.
+- **Soft-clipping at transcript ends** (#1238, fixed in #1239, Benjamin
+  Demaille). With `--softclip` / `--softclipOverhangs`, a read overhanging
+  the end of a transcript is now scored with the overhang clipped, as the
+  option promises; default scoring (no soft-clipping) is unchanged. This
+  matters most for short references: in the issue's miRNA example, reads of
+  miR-21-5p with 4–6 nt untemplated 3' tails were all dropped; they now
+  map.
 
 ## Acknowledgements
 

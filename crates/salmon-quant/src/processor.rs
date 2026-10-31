@@ -134,6 +134,9 @@ pub(crate) struct Shared<'a> {
     /// disable the fragment-length distribution in the per-fragment assignment
     /// probability entirely (`--noFragLengthDist`).
     pub no_frag_length_dist: bool,
+    /// `--noLengthCorrection`: leave the start-position term (the transcript
+    /// length) out of the online posterior, as salmon 1.x did.
+    pub no_length_correction: bool,
     /// assemble equivalence classes during the mapping pass (consumed by the EM
     /// or an eq-class dump): `!skip_quant || dump_eq || dump_eq_weights`. When
     /// `false` (a map-only `--writeRad` run) [`record`] still counts fragments and
@@ -975,7 +978,8 @@ fn record(
     // normalized over the fragment's mappings, where
     //   logFragCov   = ln(score weight)
     //   startPosProb = proper pair -> -ln(refLen - flen + 1) (flen<=refLen, else
-    //                  LOG_EPSILON); otherwise -ln(refLen)
+    //                  LOG_EPSILON); otherwise -ln(refLen); a constant (0) under
+    //                  --noLengthCorrection, as in salmon 1.x
     //   logFragProb  = the shared `frag_log_prob` term (proper-pair conditioned
     //                  PMF, or the orphan / single-end ambiguous-length weight).
     // Used for abundance-aware bias collection and abundance-aware FLD training.
@@ -992,7 +996,9 @@ fn record(
                     let rl = ref_len.max(1) as f64;
                     let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
                     let flen = m.fragment_len as f64;
-                    let start_pos_prob = if proper {
+                    let start_pos_prob = if sh.no_length_correction {
+                        0.0
+                    } else if proper {
                         if flen <= rl {
                             -((rl - flen + 1.0).ln())
                         } else {

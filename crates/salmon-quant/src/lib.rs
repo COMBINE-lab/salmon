@@ -154,7 +154,8 @@ pub struct QuantOptions {
     pub num_gibbs_samples: u32,
     /// Gibbs thinning factor (`--thinningFactor`, salmon default 16)
     pub thinning_factor: u32,
-    /// disable effective-length correction; use the raw reference length
+    /// disable length correction: every transcript gets the same constant
+    /// effective length, [`salmon_model::NO_LENGTH_CORRECTION_EFF_LEN`]
     /// (`--noLengthCorrection`)
     pub no_length_correction: bool,
     /// model the fragment-length probability of orphan / single-end mappings via
@@ -722,6 +723,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             paired_lib: opts.is_paired(),
             model_single_frag_prob: opts.model_single_frag_prob,
             no_frag_length_dist: opts.no_frag_length_dist,
+            no_length_correction: opts.no_length_correction,
             // Assemble eq-classes only if something consumes them: the EM (unless
             // `--skipQuant`) or an eq-class dump. A map-only `--writeRad` run skips
             // assembly but still trains the FLD (to bake) — see `processor::record`.
@@ -949,7 +951,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let mut eff_lengths = vec![0f64; num_refs];
     for tid in 0..num_refs {
         eff_lengths[tid] = if opts.no_length_correction {
-            salmon.ref_len(tid) as f64
+            salmon_model::NO_LENGTH_CORRECTION_EFF_LEN
         } else {
             salmon_model::smoothed_effective_length(&cond_means, salmon.ref_len(tid) as usize)
         };
