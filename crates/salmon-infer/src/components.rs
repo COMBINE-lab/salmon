@@ -593,10 +593,15 @@ impl CompView<'_> {
             // usual case) both kernels add the same terms in the same order.
             // A NaN product always leaves a NaN in `next`, so seeing none
             // means the fast result is exactly the checked one.
-            self.push_em_fast(s.alpha, s.next);
+            self.push_fast(s.alpha, s.next);
             if !s.next.iter().any(|x| x.is_nan()) {
                 return criterion(s.alpha, s.next, cutoff);
             }
+        } else if !G {
+            // Unguarded VBEM adds every product, exactly as `push_fast` does
+            // (the expectations were filled above).
+            self.push_fast(s.et, s.next);
+            return criterion(s.alpha, s.next, cutoff);
         }
         let basis: &[f64] = if VB { s.et } else { s.alpha };
         let next = &mut *s.next;
@@ -625,12 +630,14 @@ impl CompView<'_> {
         criterion(s.alpha, next, cutoff)
     }
 
-    /// The plain-EM push step without the per-product NaN test, and with
-    /// unchecked indexing: every label is below the component's size (checked
-    /// when the plan is built), and `alpha` and `next` are the component's.
+    /// The push step over `basis` (plain EM: the abundances; unguarded VBEM:
+    /// the expectations) adding every product, with unchecked indexing: every
+    /// label is below the component's size (checked when the plan is built),
+    /// and `basis` and `next` are the component's.
     #[allow(unsafe_code)]
     #[inline]
-    fn push_em_fast(&self, alpha: &[f64], next: &mut [f64]) {
+    fn push_fast(&self, basis: &[f64], next: &mut [f64]) {
+        let alpha = basis;
         let n = self.singleton.len();
         assert!(alpha.len() == n && next.len() == n);
         next.copy_from_slice(self.singleton);
