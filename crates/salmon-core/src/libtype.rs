@@ -193,23 +193,27 @@ impl LibraryFormat {
     /// straight into a fixed-size array instead of needing a hash map. The ids
     /// are also written into RAD files, so they must never be renumbered.
     pub fn format_id(&self) -> u8 {
-        match self.canonical() {
-            "IU" => 0,
-            "ISF" => 1,
-            "ISR" => 2,
-            "OU" => 3,
-            "OSF" => 4,
-            "OSR" => 5,
-            "MU" => 6,
-            "MSF" => 7,
-            "MSR" => 8,
-            "U" => 9,
-            "SF" => 10,
-            "SR" => 11,
-            // `unreachable!` documents an invariant: `canonical()` returns one of
-            // the strings above by construction, so reaching here would mean the
-            // two functions had drifted apart.
-            _ => unreachable!("canonical() only returns the 12 known formats"),
+        // The same table as `canonical()`, matched on the fields directly:
+        // this runs once per placement when requantifying a RAD, and going
+        // through the string costs a chain of string compares.
+        use ReadOrientation::*;
+        use ReadStrandedness::*;
+        use ReadType::*;
+        match (self.read_type, self.orientation, self.strandedness) {
+            (PairedEnd, Toward, U) => 0,
+            (PairedEnd, Toward, SA) => 1,
+            (PairedEnd, Toward, AS) => 2,
+            (PairedEnd, Away, U) => 3,
+            (PairedEnd, Away, SA) => 4,
+            (PairedEnd, Away, AS) => 5,
+            (PairedEnd, Same, U) => 6,
+            (PairedEnd, Same, S) => 7,
+            (PairedEnd, Same, A) => 8,
+            (SingleEnd, _, U) => 9,
+            (SingleEnd, _, S) => 10,
+            (SingleEnd, _, A) => 11,
+            (PairedEnd, _, _) => 0,
+            (SingleEnd, _, _) => 9,
         }
     }
 
@@ -829,5 +833,40 @@ mod tests {
         // U accepts both
         assert!(compatible_single(u, true, MateStatus::SingleEnd));
         assert!(compatible_single(u, false, MateStatus::SingleEnd));
+    }
+}
+
+#[cfg(test)]
+mod format_id_tests {
+    use super::*;
+
+    /// `format_id` is the id of `canonical()`'s name, for every combination.
+    #[test]
+    fn format_id_matches_canonical_name() {
+        let by_name = |n: &str| match n {
+            "IU" => 0u8,
+            "ISF" => 1,
+            "ISR" => 2,
+            "OU" => 3,
+            "OSF" => 4,
+            "OSR" => 5,
+            "MU" => 6,
+            "MSF" => 7,
+            "MSR" => 8,
+            "U" => 9,
+            "SF" => 10,
+            "SR" => 11,
+            _ => unreachable!(),
+        };
+        use ReadOrientation as O;
+        use ReadStrandedness as S;
+        for rt in [ReadType::SingleEnd, ReadType::PairedEnd] {
+            for o in [O::Toward, O::Away, O::Same, O::None] {
+                for st in [S::SA, S::AS, S::S, S::A, S::U] {
+                    let f = LibraryFormat::new(rt, o, st);
+                    assert_eq!(f.format_id(), by_name(f.canonical()), "{rt:?} {o:?} {st:?}");
+                }
+            }
+        }
     }
 }

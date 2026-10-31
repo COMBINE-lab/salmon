@@ -34,6 +34,10 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
     let is_gtf = has_gtf_extension(path);
     let reader = open_maybe_compressed(path)?;
     let mut map = HashMap::new();
+    // GFF3 files (e.g. Ensembl) put `gene_id` only on the gene feature and link
+    // transcripts to it via `Parent=<gene ID>`; resolve those after the pass.
+    let mut id_to_gene: HashMap<String, String> = HashMap::new();
+    let mut pending_parent: Vec<(String, String)> = Vec::new();
 
     for line in reader.lines() {
         let line = line.map_err(|e| annotate_read_error(path, e))?;
@@ -49,20 +53,43 @@ pub fn read_transcript_gene_map(path: &Path) -> io::Result<HashMap<String, Strin
             if cols.len() < 9 {
                 continue;
             }
-            if let (Some(t), Some(g)) = (
-                extract_attr(cols[8], "transcript_id"),
-                extract_attr(cols[8], "gene_id"),
-            ) {
-                // `or_insert` keeps the first mapping seen: an annotation
-                // repeats a transcript on every one of its exon lines, and they
-                // all name the same gene.
-                map.entry(t).or_insert(g);
+            let attrs = cols[8];
+            let gene_id = extract_attr(attrs, "gene_id");
+            match (extract_attr(attrs, "transcript_id"), gene_id) {
+                (Some(t), Some(g)) => {
+                    // `or_insert` keeps the first mapping seen: an annotation
+                    // repeats a transcript on every one of its exon lines, and
+                    // they all name the same gene.
+                    map.entry(t).or_insert(g);
+                }
+                (Some(t), None) => {
+                    if let Some(parent) = extract_attr(attrs, "Parent") {
+                        let first = parent.split(',').next().unwrap_or("").to_string();
+                        pending_parent.push((t, first));
+                    }
+                }
+                (None, Some(g)) => {
+                    if let Some(id) = extract_attr(attrs, "ID") {
+                        id_to_gene.entry(id).or_insert(g);
+                    }
+                }
+                (None, None) => {}
             }
         } else {
             let mut it = trimmed.split_whitespace();
             if let (Some(t), Some(g)) = (it.next(), it.next()) {
                 map.insert(t.to_string(), g.to_string());
             }
+        }
+    }
+
+    for (t, parent) in pending_parent {
+        let gene = id_to_gene.get(&parent).cloned().unwrap_or_else(|| {
+            // Ensembl-style `gene:ENSG…` IDs: fall back to the bare identifier.
+            parent.strip_prefix("gene:").unwrap_or(&parent).to_string()
+        });
+        if !gene.is_empty() {
+            map.entry(t).or_insert(gene);
         }
     }
 
@@ -726,6 +753,28 @@ mod tests {
         assert_eq!(extract_attr(gff, "gene_id").as_deref(), Some("ENSG1"));
         // a key that is a substring of another must not false-match
         assert_eq!(extract_attr("havana_gene_id \"X\";", "gene_id"), None);
+    }
+
+    #[test]
+    fn ensembl_gff3_resolves_gene_via_parent() {
+        let dir = std::env::temp_dir().join(format!("gff3_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("ann.gff3");
+        std::fs::write(
+            &p,
+            "##gff-version 3\n\
+             1\tensembl\tgene\t1\t100\t.\t+\t.\tID=gene:ENSG1;gene_id=ENSG1;Name=A\n\
+             1\tensembl\tmRNA\t1\t100\t.\t+\t.\tID=transcript:ENST1;Parent=gene:ENSG1;transcript_id=ENST1\n\
+             1\tensembl\tlnc_RNA\t1\t90\t.\t+\t.\tID=transcript:ENST2;Parent=gene:ENSG2;transcript_id=ENST2\n\
+             1\tensembl\texon\t1\t100\t.\t+\t.\tParent=transcript:ENST1;exon_id=E1\n",
+        )
+        .unwrap();
+        let m = read_transcript_gene_map(&p).unwrap();
+        assert_eq!(m.get("ENST1").map(String::as_str), Some("ENSG1"));
+        // gene feature absent: fall back to the stripped Parent ID
+        assert_eq!(m.get("ENST2").map(String::as_str), Some("ENSG2"));
+        assert_eq!(m.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Counts and TPM sum; length is TPM-weighted, not a plain average. The

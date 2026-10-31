@@ -121,8 +121,9 @@ aggregates (no per-fragment cost) and are emitted for every mode — reads,
 | --- | --- | --- |
 | `num_orphan` | int | mapped fragments placed as orphans (one mate only); reads mode |
 | `range_factorization_bins` | int | range-factorization bins used (0 = disabled) |
-| `num_em_iterations` | int | EM/VBEM iterations actually run |
-| `em_converged` | bool | whether the relative-difference criterion was met before the iteration cap |
+| `num_em_iterations` | int | EM/VBEM iterations actually run; when components stop separately (see `em_components`), the most any component ran |
+| `em_converged` | bool | whether the relative-difference criterion was met before the iteration cap — over all transcripts at once under the `global` stopping rule, by every connected component under `projected` |
+| `em_components` | object | how the optimizer's connected components ended (below); omitted with `--emAccel` |
 | `detected_library_type` | string \| null | library format observed by the auto-detector (reads / `--rad`); `null` if not observed (e.g. `-a` transcriptomic BAM) |
 | `seq_bias_context_length` | int | sequence-bias model context length, in nucleotides; omitted when `--seqBias` was not requested |
 | `gc_bias_bins` | int | total GC-bias bins, i.e. `--numGCBins` × `--conditionalGCBins`; omitted when `--gcBias` was not requested |
@@ -130,6 +131,30 @@ aggregates (no per-fragment cost) and are emitted for every mode — reads,
 | `total_time_seconds` | float | wall-clock seconds for the quantification call |
 | `peak_rss_kb` | int | peak resident set size in KiB (Linux `VmHWM`; 0 elsewhere) |
 | `diagnostics` | object[] | structured run diagnostics (see below) |
+
+##### `em_components` — per-component convergence
+
+The EM/VBEM iterates each connected component of the equivalence-class graph
+(a set of transcripts linked by shared fragments) on its own. VBEM, the
+default, stops each component once the relative-difference criterion holds
+over it **and** its projected remaining movement — the last step's size over
+`1 − ρ`, with `ρ` its estimated rate of convergence — is below 0.1% of the
+component's fragments. Plain EM (`--useEM`) stops all components together, as
+salmon always has.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `stop_rule` | string | `projected` (each component on its own) or `global` (all at once) |
+| `num_components` | int | connected components iterated |
+| `num_unconverged` | int | components that never met the relative-difference criterion |
+| `num_at_max_iter` | int | components stopped by the iteration cap rather than the stopping rule |
+| `fraction_reads_at_max_iter` | float | fraction of the fragments in equivalence classes that those components hold |
+| `median_iterations` | int | median, over components, of the iterations each ran |
+
+A component at the iteration cap that met the criterion is a family of
+near-identical transcripts still trading a little mass between its members;
+`em_converged` stays `true`. A nonzero `num_unconverged` (also logged as a
+warning) means the criterion itself was never met there.
 
 ##### `diagnostics` — machine-readable run warnings
 

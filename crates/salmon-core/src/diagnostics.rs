@@ -258,3 +258,24 @@ mod fs_tests {
         );
     }
 }
+
+/// How the EM/VBEM's connected components ended, as written to
+/// `meta_info.json` (`em_components`). Absent when the optimizer did not run
+/// on the component engine (`--emAccel`, or nothing to quantify).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct EmComponentsMeta {
+    /// `projected` (each component stops on its own) or `global` (all
+    /// transcripts at once, salmon ≤ 2.8)
+    pub stop_rule: String,
+    /// connected components of the equivalence-class graph
+    pub num_components: usize,
+    /// components that never met the relative-change criterion
+    pub num_unconverged: usize,
+    /// components stopped by the iteration cap (`--maxIter`-equivalent)
+    /// rather than by the stopping rule
+    pub num_at_max_iter: usize,
+    /// fraction of the fragments in equivalence classes that those components hold
+    pub fraction_reads_at_max_iter: f64,
+    /// median, over components, of the iterations each ran
+    pub median_iterations: u32,
+}

@@ -182,6 +182,12 @@ pub struct AlignQuantOptions {
     /// Used only to warn when a baked FLD makes them ineffective, so that a
     /// default-valued run stays quiet.
     pub explicit_fld_args: ExplicitFldArgs,
+    /// `--fldMean`/`--fldSD` were supplied by the user -- to this run or, for a
+    /// deterministic run's phase 2, to the mapping pass that baked the RAD.
+    /// When `false` and the library is single-end, the FLD is only salmon's
+    /// default guess, and the RAD quantifier widens it for the single-end
+    /// length term.
+    pub fld_prior_user_supplied: bool,
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
     /// initialize the EM uniformly instead of with the online-estimate-blended
@@ -321,6 +327,7 @@ impl AlignQuantOptions {
             fld_max: 1000,
             fld_policy: FldPolicy::default(),
             explicit_fld_args: ExplicitFldArgs::default(),
+            fld_prior_user_supplied: false,
             forgetting_factor: 0.65,
             init_uniform: false,
             prior_seconds: 0.0,
@@ -423,7 +430,7 @@ pub struct AlignQuantResult {
     pub start_time: String,
     pub bias_dump: salmon_model::dumps::BiasDump,
     /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
-    pub ambig: (Vec<u32>, Vec<u32>),
+    pub ambig: (Vec<u64>, Vec<u64>),
     /// posterior samples (bootstrap or Gibbs), one abundance vector each; empty
     /// when neither was requested. Length is `num_refs`, matching `quant.sf` rows.
     pub bootstraps: Vec<Vec<f64>>,
@@ -431,6 +438,9 @@ pub struct AlignQuantResult {
     /// criterion was met before `max_iter`
     pub em_iters: u32,
     pub em_converged: bool,
+    /// how each connected component's iteration ended (see
+    /// [`salmon_infer::ComponentSummary`]); `None` off the component engine
+    pub em_components: Option<salmon_infer::ComponentSummary>,
     /// library format observed for these alignments (baked/auto-detected), for
     /// provenance and the strandedness sanity check; `None` if not observed
     pub detected_library_type: Option<String>,
@@ -561,6 +571,28 @@ where
         return f64::NEG_INFINITY;
     }
     m + xs.map(|x| (x - m).exp()).sum::<f64>().ln()
+}
+
+/// [`logsumexp_iter`] of a single value, without its `exp` and `ln`.
+///
+/// For one finite `x` the general form is `x + ln(exp(x − x)) = x + ln(1)`,
+/// and `exp(0) = 1` and `ln(1) = +0` exactly (IEEE 754 / C Annex F special
+/// cases, which every libm honours), so it is `x + 0.0` — written as such,
+/// since that also turns `-0.0` into `+0.0` the way the general form does. The
+/// non-finite cases follow the general form's own: no finite maximum gives
+/// `-inf` (`f64::max` skips a NaN), and `+inf` gives `inf − inf`, a NaN.
+///
+/// A RAD fragment almost always has one placement per transcript, so this is
+/// the common case of the per-transcript grouping, where it saved an `exp` and
+/// an `ln` per placement.
+pub(crate) fn logsumexp_one(x: f64) -> f64 {
+    if x.is_nan() || x == f64::NEG_INFINITY {
+        f64::NEG_INFINITY
+    } else if x == f64::INFINITY {
+        f64::NAN
+    } else {
+        x + 0.0
+    }
 }
 
 /// `log(Σ exp(xs))`, numerically stable. `xs` is non-empty.
@@ -2455,6 +2487,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            components: None,
             dropped_mass: 0.0,
         }
     } else if opts.init_uniform {
@@ -2516,6 +2549,15 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     }
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
+    let em_components = em.components.clone();
+    if let Some(c) = &em_components {
+        let (line, warn) = c.describe(em_iters);
+        if warn {
+            tracing::warn!("{line}");
+        } else {
+            tracing::info!("{line}");
+        }
+    }
     let counts = em.alphas;
     // Bias correction + EM/VBEM point estimate.
     timer.mark("em_bias");
@@ -2649,6 +2691,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         bootstraps,
         em_iters,
         em_converged,
+        em_components,
         detected_library_type,
         total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
@@ -2845,6 +2888,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         alignment_provenance: Vec<SourceProgram>,
         num_em_iterations: u32,
         em_converged: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        em_components: Option<salmon_core::EmComponentsMeta>,
         detected_library_type: Option<String>,
         /// which inference path produced these results: `deterministic` (RAD
         /// input — including `--deterministic`'s phase 2) or `online` (the
@@ -3109,6 +3154,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
+        em_components: res.em_components.as_ref().map(|c| c.to_meta()),
         detected_library_type: res.detected_library_type.clone(),
         inference_path: match res.source {
             FragmentSource::Rad => "deterministic",
@@ -3481,7 +3527,46 @@ mod tests {
 
 #[cfg(test)]
 mod logsumexp_tests {
-    use super::{logsumexp, logsumexp_iter};
+    use super::{logsumexp, logsumexp_iter, logsumexp_one};
+
+    /// The single-value shortcut has to be the general form, bit for bit, on
+    /// every input — signed zeros and non-finite values included.
+    #[test]
+    fn one_value_shortcut_agrees_with_the_general_form() {
+        let mut cases = vec![
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            -1e-300,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE / 4.0,
+            f64::MAX,
+            f64::MIN,
+            -745.2,
+            -23.998_158_637_57,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..10_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            cases.push(f64::from_bits(x));
+            cases.push(-((x % 1_000_000) as f64) / 997.0);
+        }
+        for x in cases {
+            let general = logsumexp_iter(std::iter::once(x));
+            let one = logsumexp_one(x);
+            if general.is_nan() {
+                assert!(one.is_nan(), "x={x:e}: general NaN, shortcut {one}");
+            } else {
+                assert_eq!(general.to_bits(), one.to_bits(), "x={x:e}");
+            }
+        }
+    }
 
     /// `logsumexp_iter` exists so a caller holding a run of records can avoid
     /// copying their weights into a scratch slice. It is only safe to use in

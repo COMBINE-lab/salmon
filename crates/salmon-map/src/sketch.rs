@@ -131,9 +131,9 @@ pub fn map_single_read_sketch_into<'idx>(
                 weight: 1.0,
                 // piscem's SimpleHit.pos is the read's approximate leftmost
                 // reference coordinate. ref_pos is the orientation-aware 5' end
-                // (leftmost for fw, rightmost for rc) used as the bias context
+                // (leftmost base for fw, rightmost base — inclusive — for rc) used as the bias context
                 // anchor, mirroring selective alignment's single-end case.
-                ref_pos: if h.is_fw { h.pos.max(0) } else { h.pos.max(0) + rl },
+                ref_pos: if h.is_fw { h.pos.max(0) } else { h.pos.max(0) + rl - 1 },
                 fw_pos: if h.is_fw { h.pos.max(0) } else { -1 },
                 rc_pos: if h.is_fw { -1 } else { h.pos.max(0) },
                 // Single-end observed strandedness (sense if forward), exactly
@@ -328,13 +328,13 @@ pub fn map_read_pair_sketch_into<'idx, R: RefProvider>(
                         // the ambiguous-fragment FLD term reads).
                         MateStatus::PairedEndRight => {
                             let p = h.pos.max(0);
-                            let r5 = if h.is_fw { p } else { p + r2l };
+                            let r5 = if h.is_fw { p } else { p + r2l - 1 };
                             (r5, if h.is_fw { p } else { -1 }, if h.is_fw { -1 } else { p }, r2l, -1, p, false)
                         }
                         _ => {
                             // PairedEndLeft (and any fallback): orphan = read1.
                             let p = h.pos.max(0);
-                            let r5 = if h.is_fw { p } else { p + r1l };
+                            let r5 = if h.is_fw { p } else { p + r1l - 1 };
                             (r5, if h.is_fw { p } else { -1 }, if h.is_fw { -1 } else { p }, r1l, p, -1, false)
                         }
                     };

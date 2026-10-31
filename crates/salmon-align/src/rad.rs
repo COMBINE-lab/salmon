@@ -60,11 +60,12 @@ use std::io::BufReader;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex};
 
 use anyhow::{Context, Result};
 use libradicl::header::RadPrelude;
 use libradicl::rad_types::{MappedFragmentOrientation, TagMap};
-use libradicl::readers::{ParallelRadReader, EMPTY_METACHUNK_CALLBACK};
+use libradicl::readers::{MetaChunk, MetaChunkStream, ParallelRadReader};
 use libradicl::record::{MappedRecord, PiscemBulkReadRecord, RecordContext};
 
 use salmon_core::{
@@ -72,7 +73,7 @@ use salmon_core::{
     ReadType,
 };
 use salmon_eqclass::{
-    range_factorize_bins, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement, TranscriptGroup,
+    range_factorize_bins_into, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement,
     NAIVE_NO_FMT,
 };
 use salmon_model::{
@@ -82,8 +83,8 @@ use salmon_model::{
 use salmon_rad::{RadInputProfile, SalmonBulkRecord};
 
 use crate::{
-    asctime_now, logsumexp, logsumexp_iter, AlignQuantOptions, AlignQuantResult, ExplicitFldArgs,
-    FldPolicy,
+    asctime_now, logsumexp, logsumexp_iter, logsumexp_one, AlignQuantOptions, AlignQuantResult,
+    ExplicitFldArgs, FldPolicy,
 };
 
 /// Floor for abundances feeding the bias-collection posterior (avoid `ln(0)`).
@@ -374,7 +375,10 @@ impl<T: Grouped> TidOrdered<T> {
         group_log.extend(
             self.items
                 .chunk_by(|a, b| a.tid() == b.tid())
-                .map(|run| logsumexp_iter(run.iter().map(|p| p.log_w()))),
+                .map(|run| match run {
+                    [one] => logsumexp_one(one.log_w()),
+                    _ => logsumexp_iter(run.iter().map(|p| p.log_w())),
+                }),
         );
     }
 }
@@ -394,6 +398,11 @@ struct RadScratch {
     bias: TidOrdered<BiasPlacement>,
     /// per-group combined log weight, one per run of equal tid
     group_log: Vec<f64>,
+    /// plain path: this fragment's class label, weights and range bins, handed
+    /// to the builder by reference (it copies them only for a new class)
+    tids: Vec<u32>,
+    weights: Vec<f64>,
+    bins: Vec<u32>,
     /// bias pass only: per-group un-normalized posterior log-weight
     unnorm: Vec<f64>,
     /// bias pass only: per-group posterior probability
@@ -455,18 +464,22 @@ struct FragCfg<'a> {
     /// fixed log-CMF of the FLD, indexed by raw length (also passed whole to the
     /// orphan ambiguous-length term).
     cmf: &'a [f64],
+    /// log-CMF the single-end length term is read from: `cmf`, broadened when
+    /// the FLD is only the default prior (see [`unpaired_log_frag_prob`]).
+    se_cmf: &'a [f64],
     lengths: &'a [u32],
     expected_format: Option<LibraryFormat>,
     ignore_incompat: bool,
     incompat_prior: f64,
-    paired_lib: bool,
     /// `--noFragLengthDist`: leave the fragment-length term out of the weight.
     no_frag_length_dist: bool,
-    /// `--noSingleFragProb` (inverted): model an orphan's fragment length.
+    /// `--noSingleFragProb` (inverted): model the fragment length of an orphan
+    /// or single-end read (salmon's ambiguous bounded-CMF probability).
     model_single_frag_prob: bool,
     /// `--hardFilter`: keep only best-scoring placements, at weight 1.
     hard_filter: bool,
-    /// `--discardOrphans`: drop half-mapped fragments in a paired library.
+    /// `--discardOrphans`: drop half-mapped (orphan) fragments. Judged by each
+    /// record's mapping type, so single-end reads are never dropped.
     discard_orphans: bool,
     range_factorization_bins: u32,
     eq_builder: &'a EquivalenceClassBuilder,
@@ -479,6 +492,86 @@ struct FragCfg<'a> {
 /// than merely disfavour it. Same value the reads path uses
 /// (`salmon_quant::processor::LOG_EPSILON`).
 const ORPHAN_LOG_EPSILON: f64 = -23.998_158_637_57;
+
+/// Whether a placement is half of a paired fragment (one mate mapped).
+#[inline]
+fn is_orphan(status: MateStatus) -> bool {
+    matches!(
+        status,
+        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+    )
+}
+
+/// The mapped read's length for an orphan / single-end placement, carried in
+/// the `frag_len` slot by salmon's writer; `None` when the writer did not
+/// record it (piscem's [`salmon_rad::FRAG_LEN_UNPAIRED`]).
+#[inline]
+fn unpaired_read_len(p: &RadPlacement) -> Option<i32> {
+    (p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED).then_some(p.frag_len as i32)
+}
+
+/// Floor on the coefficient of variation of the distribution the single-end
+/// length term is computed from, when that distribution is salmon's built-in
+/// `--fldMean`/`--fldSD` default rather than something the user supplied. See
+/// [`unpaired_log_frag_prob`].
+const SE_DEFAULT_PRIOR_MIN_CV: f64 = 0.4;
+
+/// Weight of the "unseen mate lies off the transcript" alternative in an
+/// orphan's length term. See [`unpaired_log_frag_prob`].
+const ORPHAN_OFF_TRANSCRIPT_WEIGHT: f64 = 0.5;
+
+/// Fragment-length log-probability of a placement that is not a proper pair:
+/// an orphan, or a read of a single-end library, decided by the record's own
+/// mapping type (not by how `-l` was spelled). With `modelSingleFragProb` (the
+/// default) both use salmon's bounded-CMF *ambiguous* probability -- the unseen
+/// mate must fit between the read and the transcript end -- with two deliberate
+/// departures from C++ salmon, each chosen against simulated truth:
+///
+/// * **single-end reads** read the bound from `se_cmf`, which the caller widens
+///   (SD at least [`SE_DEFAULT_PRIOR_MIN_CV`] x mean) when the FLD is only
+///   salmon's default prior: a single-end library has no observed lengths, and
+///   a narrow guess that is too long crushes every placement near the
+///   transcript end the read points at. A user-supplied prior is used as given.
+/// * **orphans** mix the bound with an unconstrained alternative at weight
+///   [`ORPHAN_OFF_TRANSCRIPT_WEIGHT`]: an orphan's mate failed to map, which is
+///   itself evidence it may lie past the annotated transcript end, where the
+///   bound's premise (the fragment fits inside the transcript) is false. The
+///   penalty is thereby capped at `ln 2` instead of being unbounded.
+///
+/// Under `--noSingleFragProb` an orphan takes the flat `LOG_EPSILON` penalty
+/// and a single-end read nothing, as in salmon.
+///
+/// `p.pos` is the read's leftmost base ([`salmon_rad::RadHit::pos`]); without
+/// a recorded read length (piscem) a reverse read's bound is `pos`, a
+/// conservative under-estimate by one read length.
+#[inline]
+fn unpaired_log_frag_prob(
+    p: &RadPlacement,
+    cmf: &[f64],
+    se_cmf: &[f64],
+    model_single_frag_prob: bool,
+    rl: i32,
+) -> f64 {
+    if !model_single_frag_prob {
+        return if is_orphan(p.status) {
+            ORPHAN_LOG_EPSILON
+        } else {
+            0.0
+        };
+    }
+    let read_len = unpaired_read_len(p).unwrap_or(0);
+    let bound =
+        |c: &[f64]| salmon_model::ambig_frag_log_prob(c, p.is_fw, p.pos as i32, read_len, rl);
+    match p.status {
+        MateStatus::SingleEnd => bound(se_cmf),
+        MateStatus::PairedEndLeft | MateStatus::PairedEndRight => {
+            let w = ORPHAN_OFF_TRANSCRIPT_WEIGHT;
+            ((1.0 - w) * bound(cmf).exp() + w).ln()
+        }
+        // a pair record with no usable length: the plain bound, as before
+        MateStatus::PairedEndPaired => bound(cmf),
+    }
+}
 
 /// The eq-class log-weight basis for one hit, given the file's score
 /// interpretation. Uniform (`0`) when the profile is unscored; for a raw AS
@@ -544,7 +637,7 @@ fn process_rad_fragment(
         // dropped outright, the same rule the alignment writer applies when it
         // builds the RAD — so requantifying a RAD agrees with the run that
         // wrote it (#1140).
-        if cfg.discard_orphans && cfg.paired_lib && p.status != MateStatus::PairedEndPaired {
+        if cfg.discard_orphans && is_orphan(p.status) {
             continue;
         }
         // `--hardFilter`: keep only the best-scoring placement(s), at weight 1,
@@ -576,38 +669,10 @@ fn process_rad_fragment(
             // support. Matches the direct/reads path the round-trip is compared to.
             let flen = (p.frag_len as i32).min(rl.max(1));
             at(cfg.pmf, flen as usize) - at(cfg.cmf, rl.max(1) as usize)
-        } else if cfg.paired_lib && !cfg.model_single_frag_prob {
-            // `--noSingleFragProb`: do not model an orphan's fragment length —
-            // a flat penalty for an unexpected orphan, nothing for a
-            // single-end read, exactly as `processor::frag_log_prob` does on
-            // the reads path. The flag used to stop at the mapping pass, so it
-            // was inert on every RAD path including the 2.6.0 default (#1140,
-            // audit D14).
-            if matches!(
-                p.status,
-                MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-            ) {
-                ORPHAN_LOG_EPSILON
-            } else {
-                0.0
-            }
-        } else if cfg.paired_lib {
-            // Orphan / single-end in a paired library: bounded-CMF ambiguous
-            // fragment-length probability (salmon's `getAmbigFragLengthProb`), the
-            // same orphan weight the one-pass path uses, NOT a flat penalty. The
-            // mapped mate's position + orientation + transcript length bound the
-            // possible fragment lengths; a forward read is exact from `txp_len −
-            // pos`, a reverse read uses the mate's read length carried in the
-            // orphan `frag_len` slot (salmon RAD) or `0` (piscem RAD ⇒ forward
-            // bound only).
-            let read_len = if p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED {
-                p.frag_len as i32
-            } else {
-                0
-            };
-            salmon_model::ambig_frag_log_prob(cfg.cmf, p.is_fw, p.pos as i32, read_len, rl)
         } else {
-            0.0
+            // Orphan in a paired library, or a read of a single-end library —
+            // decided by the record's own mapping type, not by `-l`.
+            unpaired_log_frag_prob(p, cfg.cmf, cfg.se_cmf, cfg.model_single_frag_prob, rl)
         };
         let mut aux = basis + log_frag_prob;
         let (obs, is_fw, status) = rad_frag_format(p);
@@ -647,32 +712,53 @@ fn process_rad_fragment(
 
     // Aggregate by distinct transcript id (ascending), softmax over the
     // logsumexp'd per-transcript weights — identical to alignment mode's eq-class
-    // formation. `tids` and `weights` are freshly allocated because they are moved
-    // into the shared equivalence-class builder; everything else is scratch.
+    // formation. The label, weights and bins are built in worker scratch.
     scratch.core.group(&mut scratch.group_log);
-    let tids: Vec<u32> = scratch
-        .core
-        .as_slice()
-        .chunk_by(|a, b| a.tid == b.tid)
-        .map(|run| run[0].tid)
-        .collect();
-    let eq_log = &scratch.group_log;
+    let RadScratch {
+        core,
+        group_log: eq_log,
+        tids,
+        weights,
+        bins,
+        ..
+    } = scratch;
+    tids.clear();
+    tids.extend(
+        core.as_slice()
+            .chunk_by(|a, b| a.tid == b.tid)
+            .map(|run| run[0].tid),
+    );
     let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let mut weights: Vec<f64> = eq_log.iter().map(|&l| (l - maxe).exp()).collect();
+    // `exp(±0) = 1` exactly (IEEE 754 / C Annex F), so the maximum's own term —
+    // the only one for a uniquely mapped fragment — needs no `exp` call. And a
+    // fragment's transcripts often share a log weight exactly (same fragment
+    // length, same length class: sequence duplicates, near-identical
+    // isoforms), so the last `exp` is remembered by the bits of its argument.
+    let mut last_exp: Option<(u64, f64)> = None;
+    weights.clear();
+    weights.extend(eq_log.iter().map(|&l| {
+        let d = l - maxe;
+        if d == 0.0 {
+            return 1.0;
+        }
+        match last_exp {
+            Some((bits, v)) if bits == d.to_bits() => v,
+            _ => {
+                let v = d.exp();
+                last_exp = Some((d.to_bits(), v));
+                v
+            }
+        }
+    }));
     let wsum: f64 = weights.iter().sum();
     if wsum > 0.0 {
-        for w in &mut weights {
+        for w in weights.iter_mut() {
             *w /= wsum;
         }
     }
 
-    let group = if cfg.range_factorization_bins > 0 {
-        let bins = range_factorize_bins(&weights, cfg.range_factorization_bins);
-        TranscriptGroup::with_bins(tids, bins)
-    } else {
-        TranscriptGroup::from_sorted(tids)
-    };
-    cfg.eq_builder.add_group(group, weights, 1);
+    range_factorize_bins_into(weights, cfg.range_factorization_bins, bins);
+    cfg.eq_builder.add_slices(tids, bins, weights, 1);
     // Orphan only when nothing paired both mates: the most complete status
     // across a fragment's hits wins, as in the RAD fragment-level type.
     let outcome = if any_orphan && !any_pair {
@@ -702,6 +788,89 @@ fn open_prelude(path: &Path) -> Result<(BufReader<File>, RadPrelude, TagMap)> {
 }
 
 /// Reference lengths from the RAD `ref_lengths` file tag (one per reference).
+/// Parks the RAD producer while the work queue is full.
+///
+/// libradicl's producer waits for room by spinning on `is_full`. Whenever the
+/// workers are the bottleneck — the normal case, since parsing and weighting a
+/// chunk costs far more than reading it — that spin burns a core for the whole
+/// pass, and when the run is pinned to as many cores as workers it competes
+/// with them for one: at `-p 1` it took ~40% of the pass. The producer instead
+/// blocks here, from the callback it runs after every push, until a worker has
+/// taken a chunk. The next push then never finds the queue full, since the
+/// producer is the only thread that fills it.
+#[derive(Default)]
+struct QueueGate {
+    lock: Mutex<()>,
+    room: Condvar,
+}
+
+impl QueueGate {
+    /// Producer side: return once `queue` has room for another meta-chunk.
+    fn wait_for_room<T>(&self, queue: &crossbeam_queue::ArrayQueue<T>) {
+        let mut guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        while queue.is_full() {
+            guard = self.room.wait(guard).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Worker side: a meta-chunk was just taken. Passing through the lock
+    /// orders this after any check the producer made before going to sleep, so
+    /// the wakeup cannot be lost between its check and its wait.
+    fn took_one(&self) {
+        drop(self.lock.lock().unwrap_or_else(|e| e.into_inner()));
+        self.room.notify_one();
+    }
+}
+
+/// One worker's stream of meta-chunks, waking a waiting producer as each one is
+/// taken (see [`QueueGate`]).
+struct GatedChunks<'a, R: MappedRecord> {
+    chunks: MetaChunkStream<R>,
+    gate: &'a QueueGate,
+}
+
+impl<R: MappedRecord> Iterator for GatedChunks<'_, R> {
+    type Item = MetaChunk<R>;
+
+    fn next(&mut self) -> Option<MetaChunk<R>> {
+        let mc = self.chunks.next();
+        if mc.is_some() {
+            self.gate.took_one();
+        }
+        mc
+    }
+}
+
+/// Read every chunk of the RAD at `path` on `nthreads` worker threads, each
+/// running `worker` over its own stream of meta-chunks, while the calling
+/// thread runs the producer. `what` names the pass in a read error.
+fn read_rad_parallel<R, W>(path: &Path, nthreads: usize, what: &str, worker: W) -> Result<()>
+where
+    R: MappedRecord + Send,
+    R::ParsingContext: RecordContext + Clone + Send + Sync,
+    W: Fn(GatedChunks<'_, R>) + Sync,
+{
+    let (reader, prelude, file_tag_map) = open_prelude(path)?;
+    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
+    let mut prr =
+        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
+    let gate = QueueGate::default();
+    let queue = prr.get_queue();
+    std::thread::scope(|s| -> Result<()> {
+        for _ in 0..nz.get() {
+            let chunks = GatedChunks {
+                chunks: prr.chunk_iter(),
+                gate: &gate,
+            };
+            let worker = &worker;
+            s.spawn(move || worker(chunks));
+        }
+        // Producer: fill the queue until the file is exhausted.
+        prr.start_chunk_parsing(Some(|_, _| gate.wait_for_room(&queue)))
+            .with_context(|| format!("parsing RAD chunks ({what})"))
+    })
+}
+
 fn ref_lengths_from_tags(prelude: &RadPrelude, file_tag_map: &TagMap) -> Result<Vec<u32>> {
     use libradicl::rad_types::TagValue;
     let v = match file_tag_map.get("ref_lengths") {
@@ -1138,41 +1307,24 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
-    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
-    let mut prr =
-        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
-
-    std::thread::scope(|s| -> Result<()> {
-        for _ in 0..nthreads.max(1) {
-            let chunks = prr.chunk_iter();
-            s.spawn(move || {
-                // Reused for every record this worker sees, instead of a fresh
-                // allocation per fragment.
-                let mut pls: Vec<RadPlacement> = Vec::new();
-                let mut scratch = RadScratch::default();
-                let mut local = LocalTallies::default();
-                for mc in chunks {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            pls.clear();
-                            rec.placements_into(&mut pls);
-                            let (outcome, strand_judged, fmt_mask) = process_rad_fragment(
-                                &pls,
-                                PlacementOrder::Arrival,
-                                cfg,
-                                &mut scratch,
-                            );
-                            local.tally(outcome, strand_judged, fmt_mask);
-                        }
-                    }
+    read_rad_parallel::<R, _>(path, nthreads, "eq-class pass", |chunks| {
+        // Reused for every record this worker sees, instead of a fresh
+        // allocation per fragment.
+        let mut pls: Vec<RadPlacement> = Vec::new();
+        let mut scratch = RadScratch::default();
+        let mut local = LocalTallies::default();
+        for mc in chunks {
+            for chunk in mc.iter() {
+                for rec in &chunk.reads {
+                    pls.clear();
+                    rec.placements_into(&mut pls);
+                    let (outcome, strand_judged, fmt_mask) =
+                        process_rad_fragment(&pls, PlacementOrder::Arrival, cfg, &mut scratch);
+                    local.tally(outcome, strand_judged, fmt_mask);
                 }
-                local.merge_into(tallies);
-            });
+            }
         }
-        // Producer: fill the queue until the file is exhausted (blocks).
-        prr.start_chunk_parsing(EMPTY_METACHUNK_CALLBACK)
-            .context("parsing RAD chunks")
+        local.merge_into(tallies);
     })
 }
 
@@ -1207,63 +1359,49 @@ where
     // mapping pass uses, so a derived FLD and a baked one agree.
     let acc = DiscreteFld::new(fld_max);
 
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
-    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
-    let mut prr =
-        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
-    std::thread::scope(|s| -> Result<()> {
-        for _ in 0..nthreads.max(1) {
-            let chunks = prr.chunk_iter();
-            let acc = &acc;
-            s.spawn(move || {
-                let mut pls: Vec<RadPlacement> = Vec::new();
-                for mc in chunks {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            pls.clear();
-                            rec.placements_into(&mut pls);
-                            // Naive (kallisto-style) eq for the rough seed EM: the
-                            // compatible transcripts, orientation-tagged (so library-
-                            // incompatible placements can be dropped once the lib
-                            // type is known), no FLD/score weighting. Built in the
-                            // same read as the FLD counts; order-independent.
-                            if let Some(nb) = naive_eq {
-                                let sig: Vec<NaivePlacement> = pls
-                                    .iter()
-                                    .map(|p| {
-                                        let (obs, is_fw, status) = rad_frag_format(p);
-                                        NaivePlacement {
-                                            tid: p.tid,
-                                            fmt_id: obs
-                                                .map(|f| f.format_id())
-                                                .unwrap_or(NAIVE_NO_FMT),
-                                            is_fw,
-                                            status,
-                                        }
-                                    })
-                                    .collect();
-                                nb.add(sig);
-                            }
-                            // "unique" = exactly one placement; only proper pairs
-                            // carry a meaningful fragment length.
-                            if pls.len() != 1 {
-                                continue;
-                            }
-                            let p = &pls[0];
-                            if p.status != MateStatus::PairedEndPaired
-                                || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
-                                || p.frag_len == 0
-                            {
-                                continue;
-                            }
-                            acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
-                        }
+    read_rad_parallel::<R, _>(path, nthreads, "FLD estimation", |chunks| {
+        let mut pls: Vec<RadPlacement> = Vec::new();
+        for mc in chunks {
+            for chunk in mc.iter() {
+                for rec in &chunk.reads {
+                    pls.clear();
+                    rec.placements_into(&mut pls);
+                    // Naive (kallisto-style) eq for the rough seed EM: the
+                    // compatible transcripts, orientation-tagged (so library-
+                    // incompatible placements can be dropped once the lib
+                    // type is known), no FLD/score weighting. Built in the
+                    // same read as the FLD counts; order-independent.
+                    if let Some(nb) = naive_eq {
+                        let sig: Vec<NaivePlacement> = pls
+                            .iter()
+                            .map(|p| {
+                                let (obs, is_fw, status) = rad_frag_format(p);
+                                NaivePlacement {
+                                    tid: p.tid,
+                                    fmt_id: obs.map(|f| f.format_id()).unwrap_or(NAIVE_NO_FMT),
+                                    is_fw,
+                                    status,
+                                }
+                            })
+                            .collect();
+                        nb.add(sig);
                     }
+                    // "unique" = exactly one placement; only proper pairs
+                    // carry a meaningful fragment length.
+                    if pls.len() != 1 {
+                        continue;
+                    }
+                    let p = &pls[0];
+                    if p.status != MateStatus::PairedEndPaired
+                        || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
+                        || p.frag_len == 0
+                    {
+                        continue;
+                    }
+                    acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
                 }
-            });
+            }
         }
-        prr.start_chunk_parsing(EMPTY_METACHUNK_CALLBACK)
-            .context("scanning RAD chunks for FLD estimation")
     })?;
 
     let (fld, detected) = acc.finish(fld_mean, fld_sd);
@@ -1334,11 +1472,13 @@ struct BiasCfg<'a> {
     score_kind: u8,
     pmf: &'a [f64],
     cmf: &'a [f64],
+    /// log-CMF the single-end length term is read from: `cmf`, broadened when
+    /// the FLD is only the default prior (see [`unpaired_log_frag_prob`]).
+    se_cmf: &'a [f64],
     lengths: &'a [u32],
     expected_format: Option<LibraryFormat>,
     ignore_incompat: bool,
     incompat_prior: f64,
-    paired_lib: bool,
     /// `--noFragLengthDist`: leave the fragment-length term out of the posterior
     /// this bias pass weights its observations by, as the eq-class pass does.
     no_frag_length_dist: bool,
@@ -1388,7 +1528,7 @@ fn collect_bias_fragment(
     for p in placements {
         let basis = score_weight_basis(cfg.scored, cfg.score_kind, cfg.score_exp, best, p.score);
         // Same placement set as the eq-class pass (see there).
-        if cfg.discard_orphans && cfg.paired_lib && p.status != MateStatus::PairedEndPaired {
+        if cfg.discard_orphans && is_orphan(p.status) {
             continue;
         }
         if cfg.hard_filter && cfg.scored && p.score != best {
@@ -1403,25 +1543,9 @@ fn collect_bias_fragment(
             0.0
         } else if proper {
             at(cfg.pmf, flen as usize) - at(cfg.cmf, rl.max(1) as usize)
-        } else if cfg.paired_lib && !cfg.model_single_frag_prob {
-            // `--noSingleFragProb`, as in the eq-class pass above.
-            if matches!(
-                p.status,
-                MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-            ) {
-                ORPHAN_LOG_EPSILON
-            } else {
-                0.0
-            }
-        } else if cfg.paired_lib {
-            let read_len = if p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED {
-                p.frag_len as i32
-            } else {
-                0
-            };
-            salmon_model::ambig_frag_log_prob(cfg.cmf, p.is_fw, p.pos as i32, read_len, rl)
         } else {
-            0.0
+            // as in the eq-class pass above
+            unpaired_log_frag_prob(p, cfg.cmf, cfg.se_cmf, cfg.model_single_frag_prob, rl)
         };
         let start_pos = if proper && flen <= rl {
             -(((rl - flen + 1) as f64).ln())
@@ -1448,12 +1572,14 @@ fn collect_bias_fragment(
         } else if p.is_fw {
             (fs, Some(fs), None)
         } else {
-            let read_len = if p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED {
-                p.frag_len as usize
-            } else {
-                0
-            };
-            (fs, None, Some(fs + read_len.saturating_sub(1)))
+            // `pos` is the read's leftmost base (see `RadHit::pos`), so a
+            // reverse read's 5' end is `pos + read_len - 1`. Without a read
+            // length (piscem RAD) the 5' end is unknown: contribute no context
+            // rather than a wrong one.
+            let five = unpaired_read_len(p)
+                .filter(|&l| l > 0)
+                .map(|l| fs + l as usize - 1);
+            (fs, None, five)
         };
         scratch.bias.push_in(
             order,
@@ -1593,41 +1719,29 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
-    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
-    let mut prr =
-        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
     let merged = std::sync::Mutex::new(BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins));
 
-    std::thread::scope(|s| -> Result<()> {
-        for _ in 0..nthreads.max(1) {
-            let chunks = prr.chunk_iter();
-            let merged = &merged;
-            s.spawn(move || {
-                let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
-                // Reused for every record this worker sees.
-                let mut pls: Vec<RadPlacement> = Vec::new();
-                let mut scratch = RadScratch::default();
-                for mc in chunks {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            pls.clear();
-                            rec.placements_into(&mut pls);
-                            collect_bias_fragment(
-                                &pls,
-                                PlacementOrder::Arrival,
-                                cfg,
-                                &mut local,
-                                &mut scratch,
-                            );
-                        }
-                    }
+    read_rad_parallel::<R, _>(path, nthreads, "bias collection", |chunks| {
+        let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+        // Reused for every record this worker sees.
+        let mut pls: Vec<RadPlacement> = Vec::new();
+        let mut scratch = RadScratch::default();
+        for mc in chunks {
+            for chunk in mc.iter() {
+                for rec in &chunk.reads {
+                    pls.clear();
+                    rec.placements_into(&mut pls);
+                    collect_bias_fragment(
+                        &pls,
+                        PlacementOrder::Arrival,
+                        cfg,
+                        &mut local,
+                        &mut scratch,
+                    );
                 }
-                merged.lock().unwrap().merge(&local);
-            });
+            }
         }
-        prr.start_chunk_parsing(EMPTY_METACHUNK_CALLBACK)
-            .context("parsing RAD chunks for bias collection")
+        merged.lock().unwrap().merge(&local);
     })?;
 
     let merged = merged.into_inner().unwrap();
@@ -1662,54 +1776,38 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    let (reader, prelude, file_tag_map) = open_prelude(path)?;
-    let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
-    let mut prr =
-        ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
     let merged = std::sync::Mutex::new(BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins));
 
-    std::thread::scope(|s| -> Result<()> {
-        for _ in 0..nthreads.max(1) {
-            let chunks = prr.chunk_iter();
-            let merged = &merged;
-            s.spawn(move || {
-                let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
-                let mut local_tallies = LocalTallies::default();
-                // Reused for every record this worker sees.
-                let mut pls: Vec<RadPlacement> = Vec::new();
-                let mut scratch = RadScratch::default();
-                for mc in chunks {
-                    for chunk in mc.iter() {
-                        for rec in &chunk.reads {
-                            pls.clear();
-                            rec.placements_into(&mut pls);
-                            // Two consumers share these placements, so order them
-                            // once here and tell both. Neither then re-derives
-                            // what this sort already established.
-                            sort_placements_by_tid(&mut pls);
-                            let (outcome, strand_judged, fmt_mask) = process_rad_fragment(
-                                &pls,
-                                PlacementOrder::ByTid,
-                                cfg,
-                                &mut scratch,
-                            );
-                            local_tallies.tally(outcome, strand_judged, fmt_mask);
-                            collect_bias_fragment(
-                                &pls,
-                                PlacementOrder::ByTid,
-                                bias_cfg,
-                                &mut local,
-                                &mut scratch,
-                            );
-                        }
-                    }
+    read_rad_parallel::<R, _>(path, nthreads, "fused eq + bias", |chunks| {
+        let mut local = BiasLocal::new(seq, gc, pos, cond_gc_bins, gc_bins);
+        let mut local_tallies = LocalTallies::default();
+        // Reused for every record this worker sees.
+        let mut pls: Vec<RadPlacement> = Vec::new();
+        let mut scratch = RadScratch::default();
+        for mc in chunks {
+            for chunk in mc.iter() {
+                for rec in &chunk.reads {
+                    pls.clear();
+                    rec.placements_into(&mut pls);
+                    // Two consumers share these placements, so order them
+                    // once here and tell both. Neither then re-derives
+                    // what this sort already established.
+                    sort_placements_by_tid(&mut pls);
+                    let (outcome, strand_judged, fmt_mask) =
+                        process_rad_fragment(&pls, PlacementOrder::ByTid, cfg, &mut scratch);
+                    local_tallies.tally(outcome, strand_judged, fmt_mask);
+                    collect_bias_fragment(
+                        &pls,
+                        PlacementOrder::ByTid,
+                        bias_cfg,
+                        &mut local,
+                        &mut scratch,
+                    );
                 }
-                local_tallies.merge_into(tallies);
-                merged.lock().unwrap().merge(&local);
-            });
+            }
         }
-        prr.start_chunk_parsing(EMPTY_METACHUNK_CALLBACK)
-            .context("parsing RAD chunks (fused eq + bias)")
+        local_tallies.merge_into(tallies);
+        merged.lock().unwrap().merge(&local);
     })?;
 
     let merged = merged.into_inner().unwrap();
@@ -1816,8 +1914,14 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         }
     );
 
-    // Library-type handling (same as alignment mode).
-    let paired_lib = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
+    // Library layout, for the FLD policy below (whether there are fragment
+    // lengths to derive, and whether a baked FLD is observed data or a prior).
+    // Taken from the data — the RAD header's `is_paired`, which the reads-mode
+    // writer and piscem set from the actual input — unless `-l` names a
+    // single-end type. (Per-fragment weighting does not use this at all: it
+    // follows each record's own mapping type.)
+    let paired_lib =
+        prelude.hdr.is_paired != 0 && !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
     let auto_lib = opts.lib_type.as_str() == "A";
     let mut expected_format = match opts.lib_type.as_str() {
         "A" => None,
@@ -1941,6 +2045,30 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // PMF *is* the cached normalized log-PMF; the CMF is its cumulative companion.
     let pmf: Vec<f64> = fld.log_pmf().to_vec();
     let cmf: Vec<f64> = (0..pmf.len()).map(|l| fld.cmf(l)).collect();
+    // The single-end length term's distribution. When the FLD is nothing but
+    // salmon's built-in default prior (a single-end run, no `--fldMean`/`--fldSD`
+    // from the user, here or in the mapping run that baked it), widen it to an
+    // SD of at least `SE_DEFAULT_PRIOR_MIN_CV` x mean: the default is a guess
+    // about this library, and the bound is only as good as its lower tail.
+    let user_prior =
+        opts.fld_prior_user_supplied || opts.explicit_fld_args.mean || opts.explicit_fld_args.sd;
+    let default_prior_only = matches!(
+        fld_source,
+        FragLengthSource::Prior | FragLengthSource::RadBakedPrior
+    ) && !user_prior;
+    let se_cmf: Vec<f64> = if default_prior_only {
+        let (mean, sd) = (fld.mean(), fld.sd());
+        let wide_sd = sd.max(SE_DEFAULT_PRIOR_MIN_CV * mean);
+        tracing::info!(
+            "single-end fragment-length term: default prior widened to mean={mean:.1}, \
+             sd={wide_sd:.1} (pass --fldMean/--fldSD to use a known distribution as given)"
+        );
+        let mut wide = FragmentLengthDistribution::new(1.0, opts.fld_max, mean, wide_sd, 4, 0.5, 1);
+        wide.cache();
+        (0..pmf.len()).map(|l| wide.cmf(l)).collect()
+    } else {
+        cmf.clone()
+    };
 
     // Base effective lengths from the fixed FLD (used by the rough seed EM below
     // and by the final inference); bias correction mutates them in place later.
@@ -2043,11 +2171,11 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             score_kind,
             pmf: &pmf,
             cmf: &cmf,
+            se_cmf: &se_cmf,
             lengths: &lengths,
             expected_format,
             ignore_incompat,
             incompat_prior: opts.incompat_prior,
-            paired_lib,
             no_frag_length_dist: opts.no_frag_length_dist,
             model_single_frag_prob: opts.model_single_frag_prob,
             hard_filter: opts.hard_filter,
@@ -2063,11 +2191,11 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 score_kind,
                 pmf: &pmf,
                 cmf: &cmf,
+                se_cmf: &se_cmf,
                 lengths: &lengths,
                 expected_format,
                 ignore_incompat,
                 incompat_prior: opts.incompat_prior,
-                paired_lib,
                 no_frag_length_dist: opts.no_frag_length_dist,
                 model_single_frag_prob: opts.model_single_frag_prob,
                 hard_filter: opts.hard_filter,
@@ -2183,6 +2311,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             alphas: vec![0.0; num_refs],
             iters: 0,
             converged: true,
+            components: None,
             dropped_mass: 0.0,
         }
     } else if let Some((seq_obs, gc_obs, pos_obs)) = fused_bias_obs {
@@ -2239,11 +2368,11 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
                 score_kind,
                 pmf: &pmf,
                 cmf: &cmf,
+                se_cmf: &se_cmf,
                 lengths: &lengths,
                 expected_format,
                 ignore_incompat,
                 incompat_prior: opts.incompat_prior,
-                paired_lib,
                 no_frag_length_dist: opts.no_frag_length_dist,
                 model_single_frag_prob: opts.model_single_frag_prob,
                 hard_filter: opts.hard_filter,
@@ -2309,6 +2438,15 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     };
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
+    let em_components = em.components.clone();
+    if let Some(c) = &em_components {
+        let (line, warn) = c.describe(em_iters);
+        if warn {
+            tracing::warn!("{line}");
+        } else {
+            tracing::info!("{line}");
+        }
+    }
     let counts = em.alphas;
     // Bias correction + EM/VBEM point estimate (matches the reads driver's phase).
     timer.mark("em_bias");
@@ -2436,6 +2574,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         bootstraps,
         em_iters,
         em_converged,
+        em_components,
         detected_library_type,
         total_seconds: opts.prior_seconds + run_timer.elapsed().as_secs_f64(),
         peak_rss_kb: salmon_core::peak_rss_kb(),
@@ -2656,5 +2795,113 @@ mod group_tests {
         assert_eq!(p[1].tid, 5);
         assert_eq!(p[1].frag, (10, 20));
         assert_eq!(group_log, vec![-2.0, -1.0]);
+    }
+}
+
+#[cfg(test)]
+mod unpaired_tests {
+    use super::*;
+
+    /// Log-CMF of a uniform FLD on `1..=n` (`cmf[l] = ln(l/n)`), long enough
+    /// that every bound below is in range.
+    fn uniform_cmf(n: usize) -> Vec<f64> {
+        (0..=n)
+            .map(|l| {
+                if l == 0 {
+                    f64::NEG_INFINITY
+                } else {
+                    (l.min(n) as f64 / n as f64).ln()
+                }
+            })
+            .collect()
+    }
+
+    fn hit(status: MateStatus, is_fw: bool, pos: u32, frag_len: u16) -> RadPlacement {
+        RadPlacement {
+            tid: 0,
+            score: 0,
+            is_fw,
+            mate_fw: false,
+            status,
+            pos,
+            frag_len,
+        }
+    }
+
+    /// A reverse unpaired read at leftmost `pos` with read length `rl` leaves
+    /// room for a fragment of at most `pos + rl` bases — the bound must come
+    /// from the leftmost base the writer stores, for single-end reads and
+    /// orphans alike, and must not depend on `-l`. A single-end read reads the
+    /// bound from `se_cmf`; an orphan mixes it with the off-transcript
+    /// alternative at even odds.
+    #[test]
+    fn reverse_unpaired_bound_is_leftmost_plus_read_length() {
+        let cmf = uniform_cmf(1000);
+        let wide = uniform_cmf(500);
+        let txp = 400;
+        let r_rev = (176.0f64 / 1000.0) / (400.0 / 1000.0);
+        let r_fw = (300.0f64 / 1000.0) / (400.0 / 1000.0);
+        let se_rev = (176.0f64 / 500.0) / (400.0 / 500.0);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        // single-end: the bound, from `se_cmf`
+        let p = hit(MateStatus::SingleEnd, false, 100, 76);
+        assert!(close(
+            unpaired_log_frag_prob(&p, &cmf, &wide, true, txp),
+            se_rev.ln()
+        ));
+        let p = hit(MateStatus::SingleEnd, true, 100, 76);
+        assert!(close(
+            unpaired_log_frag_prob(&p, &cmf, &cmf, true, txp),
+            r_fw.ln()
+        ));
+        // orphans: ln(0.5 * bound + 0.5), from the observed `cmf`
+        for status in [MateStatus::PairedEndLeft, MateStatus::PairedEndRight] {
+            let p = hit(status, false, 100, 76);
+            let got = unpaired_log_frag_prob(&p, &cmf, &wide, true, txp);
+            assert!(close(got, (0.5 * r_rev + 0.5).ln()), "{status:?}: {got}");
+            let f = hit(status, true, 100, 76);
+            let got = unpaired_log_frag_prob(&f, &cmf, &wide, true, txp);
+            assert!(close(got, (0.5 * r_fw + 0.5).ln()));
+            // never penalized by more than ln 2, however tight the room
+            let tight = hit(status, false, 0, 1);
+            assert!(unpaired_log_frag_prob(&tight, &cmf, &wide, true, txp) >= 0.5f64.ln() - 1e-12);
+        }
+    }
+
+    /// `--noSingleFragProb`: an orphan takes salmon's flat penalty, a
+    /// single-end read nothing.
+    #[test]
+    fn no_single_frag_prob_penalizes_only_orphans() {
+        let cmf = uniform_cmf(1000);
+        let se = hit(MateStatus::SingleEnd, false, 100, 76);
+        let orphan = hit(MateStatus::PairedEndRight, false, 100, 76);
+        assert_eq!(unpaired_log_frag_prob(&se, &cmf, &cmf, false, 900), 0.0);
+        assert_eq!(
+            unpaired_log_frag_prob(&orphan, &cmf, &cmf, false, 900),
+            ORPHAN_LOG_EPSILON
+        );
+        assert!(!is_orphan(MateStatus::SingleEnd));
+        assert!(!is_orphan(MateStatus::PairedEndPaired));
+        assert!(is_orphan(MateStatus::PairedEndLeft) && is_orphan(MateStatus::PairedEndRight));
+    }
+
+    /// piscem records no read length (`FRAG_LEN_UNPAIRED`): the reverse bound
+    /// falls back to `pos` alone, and the read length reads as unknown.
+    #[test]
+    fn piscem_unpaired_hit_has_no_read_length() {
+        let cmf = uniform_cmf(1000);
+        let p = hit(
+            MateStatus::SingleEnd,
+            false,
+            100,
+            salmon_rad::FRAG_LEN_UNPAIRED,
+        );
+        assert_eq!(unpaired_read_len(&p), None);
+        let want = (100.0f64 / 1000.0).ln() - (900.0f64 / 1000.0).ln();
+        assert!((unpaired_log_frag_prob(&p, &cmf, &cmf, true, 900) - want).abs() < 1e-12);
+        assert_eq!(
+            unpaired_read_len(&hit(MateStatus::SingleEnd, false, 1, 76)),
+            Some(76)
+        );
     }
 }

@@ -324,6 +324,25 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
         quant(&fx.se, &out).status.success(),
         "intact FASTQ must run"
     );
+
+    // FASTA reads have no 4-line records, so the check must not apply to them:
+    // the same reads as FASTA, wrapped onto several lines so the line count is
+    // not a multiple of 4, must run.
+    let fasta = dir.path().join("reads.fa");
+    let mut fa = String::new();
+    for rec in lines.chunks(4) {
+        let (name, seq) = (&rec[0][1..], rec[1]);
+        let mid = seq.len() / 2;
+        fa.push_str(&format!(">{name}\n{}\n{}\n", &seq[..mid], &seq[mid..]));
+    }
+    fa.push_str(">odd\nACGTACGTACGTACGTACGTACGTACGTACGTACGT\n");
+    std::fs::write(&fasta, fa).unwrap();
+    let o = quant(&fasta, &out);
+    assert!(
+        o.status.success(),
+        "FASTA reads must run:\n{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }
 
 // ---- Group 3: incompatibilities detectable at invocation ------------------

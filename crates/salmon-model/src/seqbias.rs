@@ -496,7 +496,7 @@ pub fn corrected_effective_length(
     // Convolve the bias factors with the conditional FLD over [fld_low, fld_high].
     let stride = stride.max(1) as i32;
     let max_len = (ref_len as i32).min(fld_high as i32 + 1);
-    let mut fl = fld_low as i32;
+    let mut fl = fld_low.max(1) as i32; // a zero-length fragment has no end base
     let mut done = fl >= max_len;
     let sp = if fl > 0 { fl - 1 } else { 0 };
     let mut prev_mass = cond(sp);
@@ -579,7 +579,7 @@ pub fn eff_len_from_xcorr(
     // that the scalar's `kstart < ref_len-fl` bound excludes).
     let stride = stride.max(1) as i32;
     let mut eff = 0.0f64;
-    let mut fl = fld_low as i32;
+    let mut fl = fld_low.max(1) as i32; // same lengths as the scalar loop
     let mut done = fl >= max_len;
     let sp = if fl > 0 { fl - 1 } else { 0 };
     let mut prev_mass = cond(sp);

@@ -33,11 +33,13 @@
 use rayon::prelude::*;
 use salmon_eqclass::CollapsedEqClasses;
 
+mod components;
 mod daarem;
 mod online;
 mod packed;
 pub mod uncertainty;
 
+pub use components::ComponentSummary;
 pub use online::OnlineInference;
 pub use packed::{PackedEqClasses, PosteriorMethod};
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
@@ -70,6 +72,20 @@ pub enum EmAccel {
     /// byte-identical to `None`. **Plain EM only**: rejected with VBEM (see
     /// [`EmOptions::validate`]). See the `daarem` module.
     Daarem,
+}
+
+/// When an unaccelerated EM/VBEM run stops. (The accelerators always use
+/// salmon's global rule.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmStop {
+    /// Each connected component on its own, once salmon's relative-change
+    /// criterion holds over it and its projected remaining movement is below
+    /// 0.1% of its fragments. Default.
+    #[default]
+    Projected,
+    /// salmon's rule: after `min_iter`, the first iteration at which the
+    /// criterion holds over all transcripts at once. Reproduces salmon ≤ 2.8.
+    Global,
 }
 
 /// Effective lengths, one per transcript, or their absence.
@@ -181,6 +197,10 @@ pub struct EmOptions {
     pub per_nucleotide_prior: bool,
     /// convergence acceleration scheme (default [`EmAccel::None`]).
     pub accel: EmAccel,
+    /// stopping rule of unaccelerated VBEM (default [`EmStop::Projected`])
+    pub vb_stop: EmStop,
+    /// stopping rule of unaccelerated plain EM (default [`EmStop::Global`])
+    pub em_stop: EmStop,
 }
 
 impl Default for EmOptions {
@@ -195,6 +215,8 @@ impl Default for EmOptions {
             vb_prior: 1e-2,
             per_nucleotide_prior: false,
             accel: EmAccel::None,
+            vb_stop: EmStop::Projected,
+            em_stop: EmStop::Global,
         }
     }
 }
@@ -231,7 +253,11 @@ pub struct EmResult {
     /// iterations actually run
     pub iters: u32,
     /// whether the relative-difference criterion was met before `max_iter`
+    /// (under [`EmStop::Projected`]: by every connected component)
     pub converged: bool,
+    /// how each connected component's iteration ended; `None` when the run
+    /// did not use the component engine (an accelerator, or nothing to fit)
+    pub components: Option<ComponentSummary>,
     /// total count in equivalence classes whose every transcript was truncated
     /// below `min_alpha` in the final redistribution step — mass that could not be
     /// reassigned to any surviving transcript (reported, not rescaled away). 0 in
@@ -240,8 +266,10 @@ pub struct EmResult {
 }
 
 /// Relative-difference convergence check, matching salmon: the max over
-/// transcripts (with `alpha_in` above the cutoff) of
-/// `|alpha_out - alpha_in| / alpha_out`.
+/// transcripts (with `alpha_out` above the cutoff) of
+/// `|alpha_out - alpha_in| / alpha_out`. Returns `-inf` when no transcript
+/// clears the cutoff (e.g. no fragments at all), which counts as converged —
+/// as in salmon, where `converged` starts `true`.
 ///
 /// The *maximum* rather than an average: convergence means every meaningful
 /// transcript has settled, and an average would let one large still-moving
@@ -251,16 +279,16 @@ const VECTOR_REDUCTION_CHUNK: usize = 2048;
 fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
     let mut max_d = f64::NEG_INFINITY;
     for i in 0..alpha_in.len() {
-        // Skip negligible transcripts (see `alpha_check_cutoff`) and guard the
-        // division against a zero denominator.
-        if alpha_in[i] > cutoff && alpha_out[i] > 0.0 {
+        // Skip negligible transcripts (see `alpha_check_cutoff`); a positive
+        // cutoff also keeps the denominator non-zero.
+        if alpha_out[i] > cutoff {
             let d = (alpha_out[i] - alpha_in[i]).abs() / alpha_out[i];
             if d > max_d {
                 max_d = d;
             }
         }
     }
-    // Stays -inf when no transcript qualified; callers test `is_finite()`.
+    // Stays -inf when no transcript qualified, which callers treat as converged.
     max_d
 }
 
@@ -400,7 +428,7 @@ pub fn optimize_packed_with_init(
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
 ) -> EmResult {
-    let (alphas, iters, converged) = run_em_counts(
+    let (alphas, iters, converged, components) = run_em_counts(
         p,
         &p.counts,
         opts,
@@ -419,6 +447,7 @@ pub fn optimize_packed_with_init(
         alphas,
         iters,
         converged,
+        components,
         dropped_mass,
     }
 }
@@ -474,7 +503,7 @@ pub(crate) fn run_em_counts(
     min_iter: u32,
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
-) -> (Vec<f64>, u32, bool) {
+) -> (Vec<f64>, u32, bool, Option<ComponentSummary>) {
     if let Err(e) = opts.validate() {
         // Callers are expected to validate up front (the CLI does); reaching
         // here is a programming error, not a data condition.
@@ -501,6 +530,32 @@ pub(crate) fn run_em_counts(
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
+    // Unaccelerated runs go through the component-decomposed engine: the
+    // same fixed-point iteration and stopping rule, laid out and scheduled by
+    // connected component (see `components`). The accelerators extrapolate
+    // over whole vectors between M-steps, so they keep the global kernels.
+    if opts.accel == EmAccel::None && opts.max_iter > 0 {
+        let cplan = components::ComponentPlan::new(p, counts, parallel);
+        if cplan.num_components() > 0 {
+            let set = components::Settings {
+                vb: opts.use_vbem,
+                cutoff: opts.alpha_check_cutoff,
+                tol: opts.rel_diff_tol,
+                min_iter,
+                max_iter: opts.max_iter,
+                parallel,
+                guard_zero_et: true,
+                stop: if opts.use_vbem {
+                    opts.vb_stop
+                } else {
+                    opts.em_stop
+                },
+            };
+            let (alphas, iters, converged, summary) =
+                components::run(&cplan, &alphas, &prior_alphas, &set);
+            return (alphas, iters, converged, Some(summary));
+        }
+    }
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut rel_diff_partials = Vec::new();
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
@@ -517,6 +572,9 @@ pub(crate) fn run_em_counts(
     // sums, so deriving them from `-p` made `quant.sf` depend on the thread
     // count — the one thing this mode exists to prevent. See `ShardPlan`.
     let plan = parallel.then(|| packed::ShardPlan::new(p));
+    // The parallel VBEM M-step's expectations, with their digamma cache; the
+    // sequential kernels use the plain `exp_theta` above.
+    let mut expectations = (parallel && opts.use_vbem).then(|| packed::Expectations::new(num_txps));
     let mut shards: Vec<Vec<f64>> = match &plan {
         Some(pl) => pl.allocate_buffers(),
         None => Vec::new(),
@@ -534,71 +592,86 @@ pub(crate) fn run_em_counts(
     // `with_ll` additionally returns the data term of the objective at `src`
     // (only DAAREM asks for it); the kernels are monomorphized on it, so the
     // plain and SQUAREM paths run exactly the code they always did.
-    let mut step = |src: &[f64], dst: &mut [f64], with_ll: bool| -> f64 {
-        macro_rules! dispatch {
-            ($ll:literal) => {
-                match (opts.use_vbem, parallel) {
-                    (false, true) => packed::em_step_par::<$ll>(
-                        p,
-                        counts,
-                        src,
-                        dst,
-                        &mut shards,
-                        plan.as_ref().expect("parallel implies a shard plan"),
-                    ),
-                    (false, false) => packed::em_step_seq::<$ll>(p, counts, src, dst, &mut scratch),
-                    (true, true) => packed::vbem_step_par::<$ll>(
-                        p,
-                        counts,
-                        &prior_alphas,
-                        src,
-                        dst,
-                        &mut exp_theta,
-                        &mut shards,
-                        plan.as_ref().expect("parallel implies a shard plan"),
-                    ),
-                    (true, false) => packed::vbem_step_seq::<$ll>(
-                        p,
-                        counts,
-                        &prior_alphas,
-                        src,
-                        dst,
-                        &mut exp_theta,
-                        &mut scratch,
-                    ),
-                }
+    //
+    // `rel_diff_cutoff` asks for the convergence criterion between `src` and
+    // `dst` as well, returned second (`-inf` when not asked for). The parallel
+    // kernels evaluate it on each output as they write it; the sequential ones
+    // in a pass afterwards.
+    let mut step =
+        |src: &[f64], dst: &mut [f64], with_ll: bool, rel_diff_cutoff: Option<f64>| -> (f64, f64) {
+            let check = rel_diff_cutoff.map(|cutoff| packed::RelDiffCheck {
+                alpha_in: src,
+                cutoff,
+            });
+            let seq_check = |dst: &[f64]| {
+                rel_diff_cutoff.map_or(f64::NEG_INFINITY, |c| max_rel_diff(src, dst, c))
             };
-        }
-        if with_ll {
-            dispatch!(true)
-        } else {
-            dispatch!(false)
-        }
-    };
+            macro_rules! dispatch {
+                ($ll:literal) => {
+                    match (opts.use_vbem, parallel) {
+                        (false, true) => packed::em_step_par::<$ll>(
+                            p,
+                            counts,
+                            src,
+                            dst,
+                            &mut shards,
+                            plan.as_ref().expect("parallel implies a shard plan"),
+                            check,
+                        ),
+                        (false, false) => {
+                            let ll = packed::em_step_seq::<$ll>(p, counts, src, dst, &mut scratch);
+                            (ll, seq_check(dst))
+                        }
+                        (true, true) => packed::vbem_step_par::<$ll>(
+                            p,
+                            counts,
+                            &prior_alphas,
+                            src,
+                            dst,
+                            expectations
+                                .as_mut()
+                                .expect("parallel VBEM has expectations"),
+                            &mut shards,
+                            plan.as_ref().expect("parallel implies a shard plan"),
+                            check,
+                        ),
+                        (true, false) => {
+                            let ll = packed::vbem_step_seq::<$ll>(
+                                p,
+                                counts,
+                                &prior_alphas,
+                                src,
+                                dst,
+                                &mut exp_theta,
+                                &mut scratch,
+                            );
+                            (ll, seq_check(dst))
+                        }
+                    }
+                };
+            }
+            if with_ll {
+                dispatch!(true)
+            } else {
+                dispatch!(false)
+            }
+        };
 
     let mut converged = false;
     let mut it = 0u32;
     match opts.accel {
         EmAccel::None => {
-            let mut f = |src: &[f64], dst: &mut [f64]| {
-                step(src, dst, false);
-            };
             // The textbook loop: one M-step, check whether anything moved, repeat.
+            // Once the check is due it rides along with the M-step.
             while it < opts.max_iter {
-                f(&alphas, &mut alphas_prime);
+                let check = (it + 1 >= min_iter).then_some(opts.alpha_check_cutoff);
+                let (_, d) = step(&alphas, &mut alphas_prime, false, check);
                 it += 1;
                 if it >= min_iter {
-                    let d = max_rel_diff_mode(
-                        &alphas,
-                        &alphas_prime,
-                        opts.alpha_check_cutoff,
-                        parallel,
-                        &mut rel_diff_partials,
-                    );
                     // Swap rather than copy: the buffers just exchange roles, so
                     // no data movement is needed.
                     std::mem::swap(&mut alphas, &mut alphas_prime);
-                    if d.is_finite() && d < opts.rel_diff_tol {
+                    if d < opts.rel_diff_tol {
                         converged = true;
                         break;
                     }
@@ -609,7 +682,7 @@ pub(crate) fn run_em_counts(
         }
         EmAccel::Squarem => {
             let mut f = |src: &[f64], dst: &mut [f64]| {
-                step(src, dst, false);
+                step(src, dst, false, None);
             };
             converged = squarem_loop(
                 &mut f,
@@ -629,7 +702,7 @@ pub(crate) fn run_em_counts(
             // data term comes out of the kernel, the rest is O(num_txps).
             let n_total = counts.iter().sum::<u64>() as f64;
             let mut f = |src: &[f64], dst: &mut [f64]| -> f64 {
-                let data = step(src, dst, true);
+                let (data, _) = step(src, dst, true, None);
                 if opts.use_vbem {
                     data + vbem_objective_prior_term(src, &prior_alphas, parallel)
                 } else {
@@ -648,7 +721,7 @@ pub(crate) fn run_em_counts(
             );
         }
     }
-    (alphas, it, converged)
+    (alphas, it, converged, None)
 }
 
 /// SQUAREM (SqS3) acceleration of the fixed-point iteration.
@@ -779,7 +852,7 @@ fn squarem_loop(
                 rel_diff_partials,
             );
             std::mem::swap(x0, x_next);
-            if d.is_finite() && d < opts.rel_diff_tol {
+            if d < opts.rel_diff_tol {
                 return true;
             }
         } else {
@@ -1315,6 +1388,49 @@ mod tests {
     /// Effective length enters through the class weights, so a longer transcript
     /// needs *more* fragments to justify the same abundance and therefore receives
     /// a smaller share of identical evidence.
+    #[test]
+    fn empty_input_converges_immediately() {
+        // No fragments: nothing clears the convergence cutoff, which must count
+        // as converged (not run to `max_iter`).
+        let p = PackedEqClasses::from_collapsed(&CollapsedEqClasses::default(), 3);
+        for use_vbem in [false, true] {
+            let opts = EmOptions {
+                use_vbem,
+                ..Default::default()
+            };
+            let res = optimize_packed(&p, &opts, true);
+            assert!(res.converged);
+            assert!(res.iters <= opts.min_iter.max(1), "iters={}", res.iters);
+            assert!(res.alphas.iter().all(|&a| a == 0.0));
+        }
+    }
+
+    #[test]
+    fn parallel_and_sequential_em_agree() {
+        let eq = build(
+            &[
+                (vec![0, 1, 2], 50),
+                (vec![1, 2], 30),
+                (vec![2], 20),
+                (vec![0, 3], 7),
+                (vec![3], 1),
+            ],
+            4,
+        );
+        let p = PackedEqClasses::from_collapsed(&eq, 4);
+        for use_vbem in [false, true] {
+            let opts = EmOptions {
+                use_vbem,
+                ..Default::default()
+            };
+            let a = optimize_packed(&p, &opts, true).alphas;
+            let b = optimize_packed(&p, &opts, false).alphas;
+            for (x, y) in a.iter().zip(&b) {
+                assert!((x - y).abs() < 1e-6, "{a:?} vs {b:?}");
+            }
+        }
+    }
+
     #[test]
     fn effective_length_shifts_allocation() {
         // One shared class, equal weights, but t0 is 3x longer -> more of the

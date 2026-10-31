@@ -65,7 +65,7 @@ impl RecordContext for SalmonBulkContext {
 }
 
 /// One fragment's worth of salmon mappings, as stored in a RAD chunk.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct SalmonBulkRecord {
     /// Fragment-level mapping type (proper pair / orphan / single-end); see
     /// [`crate::frag_map_type`].
@@ -76,19 +76,27 @@ pub struct SalmonBulkRecord {
     //
     // The trait hands out a borrowed slice, which means the ids must already
     // exist contiguously somewhere; they are interleaved inside `hits`, so a
-    // flat copy is kept alongside.
-    refs: Vec<u32>,
+    // flat copy is built — on first use, since salmon's own readers never ask
+    // for it, and eagerly it was a second allocation for every record read.
+    refs: std::cell::OnceCell<Vec<u32>>,
 }
 
+// Equality is the record's content; whether the `refs` cache has been built
+// yet is not part of it.
+impl PartialEq for SalmonBulkRecord {
+    fn eq(&self, other: &Self) -> bool {
+        self.frag_type == other.frag_type && self.hits == other.hits
+    }
+}
+impl Eq for SalmonBulkRecord {}
+
 impl SalmonBulkRecord {
-    /// Build a record from a fragment's `frag_type` and hits, deriving the
-    /// cached `refs` slice.
+    /// Build a record from a fragment's `frag_type` and hits.
     pub fn new(frag_type: u8, hits: Vec<RadHit>) -> Self {
-        let refs = hits.iter().map(|h| h.tid).collect();
         Self {
             frag_type,
             hits,
-            refs,
+            refs: std::cell::OnceCell::new(),
         }
     }
 }
@@ -182,7 +190,8 @@ impl MappedRecord for SalmonBulkRecord {
 
     /// The transcript ids this fragment touched (the cached flat copy).
     fn refs(&self) -> &[u32] {
-        &self.refs
+        self.refs
+            .get_or_init(|| self.hits.iter().map(|h| h.tid).collect())
     }
 
     /// Whether any placement is on the given strand; libradicl uses this for

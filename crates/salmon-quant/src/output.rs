@@ -372,6 +372,9 @@ struct MetaInfo {
     /// EM/VBEM convergence
     num_em_iterations: u32,
     em_converged: bool,
+    /// per-component convergence of the EM/VBEM (absent off the component engine)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    em_components: Option<salmon_core::EmComponentsMeta>,
     /// library format observed by the auto-detector (null if not observed)
     detected_library_type: Option<String>,
     /// which inference path produced these results: `online` (the one-pass
@@ -506,6 +509,7 @@ fn write_meta_info(
         range_factorization_bins: opts.range_factorization_bins,
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
+        em_components: res.em_components.as_ref().map(|c| c.to_meta()),
         detected_library_type: res.detected_library_type.clone(),
         inference_path: if opts.skip_quant { "none" } else { "online" },
         total_time_seconds: res.total_seconds,

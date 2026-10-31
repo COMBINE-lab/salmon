@@ -662,7 +662,7 @@ pub(crate) fn daarem_loop(
                 rel_diff_partials,
             );
             let d = d_iter.max(d_step);
-            if d.is_finite() && d < opts.rel_diff_tol {
+            if d < opts.rel_diff_tol {
                 converged = true;
                 break;
             }
@@ -817,7 +817,7 @@ mod tests {
             accel: crate::EmAccel::Daarem,
             ..EmOptions::default()
         };
-        let (alphas, _, converged) = crate::run_em_counts(
+        let (alphas, _, converged, _) = crate::run_em_counts(
             &p,
             &p.counts,
             &opts,
