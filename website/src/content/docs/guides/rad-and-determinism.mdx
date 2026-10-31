@@ -129,8 +129,8 @@ is written under the output directory and removed on success unless you pass
 `--deterministic` is still accepted as a no-op, and `meta_info.json` records
 which path ran in `inference_path`.
 
-The pre-2.6 online one-pass path remains available for one release cycle behind
-`--online` (**deprecated**, removal planned for 2.7.0). Its results depend on
+The pre-2.6 online one-pass path remains available behind `--online`
+(**deprecated**, and to be removed in a future release). Its results depend on
 the thread count, and the online-only knobs — `--forgettingFactor`,
 `--numAuxModelSamples`, `--numPreAuxModelSamples` — warn and are ignored unless
 `--online` is passed.
