@@ -1190,15 +1190,16 @@ fn write_length_knob_rad(rad: &Path) {
 }
 
 #[test]
-/// `--noLengthCorrection` has to reach the RAD path: the divisor is the raw
-/// reference length, as it is in reads mode.
+/// `--noLengthCorrection` has to reach the RAD path, and it has to take length
+/// out of the model entirely: every transcript gets the same constant effective
+/// length, as in reads mode and salmon 1.x.
 ///
 /// Until #1140 the flag was accepted and dropped on the way to the requant, so
 /// `--deterministic --noLengthCorrection` silently corrected lengths anyway.
-/// That matters most to 3' tagged-end protocols, where a fragment does not
-/// sample a transcript's interior uniformly and the corrected length describes
-/// something the data never did.
-fn no_length_correction_uses_raw_lengths() {
+/// 2.0–2.8 then used the raw reference length, which still divides by length
+/// (#1243). Both matter most to 3' tagged-end protocols, whose read count does
+/// not grow with transcript length.
+fn no_length_correction_uses_constant_length() {
     let dir = tempfile::tempdir().unwrap();
     let rad = dir.path().join("m.rad");
     write_length_knob_rad(&rad);
@@ -1217,16 +1218,66 @@ fn no_length_correction_uses_raw_lengths() {
         corrected.lengths
     );
 
-    let out = dir.path().join("raw");
+    let out = dir.path().join("constant");
     std::fs::create_dir_all(&out).unwrap();
     let mut opts = opts_for(&out);
     opts.no_length_correction = true;
-    let raw = quantify_rad(&opts, &rad).unwrap();
-    assert_eq!(
-        raw.eff_lengths,
-        raw.lengths.iter().map(|&l| l as f64).collect::<Vec<_>>(),
-        "with --noLengthCorrection the effective length is the reference length"
+    let constant = quantify_rad(&opts, &rad).unwrap();
+    assert!(
+        constant
+            .eff_lengths
+            .iter()
+            .all(|&e| e == salmon_model::NO_LENGTH_CORRECTION_EFF_LEN),
+        "with --noLengthCorrection every effective length is the same constant: {:?}",
+        constant.eff_lengths
     );
+}
+
+#[test]
+/// #1243's second report: with `--noLengthCorrection`, length must not move
+/// reads between isoforms. A short and a long isoform share the long one's 3'
+/// end; 4000 fragments land in the shared region and 1000 only on the long
+/// isoform. Without a length term the long isoform explains all of it, and the
+/// short one gets nothing, as in salmon 1.10. Dividing by the raw length
+/// (2.0–2.8) gave the short isoform 3750 of the 5000.
+fn no_length_correction_keeps_length_out_of_the_split() {
+    let dir = tempfile::tempdir().unwrap();
+    let rad = dir.path().join("m.rad");
+    let names = ["short", "long"];
+    let lens = [1000u32, 5000];
+    let mut frags: Vec<Vec<(u32, Option<u16>, i32)>> = Vec::new();
+    for i in 0..4000 {
+        frags.push(vec![
+            (0u32, Some(150 + (i % 100) as u16), 0),
+            (1u32, Some(150 + (i % 100) as u16), 0),
+        ]);
+    }
+    for i in 0..1000 {
+        frags.push(vec![(1u32, Some(150 + (i % 100) as u16), 0)]);
+    }
+    write_rad(&rad, &names, &lens, RadProfile::Sketch, &frags, None);
+
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut opts = opts_for(&out);
+    opts.no_length_correction = true;
+    let res = quantify_rad(&opts, &rad).unwrap();
+    let total: f64 = res.counts.iter().sum();
+    assert!((total - 5000.0).abs() < 1e-6, "{:?}", res.counts);
+    assert!(
+        res.counts[0] < 1.0,
+        "the short isoform has no evidence of its own: {:?}",
+        res.counts
+    );
+    // A constant divisor makes TPM proportional to the counts.
+    for (t, c) in res.tpm.iter().zip(&res.counts) {
+        assert!(
+            (t / 1e6 - c / total).abs() < 1e-9,
+            "{:?} {:?}",
+            res.tpm,
+            res.counts
+        );
+    }
 }
 
 #[test]

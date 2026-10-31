@@ -681,7 +681,10 @@ struct QuantArgs {
     /// (Long reads) Oxford Nanopore model — not supported; use oarfish instead.
     #[arg(long = "ont")]
     ont: bool,
-    /// Disable effective-length correction (use raw reference length).
+    /// Disable length correction entirely: every transcript gets the same
+    /// constant effective length (100, as in salmon 1.x). For protocols where a
+    /// transcript's read count does not depend on its length, such as 3'
+    /// tagged-end (QuantSeq) libraries.
     #[arg(long = "noLengthCorrection")]
     no_length_correction: bool,
     /// Minimum alignment score as a fraction of the perfect score (default 0.65).

@@ -2075,12 +2075,12 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let cond_means = fld.conditional_means();
     let mut eff_lengths = vec![0f64; num_refs];
     for (tid, &len) in lengths.iter().enumerate() {
-        // --noLengthCorrection: the raw reference length is the divisor, as in
-        // reads mode. A 3' tagged-end library does not sample a transcript's
-        // interior uniformly, so the fragment-length-derived length describes
-        // something the data never did.
+        // --noLengthCorrection: one constant effective length for every
+        // transcript, as in reads mode and salmon 1.x (#1243). A 3' tagged-end
+        // library's read count does not grow with transcript length, so neither
+        // the fragment-length-derived length nor the raw length describes it.
         eff_lengths[tid] = if opts.no_length_correction {
-            len as f64
+            salmon_model::NO_LENGTH_CORRECTION_EFF_LEN
         } else {
             salmon_model::smoothed_effective_length(&cond_means, len as usize)
         };

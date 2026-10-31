@@ -228,14 +228,15 @@ pub struct AlignQuantOptions {
     /// `--dumpEqWeights`: the same file with each class's per-transcript
     /// combined weights, and without collapsing range-factorized sub-classes.
     pub dump_eq_weights: bool,
-    /// `--noLengthCorrection`: use the raw reference length as the effective
-    /// length, instead of the fragment-length-derived one.
+    /// `--noLengthCorrection`: give every transcript the same constant effective
+    /// length ([`salmon_model::NO_LENGTH_CORRECTION_EFF_LEN`], as salmon 1.x
+    /// did), instead of the fragment-length-derived one.
     ///
-    /// For protocols where a fragment does not sample a transcript's interior
-    /// uniformly (3' tagged-end libraries above all), the usual correction
-    /// describes something the data never did, and the raw length is the honest
-    /// divisor. Bias correction is disabled with it, for the same reason: its
-    /// whole job is to adjust an effective length this mode is not computing.
+    /// For protocols whose read count does not grow with transcript length (3'
+    /// tagged-end libraries above all), any length-dependent divisor, the raw
+    /// length included, puts back a dependence the data does not have (#1243).
+    /// Bias correction is disabled with it, for the same reason: its whole job
+    /// is to adjust an effective length this mode is not computing.
     pub no_length_correction: bool,
     /// `--noFragLengthDist`: drop the fragment-length term from a placement's
     /// weight, leaving score and compatibility to decide it.
@@ -988,6 +989,9 @@ struct PassCfg<'a> {
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
+    /// `--noLengthCorrection`: no start-position (length) term in the online
+    /// posterior
+    no_length_correction: bool,
     /// drop single-mate (orphan) placements in a paired library (`--discardOrphans`)
     discard_orphans: bool,
     /// fragments processed before the FLD aux model is applied (`--numPreAuxModelSamples`)
@@ -1165,6 +1169,7 @@ where
                         ignore_incompat: cfg.ignore_incompat,
                         incompat_prior: cfg.incompat_prior,
                         paired_lib: cfg.paired_lib,
+                        no_length_correction: cfg.no_length_correction,
                         discard_orphans: cfg.discard_orphans,
                         pre_burnin: cfg.pre_burnin,
                         range_factorization_bins: cfg.range_factorization_bins,
@@ -1377,6 +1382,9 @@ struct FragCtx<'a> {
     ignore_incompat: bool,
     incompat_prior: f64,
     paired_lib: bool,
+    /// `--noLengthCorrection`: no start-position (length) term in the online
+    /// posterior
+    no_length_correction: bool,
     /// drop single-mate (orphan) placements in a paired library (`--discardOrphans`)
     discard_orphans: bool,
     /// fragments processed before the FLD aux model is applied (`--numPreAuxModelSamples`)
@@ -1597,7 +1605,10 @@ fn process_fragment(
         let proper = idxs.len() >= 2 && flen > 0;
         let frag_start = recs[idxs[0]].pos;
         let frag_end = frag_start + (flen.max(1) as usize) - 1;
-        let start_pos = if proper && flen <= rl {
+        // A constant under --noLengthCorrection, as in salmon 1.x.
+        let start_pos = if ctx.no_length_correction {
+            0.0
+        } else if proper && flen <= rl {
             -(((rl - flen + 1) as f64).ln())
         } else {
             -((rl.max(1) as f64).ln())
@@ -2369,6 +2380,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             ignore_incompat,
             incompat_prior: opts.incompat_prior,
             paired_lib,
+            no_length_correction: opts.no_length_correction,
             discard_orphans: opts.discard_orphans,
             pre_burnin: opts.num_pre_aux_model_samples,
             range_factorization_bins: opts.range_factorization_bins,
@@ -2428,7 +2440,11 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let cond_means = fld.conditional_means();
     let mut eff_lengths = vec![0f64; num_refs];
     for (tid, len) in lengths.iter().enumerate() {
-        eff_lengths[tid] = salmon_model::smoothed_effective_length(&cond_means, *len as usize);
+        eff_lengths[tid] = if opts.no_length_correction {
+            salmon_model::NO_LENGTH_CORRECTION_EFF_LEN
+        } else {
+            salmon_model::smoothed_effective_length(&cond_means, *len as usize)
+        };
     }
 
     let mut collapsed = eq_builder.finish();
