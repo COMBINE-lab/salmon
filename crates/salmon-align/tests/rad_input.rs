@@ -1192,7 +1192,8 @@ fn write_length_knob_rad(rad: &Path) {
 #[test]
 /// `--noLengthCorrection` has to reach the RAD path, and it has to take length
 /// out of the model entirely: every transcript gets the same constant effective
-/// length, as in reads mode and salmon 1.x.
+/// length, as in reads mode and salmon 1.x. `--noEffectiveLengthCorrection`
+/// divides by the raw length instead.
 ///
 /// Until #1140 the flag was accepted and dropped on the way to the requant, so
 /// `--deterministic --noLengthCorrection` silently corrected lengths anyway.
@@ -1231,6 +1232,26 @@ fn no_length_correction_uses_constant_length() {
         "with --noLengthCorrection every effective length is the same constant: {:?}",
         constant.eff_lengths
     );
+
+    // --noEffectiveLengthCorrection: the raw reference length, as in C++ salmon.
+    let out = dir.path().join("raw");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut opts = opts_for(&out);
+    opts.no_effective_length_correction = true;
+    let raw = quantify_rad(&opts, &rad).unwrap();
+    assert_eq!(
+        raw.eff_lengths,
+        raw.lengths.iter().map(|&l| l as f64).collect::<Vec<_>>(),
+        "with --noEffectiveLengthCorrection the effective length is the reference length"
+    );
+
+    // Both flags: --noLengthCorrection wins, as in C++ salmon.
+    let out = dir.path().join("both");
+    std::fs::create_dir_all(&out).unwrap();
+    opts.output_dir = out;
+    opts.no_length_correction = true;
+    let both = quantify_rad(&opts, &rad).unwrap();
+    assert_eq!(both.eff_lengths, constant.eff_lengths);
 }
 
 #[test]

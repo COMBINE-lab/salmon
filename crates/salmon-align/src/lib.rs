@@ -238,6 +238,11 @@ pub struct AlignQuantOptions {
     /// Bias correction is disabled with it, for the same reason: its whole job
     /// is to adjust an effective length this mode is not computing.
     pub no_length_correction: bool,
+    /// `--noEffectiveLengthCorrection`: divide by the raw reference length
+    /// instead of the fragment-length-derived effective length (C++ salmon's
+    /// flag of the same name). `no_length_correction` wins if both are set.
+    /// Bias correction is disabled with it too.
+    pub no_effective_length_correction: bool,
     /// `--noFragLengthDist`: drop the fragment-length term from a placement's
     /// weight, leaving score and compatibility to decide it.
     pub no_frag_length_dist: bool,
@@ -306,6 +311,15 @@ pub struct AlignQuantOptions {
 }
 
 impl AlignQuantOptions {
+    /// The effective-length mode `--noLengthCorrection` and
+    /// `--noEffectiveLengthCorrection` select.
+    pub fn length_correction(&self) -> salmon_model::LengthCorrection {
+        salmon_model::LengthCorrection::from_flags(
+            self.no_length_correction,
+            self.no_effective_length_correction,
+        )
+    }
+
     pub fn new(bam: PathBuf, output_dir: PathBuf) -> Self {
         Self {
             bam,
@@ -339,6 +353,7 @@ impl AlignQuantOptions {
             dump_eq: false,
             dump_eq_weights: false,
             no_length_correction: false,
+            no_effective_length_correction: false,
             no_frag_length_dist: false,
             hard_filter: false,
             model_single_frag_prob: true,
@@ -2245,7 +2260,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     // The error model and bias models need the transcriptome (salmon requires `-t`).
     let use_error_model = opts.transcripts.is_some() && !opts.no_error_model;
-    let bias_on = opts.seq_bias || opts.gc_bias || opts.pos_bias;
+    let bias_on =
+        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && opts.length_correction().is_effective();
     anyhow::ensure!(
         !bias_on || opts.transcripts.is_some(),
         "--seqBias/--gcBias/--posBias in alignment mode require -t/--targets (the transcriptome FASTA)"
@@ -2438,13 +2454,10 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // ---- base effective lengths --------------------------------------------
     fld.cache();
     let cond_means = fld.conditional_means();
+    let length_correction = opts.length_correction();
     let mut eff_lengths = vec![0f64; num_refs];
     for (tid, len) in lengths.iter().enumerate() {
-        eff_lengths[tid] = if opts.no_length_correction {
-            salmon_model::NO_LENGTH_CORRECTION_EFF_LEN
-        } else {
-            salmon_model::smoothed_effective_length(&cond_means, *len as usize)
-        };
+        eff_lengths[tid] = length_correction.effective_length(&cond_means, *len as usize);
     }
 
     let mut collapsed = eq_builder.finish();

@@ -188,6 +188,12 @@ paired-end without orphans).
   input. On GEUVADIS (10M pairs, `--noLengthCorrection`), agreement with
   C++ salmon goes from Pearson 0.59 to 0.97 on read counts. Runs without the
   flag are unchanged.
+- **`--noEffectiveLengthCorrection`** (new, from C++ salmon) divides by each
+  transcript's raw length instead of its fragment-length-adjusted effective
+  length. It reproduces what `--noLengthCorrection` did in 2.0–2.8, for
+  anyone who relied on that. Like `--noLengthCorrection`, it is refused
+  together with bias correction, and `--noLengthCorrection` wins if both are
+  given.
 - **Security advisories in zstd.** RustSec published advisories against the
   zstd crates on 2026-10-16. salmon now uses zstd 0.14.3 / zstd-safe 8.2.0 /
   zstd-sys 2.1.2 throughout: for RAD chunk compression (libradicl 0.21.1),
