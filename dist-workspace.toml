@@ -26,3 +26,10 @@ container = { image = "quay.io/pypa/manylinux_2_28_x86_64", host = "x86_64-unkno
 [dist.github-custom-runners.aarch64-unknown-linux-gnu]
 runner = "ubuntu-24.04-arm"
 container = { image = "quay.io/pypa/manylinux_2_28_aarch64", host = "aarch64-unknown-linux-musl" }
+
+# dist 0.32 builds aarch64-apple-darwin on macos-14 by default; that image is
+# retired on 2026-11-02 (actions/runner-images#13518). Pin the Apple Silicon
+# build to macos-15. The binary's deployment target is unchanged (rustc's
+# default for aarch64-apple-darwin, macOS 11).
+[dist.github-custom-runners.aarch64-apple-darwin]
+runner = "macos-15"
