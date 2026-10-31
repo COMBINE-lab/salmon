@@ -9,6 +9,7 @@ authors.workspace = true
 description = "Index construction and loading for the salmon Rust port (wraps cf1-rs + piscem-rs)."
 
 [dependencies]
+memmap2 = { workspace = true }
 salmon-core = { workspace = true }
 cf1-rs = { workspace = true }
 piscem-rs = { workspace = true }

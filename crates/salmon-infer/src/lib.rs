@@ -535,7 +535,12 @@ pub(crate) fn run_em_counts(
     // connected component (see `components`). The accelerators extrapolate
     // over whole vectors between M-steps, so they keep the global kernels.
     if opts.accel == EmAccel::None && opts.max_iter > 0 {
-        let cplan = components::ComponentPlan::new(p, counts, parallel);
+        let stop = if opts.use_vbem {
+            opts.vb_stop
+        } else {
+            opts.em_stop
+        };
+        let cplan = components::ComponentPlan::new(p, counts, parallel, stop);
         if cplan.num_components() > 0 {
             let set = components::Settings {
                 vb: opts.use_vbem,
@@ -545,11 +550,7 @@ pub(crate) fn run_em_counts(
                 max_iter: opts.max_iter,
                 parallel,
                 guard_zero_et: true,
-                stop: if opts.use_vbem {
-                    opts.vb_stop
-                } else {
-                    opts.em_stop
-                },
+                stop,
             };
             let (alphas, iters, converged, summary) =
                 components::run(&cplan, &alphas, &prior_alphas, &set);
