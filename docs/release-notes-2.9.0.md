@@ -1,8 +1,8 @@
 # salmon 2.9.0
 
-A performance release. `--sketch` quantification is up to **2.5× faster**,
+A performance release. `--sketch` quantification is up to **2.7× faster**,
 selective alignment up to **1.6× faster** on isoform-rich references, and
-`salmon index` up to **4.9× faster** with less memory, and indexes are now
+`salmon index` up to **4.2× faster** with less memory, and indexes are now
 byte-for-byte reproducible. Two things change for users:
 
 - **Indexes must be rebuilt.** The index format moves to v3 (a new sshash
@@ -17,24 +17,25 @@ byte-for-byte reproducible. Two things change for users:
 ## Speed
 
 Full quantification (`salmon quant --sketch`, wall time in seconds, median
-of 3 interleaved runs, 2 at one thread; one machine, AMD EPYC 9575F), against
+of 3 interleaved runs, 2 at one thread; one machine, AMD EPYC 9575F, all
+runs pinned to the same socket), against
 salmon 2.8.0 (built from its release tag) and kallistors 0.6.0 on the same
 reads and reference:
 
 | workload | threads | 2.8.0 | 2.9.0 | kallistors 0.6.0 |
 |---|---|---|---|---|
-| muscle (SRR13638690, 4.4M × 2×170 bp, trimmed as in kallistors' benchmark), GENCODE v50 | 1 | 105.9 | 43.1 | 42.1 |
-| | 8 | 14.6 | 6.1 | 9.2 |
-| | 16 | 8.9 | 3.7 | 6.7 |
-| GEUVADIS (ERR188044, first 10M × 2×75 bp), Ensembl GRCh38 cDNA | 1 | 82.4 | 53.3 | 58.9 |
-| | 8 | 10.9 | 7.7 | 11.3 |
-| | 16 | 6.3 | 4.4 | 7.3 |
+| muscle (SRR13638690, 4.4M × 2×170 bp, trimmed as in kallistors' benchmark), GENCODE v50 | 1 | 105.6 | 38.6 | 40.5 |
+| | 8 | 14.5 | 5.5 | 8.9 |
+| | 16 | 8.8 | 3.4 | 6.2 |
+| GEUVADIS (ERR188044, first 10M × 2×75 bp), Ensembl GRCh38 cDNA | 1 | 81.9 | 47.9 | 59.1 |
+| | 8 | 10.8 | 6.9 | 11.2 |
+| | 16 | 6.4 | 4.0 | 7.1 |
 
 Peak memory is unchanged from 2.8.0 (0.3–1.4 GB on these runs; kallistors
-used 1.0–3.7 GB). Selective alignment at 8 threads: muscle 34.2 → 21.2 s,
-GEUVADIS 29.2 → 25.0 s. Building the index at 16 threads: GENCODE v50
-64.0 → 13.2 s (kallistors 13.8 s), Ensembl cDNA 17.6 → 4.6 s (kallistors
-6.0 s).
+used 1.0–3.7 GB). Selective alignment at 8 threads: muscle 33.8 → 20.5 s,
+GEUVADIS 29.3 → 24.2 s. Building the index at 16 threads: GENCODE v50
+50.4 → 12.0 s (kallistors 11.8 s), Ensembl cDNA 17.1 → 4.5 s (kallistors
+5.1 s).
 
 Where the time went:
 
@@ -52,17 +53,25 @@ Where the time went:
 - **Mapping (`--sketch`).** piscem-rs 0.12 stops tracking a transcript as
   soon as it misses a hit (it could no longer be accepted), instead of keeping
   a hash-map entry for every occurrence of every k-mer hit; the accepted
-  mappings are the same, and mapping is 12–20% faster. Reading the intermediate mapping file back
-  and building equivalence classes is also cheaper.
+  mappings are the same, and mapping is 12–20% faster. piscem-rs 0.12.1 and
+  sshash-lib 0.8.1 then remove mispredicted branches and redundant
+  Elias–Fano selects from the k-mer lookup and contig-table reads, worth
+  another 7–9% at every thread count (found by profiling on Apple
+  Silicon). Reading the intermediate mapping file back and building
+  equivalence classes is also cheaper.
+- **Single-threaded gzip input** is decoded with
+  [sirocco](https://crates.io/crates/sirocco), about 45% faster than the
+  zlib-rs decoder it replaces (multi-threaded runs already decode in
+  parallel and are unchanged).
 - **Selective alignment.** Grouping candidate anchors by transcript is now
   linear, and repeated hits that extend to an already-seen anchor are skipped:
-  on the muscle run, full quantification at 8 threads goes from 34.2 s to
-  21.2 s (Ensembl/GEUVADIS: 29.2 s → 25.0 s).
+  on the muscle run, full quantification at 8 threads goes from 33.8 s to
+  20.5 s (Ensembl/GEUVADIS: 29.3 s → 24.2 s).
 - **Index construction.** cf1-rs batches and prefetches its MPHF lookups, uses
   a faster MPHF for in-memory builds, and skips work repeated across the
   isoforms of a gene; piscem-rs and salmon parse and hash their inputs in one
-  parallel pass. GENCODE v50 at 16 threads: 64.0 s → 13.2 s; Ensembl cDNA:
-  17.6 s → 4.6 s.
+  parallel pass. GENCODE v50 at 16 threads: 50.4 s → 12.0 s; Ensembl cDNA:
+  17.1 s → 4.5 s.
 
 ## What changes in the results
 
@@ -159,12 +168,17 @@ paired-end without orphans).
 - **Reproducible builds.** Contigs are numbered by their first appearance in
   the reference, so building the same index twice gives identical files.
 - **Memory.** Peak RSS of `salmon index` is lower than 2.8.0's: GENCODE v50
-  6.5 → 5.0 GB, Ensembl cDNA 3.1 → 2.6 GB (16 threads). cf1-rs now uses
+  6.5 → 4.9 GB, Ensembl cDNA 3.1 → 2.6 GB (16 threads). cf1-rs now uses
   sux's PHastR minimal perfect hash for both in-memory and external-memory
   builds; genome-scale (decoy) cDBG construction is about 1.5–1.9× faster.
 
 ## Fixes
 
+- **Security advisories in zstd.** RustSec published advisories against the
+  zstd crates on 2026-10-16. salmon now uses zstd 0.14.3 / zstd-safe 8.2.0 /
+  zstd-sys 2.1.2 for RAD chunk compression (via libradicl 0.21.1) and
+  elsewhere, and its dependencies no longer pull in sux's unused zstd
+  support. See Known issues for what remains.
 - **FASTA reads.** Uncompressed FASTA read files were refused in reads mode
   as truncated FASTQ (the truncation check assumed four-line records). They
   are accepted again, and give the same results as the equivalent FASTQ.
@@ -207,6 +221,19 @@ paired-end without orphans).
   transcript is now scored with the overhang clipped, as the option
   promises; default scoring (no soft-clipping) is unchanged.
 
+## Known issues
+
+- `cargo audit` still reports RUSTSEC-2026-0391 (zstd 0.13.3) and
+  RUSTSEC-2026-0398 / -0403 (zstd-safe 7.3.0). They come from needletail 0.7.3,
+  which cf1-rs uses to read compressed reference FASTA, and from niffler
+  3.0.0, which salmon uses to read compressed FASTQ; needletail's liblzma 0.3
+  keeps niffler from moving to 3.0.2. Only decompressing `.zst` input reaches
+  the affected code. The `Seekable` advisory is in an API nothing here calls,
+  and the reused-context one does not apply to the one-decoder-per-file use
+  here; the one that does apply (-0403) lets a malformed legacy-format `.zst`
+  file expose uninitialized memory in the decoded output. The fix (needletail
+  moving to zstd 0.14 and liblzma 0.4) is being proposed upstream; a later
+  release will pick it up.
 
 ## Acknowledgements
 
@@ -228,10 +255,12 @@ available, and to Benjamin Demaille for the #1231 and #1239 fixes.
 
 ## Dependencies
 
-piscem-rs 0.12, sshash-lib 0.8 (sux 0.15 / epserde 0.13), cf1-rs
-0.6, bramble-rs 0.2, noodles 0.119
+piscem-rs 0.12.1, sshash-lib 0.8.1 (sux 0.15 / epserde 0.13), cf1-rs
+0.6, bramble-rs 0.2, libradicl 0.21.1 (with its faster lz4 paths; RAD files
+are unchanged), noodles 0.119
 (noodles-bam 0.98, noodles-sam 0.93, noodles-bgzf 0.52), paraseq-temp
-0.6.2-pre.1, plus semver-compatible updates. Each noodles crate now appears
+0.6.2-pre.1, zstd 0.14.3, and new: sirocco 0.3 (single-threaded gzip
+decoding), plus semver-compatible updates. Each noodles crate now appears
 once in the dependency graph.
 
 ## For library users
