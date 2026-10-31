@@ -229,6 +229,16 @@ impl ComponentPlan {
                 cls_start.push(labels.len());
             }
         }
+        // Every label is a component-local transcript id: the fast plain-EM
+        // step indexes with it unchecked (see `CompView::push_em_fast`).
+        for c in 0..ncomp {
+            let size = (comp_txp[c + 1] - comp_txp[c]) as u32;
+            let (i0, i1) = (cls_start[comp_cls[c]], cls_start[comp_cls[c + 1]]);
+            assert!(
+                labels[i0..i1].iter().all(|&t| t < size),
+                "a class label lies outside its component"
+            );
+        }
         let mut plan = Self {
             txps,
             comp_txp,
@@ -578,6 +588,16 @@ impl CompView<'_> {
         if VB {
             fill_et(s.et, s.alpha, s.prior);
         }
+        if !VB {
+            // The checked kernel below skips a NaN product; with none (the
+            // usual case) both kernels add the same terms in the same order.
+            // A NaN product always leaves a NaN in `next`, so seeing none
+            // means the fast result is exactly the checked one.
+            self.push_em_fast(s.alpha, s.next);
+            if !s.next.iter().any(|x| x.is_nan()) {
+                return criterion(s.alpha, s.next, cutoff);
+            }
+        }
         let basis: &[f64] = if VB { s.et } else { s.alpha };
         let next = &mut *s.next;
         next.copy_from_slice(self.singleton);
@@ -602,14 +622,54 @@ impl CompView<'_> {
                 }
             }
         }
-        let mut max_d = f64::NEG_INFINITY;
-        let mut l1 = 0.0f64;
-        for (&a_in, &a_out) in s.alpha.iter().zip(next.iter()) {
-            max_d = fold_d(max_d, a_in, a_out, cutoff);
-            l1 += (a_out - a_in).abs();
-        }
-        (max_d, l1)
+        criterion(s.alpha, next, cutoff)
     }
+
+    /// The plain-EM push step without the per-product NaN test, and with
+    /// unchecked indexing: every label is below the component's size (checked
+    /// when the plan is built), and `alpha` and `next` are the component's.
+    #[allow(unsafe_code)]
+    #[inline]
+    fn push_em_fast(&self, alpha: &[f64], next: &mut [f64]) {
+        let n = self.singleton.len();
+        assert!(alpha.len() == n && next.len() == n);
+        next.copy_from_slice(self.singleton);
+        let mut lo = 0usize;
+        for (k, &count) in self.counts.iter().enumerate() {
+            let hi = self.cls_start[k + 1] - self.base;
+            let tids = &self.labels[lo..hi];
+            let ws = &self.weights[lo..hi];
+            lo = hi;
+            let mut denom = 0.0;
+            for (&t, &w) in tids.iter().zip(ws) {
+                // SAFETY: t < n (plan invariant) and alpha.len() == n
+                denom += unsafe { *alpha.get_unchecked(t as usize) } * w;
+            }
+            if denom > MIN_EQ_CLASS_WEIGHT {
+                let inv = count / denom;
+                for (&t, &w) in tids.iter().zip(ws) {
+                    // SAFETY: t < n (plan invariant) and alpha.len() == next.len() == n
+                    unsafe {
+                        let v = *alpha.get_unchecked(t as usize) * w;
+                        *next.get_unchecked_mut(t as usize) += v * inv;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The convergence criterion over a component's transcripts and the L1 size
+/// of its step from `alpha` to `next`.
+#[inline]
+fn criterion(alpha: &[f64], next: &[f64], cutoff: f64) -> (f64, f64) {
+    let mut max_d = f64::NEG_INFINITY;
+    let mut l1 = 0.0f64;
+    for (&a_in, &a_out) in alpha.iter().zip(next.iter()) {
+        max_d = fold_d(max_d, a_in, a_out, cutoff);
+        l1 += (a_out - a_in).abs();
+    }
+    (max_d, l1)
 }
 
 /// Split `v` into consecutive mutable pieces at `bounds` (`bounds[0] == 0`).
