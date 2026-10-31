@@ -176,9 +176,10 @@ paired-end without orphans).
 
 - **Security advisories in zstd.** RustSec published advisories against the
   zstd crates on 2026-10-16. salmon now uses zstd 0.14.3 / zstd-safe 8.2.0 /
-  zstd-sys 2.1.2 for RAD chunk compression (via libradicl 0.21.1) and
-  elsewhere, and its dependencies no longer pull in sux's unused zstd
-  support. See Known issues for what remains.
+  zstd-sys 2.1.2 throughout: for RAD chunk compression (libradicl 0.21.1),
+  for compressed reference FASTA (needletail 0.7.4) and for compressed reads
+  (niffler 3.0.2), and its dependencies no longer pull in sux's unused zstd
+  support. `cargo audit` reports no vulnerabilities.
 - **FASTA reads.** Uncompressed FASTA read files were refused in reads mode
   as truncated FASTQ (the truncation check assumed four-line records). They
   are accepted again, and give the same results as the equivalent FASTQ.
@@ -221,20 +222,6 @@ paired-end without orphans).
   transcript is now scored with the overhang clipped, as the option
   promises; default scoring (no soft-clipping) is unchanged.
 
-## Known issues
-
-- `cargo audit` still reports RUSTSEC-2026-0391 (zstd 0.13.3) and
-  RUSTSEC-2026-0398 / -0403 (zstd-safe 7.3.0). They come from needletail 0.7.3,
-  which cf1-rs uses to read compressed reference FASTA, and from niffler
-  3.0.0, which salmon uses to read compressed FASTQ; needletail's liblzma 0.3
-  keeps niffler from moving to 3.0.2. Only decompressing `.zst` input reaches
-  the affected code. The `Seekable` advisory is in an API nothing here calls,
-  and the reused-context one does not apply to the one-decoder-per-file use
-  here; the one that does apply (-0403) lets a malformed legacy-format `.zst`
-  file expose uninitialized memory in the decoded output. The fix (needletail
-  moving to zstd 0.14 and liblzma 0.4) is being proposed upstream; a later
-  release will pick it up.
-
 ## Acknowledgements
 
 This release was prompted by, and borrows from,
@@ -259,7 +246,7 @@ piscem-rs 0.12.1, sshash-lib 0.8.1 (sux 0.15 / epserde 0.13), cf1-rs
 0.6, bramble-rs 0.2, libradicl 0.21.1 (with its faster lz4 paths; RAD files
 are unchanged), noodles 0.119
 (noodles-bam 0.98, noodles-sam 0.93, noodles-bgzf 0.52), paraseq-temp
-0.6.2-pre.1, zstd 0.14.3, and new: sirocco 0.3 (single-threaded gzip
+0.6.2-pre.1, needletail 0.7.4, niffler 3.0.2, zstd 0.14.3, and new: sirocco 0.3 (single-threaded gzip
 decoding), plus semver-compatible updates. Each noodles crate now appears
 once in the dependency graph.
 
