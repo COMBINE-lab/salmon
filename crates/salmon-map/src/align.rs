@@ -152,17 +152,15 @@ pub fn align_chain(
     let win_start = diag_origin.max(0);
     let reflen_i = ref_seq.len() as i32;
 
-    // Build the oriented query into a reused thread-local buffer — `align_chain`
-    // runs once per candidate (millions of times), so a fresh
-    // `read.to_vec()`/`revcomp` per call was pure allocator traffic.
-    ALIGN_QUERY.with(|qbuf| {
-        let mut query = qbuf.borrow_mut();
-        if chain.is_fw {
-            query.clear();
-            query.extend_from_slice(read);
+    // `align_chain` runs once per candidate (millions of times), usually many
+    // times per read, so a read's reverse complement is kept between calls.
+    ALIGN_QUERY.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        let query: &[u8] = if chain.is_fw {
+            read
         } else {
-            revcomp_into(read, &mut query);
-        }
+            memo.revcomp_of(read)
+        };
         let qlen = query.len() as i32;
 
         // Invariant boundary: every MEM must lie within the read and the reference.
@@ -193,10 +191,10 @@ pub fn align_chain(
                 return None;
             }
             let rwin = &ref_seq[win_start as usize..win_end as usize];
-            ksw2_align_score(&query, rwin, cfg)
+            ksw2_align_score(query, rwin, cfg)
         } else {
             // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
-            anchored_align_score(&query, ref_seq, &chain.mems, cfg)
+            anchored_align_score(query, ref_seq, &chain.mems, cfg)
         };
 
         let valid = score > min_accepted_score(query.len(), cfg);
@@ -218,10 +216,39 @@ thread_local! {
     /// the DNA5-encoded query/target buffers between small gap/flank DPs.
     static KSW_SCRATCH: std::cell::RefCell<KswScratch> =
         std::cell::RefCell::new(KswScratch::default());
-    /// Per-thread query buffer for [`align_chain`], reused across the millions of
-    /// per-candidate alignments instead of allocating a fresh `Vec` each call.
-    static ALIGN_QUERY: std::cell::RefCell<Vec<u8>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    /// Per-thread reverse complements for [`align_chain`].
+    static ALIGN_QUERY: std::cell::RefCell<RevcompMemo> =
+        std::cell::RefCell::new(RevcompMemo::default());
+}
+
+/// The reverse complements of the last two reads seen: a pair's candidates
+/// alternate between its mates, and comparing a read is far cheaper than
+/// complementing it.
+#[derive(Default)]
+struct RevcompMemo {
+    /// `(read, its reverse complement)`
+    slots: [(Vec<u8>, Vec<u8>); 2],
+    /// the slot to replace next
+    next: usize,
+}
+
+impl RevcompMemo {
+    #[inline]
+    fn revcomp_of(&mut self, read: &[u8]) -> &[u8] {
+        let i = match self.slots.iter().position(|(src, _)| src == read) {
+            Some(i) => i,
+            None => {
+                let i = self.next;
+                self.next = 1 - i;
+                let (src, rc) = &mut self.slots[i];
+                src.clear();
+                src.extend_from_slice(read);
+                revcomp_into(read, rc);
+                i
+            }
+        };
+        &self.slots[i].1
+    }
 }
 
 struct KswScratch {
@@ -604,10 +631,84 @@ fn cached_gap_score(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
     })
 }
 
+/// What [`flank_shortcut`] established about a flank.
+enum FlankShortcut<'a> {
+    /// the DP's score, without running it
+    Score(i32),
+    /// the part of the reference the DP can use
+    Target(&'a [u8]),
+}
+
+/// Settle a read flank from its ungapped alignment where the scoring allows.
+///
+/// The flank must be fully consumed, so the ungapped path scores `s0`, the sum
+/// over its bases. A path with a gap consuming `d` extra reference bases scores
+/// at most `ma·q − go − ge·d`: every read base scores at most `ma`, and it pays
+/// for at least one gap. So if `s0` reaches `ma·q − go − ge` no gap can beat it
+/// and `s0` is the DP's answer, and otherwise only `d < (ma·q − s0 − go) / ge`
+/// can, which bounds the reference the DP needs far below the indel margin it
+/// is handed. Both hold exactly, so this cannot change a score.
+///
+/// Soft-clipping also reads the DP's `mte` and `max`, which a shorter target
+/// would change, and a reference shorter than the flank has no ungapped path.
+#[inline]
+fn flank_shortcut<'a>(
+    qf: &[u8],
+    tf: &'a [u8],
+    cfg: &AlignConfig,
+    anchor_right: bool,
+) -> FlankShortcut<'a> {
+    let (ma, mp) = (cfg.match_score as i32, cfg.mismatch_pen as i32);
+    let (go, ge) = (cfg.gap_open_pen as i32, cfg.gap_extend_pen as i32);
+    if cfg.softclip
+        || cfg.softclip_overhangs
+        || tf.len() < qf.len()
+        || ma < 0
+        || mp < -ma
+        || go <= 0
+        || ge <= 0
+    {
+        return FlankShortcut::Target(tf);
+    }
+    // An ambiguous base on the diagonal goes to the DP: its SIMD kernels score
+    // those by their own rule, not from the matrix. Elsewhere it is no matter,
+    // since no such score exceeds `ma`.
+    let (q_diag, t_diag) = if anchor_right {
+        (qf, &tf[tf.len() - qf.len()..])
+    } else {
+        (qf, &tf[..qf.len()])
+    };
+    let (mut s0, mut ambiguous) = (0i32, false);
+    for (&a, &b) in q_diag.iter().zip(t_diag) {
+        let (a, b) = (DNA5_LUT[a as usize], DNA5_LUT[b as usize]);
+        ambiguous |= a == 4 || b == 4;
+        s0 += if a == b { ma } else { -mp };
+    }
+    if ambiguous {
+        return FlankShortcut::Target(tf);
+    }
+    let room = ma * qf.len() as i32 - s0 - go;
+    if room <= ge {
+        return FlankShortcut::Score(s0);
+    }
+    let keep = (qf.len() + (room / ge) as usize).min(tf.len());
+    FlankShortcut::Target(if anchor_right {
+        &tf[tf.len() - keep..]
+    } else {
+        &tf[..keep]
+    })
+}
+
 fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool) -> i32 {
     if qf.is_empty() {
         return 0;
     }
+    // Most flanks are settled without a DP, and the rest need far less of the
+    // reference than they are given.
+    let tf = match flank_shortcut(qf, tf, cfg, anchor_right) {
+        FlankShortcut::Score(s) => return s,
+        FlankShortcut::Target(t) => t,
+    };
     // The anchor side selects a different DP, so it is part of the key.
     let kind = if anchor_right {
         GapKind::FlankRightAnchored
@@ -784,6 +885,105 @@ pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shortcuts must agree with the DP they replace, on the flanks they
+    /// fire on and the trimmed targets they hand it, over ambiguous bases, both
+    /// anchors and several scoring schemes.
+    #[test]
+    fn flank_shortcut_matches_the_dp() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut rnd = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let (mut settled, mut trimmed) = (0, 0);
+        for &(ma, mp, go, ge) in &[
+            (2i8, 4i8, 6i8, 2i8),
+            (1, 3, 5, 1),
+            (2, 1, 1, 1),
+            (3, 2, 2, 3),
+        ] {
+            let cfg = AlignConfig {
+                match_score: ma,
+                mismatch_pen: mp,
+                gap_open_pen: go,
+                gap_extend_pen: ge,
+                ..AlignConfig::default()
+            };
+            for _ in 0..60_000 {
+                let qlen = 1 + rnd(40) as usize;
+                let tlen = qlen + rnd(cfg.indel_margin as u64 + 1) as usize;
+                let alphabet: &[u8] = if rnd(4) == 0 { b"ACGTN" } else { b"ACGT" };
+                let mut t: Vec<u8> = (0..tlen)
+                    .map(|_| alphabet[rnd(alphabet.len() as u64) as usize])
+                    .collect();
+                let anchor_right = rnd(2) == 0;
+                // A read flank derived from the reference by a few edits, as real
+                // ones are; sometimes unrelated, so large deficits occur too.
+                let start = if anchor_right { tlen - qlen } else { 0 };
+                let mut q = t[start..start + qlen].to_vec();
+                match rnd(5) {
+                    0 => q
+                        .iter_mut()
+                        .for_each(|b| *b = alphabet[rnd(alphabet.len() as u64) as usize]),
+                    _ => {
+                        for _ in 0..rnd(4) {
+                            let at = rnd(q.len() as u64) as usize;
+                            q[at] = alphabet[rnd(alphabet.len() as u64) as usize];
+                        }
+                    }
+                }
+                if rnd(3) == 0 {
+                    // An indel, on either axis.
+                    let at = rnd(q.len() as u64) as usize;
+                    if rnd(2) == 0 && q.len() > 1 {
+                        q.remove(at);
+                    } else {
+                        t.remove(start + at.min(t.len() - start - 1));
+                    }
+                    if t.len() < q.len() {
+                        continue;
+                    }
+                }
+                let dp = ksw2_flank_extend(&q, &t, &cfg, anchor_right);
+                match flank_shortcut(&q, &t, &cfg, anchor_right) {
+                    FlankShortcut::Score(s) => {
+                        settled += 1;
+                        assert_eq!(s, dp, "settled {q:?} {t:?} {anchor_right} {cfg:?}");
+                    }
+                    FlankShortcut::Target(k) => {
+                        trimmed += usize::from(k.len() < t.len());
+                        let got = ksw2_flank_extend(&q, k, &cfg, anchor_right);
+                        assert_eq!(got, dp, "trimmed {q:?} {t:?} {anchor_right} {cfg:?}");
+                    }
+                }
+            }
+        }
+        assert!(settled > 10_000 && trimmed > 10_000, "{settled} {trimmed}");
+    }
+
+    /// Soft-clipping reads more of the DP than the shortcuts can stand in for.
+    #[test]
+    fn flank_shortcut_stays_out_of_soft_clipping() {
+        let (q, t) = (b"ACGTACGT", b"ACGTACGTACGTACGT");
+        for cfg in [
+            AlignConfig {
+                softclip: true,
+                ..AlignConfig::default()
+            },
+            AlignConfig {
+                softclip_overhangs: true,
+                ..AlignConfig::default()
+            },
+        ] {
+            match flank_shortcut(q, t, &cfg, false) {
+                FlankShortcut::Target(k) => assert_eq!(k, t),
+                FlankShortcut::Score(_) => panic!("settled under soft-clipping"),
+            }
+        }
+    }
     use crate::mem::Mem;
 
     #[test]

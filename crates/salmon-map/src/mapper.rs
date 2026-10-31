@@ -317,8 +317,19 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
         raw.is_empty(),
         "scratch.raw was not drained by the last call"
     );
+    // A concordant pair to a transcript discards every orphan below, so once one
+    // is known to exist there is no point aligning them: on a fragment with many
+    // candidate transcripts this is a large share of all alignment work. Recovery
+    // is the exception, since it can turn an orphan into a pair that stays.
+    let skip_orphans = !cfg.recover_orphans
+        && joints.iter().any(|j| {
+            matches!(j.status, MateStatus::PairedEndPaired)
+                && !refs.is_decoy(j.tid)
+                && joint_pair_is_valid(j, r1, r2, refs, cfg)
+        });
     for j in joints {
         match j.status {
+            MateStatus::PairedEndLeft | MateStatus::PairedEndRight if skip_orphans => {}
             MateStatus::PairedEndPaired => {
                 let l = j.left.as_ref().unwrap();
                 let r = j.right.as_ref().unwrap();
@@ -452,6 +463,24 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
         dovetail,
         alns_below_threshold: below + below_final,
     });
+}
+
+/// Whether both mates of a concordant joint align above the threshold.
+fn joint_pair_is_valid<R: RefProvider>(
+    j: &crate::pair::JointMapping,
+    r1: &[u8],
+    r2: &[u8],
+    refs: &R,
+    cfg: &MapConfig,
+) -> bool {
+    let (Some(l), Some(r)) = (j.left.as_ref(), j.right.as_ref()) else {
+        return false;
+    };
+    let refseq = refs.ref_seq(j.tid);
+    let valid = |read, c: &MappingCandidate| {
+        align_chain(read, refseq, &c.chain, &cfg.align).is_some_and(|a| a.valid)
+    };
+    valid(r1, l) && valid(r2, r)
 }
 
 #[inline]
