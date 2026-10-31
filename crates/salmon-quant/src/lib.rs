@@ -154,9 +154,14 @@ pub struct QuantOptions {
     pub num_gibbs_samples: u32,
     /// Gibbs thinning factor (`--thinningFactor`, salmon default 16)
     pub thinning_factor: u32,
-    /// disable effective-length correction; use the raw reference length
+    /// disable length correction: every transcript gets the same constant
+    /// effective length, [`salmon_model::NO_LENGTH_CORRECTION_EFF_LEN`]
     /// (`--noLengthCorrection`)
     pub no_length_correction: bool,
+    /// divide by the raw reference length instead of the fragment-length-derived
+    /// effective length (`--noEffectiveLengthCorrection`); `no_length_correction`
+    /// wins if both are set
+    pub no_effective_length_correction: bool,
     /// model the fragment-length probability of orphan / single-end mappings via
     /// the bounded-CMF "ambiguous" weight (salmon default `true`); `false` =
     /// `--noSingleFragProb`.
@@ -222,6 +227,15 @@ pub struct QuantOptions {
 }
 
 impl QuantOptions {
+    /// The effective-length mode `--noLengthCorrection` and
+    /// `--noEffectiveLengthCorrection` select.
+    pub fn length_correction(&self) -> salmon_model::LengthCorrection {
+        salmon_model::LengthCorrection::from_flags(
+            self.no_length_correction,
+            self.no_effective_length_correction,
+        )
+    }
+
     /// Options with salmon-like defaults for the given index and output dir.
     pub fn new(index_dir: PathBuf, output_dir: PathBuf) -> Self {
         Self {
@@ -258,6 +272,7 @@ impl QuantOptions {
             num_gibbs_samples: 0,
             thinning_factor: 16,
             no_length_correction: false,
+            no_effective_length_correction: false,
             model_single_frag_prob: true,
             no_frag_length_dist: false,
             fld_mean: 250.0,
@@ -576,7 +591,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // rough end-of-mapping EM can bake `initial_abundances` to seed the requant's
     // bias model — letting the requant be a single fused RAD read.
     let want_rough_abund = discrete_fld.is_some()
-        && !opts.no_length_correction
+        && opts.length_correction().is_effective()
         && (opts.seq_bias || opts.gc_bias || opts.pos_bias);
     // Orientation-tagged naive eq-classes for the rough seed EM (filtered by the
     // resolved library type at end of mapping; see `processor::record_discrete`).
@@ -602,7 +617,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // the full GcRank bitvector over the reference concatenation and
     // per-fragment model updates on the mapping hot path, all discarded
     // (#1140, computed-but-unused).
-    let observe_bias = !opts.skip_quant && !opts.no_length_correction;
+    let observe_bias = !opts.skip_quant && opts.length_correction().is_effective();
 
     // Shared observed sequence-bias models (merged per-thread) for `--seqBias`.
     let seqbias_obs = (opts.seq_bias && observe_bias)
@@ -722,6 +737,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             paired_lib: opts.is_paired(),
             model_single_frag_prob: opts.model_single_frag_prob,
             no_frag_length_dist: opts.no_frag_length_dist,
+            no_length_correction: opts.no_length_correction,
             // Assemble eq-classes only if something consumes them: the EM (unless
             // `--skipQuant`) or an eq-class dump. A map-only `--writeRad` run skips
             // assembly but still trains the FLD (to bake) — see `processor::record`.
@@ -946,13 +962,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     fld.cache();
     let log_pmf = fld.log_pmf();
     let cond_means = fld.conditional_means();
+    let length_correction = opts.length_correction();
     let mut eff_lengths = vec![0f64; num_refs];
     for tid in 0..num_refs {
-        eff_lengths[tid] = if opts.no_length_correction {
-            salmon.ref_len(tid) as f64
-        } else {
-            salmon_model::smoothed_effective_length(&cond_means, salmon.ref_len(tid) as usize)
-        };
+        eff_lengths[tid] =
+            length_correction.effective_length(&cond_means, salmon.ref_len(tid) as usize);
     }
 
     // ---- inference ----------------------------------------------------------
@@ -976,7 +990,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         )
         .context("writing eq_classes.txt.gz")?;
     }
-    let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
+    let bias_on =
+        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && length_correction.is_effective();
     // salmon runs a *single* offline EM: after a short burn-in (`targetIt = 10`
     // iterations) it corrects effective lengths in place using that early
     // abundance estimate to weight the expected bias models, then continues the

@@ -511,6 +511,66 @@ pub fn ambig_frag_log_prob(cmf: &[f64], fwd: bool, pos: i32, read_len: i32, txp_
     cmf_at(cmf, max_frag_len) - ref_cm
 }
 
+/// How quantification turns a transcript's length into the effective length the
+/// EM divides its abundance by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LengthCorrection {
+    /// salmon's default: the fragment-length-derived
+    /// [`smoothed_effective_length`].
+    #[default]
+    Effective,
+    /// `--noEffectiveLengthCorrection`: the raw reference length. Estimates
+    /// still scale with length, but without the fragment-length adjustment.
+    Raw,
+    /// `--noLengthCorrection`: the same constant,
+    /// [`NO_LENGTH_CORRECTION_EFF_LEN`], for every transcript, which takes
+    /// length out of the model.
+    None,
+}
+
+impl LengthCorrection {
+    /// The mode for the two flags. `--noLengthCorrection` wins when both are
+    /// given, as in C++ salmon.
+    pub fn from_flags(no_length_correction: bool, no_effective_length_correction: bool) -> Self {
+        if no_length_correction {
+            Self::None
+        } else if no_effective_length_correction {
+            Self::Raw
+        } else {
+            Self::Effective
+        }
+    }
+
+    /// Whether this is the default, fragment-length-derived correction. Bias
+    /// correction works by adjusting that effective length, so it applies only
+    /// here.
+    pub fn is_effective(self) -> bool {
+        self == Self::Effective
+    }
+
+    /// The effective length of a transcript of `ref_len` bases. `cond_means`
+    /// is [`FragmentLengthDistribution::conditional_means`].
+    pub fn effective_length(self, cond_means: &[f64], ref_len: usize) -> f64 {
+        match self {
+            Self::Effective => smoothed_effective_length(cond_means, ref_len),
+            Self::Raw => ref_len as f64,
+            Self::None => NO_LENGTH_CORRECTION_EFF_LEN,
+        }
+    }
+}
+
+/// The effective length of every transcript under `--noLengthCorrection`.
+///
+/// salmon 1.x set every effective length to this constant: in the EM, in
+/// `quant.sf`'s `EffectiveLength` column and in the TPM. A constant divisor
+/// takes transcript length out of the model entirely, which is what 3'
+/// tagged-end protocols (QuantSeq and similar) need, since their read count
+/// does not grow with transcript length. The raw reference length would put it
+/// back (#1243). The value itself only matters where an effective length is
+/// used as a magnitude rather than a ratio, such as the EM's warm start and
+/// `--perNucleotidePrior`, so it is kept at salmon's 100.
+pub const NO_LENGTH_CORRECTION_EFF_LEN: f64 = 100.0;
+
 /// salmon's base effective length (`computeSmoothedEffectiveLengths`):
 /// `effLen = refLen − E[L | L ≤ refLen]`, clamped back to `refLen` if it would
 /// fall below 1. `cond_means` is [`FragmentLengthDistribution::conditional_means`].

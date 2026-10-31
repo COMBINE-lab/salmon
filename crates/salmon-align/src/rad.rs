@@ -1841,7 +1841,8 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // for four user-facing modes (reads, `-a`, `--rad`, genome projection), so
     // telling a `-a` user to fix `--rad` would send them after a flag they never
     // typed. Name what the user did ask for (the bias flags) and what to add.
-    let bias_on = (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
+    let bias_on =
+        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && opts.length_correction().is_effective();
     if bias_on && opts.ref_seqs.is_none() && opts.transcripts.is_none() {
         let mut requested = Vec::new();
         if opts.seq_bias {
@@ -2073,17 +2074,15 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     // Base effective lengths from the fixed FLD (used by the rough seed EM below
     // and by the final inference); bias correction mutates them in place later.
     let cond_means = fld.conditional_means();
+    // --noLengthCorrection gives every transcript one constant effective length,
+    // as in reads mode and salmon 1.x (#1243): a 3' tagged-end library's read
+    // count does not grow with transcript length, so neither the
+    // fragment-length-derived length nor the raw length describes it.
+    // --noEffectiveLengthCorrection divides by the raw length.
+    let length_correction = opts.length_correction();
     let mut eff_lengths = vec![0f64; num_refs];
     for (tid, &len) in lengths.iter().enumerate() {
-        // --noLengthCorrection: the raw reference length is the divisor, as in
-        // reads mode. A 3' tagged-end library does not sample a transcript's
-        // interior uniformly, so the fragment-length-derived length describes
-        // something the data never did.
-        eff_lengths[tid] = if opts.no_length_correction {
-            len as f64
-        } else {
-            salmon_model::smoothed_effective_length(&cond_means, len as usize)
-        };
+        eff_lengths[tid] = length_correction.effective_length(&cond_means, len as usize);
     }
     // Rough seed abundances from the naive eq-classes gathered during the prepare
     // read (piscem/unbaked + bias) → the up-front abundances that let pass-2 fuse.

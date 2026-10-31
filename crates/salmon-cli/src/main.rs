@@ -681,9 +681,18 @@ struct QuantArgs {
     /// (Long reads) Oxford Nanopore model — not supported; use oarfish instead.
     #[arg(long = "ont")]
     ont: bool,
-    /// Disable effective-length correction (use raw reference length).
+    /// Disable length correction entirely: every transcript gets the same
+    /// constant effective length (100, as in salmon 1.x). For protocols where a
+    /// transcript's read count does not depend on its length, such as 3'
+    /// tagged-end (QuantSeq) libraries.
     #[arg(long = "noLengthCorrection")]
     no_length_correction: bool,
+    /// Divide by each transcript's raw length instead of its effective length
+    /// (length minus the expected fragment length), as C++ salmon's flag of the
+    /// same name does. This was what --noLengthCorrection did in salmon
+    /// 2.0–2.8. --noLengthCorrection takes precedence if both are given.
+    #[arg(long = "noEffectiveLengthCorrection")]
+    no_effective_length_correction: bool,
     /// Minimum alignment score as a fraction of the perfect score (default 0.65).
     /// Option-typed so passing it under `--sketch` — which computes no alignment
     /// scores — can warn instead of being silently inert (#1140).
@@ -1292,6 +1301,7 @@ fn requant_options(
     // reads mode, so `--deterministic` accepted them and quantified as though
     // they had not been passed.
     q.no_length_correction = map_opts.no_length_correction;
+    q.no_effective_length_correction = map_opts.no_effective_length_correction;
     q.no_frag_length_dist = map_opts.no_frag_length_dist;
     q
 }
@@ -2182,12 +2192,21 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         );
     }
 
-    // `--noLengthCorrection` and bias correction cannot both apply: every
-    // driver computes `bias_on = (seq||gc||pos) && !no_length_correction`, so
-    // the bias request was silently discarded — and `meta_info.json` went on
-    // reporting `gc_bias_correct: true` for a run that did no such thing. The
-    // conflict is fully known at invocation, so say so instead (#1140).
-    if args.no_length_correction && (args.seq_bias || args.gc_bias || args.pos_bias) {
+    // `--noLengthCorrection` / `--noEffectiveLengthCorrection` and bias
+    // correction cannot both apply: every driver computes `bias_on` only under
+    // the default length correction, so the bias request was silently
+    // discarded — and `meta_info.json` went on reporting `gc_bias_correct: true`
+    // for a run that did no such thing. The conflict is fully known at
+    // invocation, so say so instead (#1140).
+    let length_flag = if args.no_length_correction {
+        Some("--noLengthCorrection")
+    } else if args.no_effective_length_correction {
+        Some("--noEffectiveLengthCorrection")
+    } else {
+        None
+    };
+    if let (Some(length_flag), true) = (length_flag, args.seq_bias || args.gc_bias || args.pos_bias)
+    {
         let asked: Vec<&str> = [
             ("--seqBias", args.seq_bias),
             ("--gcBias", args.gc_bias),
@@ -2197,9 +2216,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         .filter_map(|&(n, on)| on.then_some(n))
         .collect();
         anyhow::bail!(
-            "--noLengthCorrection cannot be combined with {}: bias correction works by \
-             adjusting effective lengths, which is exactly what --noLengthCorrection turns \
-             off. Drop whichever you did not mean.",
+            "{length_flag} cannot be combined with {}: bias correction works by adjusting \
+             effective lengths, which is exactly what {length_flag} turns off. Drop \
+             whichever you did not mean.",
             asked.join(" / ")
         );
     }
@@ -2427,6 +2446,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.dump_eq_weights = args.dump_eq_weights;
         opts.dump_bias_models = args.dump_bias_models;
         opts.no_length_correction = args.no_length_correction;
+        opts.no_effective_length_correction = args.no_effective_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
         opts.num_aux_model_samples = args.num_aux_model_samples.unwrap_or(5_000_000);
@@ -2516,14 +2536,15 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             );
         }
 
-        // The online alignment path never supported these two (C++ did); the
-        // deterministic default honours them, so under `--online` they warn
-        // rather than silently doing nothing (#1140: no parity work for a path
-        // scheduled for removal).
-        if args.no_length_correction || args.no_frag_length_dist {
+        // The online alignment path never supported --noFragLengthDist (C++
+        // did); the deterministic default honours it, so under `--online` it
+        // warns rather than silently doing nothing (#1140: no parity work for a
+        // path scheduled for removal). The length-correction flags only set the
+        // effective lengths, which this path shares, so they apply here too.
+        if args.no_frag_length_dist {
             tracing::warn!(
-                "--noLengthCorrection/--noFragLengthDist are not supported on the deprecated \
-                 online alignment path: ignored. The default (deterministic) mode honours them."
+                "--noFragLengthDist is not supported on the deprecated online alignment \
+                 path: ignored. The default (deterministic) mode honours it."
             );
         }
         // The online alignment path writes no RAD, so the flags that place or
@@ -2715,6 +2736,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.no_length_correction = args.no_length_correction;
+        opts.no_effective_length_correction = args.no_effective_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
@@ -2950,6 +2972,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.num_gibbs_samples = args.num_gibbs_samples;
     opts.thinning_factor = args.thinning_factor.unwrap_or(16);
     opts.no_length_correction = args.no_length_correction;
+    opts.no_effective_length_correction = args.no_effective_length_correction;
     opts.model_single_frag_prob = !args.no_single_frag_prob;
     opts.no_frag_length_dist = args.no_frag_length_dist;
     opts.map_config.align.min_score_fraction = args.min_score_fraction.unwrap_or(0.65);
@@ -3555,6 +3578,7 @@ mod tests {
         map_opts.dump_bias_models = true;
         map_opts.model_single_frag_prob = false;
         map_opts.no_length_correction = true;
+        map_opts.no_effective_length_correction = true;
         map_opts.no_frag_length_dist = true;
 
         let q = requant_options(
@@ -3593,6 +3617,7 @@ mod tests {
         assert!(q.dump_bias_models);
         assert!(!q.model_single_frag_prob);
         assert!(q.no_length_correction);
+        assert!(q.no_effective_length_correction);
         assert!(q.no_frag_length_dist);
     }
 
@@ -3614,6 +3639,10 @@ mod tests {
         assert_eq!(q.dump_eq, defaults.dump_eq);
         assert_eq!(q.dump_eq_weights, defaults.dump_eq_weights);
         assert_eq!(q.no_length_correction, defaults.no_length_correction);
+        assert_eq!(
+            q.no_effective_length_correction,
+            defaults.no_effective_length_correction
+        );
         assert_eq!(q.no_frag_length_dist, defaults.no_frag_length_dist);
     }
 

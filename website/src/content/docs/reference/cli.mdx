@@ -128,7 +128,8 @@ under a misleading name.
 | `--seqBias` | Sequence-specific bias correction. |
 | `--gcBias` | Fragment-GC bias correction. |
 | `--posBias` | Positional bias correction. |
-| `--noLengthCorrection` | Use raw reference length (no effective-length correction). |
+| `--noLengthCorrection` | Disable length correction entirely: every transcript gets the same effective length (100). For 3' tagged-end protocols such as QuantSeq, where read count does not depend on transcript length. |
+| `--noEffectiveLengthCorrection` | Divide by each transcript's raw length instead of its fragment-length-adjusted effective length. |
 
 ### RAD I/O & determinism
 
