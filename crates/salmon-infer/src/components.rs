@@ -61,7 +61,14 @@ use crate::packed::{PackedEqClasses, DIGAMMA_MIN, MIN_EQ_CLASS_WEIGHT};
 use crate::EmStop;
 
 /// The component-ordered eq-classes.
-pub(crate) struct ComponentPlan {
+pub(crate) struct ComponentPlan<'p> {
+    /// the classes this was laid out from
+    src: &'p PackedEqClasses,
+    /// layout class → source class (kept under [`EmStop::Projected`], whose
+    /// dead-transcript checks read a component's classes back from `src`)
+    cls_orig: Vec<u32>,
+    /// source transcript id → dense id (likewise)
+    dense_of: Vec<u32>,
     /// dense id → original transcript id
     txps: Vec<u32>,
     /// component boundaries in dense ids, `ncomp + 1` long
@@ -103,26 +110,36 @@ struct Pull {
 /// (when the run is parallel).
 const PULL_MIN_INCIDENCES: usize = 1 << 16;
 
-impl ComponentPlan {
+impl<'p> ComponentPlan<'p> {
     /// Lay out `p` (with per-class `counts`) by component. `parallel` asks for
     /// the transposed incidences that let a large component be stepped in
     /// parallel; it changes scheduling only.
-    pub(crate) fn new(p: &PackedEqClasses, counts: &[u64], parallel: bool, stop: EmStop) -> Self {
+    pub(crate) fn new(
+        p: &'p PackedEqClasses,
+        counts: &[u64],
+        parallel: bool,
+        stop: EmStop,
+    ) -> Self {
         let pull_min = if parallel && rayon::current_num_threads() > 1 {
             PULL_MIN_INCIDENCES
         } else {
             usize::MAX
         };
         match stop {
-            EmStop::Global => Self::with_pull_min(p, counts, pull_min),
+            EmStop::Global => Self::with_pull_min(p, counts, pull_min, false),
             EmStop::Projected => Self {
                 lazy_pull_min: pull_min,
-                ..Self::with_pull_min(p, counts, usize::MAX)
+                ..Self::with_pull_min(p, counts, usize::MAX, true)
             },
         }
     }
 
-    fn with_pull_min(p: &PackedEqClasses, counts: &[u64], pull_min: usize) -> Self {
+    fn with_pull_min(
+        p: &'p PackedEqClasses,
+        counts: &[u64],
+        pull_min: usize,
+        keep_source_map: bool,
+    ) -> Self {
         let n = p.num_txps;
         let nclasses = p.num_classes();
         // Union-find over transcripts, joining each multi class's members.
@@ -255,7 +272,19 @@ impl ComponentPlan {
                 "a class label lies outside its component"
             );
         }
+        let (cls_orig, dense_of) = if keep_source_map {
+            let cls_orig = order
+                .iter()
+                .map(|&ci| u32::try_from(ci).expect("more than 2^32 eq-classes"))
+                .collect();
+            (cls_orig, dense_of)
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let mut plan = Self {
+            src: p,
+            cls_orig,
+            dense_of,
             txps,
             comp_txp,
             comp_cls,
@@ -287,17 +316,53 @@ impl ComponentPlan {
     }
 
     fn view(&self, c: usize) -> CompView<'_> {
+        let (i0, i1) = (
+            self.cls_start[self.comp_cls[c]],
+            self.cls_start[self.comp_cls[c + 1]],
+        );
+        self.view_in(c, &self.labels[i0..i1], &self.weights[i0..i1])
+    }
+
+    /// Component `c` over its own `labels`/`weights` (its slice of the plan's).
+    fn view_in<'a>(&'a self, c: usize, labels: &'a [u32], weights: &'a [f64]) -> CompView<'a> {
         let (c0, c1) = (self.comp_cls[c], self.comp_cls[c + 1]);
         let (t0, t1) = (self.comp_txp[c], self.comp_txp[c + 1]);
-        let i0 = self.cls_start[c0];
         CompView {
             cls_start: &self.cls_start[c0..=c1],
-            base: i0,
-            labels: &self.labels[i0..self.cls_start[c1]],
-            weights: &self.weights[i0..self.cls_start[c1]],
+            base: self.cls_start[c0],
+            labels,
+            weights,
             counts: &self.counts[c0..c1],
             singleton: &self.singleton[t0..t1],
         }
+    }
+
+    /// Component `c`'s classes in layout order, read from the source classes
+    /// with component-local labels: `f(class within the component, labels,
+    /// weights)`. The same labels and weights, in the same order, as the
+    /// component's own incidences when it is whole.
+    fn source_classes(&self, c: usize, mut f: impl FnMut(usize, &[u32], &[f64])) {
+        let t0 = self.comp_txp[c] as u32;
+        let c0 = self.comp_cls[c];
+        let mut local = Vec::new();
+        for j in c0..self.comp_cls[c + 1] {
+            let (tids, ws) = self.src.class(self.cls_orig[j] as usize);
+            local.clear();
+            local.extend(tids.iter().map(|&t| self.dense_of[t as usize] - t0));
+            f(j - c0, &local, ws);
+        }
+    }
+
+    /// Lay component `c` out whole again in `labels`/`weights` (its slice of
+    /// the plan's), after a [`Reduced`] wrote over them.
+    fn restore(&self, c: usize, labels: &mut [u32], weights: &mut [f64]) {
+        let mut n = 0;
+        self.source_classes(c, |_, tids, ws| {
+            labels[n..n + tids.len()].copy_from_slice(tids);
+            weights[n..n + ws.len()].copy_from_slice(ws);
+            n += tids.len();
+        });
+        debug_assert_eq!(n, labels.len());
     }
 }
 
@@ -916,7 +981,7 @@ fn max_of(a: f64, b: f64) -> f64 {
 /// all transcripts under [`EmStop::Global`], over every component under
 /// [`EmStop::Projected`]).
 pub(crate) fn run(
-    plan: &ComponentPlan,
+    plan: &mut ComponentPlan,
     init: &[f64],
     prior_full: &[f64],
     set: &Settings,
@@ -1097,12 +1162,19 @@ const FREEZE_CUTOFF_MIN: f64 = 1e-15;
 /// A component without its dead transcripts: the same classes in the same
 /// order, each without its dead members, with the live transcripts renumbered.
 /// It steps through the same code as the whole component.
+///
+/// Its incidences are written over the front of the component's own slice of
+/// the plan rather than into a copy, so taking transcripts out never costs
+/// memory: a bootstrap runs a replicate per thread, each with its own plan,
+/// and a copy of every replicate's largest component added up. The dead
+/// members are read back from the source classes when they are needed
+/// ([`settle_dead`]), and [`ComponentPlan::restore`] puts the whole component
+/// back at the end.
 struct Reduced {
     /// reduced id → component-local id
     live: Vec<u32>,
+    /// class boundaries in the front of the component's incidences
     cls_start: Vec<usize>,
-    labels: Vec<u32>,
-    weights: Vec<f64>,
     singleton: Vec<f64>,
     prior: Vec<f64>,
     alpha: Vec<f64>,
@@ -1113,12 +1185,16 @@ struct Reduced {
 }
 
 impl Reduced {
+    /// Lay out component `c` without its `dead` transcripts in the front of
+    /// `labels`/`weights` (the component's slice of the plan).
+    #[allow(clippy::too_many_arguments)]
     fn build(
-        v: &CompView,
+        plan: &ComponentPlan,
+        c: usize,
+        labels: &mut [u32],
+        weights: &mut [f64],
         dead: &[bool],
-        alpha: &[f64],
-        et: &[f64],
-        prior: &[f64],
+        s: &CompState,
         pull_min: usize,
     ) -> Self {
         let live: Vec<u32> = (0..dead.len() as u32)
@@ -1128,66 +1204,78 @@ impl Reduced {
         for (i, &t) in live.iter().enumerate() {
             reduced_id[t as usize] = i as u32;
         }
-        let mut cls_start = Vec::with_capacity(v.counts.len() + 1);
+        let ncls = plan.comp_cls[c + 1] - plan.comp_cls[c];
+        let mut cls_start = Vec::with_capacity(ncls + 1);
         cls_start.push(0);
-        let nlive = v.labels.iter().filter(|&&t| !dead[t as usize]).count();
-        let mut labels = Vec::with_capacity(nlive);
-        let mut weights = Vec::with_capacity(nlive);
-        for k in 0..v.counts.len() {
-            let (lo, hi) = (v.cls_start[k] - v.base, v.cls_start[k + 1] - v.base);
-            for (&t, &w) in v.labels[lo..hi].iter().zip(&v.weights[lo..hi]) {
+        let mut n = 0;
+        plan.source_classes(c, |_, tids, ws| {
+            for (&t, &w) in tids.iter().zip(ws) {
                 if !dead[t as usize] {
-                    labels.push(reduced_id[t as usize]);
-                    weights.push(w);
+                    labels[n] = reduced_id[t as usize];
+                    weights[n] = w;
+                    n += 1;
                 }
             }
-            cls_start.push(labels.len());
-        }
+            cls_start.push(n);
+        });
         // The fast step indexes with these unchecked (see `CompView::push_fast`),
         // as the plan's own labels are checked when it is built.
         assert!(
-            labels.iter().all(|&t| (t as usize) < live.len()),
+            labels[..n].iter().all(|&t| (t as usize) < live.len()),
             "a class label lies outside its reduced component"
         );
+        let singleton = &plan.singleton[plan.comp_txp[c]..plan.comp_txp[c + 1]];
         let pick = |x: &[f64]| live.iter().map(|&t| x[t as usize]).collect::<Vec<f64>>();
         let mut r = Self {
             cls_start,
-            labels,
-            weights,
-            singleton: pick(v.singleton),
-            prior: pick(prior),
-            alpha: pick(alpha),
+            singleton: pick(singleton),
+            prior: pick(s.prior),
+            alpha: pick(s.alpha),
             next: vec![0.0; live.len()],
-            et: pick(et),
+            et: pick(s.et),
             scale: Vec::new(),
             pull: None,
             live,
         };
-        if r.labels.len() >= pull_min {
-            r.pull = Some(r.view(v.counts).transpose());
-            r.scale = vec![0.0; v.counts.len()];
+        if n >= pull_min {
+            let counts = &plan.counts[plan.comp_cls[c]..plan.comp_cls[c + 1]];
+            r.pull = Some(r.view(counts, labels, weights).transpose());
+            r.scale = vec![0.0; ncls];
         }
         r
     }
 
-    fn view<'a>(&'a self, counts: &'a [f64]) -> CompView<'a> {
+    fn view<'a>(
+        &'a self,
+        counts: &'a [f64],
+        labels: &'a [u32],
+        weights: &'a [f64],
+    ) -> CompView<'a> {
+        let n = *self.cls_start.last().unwrap();
         CompView {
             cls_start: &self.cls_start,
             base: 0,
-            labels: &self.labels,
-            weights: &self.weights,
+            labels: &labels[..n],
+            weights: &weights[..n],
             counts,
             singleton: &self.singleton,
         }
     }
 
     /// One M-step, leaving the new iterate in `alpha`.
-    fn step(&mut self, counts: &[f64], set: &Settings) -> (f64, f64) {
+    fn step(
+        &mut self,
+        counts: &[f64],
+        labels: &[u32],
+        weights: &[f64],
+        set: &Settings,
+    ) -> (f64, f64) {
+        let n = *self.cls_start.last().unwrap();
         let v = CompView {
             cls_start: &self.cls_start,
             base: 0,
-            labels: &self.labels,
-            weights: &self.weights,
+            labels: &labels[..n],
+            weights: &weights[..n],
             counts,
             singleton: &self.singleton,
         };
@@ -1206,14 +1294,18 @@ impl Reduced {
     }
 }
 
-/// Bring `s.alpha` and `s.et` up to date for the whole component: the live
-/// transcripts' from `reduced`, the dead ones' `α` from this iteration's class
-/// scales (a dead transcript's expectation is constant, so its M-step needs
-/// nothing else). Returns which transcripts are dead now: those whose `α` no
-/// longer moves `α + prior` and whose every term is negligible in its class,
-/// with every class keeping a live member.
+/// Bring `s.alpha` and `s.et` up to date for the whole of component `c`: the
+/// live transcripts' from `reduced`, the dead ones' `α` from this iteration's
+/// class scales (a dead transcript's expectation is constant, so its M-step
+/// needs nothing else). Returns which transcripts are dead now: those whose
+/// `α` no longer moves `α + prior` and whose every term is negligible in its
+/// class, with every class keeping a live member.
+///
+/// The classes are read from the source, since a reduced component's own
+/// incidences no longer hold its dead members.
 fn settle_dead(
-    v: &CompView,
+    plan: &ComponentPlan,
+    c: usize,
     s: &mut CompState,
     reduced: Option<&Reduced>,
     dead: &[bool],
@@ -1224,15 +1316,14 @@ fn settle_dead(
             s.et[t as usize] = r.et[i];
         }
     }
-    let nt = v.singleton.len();
+    let counts = &plan.counts[plan.comp_cls[c]..plan.comp_cls[c + 1]];
+    let nt = plan.comp_txp[c + 1] - plan.comp_txp[c];
     let mut acc = vec![0.0f64; nt];
     let mut negligible = vec![true; nt];
-    for k in 0..v.counts.len() {
-        let (lo, hi) = (v.cls_start[k] - v.base, v.cls_start[k + 1] - v.base);
-        let (tids, ws) = (&v.labels[lo..hi], &v.weights[lo..hi]);
+    plan.source_classes(c, |k, tids, ws| {
         let denom = class_denom::<true, false>(tids, ws, s.et);
         let live_denom = denom > MIN_EQ_CLASS_WEIGHT;
-        let inv = v.counts[k] / denom;
+        let inv = counts[k] / denom;
         for (&t, &w) in tids.iter().zip(ws) {
             let t = t as usize;
             let term = s.et[t] * w;
@@ -1243,7 +1334,7 @@ fn settle_dead(
                 acc[t] += term * inv;
             }
         }
-    }
+    });
     let mut now_dead = vec![false; nt];
     for t in 0..nt {
         if dead[t] {
@@ -1253,15 +1344,13 @@ fn settle_dead(
     }
     // A class is never left without a live member. Its largest term cannot be
     // negligible next to their sum, so this only catches all-zero weights.
-    for k in 0..v.counts.len() {
-        let (lo, hi) = (v.cls_start[k] - v.base, v.cls_start[k + 1] - v.base);
-        let tids = &v.labels[lo..hi];
+    plan.source_classes(c, |_, tids, _| {
         if tids.iter().all(|&t| now_dead[t as usize]) {
             for &t in tids {
                 now_dead[t as usize] = false;
             }
         }
-    }
+    });
     now_dead
 }
 
@@ -1295,22 +1384,46 @@ struct CompEnd {
 /// A component's iterate depends only on its own data and its stopping test
 /// only on its own step sizes (each summed in a data-defined order), so
 /// scheduling is free and the result is independent of the thread count.
+///
+/// The plan's incidences are lent out per component for the run (a reduced
+/// component overwrites its own) and are whole again when this returns.
 fn run_projected(
-    plan: &ComponentPlan,
+    plan: &mut ComponentPlan,
     states: &mut [(usize, CompState)],
     set: &Settings,
 ) -> Vec<CompEnd> {
-    let one = |(c, s): &mut (usize, CompState)| -> CompEnd {
-        let view = plan.view(*c);
-        let mass = view.reads();
-        let incidences = view.labels.len();
+    let mut labels = std::mem::take(&mut plan.labels);
+    let mut weights = std::mem::take(&mut plan.weights);
+    let ends = run_projected_lent(plan, states, set, &mut labels, &mut weights);
+    plan.labels = labels;
+    plan.weights = weights;
+    ends
+}
+
+/// [`run_projected`] with the plan's incidences lent out.
+fn run_projected_lent(
+    plan: &ComponentPlan,
+    states: &mut [(usize, CompState)],
+    set: &Settings,
+    all_labels: &mut [u32],
+    all_weights: &mut [f64],
+) -> Vec<CompEnd> {
+    let inc_bounds: Vec<usize> = plan.comp_cls.iter().map(|&k| plan.cls_start[k]).collect();
+    let one = |((c, s), (labels, weights)): (&mut (usize, CompState), (&mut [u32], &mut [f64]))| -> CompEnd {
+        let c = *c;
+        let counts = &plan.counts[plan.comp_cls[c]..plan.comp_cls[c + 1]];
+        let ntxp = plan.comp_txp[c + 1] - plan.comp_txp[c];
+        let (mass, incidences) = {
+            let view = plan.view_in(c, labels, weights);
+            (view.reads(), view.labels.len())
+        };
         let mut ratios = [f64::INFINITY; RATE_WINDOW];
         let mut prev_l1 = f64::NAN;
         let mut met = false;
         let mut it = 0;
         // The whole component's transpose, until the component shrinks.
-        let mut pull =
-            (plan.pull[*c].is_none() && incidences >= plan.lazy_pull_min).then(|| view.transpose());
+        let mut pull = (plan.pull[c].is_none() && incidences >= plan.lazy_pull_min)
+            .then(|| plan.view_in(c, labels, weights).transpose());
         // Taking transcripts out is only sound under VBEM with a prior that
         // keeps every expectation positive, and when the criterion cannot see
         // them.
@@ -1319,17 +1432,17 @@ fn run_projected(
             && set.cutoff >= FREEZE_CUTOFF_MIN
             && incidences >= FREEZE_MIN_INCIDENCES;
         let mut reduced: Option<Reduced> = None;
-        let mut dead = vec![false; if can_freeze { view.singleton.len() } else { 0 }];
+        let mut dead = vec![false; if can_freeze { ntxp } else { 0 }];
         let mut ndead = 0usize;
         let mut next_check = set.min_iter;
         let mut check_gap = FREEZE_CHECK;
         let end = 'iterate: {
             while it < set.max_iter {
                 let (d, l1) = match reduced.as_mut() {
-                    Some(r) => r.step(view.counts, set),
+                    Some(r) => r.step(counts, labels, weights, set),
                     None => step_view_l1(
-                        plan.view(*c),
-                        pull.as_ref().or(plan.pull[*c].as_ref()),
+                        plan.view_in(c, labels, weights),
+                        pull.as_ref().or(plan.pull[c].as_ref()),
                         s,
                         set,
                     ),
@@ -1349,7 +1462,7 @@ fn run_projected(
                 // No transcript above the cutoff: nothing the criterion measures.
                 if d == f64::NEG_INFINITY {
                     break 'iterate CompEnd {
-                        comp: *c,
+                        comp: c,
                         iters: it,
                         met: true,
                         stopped: true,
@@ -1360,7 +1473,7 @@ fn run_projected(
                     let rho = ratios.iter().copied().fold(0.0f64, f64::max).min(RATE_CAP);
                     if l1 / (1.0 - rho) < PROJECTED_EPS * mass {
                         break 'iterate CompEnd {
-                            comp: *c,
+                            comp: c,
                             iters: it,
                             met,
                             stopped: true,
@@ -1372,11 +1485,11 @@ fn run_projected(
                     // transcript comes back to life only slowly, if at all.
                     next_check = it + check_gap;
                     check_gap = (2 * check_gap).min(FREEZE_CHECK_MAX);
-                    let now_dead = settle_dead(&view, s, reduced.as_ref(), &dead);
+                    let now_dead = settle_dead(plan, c, s, reduced.as_ref(), &dead);
                     let n = now_dead.iter().filter(|&&x| x).count();
                     let revived = dead.iter().zip(&now_dead).any(|(&a, &b)| a && !b);
                     // Rebuilding costs a few passes; wait for it to pay.
-                    if revived || (n > ndead && n >= ndead + (view.singleton.len() - ndead) / 16) {
+                    if revived || (n > ndead && n >= ndead + (ntxp - ndead) / 16) {
                         dead = now_dead;
                         ndead = n;
                         // Freed first: `settle_dead` left everything in `s`, and
@@ -1385,36 +1498,42 @@ fn run_projected(
                         pull = None;
                         s.scale = Vec::new();
                         reduced = Some(Reduced::build(
-                            &view,
+                            plan,
+                            c,
+                            labels,
+                            weights,
                             &dead,
-                            s.alpha,
-                            s.et,
-                            s.prior,
+                            s,
                             plan.lazy_pull_min,
                         ));
                     }
                 }
             }
             CompEnd {
-                comp: *c,
+                comp: c,
                 iters: it,
                 met,
                 stopped: false,
             }
         };
         if reduced.is_some() {
-            settle_dead(&view, s, reduced.as_ref(), &dead);
+            settle_dead(plan, c, s, reduced.as_ref(), &dead);
+            plan.restore(c, labels, weights);
         }
         end
     };
+    let lent = split_at_bounds(all_labels, &inc_bounds)
+        .into_iter()
+        .zip(split_at_bounds(all_weights, &inc_bounds));
+    let jobs: Vec<_> = states.iter_mut().zip(lent).collect();
     if set.parallel {
         // Largest first, so the long tail of small components fills in behind
         // the big ones. Scheduling only.
-        let mut order: Vec<&mut (usize, CompState)> = states.iter_mut().collect();
-        order.sort_by_key(|(c, _)| std::cmp::Reverse(plan.comp_incidences(*c)));
+        let mut order = jobs;
+        order.sort_by_key(|((c, _), _)| std::cmp::Reverse(plan.comp_incidences(*c)));
         order.into_par_iter().with_max_len(1).map(&one).collect()
     } else {
-        states.iter_mut().map(one).collect()
+        jobs.into_iter().map(one).collect()
     }
 }
 
@@ -1529,7 +1648,7 @@ mod tests {
     fn dead_transcripts_do_not_move_the_result() {
         let p = dying_fixture();
         let (init, prior) = start(&p);
-        let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
+        let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
         assert_eq!(plan.num_components(), 1);
         assert!(plan.comp_incidences(0) >= FREEZE_MIN_INCIDENCES);
         let set = Settings {
@@ -1537,11 +1656,23 @@ mod tests {
             ..settings(true, false)
         };
         // `run` drops the guard for this prior, which is what allows freezing.
-        let (fast, fast_iters, ..) = run(&plan, &init, &prior, &set);
+        let (fast, fast_iters, ..) = run(&mut plan, &init, &prior, &set);
+        // The freeze lays the component out over its own incidences; `run`
+        // must leave it whole.
+        let fresh = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
+        assert_eq!(plan.labels, fresh.labels);
+        assert_eq!(
+            plan.weights.iter().map(|w| w.to_bits()).collect::<Vec<_>>(),
+            fresh
+                .weights
+                .iter()
+                .map(|w| w.to_bits())
+                .collect::<Vec<_>>()
+        );
         let whole = {
             let mut buffers = Buffers::new(&plan, &init, &prior, true);
             let mut states = buffers.states(&plan);
-            let ends = run_projected(&plan, &mut states, &set);
+            let ends = run_projected(&mut plan, &mut states, &set);
             let mut out = vec![0.0; init.len()];
             write_out(&plan, &states, &mut out);
             (out, ends[0].iters)
@@ -1564,16 +1695,14 @@ mod tests {
     /// comes back to life once its term stops being negligible.
     #[test]
     fn settle_dead_recovers_and_revives() {
-        let (labels, weights) = (vec![0u32, 1], vec![1.0, 2.0]);
-        let (cls_start, counts, singleton) = (vec![0usize, 2], vec![10.0], vec![0.0, 0.0]);
-        let v = CompView {
-            cls_start: &cls_start,
-            base: 0,
-            labels: &labels,
-            weights: &weights,
-            counts: &counts,
-            singleton: &singleton,
-        };
+        let b = EquivalenceClassBuilder::new();
+        b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 2.0], 10);
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[100.0, 100.0]);
+        let p = PackedEqClasses::from_collapsed(&eq, 2);
+        let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
+        let (_, ws) = p.class(0);
+        let (w0, w1) = (ws[0], ws[1]);
         let prior = vec![0.01, 0.01];
         let (mut alpha, mut next) = (vec![10.0, 0.0], vec![0.0, 0.0]);
         let mut et = vec![1.0, 1e-44];
@@ -1585,13 +1714,13 @@ mod tests {
             changed: true,
             scale: Vec::new(),
         };
-        let dead = settle_dead(&v, &mut s, None, &[false, true]);
+        let dead = settle_dead(&plan, 0, &mut s, None, &[false, true]);
         assert_eq!(dead, [false, true]);
-        let inv = 10.0 / (1.0 + 2e-44);
-        assert_eq!(s.alpha[1], 1e-44 * 2.0 * inv);
+        let inv = 10.0 / (w0 + 1e-44 * w1);
+        assert_eq!(s.alpha[1], 1e-44 * w1 * inv);
         // The live transcript fades until the dead one's term matters.
         s.et[0] = 1e-30;
-        let dead = settle_dead(&v, &mut s, None, &[false, true]);
+        let dead = settle_dead(&plan, 0, &mut s, None, &[false, true]);
         assert_eq!(dead, [false, false]);
     }
 
@@ -1631,11 +1760,11 @@ mod tests {
     fn tiled_schedule_matches_the_plain_loop_bitwise() {
         let p = fixture(150, 20, 6000);
         let (init, prior) = start(&p);
-        let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
+        let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
         assert!(plan.num_components() > 100);
         for vb in [false, true] {
             let set = settings(vb, false);
-            let (a, ia, ca, _) = run(&plan, &init, &prior, &set);
+            let (a, ia, ca, _) = run(&mut plan, &init, &prior, &set);
             let (b, ib, cb) = untiled(&plan, &init, &prior, &set);
             assert_eq!((ia, ca), (ib, cb), "vb={vb}");
             assert!(ia > TILE, "the run must span several tiles");
@@ -1649,17 +1778,17 @@ mod tests {
     fn parallel_gather_matches_sequential_push_bitwise() {
         let p = fixture(3, 400, 9000);
         let (init, prior) = start(&p);
-        let push = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
-        let pull = ComponentPlan::with_pull_min(&p, &p.counts, 0);
+        let mut push = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
+        let mut pull = ComponentPlan::with_pull_min(&p, &p.counts, 0, true);
         assert!(pull.pull.iter().all(Option::is_some));
         for vb in [false, true] {
-            let reference = run(&push, &init, &prior, &settings(vb, false));
+            let reference = run(&mut push, &init, &prior, &settings(vb, false));
             for threads in [1, 4] {
                 let pool = rayon::ThreadPoolBuilder::new()
                     .num_threads(threads)
                     .build()
                     .unwrap();
-                let got = pool.install(|| run(&pull, &init, &prior, &settings(vb, true)));
+                let got = pool.install(|| run(&mut pull, &init, &prior, &settings(vb, true)));
                 assert_eq!((got.1, got.2), (reference.1, reference.2));
                 assert_eq!(bits(&got.0), bits(&reference.0), "vb={vb} t{threads}");
             }
@@ -1673,10 +1802,10 @@ mod tests {
     fn matches_the_global_kernels_to_rounding() {
         let p = fixture(40, 30, 5000);
         let (init, prior) = start(&p);
-        let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
+        let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
         for vb in [false, true] {
             let set = settings(vb, false);
-            let (got, iters, converged, _) = run(&plan, &init, &prior, &set);
+            let (got, iters, converged, _) = run(&mut plan, &init, &prior, &set);
             let mut a = init.clone();
             let mut b = vec![0.0; p.num_txps];
             let mut et = vec![0.0; p.num_txps];
@@ -1720,14 +1849,14 @@ mod tests {
     fn projected_stop_is_independent_of_threads_and_stepping() {
         let p = fixture(60, 15, 3000);
         let (init, prior) = start(&p);
-        let seq = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
-        let pull = ComponentPlan::with_pull_min(&p, &p.counts, 0);
+        let mut seq = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
+        let mut pull = ComponentPlan::with_pull_min(&p, &p.counts, 0, true);
         for vb in [false, true] {
             let set = Settings {
                 stop: EmStop::Projected,
                 ..settings(vb, false)
             };
-            let (got, iters, converged, summary) = run(&seq, &init, &prior, &set);
+            let (got, iters, converged, summary) = run(&mut seq, &init, &prior, &set);
             assert!(converged);
             assert_eq!(summary.num_components, seq.num_components());
             assert_eq!(summary.num_at_max_iter, 0);
@@ -1738,7 +1867,7 @@ mod tests {
                     .unwrap();
                 let par = pool.install(|| {
                     run(
-                        &pull,
+                        &mut pull,
                         &init,
                         &prior,
                         &Settings {
@@ -1767,11 +1896,11 @@ mod tests {
         eq.update_eff_lengths(&[1000.0, 1000.0]);
         let p = PackedEqClasses::from_collapsed(&eq, 2);
         let (init, prior) = start(&p);
-        let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
+        let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
         for vb in [false, true] {
-            let global = run(&plan, &init, &prior, &settings(vb, false));
+            let global = run(&mut plan, &init, &prior, &settings(vb, false));
             let fixpoint = run(
-                &plan,
+                &mut plan,
                 &init,
                 &prior,
                 &Settings {
@@ -1784,7 +1913,7 @@ mod tests {
                 stop: EmStop::Projected,
                 ..settings(vb, false)
             };
-            let (got, iters, converged, summary) = run(&plan, &init, &prior, &set);
+            let (got, iters, converged, summary) = run(&mut plan, &init, &prior, &set);
             assert!(converged && summary.num_at_max_iter == 0, "vb={vb}");
             assert!(iters > global.1, "vb={vb}: {iters} vs {}", global.1);
             let err = |a: &[f64]| (a[0] - fixpoint.0[0]).abs();
@@ -1807,13 +1936,13 @@ mod tests {
         eq.update_eff_lengths(&[1000.0; 4]);
         let p = PackedEqClasses::from_collapsed(&eq, 4);
         let (init, prior) = start(&p);
-        let plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX);
+        let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
         let set = Settings {
             stop: EmStop::Projected,
             max_iter: 200,
             ..settings(false, false)
         };
-        let (_, iters, converged, summary) = run(&plan, &init, &prior, &set);
+        let (_, iters, converged, summary) = run(&mut plan, &init, &prior, &set);
         assert_eq!(iters, 200);
         assert!(converged, "the criterion held over both components");
         assert_eq!(summary.num_components, 2);
@@ -1826,7 +1955,7 @@ mod tests {
             max_iter: 10,
             ..set
         };
-        let (_, _, converged, summary) = run(&plan, &init, &prior, &short);
+        let (_, _, converged, summary) = run(&mut plan, &init, &prior, &short);
         assert!(!converged && summary.num_unconverged >= 1);
     }
 

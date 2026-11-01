@@ -540,7 +540,7 @@ pub(crate) fn run_em_counts(
         } else {
             opts.em_stop
         };
-        let cplan = components::ComponentPlan::new(p, counts, parallel, stop);
+        let mut cplan = components::ComponentPlan::new(p, counts, parallel, stop);
         if cplan.num_components() > 0 {
             let set = components::Settings {
                 vb: opts.use_vbem,
@@ -553,7 +553,7 @@ pub(crate) fn run_em_counts(
                 stop,
             };
             let (alphas, iters, converged, summary) =
-                components::run(&cplan, &alphas, &prior_alphas, &set);
+                components::run(&mut cplan, &alphas, &prior_alphas, &set);
             return (alphas, iters, converged, Some(summary));
         }
     }
