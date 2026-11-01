@@ -52,7 +52,7 @@ use bramble_rs::{
 
 use salmon_core::{observed_paired_format, LibraryFormat, MateStatus};
 use salmon_eqclass::{NaiveEqBuilder, NaivePlacement, NAIVE_NO_FMT};
-use salmon_model::{smoothed_effective_length, DiscreteFld};
+use salmon_model::{smoothed_effective_length, DiscreteFld, PairObs};
 use salmon_rad::{
     frag_map_type, ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile,
     SalmonBulkRecord,
@@ -409,20 +409,16 @@ fn record_to_genomic_alignment<R: sam::alignment::Record>(
 }
 
 /// Collapse one read group's projected alignments into a salmon RAD record.
-/// Returns the record, the (frag_len,is_fw,mate_fw) FLD sample for a fragment
-/// that maps as a proper pair to exactly one transcript, and the naive-eq
-/// signature. `None` if nothing projected.
+/// Returns the record, the fragment's proper-pair placements for the FLD (with
+/// whether it maps to exactly one transcript), and the naive-eq signature.
+/// `None` if nothing projected.
 fn build_projected_record(
     gas: &[GenomicAlignment],
     gn_as: &[i32],
     proj: &[ProjectedAlignment],
     tx_is_minus: &[bool],
     is_short: bool,
-) -> Option<(
-    SalmonBulkRecord,
-    Option<(usize, bool, bool)>,
-    Vec<NaivePlacement>,
-)> {
+) -> Option<(SalmonBulkRecord, (bool, Vec<PairObs>), Vec<NaivePlacement>)> {
     if proj.is_empty() {
         return None;
     }
@@ -434,7 +430,7 @@ fn build_projected_record(
     let mut hits = Vec::with_capacity(by_tid.len());
     let mut statuses = Vec::with_capacity(by_tid.len());
     let mut naive_sig = Vec::with_capacity(by_tid.len());
-    let mut fld_sample = None;
+    let mut fld_pairs = Vec::new();
 
     let is_read1 =
         |e: &ProjectedAlignment| gas.get(e.input_index).is_none_or(|g| g.is_first_in_pair);
@@ -512,8 +508,13 @@ fn build_projected_record(
                 is_fw,
                 status: MateStatus::PairedEndPaired,
             });
-            if single_tid && frag_len > 0 {
-                fld_sample = Some((frag_len as usize, is_fw, mate_fw));
+            if frag_len > 0 {
+                fld_pairs.push(PairObs {
+                    len: frag_len as usize,
+                    tid,
+                    is_fw,
+                    mate_fw,
+                });
             }
         } else {
             // Orphan(s) / single-end on this transcript: one hit per projected
@@ -547,7 +548,7 @@ fn build_projected_record(
     let frag_type = frag_map_type::fragment_level(statuses.iter().copied());
     Some((
         SalmonBulkRecord::new(frag_type, hits),
-        fld_sample,
+        (single_tid, fld_pairs),
         naive_sig,
     ))
 }
@@ -715,9 +716,8 @@ where
                             let bytes = buf.take_bytes()?;
                             writer.append_chunk_bytes(&bytes)?;
                         }
-                        if let Some((len, is_fw, mate_fw)) = fld_sample {
-                            fld.add(len, is_fw, mate_fw);
-                        }
+                        let (unique, pairs) = fld_sample;
+                        fld.add_fragment(unique, pairs);
                         if let Some(nb) = naive {
                             nb.add(naive_sig);
                         }

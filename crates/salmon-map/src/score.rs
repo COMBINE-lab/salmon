@@ -24,6 +24,7 @@
 //! equivalence class. This mirrors salmon's `MappingScoreInfo` /
 //! `filterAndCollectAlignments`.
 
+use crate::align::Alignment;
 use salmon_core::{LibraryFormat, MateStatus, RefProvider};
 
 /// A validated mapping before final collapse/weighting.
@@ -194,6 +195,9 @@ pub struct MapScratch {
     pub(crate) revcomp: Vec<u8>,
     /// dedup table for fragments with many mappings
     pub(crate) dedup: DedupScratch,
+    /// concordant pairs aligned while looking for a valid one, as
+    /// `(joint index, mate 1, mate 2)`, so they are not aligned again
+    pub(crate) pair_alns: Vec<(usize, Option<Alignment>, Option<Alignment>)>,
 }
 
 /// Reusable table for the large-fragment deduplication path.

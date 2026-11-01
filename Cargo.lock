@@ -1493,9 +1493,9 @@ dependencies = [
 
 [[package]]
 name = "ksw2rs"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74a8399e5b7c51c26df540e9e13c453e1d4edede17f538013572135ea0cbb87e"
+checksum = "174a142b8d417d13b720b26f3b3ead48cb755399e83dc96fbcd5ba19e5b8be01"
 dependencies = [
  "cc",
 ]
@@ -2236,9 +2236,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b5932be0a89215403a0eeaa325e787a4d651c70a4d6032afc12af93377992d5"
+checksum = "e6c12807a35c0f91ac18b14bdf3feea2b07e855b025bf8067b0e0746de39d75e"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3177,7 +3177,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys",

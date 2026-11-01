@@ -50,7 +50,7 @@ use salmon_map::{
 };
 use salmon_model::seqbias::{SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
 use salmon_model::{
-    gc_desc, FragmentLengthDistribution, GcFragModel, LibraryTypeDetector, SimplePosBias,
+    gc_desc, FragmentLengthDistribution, GcFragModel, LibraryTypeDetector, PairObs, SimplePosBias,
     NUM_LENGTH_CLASSES,
 };
 
@@ -198,7 +198,7 @@ pub(crate) struct Shared<'a> {
     /// when set, write per-fragment mappings to a RAD file (`--writeRad`)
     pub rad: Option<&'a salmon_rad::RadOutputWriter>,
     /// `--deterministic` mode: collect an order-independent fragment-length
-    /// distribution (+ library-format tally) from uniquely-mapped proper pairs
+    /// distribution (+ library-format tally) from the proper pairs
     /// during the mapping pass, instead of training the online (log-space) FLD or
     /// using the prefix library-type detector. Built into a baked FLD at end of
     /// pass. When `Some`, the per-fragment work is the cheap [`record_discrete`].
@@ -245,6 +245,8 @@ pub(crate) struct Counters {
     pub dovetail: u64,
     pub frags_filtered_vm: u64,
     pub below_threshold_vm: u64,
+    /// this worker's share of [`Shared::discrete_fld`], created on first use
+    pub fld: Option<salmon_model::LocalFld>,
 }
 
 impl Counters {
@@ -266,6 +268,9 @@ impl Counters {
         add(sh.num_dovetail, self.dovetail);
         add(sh.num_frags_filtered_vm, self.frags_filtered_vm);
         add(sh.num_below_threshold_vm, self.below_threshold_vm);
+        if let (Some(local), Some(acc)) = (&self.fld, sh.discrete_fld) {
+            acc.absorb(local);
+        }
     }
 }
 
@@ -683,8 +688,9 @@ fn tally_observed_formats(
 }
 
 /// Cheap per-fragment work for `--deterministic`'s mapping pass: count the
-/// fragment and, for a uniquely-mapped proper pair, record its length + observed
-/// format into the order-independent [`salmon_model::DiscreteFld`]. No online
+/// fragment and, for a proper pair, record its shortest implied length (and, if
+/// it maps uniquely, its observed format) into the order-independent
+/// [`salmon_model::DiscreteFld`]. No online
 /// inference, eq-class assembly, bias collection, or prefix library-type
 /// detection — the FLD and library format are derived deterministically from the
 /// accumulator at end of pass and baked into the RAD.
@@ -729,19 +735,26 @@ fn record_discrete(
             counters.frags_incompat += 1;
         }
     }
-    // A uniquely-mapped proper pair unambiguously implies its fragment length and
-    // orientation; its observed format also feeds order-independent `-l A`
-    // detection. Uses the raw mapping (like the RAD records written this pass, and
-    // like the reader's `derive_fld`), so a baked FLD matches a re-derived one.
-    if placements.len() == 1 {
-        let m = &placements[0];
-        if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
-            // Orientation from the mate strands rather than `m.format`, exactly
-            // as `build_rad_record` derives the RAD hit — the two must classify
-            // a placement identically for a baked FLD to match a re-derived one.
-            acc.add(m.fragment_len as usize, m.is_fw, m.r2_fw);
-        }
-    }
+    // Each concordant fragment adds its shortest implied length to the FLD (see
+    // `DiscreteFld::add_fragment`); a unique one's observed format also feeds
+    // order-independent `-l A` detection. Uses the raw mapping (like the RAD
+    // records written this pass, and like the reader's `derive_fld`), so a baked
+    // FLD matches a re-derived one. Orientation comes from the mate strands
+    // rather than `m.format`, exactly as `build_rad_record` derives the RAD hit,
+    // for the same reason. Tallied per worker and merged at thread end.
+    let fld = counters.fld.get_or_insert_with(|| acc.local());
+    fld.add_fragment(
+        placements.len() == 1,
+        placements
+            .iter()
+            .filter(|m| m.status == MateStatus::PairedEndPaired && m.fragment_len > 0)
+            .map(|m| PairObs {
+                len: m.fragment_len as usize,
+                tid: m.tid,
+                is_fw: m.is_fw,
+                mate_fw: m.r2_fw,
+            }),
+    );
     // Naive (kallisto-style) equivalence class for the rough seed EM: the
     // compatible transcripts, orientation-tagged so library-incompatible
     // placements can be dropped once the library type is resolved at end of
@@ -776,8 +789,8 @@ fn record_discrete(
 ///   * [`Shared::use_online`] — compute the abundance-aware online posterior
 ///     (advancing the online masses) and train the fragment-length distribution
 ///     by online acceptance sampling. When `false` the FLD is instead trained
-///     *deterministically* from uniquely-mapped concordant pairs (the
-///     order-independent, commutative-histogram estimate the RAD reader's
+///     *deterministically* from each concordant pair's shortest implied length
+///     (the order-independent, commutative-histogram estimate the RAD reader's
 ///     `derive_fld` also uses) and bias weights fall back to score-only.
 ///   * [`Shared::build_eq`] — assemble the equivalence class and add it to the
 ///     shared builder (consumed by the EM or an eq-class dump). Whether those
@@ -1076,20 +1089,25 @@ fn record(
             }
         }
     } else if !sh.use_online {
-        // Deterministic: a *uniquely*-mapped concordant proper pair implies its
-        // fragment length exactly. Adding only unique fragments at full weight is
-        // order-independent (a commutative histogram) and matches the RAD reader's
-        // `derive_fld`, so a baked FLD reproduces on requant. (When `use_online`
-        // is true but `online_post` is `None`, the training window has closed and
-        // the FLD is intentionally frozen — so this branch is skipped.)
-        if compat.len() == 1 {
-            let m = &compat[0].0.get(placements);
-            if m.status == MateStatus::PairedEndPaired
-                && m.fragment_len > 0
-                && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
-            {
-                sh.fld.add_val(m.fragment_len as usize, 0.0);
-            }
+        // Deterministic: each concordant fragment adds the shortest length its
+        // compatible placements imply, at full weight (the rule
+        // `DiscreteFld::add_fragment` documents). That is order-independent (a
+        // commutative histogram) and matches the RAD reader's `derive_fld`, so a
+        // baked FLD reproduces on requant. (When `use_online` is true but
+        // `online_post` is `None`, the training window has closed and the FLD is
+        // intentionally frozen — so this branch is skipped.)
+        let shortest = compat
+            .iter()
+            .map(|&(i, _)| i.get(placements))
+            .filter(|m| {
+                m.status == MateStatus::PairedEndPaired
+                    && m.fragment_len > 0
+                    && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
+            })
+            .map(|m| m.fragment_len)
+            .min();
+        if let Some(len) = shortest {
+            sh.fld.add_val(len as usize, 0.0);
         }
     }
 

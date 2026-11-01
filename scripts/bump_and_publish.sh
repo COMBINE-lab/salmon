@@ -26,9 +26,10 @@ dependency order.
 
 Options:
   --publish  Publish to crates.io after bumping, committing, tagging, pushing
-  --dry-run  Show what would be done; do not modify tracked files, commit, tag,
-             push, or publish. Runs `cargo publish --dry-run` per crate so the
-             publish order and packaging are validated without uploading.
+  --dry-run  Do not modify this checkout, commit, tag, push, or publish. Applies
+             the bump in a scratch git worktree and runs
+             `cargo publish --workspace --dry-run` there, so every crate is
+             packaged and verified at the new version without uploading.
   -h, --help Show this help message
 
 Publish order (dependency-topological):
@@ -146,49 +147,65 @@ echo "Preflight: cargo check"
 cargo check -q
 
 echo "Updating [workspace.package] version: $CURRENT_VERSION -> $VERSION"
-if [[ "$DRY_RUN" == false ]]; then
-    MANIFEST_BACKUP="$(mktemp "${TMPDIR:-/tmp}/salmon-Cargo.toml.XXXXXX")"
-    LOCKFILE_BACKUP="$(mktemp "${TMPDIR:-/tmp}/salmon-Cargo.lock.XXXXXX")"
-    cp "$ROOT_CARGO" "$MANIFEST_BACKUP"
-    cp "$LOCKFILE" "$LOCKFILE_BACKUP"
 
+bump_manifest() {
     # Bump the version line within the [workspace.package] block, and the
     # version="X" requirements on the internal salmon-* path deps in
     # [workspace.dependencies] (so the published deps resolve to the new version).
-    sed -i.bak "/^\[workspace.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/}" "$ROOT_CARGO"
-    sed -i.bak "/^\[workspace.dependencies\]/,/^\[profile/{s/^\(salmon-[a-z]* = { path = \"crates\/salmon-[a-z]*\", version = \"\).*\(\" }\)/\1${VERSION}\2/}" "$ROOT_CARGO"
-    rm -f "${ROOT_CARGO}.bak"
-
-    MANIFEST_UPDATED=true
-
-    # Refresh Cargo.lock for the new versions.
-    cargo check -q
-
-    UPDATED_VERSION="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' "$ROOT_CARGO" | head -1)"
-    [[ "$UPDATED_VERSION" == "$VERSION" ]] || die "workspace version update failed"
-else
-    echo "Dry-run: would rewrite [workspace.package] version and salmon-* dep versions in $ROOT_CARGO"
-fi
+    local manifest="$1"
+    sed -i.bak "/^\[workspace.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/}" "$manifest"
+    sed -i.bak "/^\[workspace.dependencies\]/,/^\[profile/{s/^\(salmon-[a-z]* = { path = \"crates\/salmon-[a-z]*\", version = \"\).*\(\" }\)/\1${VERSION}\2/}" "$manifest"
+    rm -f "${manifest}.bak"
+}
 
 if [[ "$DRY_RUN" == true ]]; then
-    # Per-crate packaging validation. Only meaningful in --dry-run mode, where the
-    # version is NOT bumped, so each crate's salmon-* dependency requirements still
-    # resolve against the already-published versions in the index. In --publish
-    # mode the version IS bumped, so a dependent crate's `salmon-x = "^<new>"`
-    # requirement cannot resolve until its dependency is actually published; the
-    # real publish loop below handles that ordering via cargo's wait-for-publish
-    # (each crate lands in the index before the next is built), so an upfront
-    # dry-run validation of dependents is impossible there (and unnecessary).
+    # Validate exactly what --publish would upload: apply the same bump in a
+    # throwaway worktree of HEAD and run a workspace publish dry-run there.
+    # `cargo publish --workspace` (cargo >= 1.90) verifies every crate in
+    # dependency order, supplying the not-yet-published salmon-* versions from
+    # a temporary local registry, so the dependents of a bumped crate are
+    # checked too. Nothing in this checkout is modified.
+    command -v git >/dev/null || die "git is required"
+    SIM_DIR="$(mktemp -d "${TMPDIR:-/tmp}/salmon-release-sim.XXXXXX")"
+    trap 'git worktree remove --force "$SIM_DIR" >/dev/null 2>&1 || true; rm -rf "$SIM_DIR"; cleanup' EXIT
+    git worktree add --quiet --detach "$SIM_DIR" HEAD
     echo
-    echo "Per-crate package validation (cargo publish --dry-run, in order)"
-    for crate in "${CRATES[@]}"; do
-        echo "--- $crate"
-        run cargo publish -p "$crate" --dry-run --allow-dirty
-    done
+    echo "Dry-run: validating the v${VERSION} packages in a scratch worktree ($SIM_DIR)"
+    (
+        cd "$SIM_DIR"
+        bump_manifest "$ROOT_CARGO"
+        cargo check -q
+        cargo publish --workspace --dry-run --allow-dirty
+    )
     echo
-    echo "Dry-run complete (no commit, tag, push, or publish performed)"
+    echo "Dry-run: would rewrite [workspace.package] version and salmon-* dep versions in $ROOT_CARGO"
+    print_cmd git add "$ROOT_CARGO" "$LOCKFILE"
+    print_cmd git commit -m "chore(release): bump salmon workspace to v${VERSION}"
+    print_cmd git tag -a "$TAG" -m "Release ${VERSION}"
+    print_cmd git push origin HEAD
+    print_cmd git push origin "$TAG"
+    if [[ "$PUBLISH" == true ]]; then
+        for crate in "${CRATES[@]}"; do
+            print_cmd cargo publish -p "$crate"
+        done
+    fi
+    echo
+    echo "Dry-run complete: all crates packaged and verified at v${VERSION}; no commit, tag, push, or publish performed"
     exit 0
 fi
+
+MANIFEST_BACKUP="$(mktemp "${TMPDIR:-/tmp}/salmon-Cargo.toml.XXXXXX")"
+LOCKFILE_BACKUP="$(mktemp "${TMPDIR:-/tmp}/salmon-Cargo.lock.XXXXXX")"
+cp "$ROOT_CARGO" "$MANIFEST_BACKUP"
+cp "$LOCKFILE" "$LOCKFILE_BACKUP"
+bump_manifest "$ROOT_CARGO"
+MANIFEST_UPDATED=true
+
+# Refresh Cargo.lock for the new versions.
+cargo check -q
+
+UPDATED_VERSION="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' "$ROOT_CARGO" | head -1)"
+[[ "$UPDATED_VERSION" == "$VERSION" ]] || die "workspace version update failed"
 
 run git add "$ROOT_CARGO" "$LOCKFILE"
 run git commit -m "chore(release): bump salmon workspace to v${VERSION}"
