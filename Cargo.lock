@@ -1493,9 +1493,9 @@ dependencies = [
 
 [[package]]
 name = "ksw2rs"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74a8399e5b7c51c26df540e9e13c453e1d4edede17f538013572135ea0cbb87e"
+checksum = "174a142b8d417d13b720b26f3b3ead48cb755399e83dc96fbcd5ba19e5b8be01"
 dependencies = [
  "cc",
 ]
@@ -3177,7 +3177,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys",
