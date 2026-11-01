@@ -49,7 +49,7 @@ use noodles_sam::Header;
 
 use salmon_core::{LibraryFormat, MateStatus};
 use salmon_eqclass::{NaiveEqBuilder, NaivePlacement, NAIVE_NO_FMT};
-use salmon_model::{smoothed_effective_length, DiscreteFld};
+use salmon_model::{smoothed_effective_length, DiscreteFld, PairObs};
 use salmon_rad::{
     frag_map_type, ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile,
     SalmonBulkRecord,
@@ -401,8 +401,6 @@ struct PlacementInfo {
 struct GroupData {
     frags: Vec<FragRecord>,
     infos: Vec<PlacementInfo>,
-    /// `(frag_len, is_fw, mate_fw)` of a unique proper pair → the FLD.
-    fld_sample: Option<(usize, bool, bool)>,
 }
 
 /// Pair a read group's records and compute the shared per-placement geometry.
@@ -438,9 +436,7 @@ fn analyze_group<R: sam::alignment::Record>(
         *scratch = frags;
         return None;
     }
-    let single = placements.len() == 1;
     let mut infos = Vec::with_capacity(placements.len());
-    let mut fld_sample = None;
     for pl in &placements {
         let (fmt, is_fw, status) = frag_format(&frags, &pl.idxs);
         let paired = status == MateStatus::PairedEndPaired;
@@ -463,9 +459,6 @@ fn analyze_group<R: sam::alignment::Record>(
                 .find(|r| !r.is_read1)
                 .map(|r2| !r2.is_reverse)
                 .unwrap_or(false);
-        if single && paired && frag_len > 0 {
-            fld_sample = Some((frag_len as usize, is_fw, mate_fw));
-        }
         infos.push(PlacementInfo {
             tid: pl.tid,
             idxs: pl.idxs.clone(),
@@ -479,18 +472,23 @@ fn analyze_group<R: sam::alignment::Record>(
             fmt_id: fmt.map(|f| f.format_id()).unwrap_or(NAIVE_NO_FMT),
         });
     }
-    Some(GroupData {
-        frags,
-        infos,
-        fld_sample,
-    })
+    Some(GroupData { frags, infos })
 }
 
 /// Feed a group's placements to the shared FLD + naive-eq accumulators.
 fn tally_fld_naive(data: &GroupData, fld: &DiscreteFld, naive: Option<&NaiveEqBuilder>) {
-    if let Some((len, is_fw, mate_fw)) = data.fld_sample {
-        fld.add(len, is_fw, mate_fw);
-    }
+    fld.add_fragment(
+        data.infos.len() == 1,
+        data.infos
+            .iter()
+            .filter(|i| i.paired && i.frag_len > 0)
+            .map(|i| PairObs {
+                len: i.frag_len as usize,
+                tid: i.tid,
+                is_fw: i.is_fw,
+                mate_fw: i.mate_fw,
+            }),
+    );
     if let Some(nb) = naive {
         let sig: Vec<NaivePlacement> = data
             .infos

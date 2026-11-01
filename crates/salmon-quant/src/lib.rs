@@ -126,7 +126,7 @@ pub struct QuantOptions {
     pub write_rad: Option<PathBuf>,
     /// `--deterministic` mapping pass: derive the fragment-length distribution and
     /// library format **order-independently** (integer count histograms over
-    /// uniquely-mapped proper pairs; see [`salmon_model::DiscreteFld`]) instead of
+    /// proper pairs; see [`salmon_model::DiscreteFld`]) instead of
     /// the online log-space FLD + prefix detector, then bake them. This makes the
     /// baked values — and hence the downstream requant — byte-identical across
     /// thread counts.
@@ -855,24 +855,29 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // so the context is free. With one input we can name it outright; with
         // several we say plainly that the list is the candidate set and not the
         // culprit, rather than implying we know which.
-        mapped
-            .map_err(|e| anyhow::anyhow!("mapping failed: {e}"))
-            .with_context(|| {
-                let files: Vec<String> = groups
-                    .iter()
-                    .flatten()
-                    .map(|p| p.display().to_string())
-                    .collect();
-                match files.as_slice() {
-                    [one] => format!("while reading {one}"),
-                    many => format!(
-                        "while reading one of the {} read files (the FASTX reader does not \
-                         report which): {}",
-                        many.len(),
-                        many.join(", ")
-                    ),
-                }
-            })?;
+        if let Err(e) = mapped {
+            let files: Vec<String> = groups
+                .iter()
+                .flatten()
+                .map(|p| p.display().to_string())
+                .collect();
+            let msg = e.to_string();
+            let err = anyhow::anyhow!("mapping failed: {msg}");
+            // A decoder error (a truncated or corrupt compressed file) already
+            // names its file; only a parse error still needs the candidates.
+            if files.iter().any(|f| msg.contains(f.as_str())) {
+                return Err(err);
+            }
+            return Err(err.context(match files.as_slice() {
+                [one] => format!("while reading {one}"),
+                many => format!(
+                    "while reading one of the {} read files (the FASTX reader does not \
+                     report which): {}",
+                    many.len(),
+                    many.join(", ")
+                ),
+            }));
+        }
         if let Some(err) = &diagnostics.failure {
             tracing::warn!(
                 "thread broker stopped early ({err:?}); mapping completed with the \
