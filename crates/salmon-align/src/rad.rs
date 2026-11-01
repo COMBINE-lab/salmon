@@ -77,8 +77,8 @@ use salmon_eqclass::{
     NAIVE_NO_FMT,
 };
 use salmon_model::{
-    DiscreteFld, FragLengthSource, FragmentLengthDistribution, GcFragModel, GcStore, SBModel,
-    SimplePosBias,
+    DiscreteFld, FragLengthSource, FragmentLengthDistribution, GcFragModel, GcStore, PairObs,
+    SBModel, SimplePosBias,
 };
 use salmon_rad::{RadInputProfile, SalmonBulkRecord};
 
@@ -1329,18 +1329,20 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic FLD derivation (order-independent, unique fragments)
+// Deterministic FLD derivation (order-independent)
 // ---------------------------------------------------------------------------
 
 /// Derive a FIXED fragment-length distribution from the RAD file in one
-/// order-independent pass, using only **uniquely-mapped proper pairs** (a single
-/// placement). Lengths are accumulated into two orientation buckets
+/// order-independent pass: each proper pair adds its shortest implied length
+/// (see [`DiscreteFld::add_fragment`]), and uniquely-mapped ones (a single
+/// placement) also set the library format. Lengths are accumulated into two orientation buckets
 /// (opposite-strand vs same-strand) via the FLD's commutative `add_val`, so the
 /// result is independent of chunk/worker order. The bucket with more observations
 /// defines the library's concordant orientation — robust under `-A` and to a
-/// mis-specified `-l` — and its FLD is returned cached. Mirrors piscem-infer's
-/// unique-fragment FLD, made order-independent by using *all* unique fragments
-/// plus a global-count orientation choice instead of a file-order sample quota.
+/// mis-specified `-l` — and its FLD is returned cached. Unlike piscem-infer's
+/// unique-fragment FLD it uses every concordant fragment, and it is
+/// order-independent: a global-count orientation choice instead of a file-order
+/// sample quota.
 fn derive_fld<R>(
     path: &Path,
     nthreads: usize,
@@ -1353,7 +1355,7 @@ where
     R: MappedRecord + RadFragment + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
 {
-    // Tally uniquely-mapped proper pairs into an order-independent integer
+    // Tally proper pairs into an order-independent integer
     // accumulator (see [`DiscreteFld`]); the FLD + format are built once, after the
     // pass, deterministically. This is the SAME accumulator the deterministic
     // mapping pass uses, so a derived FLD and a baked one agree.
@@ -1386,19 +1388,22 @@ where
                             .collect();
                         nb.add(sig);
                     }
-                    // "unique" = exactly one placement; only proper pairs
-                    // carry a meaningful fragment length.
-                    if pls.len() != 1 {
-                        continue;
-                    }
-                    let p = &pls[0];
-                    if p.status != MateStatus::PairedEndPaired
-                        || p.frag_len == salmon_rad::FRAG_LEN_UNPAIRED
-                        || p.frag_len == 0
-                    {
-                        continue;
-                    }
-                    acc.add(p.frag_len as usize, p.is_fw, p.mate_fw);
+                    // Only proper pairs carry a meaningful fragment length.
+                    acc.add_fragment(
+                        pls.len() == 1,
+                        pls.iter()
+                            .filter(|p| {
+                                p.status == MateStatus::PairedEndPaired
+                                    && p.frag_len != salmon_rad::FRAG_LEN_UNPAIRED
+                                    && p.frag_len != 0
+                            })
+                            .map(|p| PairObs {
+                                len: p.frag_len as usize,
+                                tid: p.tid,
+                                is_fw: p.is_fw,
+                                mate_fw: p.mate_fw,
+                            }),
+                    );
                 }
             }
         }
@@ -1406,7 +1411,7 @@ where
 
     let (fld, detected) = acc.finish(fld_mean, fld_sd);
     tracing::info!(
-        "derived FLD from {} unique proper pairs{}",
+        "derived FLD from {} proper pairs{}",
         acc.count(),
         match detected {
             Some(f) => format!(" (auto-detected {})", f.canonical()),

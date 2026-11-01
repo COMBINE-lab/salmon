@@ -600,8 +600,27 @@ pub fn smoothed_effective_length(cond_means: &[f64], ref_len: usize) -> f64 {
     }
 }
 
+/// One proper-pair placement of a fragment, as the FLD sees it: the implied
+/// fragment length, the transcript (to break length ties deterministically) and
+/// the two mate strands (which fix the orientation bucket and observed format).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairObs {
+    pub len: usize,
+    pub tid: u32,
+    pub is_fw: bool,
+    pub mate_fw: bool,
+}
+
 /// Order-independent accumulator for *deriving* a fragment-length distribution
-/// (and library format) from uniquely-mapped proper pairs.
+/// (and library format) from concordant proper pairs.
+///
+/// Each mapped fragment contributes one length: its only one if it maps
+/// uniquely, otherwise the **shortest** length any of its placements implies
+/// (see [`add_fragment`](Self::add_fragment)). Using only unique fragments
+/// biases the distribution long, because short fragments fall more often in
+/// exons shared by several isoforms and so map ambiguously; the shortest
+/// implied length is usually the true one, since the longer alternatives come
+/// from isoforms that retain an intron or extend an exon between the mates.
 ///
 /// Unlike [`FragmentLengthDistribution`] — which accumulates in **log space** and
 /// is required for the online phase (it folds in per-fragment forgetting mass and
@@ -644,15 +663,40 @@ impl DiscreteFld {
         }
     }
 
+    /// Record one mapped fragment from its proper-pair placements (those with a
+    /// known fragment length; a fragment without any is ignored). `unique` says
+    /// whether the fragment had exactly one placement.
+    ///
+    /// The fragment adds one length to the histogram: the shortest its
+    /// placements imply, ties going to the lowest transcript id so the choice
+    /// doesn't depend on placement order (the mapping pass and the RAD reader
+    /// see a fragment's placements in different orders, and must agree). Only a
+    /// unique fragment also counts towards the library-format tally, since an
+    /// ambiguous fragment's placements can disagree on orientation.
+    pub fn add_fragment(&self, unique: bool, pairs: impl IntoIterator<Item = PairObs>) {
+        let Some(p) = pairs.into_iter().min_by_key(|p| (p.len, p.tid)) else {
+            return;
+        };
+        if unique {
+            self.add(p.len, p.is_fw, p.mate_fw);
+        } else {
+            self.add_len(p.len, p.is_fw, p.mate_fw);
+        }
+    }
+
     /// Record one uniquely-mapped proper pair from its mate strands: fragment
     /// length, orientation bucket, and observed format (derived from `is_fw` /
     /// `mate_fw`, mirroring the RAD reader's `rad_frag_format` so the mapping pass
     /// and the RAD-derive path agree). Works in sketch mode, where no precomputed
     /// `LibraryFormat` is available. Thread-safe and order-independent.
-    ///
-    /// *Uniquely* mapped, because an ambiguous pair's implied fragment length
-    /// depends on which transcript it really came from — unknown at this stage.
     pub fn add(&self, len: usize, is_fw: bool, mate_fw: bool) {
+        let fmt = self.add_len(len, is_fw, mate_fw);
+        self.fmt_counts[fmt.format_id() as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Add a fragment length to its orientation bucket, without the format
+    /// tally; returns the observed format.
+    fn add_len(&self, len: usize, is_fw: bool, mate_fw: bool) -> LibraryFormat {
         let l = len.min(self.max_len);
         // opposite-strand (inward/outward) vs same-strand, exactly as the RAD
         // reader classifies placements.
@@ -678,11 +722,10 @@ impl DiscreteFld {
             self.opp[l].fetch_add(1, Ordering::Relaxed);
             self.n_opp.fetch_add(1, Ordering::Relaxed);
         }
-        let fmt = LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness);
-        self.fmt_counts[fmt.format_id() as usize].fetch_add(1, Ordering::Relaxed);
+        LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)
     }
 
-    /// Total unique proper pairs seen across both orientation buckets.
+    /// Total proper pairs seen across both orientation buckets.
     pub fn count(&self) -> u64 {
         self.n_opp.load(Ordering::Relaxed) + self.n_same.load(Ordering::Relaxed)
     }
@@ -756,8 +799,8 @@ pub enum FragLengthSource {
     /// lengths existed to observe, so the baked distribution is that run's
     /// `--fldMean`/`--fldSD` prior rather than an empirical distribution.
     RadBakedPrior,
-    /// Derived at read time from this RAD's uniquely-mapped proper pairs
-    /// (a piscem RAD, or `--fldPolicy derive`).
+    /// Derived at read time from this RAD's proper pairs (a piscem RAD, or
+    /// `--fldPolicy derive`).
     RadDerived,
     /// The `--fldMean`/`--fldSD` prior alone, with no observations folded in.
     Prior,
@@ -780,6 +823,47 @@ impl FragLengthSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An ambiguous fragment adds its shortest implied length, ties going to
+    /// the lowest transcript id whatever the placement order, and leaves the
+    /// library-format tally to unique fragments.
+    #[test]
+    fn add_fragment_takes_shortest_length() {
+        let obs = |len, tid, is_fw, mate_fw| PairObs {
+            len,
+            tid,
+            is_fw,
+            mate_fw,
+        };
+        let acc = DiscreteFld::new(1000);
+        // Same shortest length on tid 5 (inward) and tid 1 (same-strand): tid 1
+        // wins, in either order.
+        acc.add_fragment(
+            false,
+            [
+                obs(300, 2, true, false),
+                obs(150, 5, true, false),
+                obs(150, 1, true, true),
+            ],
+        );
+        acc.add_fragment(
+            false,
+            [
+                obs(150, 1, true, true),
+                obs(150, 5, true, false),
+                obs(300, 2, true, false),
+            ],
+        );
+        assert_eq!(acc.same[150].load(Ordering::Relaxed), 2);
+        assert_eq!(acc.count(), 2);
+        assert!(acc.finish(200.0, 80.0).1.is_none(), "format tallied");
+
+        acc.add_fragment(true, [obs(210, 3, true, false)]);
+        acc.add_fragment(false, std::iter::empty());
+        assert_eq!(acc.opp[210].load(Ordering::Relaxed), 1);
+        assert_eq!(acc.count(), 3);
+        assert!(acc.finish(200.0, 80.0).1.is_some());
+    }
 
     /// A probability distribution must sum to 1; this catches an error in the
     /// uniform prior's closed-form initialization.

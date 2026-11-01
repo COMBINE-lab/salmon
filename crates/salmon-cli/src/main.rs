@@ -241,8 +241,8 @@ enum FldPolicyArg {
     /// run that wrote it); otherwise derive it, or fall back to the prior.
     #[default]
     Baked,
-    /// Ignore any baked distribution; re-derive it from this RAD's own
-    /// uniquely-mapped proper pairs.
+    /// Ignore any baked distribution; re-derive it from this RAD's own proper
+    /// pairs.
     Derive,
     /// Ignore both the baked distribution and the RAD's fragment lengths; use
     /// `--fldMean`/`--fldSD` alone.
