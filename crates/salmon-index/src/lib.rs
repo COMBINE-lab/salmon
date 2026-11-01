@@ -1354,42 +1354,11 @@ pub struct SalmonIndex {
     /// without sequence-dependent bias correction): the raw nucleotides are only
     /// needed for selective-alignment extension and seq/GC bias, so skipping the
     /// read avoids holding a multi-GB decoy genome resident.
-    refseq: RefseqBytes,
+    refseq: Vec<u8>,
     /// offsets into `refseq` (`num_refs + 1` entries); empty iff `!refseq_loaded`
     ref_offsets: Vec<u64>,
     /// whether the reference sequence bytes were loaded
     refseq_loaded: bool,
-}
-
-/// The bytes of `refseq.bin`. Mapped rather than read: alignment visits only
-/// the references reads land on, so the rest (with a genome decoy, nearly all of
-/// it) never becomes resident, and what does is page cache the OS can reclaim.
-enum RefseqBytes {
-    /// Not loaded, or an empty file (which cannot be mapped).
-    Empty,
-    Mapped(memmap2::Mmap),
-}
-
-impl RefseqBytes {
-    fn open(path: &Path) -> std::io::Result<Self> {
-        let file = std::fs::File::open(path)?;
-        if file.metadata()?.len() == 0 {
-            return Ok(Self::Empty);
-        }
-        // SAFETY: the mapping is read-only and lives inside an index directory
-        // that nothing writes after `build` finishes; the same assumption every
-        // reader of an index already makes of its files.
-        #[allow(unsafe_code)]
-        let map = unsafe { memmap2::Mmap::map(&file)? };
-        Ok(Self::Mapped(map))
-    }
-
-    fn as_slice(&self) -> &[u8] {
-        match self {
-            Self::Empty => &[],
-            Self::Mapped(map) => map,
-        }
-    }
 }
 
 /// Load just the per-reference forward sequences from an index directory, in
@@ -1492,7 +1461,7 @@ impl SalmonIndex {
         let inner = ReferenceIndex::load(&index_prefix, info.has_ec_table, false)
             .with_context(|| format!("loading piscem index at {}", index_prefix.display()))?;
         let (refseq, ref_offsets) = if load_refseq {
-            let refseq = RefseqBytes::open(&dir.join(REFSEQ_FILE))
+            let refseq = std::fs::read(dir.join(REFSEQ_FILE))
                 .with_context(|| format!("reading {REFSEQ_FILE}"))?;
             let ref_offsets: Vec<u64> = serde_json::from_slice(
                 &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
@@ -1500,7 +1469,7 @@ impl SalmonIndex {
             )?;
             (refseq, ref_offsets)
         } else {
-            (RefseqBytes::Empty, Vec::new())
+            (Vec::new(), Vec::new())
         };
         Ok(Self {
             inner,
@@ -1529,7 +1498,7 @@ impl SalmonIndex {
         // Slice the concatenated blob using the offset table.
         let s = self.ref_offsets[tid as usize] as usize;
         let e = self.ref_offsets[tid as usize + 1] as usize;
-        &self.refseq.as_slice()[s..e]
+        &self.refseq[s..e]
     }
 
     /// The concatenated forward-strand reference sequences (all transcripts).
@@ -1537,7 +1506,7 @@ impl SalmonIndex {
     /// reduced-memory GC rank bitvector. Empty if loaded without the reference
     /// sequence (`load_refseq == false`).
     pub fn refseq_concat(&self) -> &[u8] {
-        self.refseq.as_slice()
+        &self.refseq
     }
 
     /// Cumulative offsets into [`refseq_concat`](Self::refseq_concat)

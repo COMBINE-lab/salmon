@@ -65,8 +65,6 @@ zstd = "0.14.3"
 # format-sniffing decompression (gzip/BGZF, bzip2, xz, zstd) for user-supplied
 # annotation files; already in the tree via paraseq and piscem-rs.
 niffler = "3"
-# read-only mapping of the index's reference sequence store
-memmap2 = "0.9"
 # logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
