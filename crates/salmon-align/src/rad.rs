@@ -2310,6 +2310,11 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     );
     let mut packed =
         salmon_infer::PackedEqClasses::from_collapsed_for(&collapsed, num_refs, posterior);
+    // Only bias correction goes back to the classes (for their raw weights), and
+    // they are the largest thing alive during inference.
+    if !bias_on {
+        collapsed.classes = Vec::new();
+    }
     let em = if opts.skip_quant {
         salmon_infer::EmResult {
             alphas: vec![0.0; num_refs],

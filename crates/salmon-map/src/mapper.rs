@@ -317,14 +317,48 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
         raw.is_empty(),
         "scratch.raw was not drained by the last call"
     );
-    for j in joints {
+    // A concordant pair to a transcript discards every orphan below, so once one
+    // is known to exist there is no point aligning them: on a fragment with many
+    // candidate transcripts this is a large share of all alignment work. Recovery
+    // is the exception, since it can turn an orphan into a pair that stays. The
+    // pairs aligned while looking for a valid one are kept for the loop below,
+    // which would otherwise align them again.
+    let pre = &mut scratch.pair_alns;
+    pre.clear();
+    let mut skip_orphans = false;
+    if !cfg.recover_orphans {
+        for (k, j) in joints.iter().enumerate() {
+            if !matches!(j.status, MateStatus::PairedEndPaired) {
+                continue;
+            }
+            let refseq = refs.ref_seq(j.tid);
+            let al = align_chain(r1, refseq, &j.left.as_ref().unwrap().chain, &cfg.align);
+            let ar = align_chain(r2, refseq, &j.right.as_ref().unwrap().chain, &cfg.align);
+            pre.push((k, al, ar));
+            if !refs.is_decoy(j.tid) && al.is_some_and(|a| a.valid) && ar.is_some_and(|a| a.valid) {
+                skip_orphans = true;
+                break;
+            }
+        }
+    }
+    let mut pre_next = 0;
+    for (k, j) in joints.into_iter().enumerate() {
         match j.status {
+            MateStatus::PairedEndLeft | MateStatus::PairedEndRight if skip_orphans => {}
             MateStatus::PairedEndPaired => {
                 let l = j.left.as_ref().unwrap();
                 let r = j.right.as_ref().unwrap();
                 let refseq = refs.ref_seq(j.tid);
-                let al = align_chain(r1, refseq, &l.chain, &cfg.align);
-                let ar = align_chain(r2, refseq, &r.chain, &cfg.align);
+                let (al, ar) = match scratch.pair_alns.get(pre_next) {
+                    Some(&(pk, al, ar)) if pk == k => {
+                        pre_next += 1;
+                        (al, ar)
+                    }
+                    _ => (
+                        align_chain(r1, refseq, &l.chain, &cfg.align),
+                        align_chain(r2, refseq, &r.chain, &cfg.align),
+                    ),
+                };
                 if let (Some(al), Some(ar)) = (al, ar) {
                     if al.valid && ar.valid {
                         // positional bias (salmon's PAIRED_END_PAIRED case): only
@@ -554,7 +588,8 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
         cfg.collect.consensus_fraction,
     );
     let best = cands.iter().max_by_key(|c| c.chain.covered_read_bases())?;
-    let aln = align_chain(read, refs.ref_seq(best.tid), &best.chain, &cfg.align)?;
+    let aln =
+        crate::align::align_chain_exact(read, refs.ref_seq(best.tid), &best.chain, &cfg.align)?;
     Some(DebugMapping {
         tid: best.tid,
         is_fw: best.is_fw,
