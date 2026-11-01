@@ -617,8 +617,8 @@ struct QuantArgs {
     deterministic: bool,
     /// Quantify with the pre-2.6 online one-pass path instead of the default
     /// deterministic two-phase flow. Deprecated: results depend on the thread
-    /// count (the default is byte-identical at any -p); scheduled for removal
-    /// in 2.7.0.
+    /// count (the default is byte-identical at any -p), and it will be removed
+    /// in a future release.
     #[arg(long = "online", conflicts_with = "deterministic")]
     online: bool,
     /// Keep the intermediate RAD produced by --deterministic (by default it is
@@ -2313,7 +2313,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         tracing::info!(
             "--deterministic is the default since 2.6.0 and no longer needs to be passed; \
              accepting it as a no-op. Pass --online for the deprecated one-pass path \
-             (removal planned for 2.7.0)."
+             (to be removed in a future release)."
         );
     }
     let online_path_exists = args.rad.is_none();
@@ -2325,9 +2325,9 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     }
     if args.online && online_path_exists {
         tracing::warn!(
-            "--online selects the deprecated one-pass quantification path (removal planned \
-             for 2.7.0). Its results depend on the thread count; the default deterministic \
-             mode is byte-identical at any -p and was measured as fast or faster."
+            "--online selects the deprecated one-pass quantification path, which will be \
+             removed in a future release. Its results depend on the thread count; the default \
+             deterministic mode is byte-identical at any -p and was measured as fast or faster."
         );
     } else {
         let mut inert: Vec<&str> = Vec::new();
@@ -2351,8 +2351,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             };
             tracing::warn!(
                 "{subject} {verb} the online inference path, which the default deterministic \
-                 mode does not run: ignored. Pass --online (deprecated, removal planned \
-                 for 2.7.0) to use {pronoun}."
+                 mode does not run: ignored. Pass --online (deprecated, to be removed in a \
+                 future release) to use {pronoun}."
             );
         }
     }

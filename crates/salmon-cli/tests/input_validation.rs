@@ -628,7 +628,7 @@ fn explicit_deterministic_is_a_no_op_with_an_info_note() {
 
 /// The online-only knobs (`--forgettingFactor`, `--numAuxModelSamples`,
 /// `--numPreAuxModelSamples`) warn-and-ignore when passed without `--online`,
-/// naming the 2.7.0 removal, and the message agrees in number: one flag
+/// noting the planned removal, and the message agrees in number: one flag
 /// "configures … to use it", several "configure … to use them".
 #[test]
 fn online_only_knobs_warn_without_online_and_agree_in_number() {
@@ -653,9 +653,9 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
     let e1 = String::from_utf8_lossy(&one.stderr);
     assert!(
         e1.contains("--forgettingFactor configures the online inference path")
-            && e1.contains("removal planned for 2.7.0")
+            && e1.contains("to be removed in a")
             && e1.contains("to use it."),
-        "single online knob must warn in the singular, naming 2.7.0: {e1}"
+        "single online knob must warn in the singular, noting the removal: {e1}"
     );
 
     // Two knobs → plural.

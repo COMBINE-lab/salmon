@@ -1519,7 +1519,7 @@ fn process_fragment(
     // bake an order-independent distribution. The weighting below likewise uses
     // a flat `LOG_EPSILON` orphan penalty rather than the CMF length-
     // conditioning the other paths apply. This is documented, not fixed: the
-    // online alignment path is deprecated (removal planned 2.7.0), and parity
+    // online alignment path is deprecated (to be removed), and parity
     // work on a floor being torn out would only risk the estimates it still
     // produces. `-a` without `--online` takes the deterministic path, which has
     // none of these divergences.
