@@ -126,7 +126,7 @@ pub struct QuantOptions {
     pub write_rad: Option<PathBuf>,
     /// `--deterministic` mapping pass: derive the fragment-length distribution and
     /// library format **order-independently** (integer count histograms over
-    /// uniquely-mapped proper pairs; see [`salmon_model::DiscreteFld`]) instead of
+    /// proper pairs; see [`salmon_model::DiscreteFld`]) instead of
     /// the online log-space FLD + prefix detector, then bake them. This makes the
     /// baked values — and hence the downstream requant — byte-identical across
     /// thread counts.

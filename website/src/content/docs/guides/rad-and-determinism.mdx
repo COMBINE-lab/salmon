@@ -47,8 +47,8 @@ salmon quant --rad mappings.rad -l A -p 16 -o out_quant
 `--rad` reads the RAD in parallel and runs the full EM. Reference names travel in
 the RAD header, so no index is required. salmon auto-detects whether the RAD came
 from salmon (header values are present and consumed — one pass) or from piscem
-(nothing baked — a first pass derives a unique-fragment fragment-length
-distribution, then quantifies). Bias correction (`--seqBias`, `--gcBias`,
+(nothing baked — a first pass derives the fragment-length distribution from the
+RAD's proper pairs, then quantifies). Bias correction (`--seqBias`, `--gcBias`,
 `--posBias`), `--numBootstraps`, `--numGibbsSamples`, and `-g/--geneMap` all work
 in RAD mode.
 
@@ -70,7 +70,7 @@ inherits their defaults stays quiet.
 | Policy | Behavior |
 | --- | --- |
 | `baked` *(default)* | Use the RAD's baked distribution when present. Exact parity with the run that wrote the file. |
-| `derive` | Ignore the baked distribution; rebuild it from this RAD's own uniquely-mapped proper pairs, seeded by `--fldMean`/`--fldSD`. This is what a piscem RAD does automatically. |
+| `derive` | Ignore the baked distribution; rebuild it from this RAD's own proper pairs, seeded by `--fldMean`/`--fldSD`. This is what a piscem RAD does automatically. |
 | `prior` | Ignore both the baked distribution and the RAD's fragment lengths; `--fldMean`/`--fldSD` alone determine it. |
 
 Use `prior` for a fragment-length sensitivity analysis — it is the only setting
