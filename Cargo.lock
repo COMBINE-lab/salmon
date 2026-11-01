@@ -2236,9 +2236,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b5932be0a89215403a0eeaa325e787a4d651c70a4d6032afc12af93377992d5"
+checksum = "e6c12807a35c0f91ac18b14bdf3feea2b07e855b025bf8067b0e0746de39d75e"
 dependencies = [
  "ahash",
  "anyhow",
