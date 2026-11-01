@@ -569,7 +569,7 @@ fn dna5_mat(cfg: &AlignConfig) -> [i8; 25] {
 /// Global DP score of an inter-MEM gap (both substrings fully consumed). The
 /// band is widened to guarantee the alignment can reach the corner.
 fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
-    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
+    use ksw2rs::{Extz2Input, KSW_EZ_NO_MAX, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qg.is_empty() {
         return -(cfg.gap_open_pen as i32 + tg.len() as i32 * cfg.gap_extend_pen as i32);
     }
@@ -599,8 +599,9 @@ fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
             zdrop: -1,
             end_bonus: 0,
             // Mapping only needs the score, not the CIGAR — score-only mode skips
-            // the O(qlen·tlen) traceback-matrix fill and backtrack pass.
-            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
+            // the O(qlen·tlen) traceback-matrix fill and backtrack pass; and only
+            // `score` is read, so the overall maximum is not tracked either.
+            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY | KSW_EZ_NO_MAX,
         };
         aligner.align(&input).score
     });
@@ -636,7 +637,7 @@ fn ksw2_flank_extend_in_band(
     anchor_right: bool,
     band: i32,
 ) -> i32 {
-    use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
+    use ksw2rs::{Extz2Input, KSW_EZ_NO_MAX, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qf.is_empty() {
         return 0;
     }
@@ -649,35 +650,49 @@ fn ksw2_flank_extend_in_band(
         return -(cfg.gap_open_pen as i32 + qf.len() as i32 * cfg.gap_extend_pen as i32);
     }
     let mat = dna5_mat(cfg);
-    let (mqe, mte, max_score) = KSW_SCRATCH.with(|cell| {
-        let KswScratch {
-            aligner,
-            query,
-            target,
-        } = &mut *cell.borrow_mut();
-        if anchor_right {
-            dna5_encode_rev_into(qf, query);
-            dna5_encode_rev_into(tf, target);
-        } else {
-            dna5_encode_into(qf, query);
-            dna5_encode_into(tf, target);
-        }
-        let input = Extz2Input {
-            query,
-            target,
-            m: 5,
-            mat: &mat,
-            q: cfg.gap_open_pen,
-            e: cfg.gap_extend_pen,
-            w: band,
-            zdrop: -1,
-            end_bonus: 0,
-            // Score-only: we read `mqe`/`max`, never the CIGAR (see ksw2_gap_global).
-            flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
-        };
-        let ez = aligner.align(&input);
-        (ez.mqe, ez.mte, ez.max as i32)
-    });
+    // `max` is only the fallback for a flank with no valid extension: it is not
+    // tracked, and the DP runs again in the (band-clipped) case that needs it.
+    let run = |flag: u32| {
+        KSW_SCRATCH.with(|cell| {
+            let KswScratch {
+                aligner,
+                query,
+                target,
+            } = &mut *cell.borrow_mut();
+            if anchor_right {
+                dna5_encode_rev_into(qf, query);
+                dna5_encode_rev_into(tf, target);
+            } else {
+                dna5_encode_into(qf, query);
+                dna5_encode_into(tf, target);
+            }
+            let input = Extz2Input {
+                query,
+                target,
+                m: 5,
+                mat: &mat,
+                q: cfg.gap_open_pen,
+                e: cfg.gap_extend_pen,
+                w: band,
+                zdrop: -1,
+                end_bonus: 0,
+                // Score-only: we read `mqe`/`mte`/`max`, never the CIGAR (see
+                // ksw2_gap_global).
+                flag,
+            };
+            let ez = aligner.align(&input);
+            (ez.mqe, ez.mte, ez.max as i32)
+        })
+    };
+    let (mut mqe, mut mte, mut max_score) = run(KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY | KSW_EZ_NO_MAX);
+    let extended = if cfg.softclip || cfg.softclip_overhangs {
+        mqe.max(mte)
+    } else {
+        mqe
+    };
+    if extended <= KSW_NEG_INF {
+        (mqe, mte, max_score) = run(KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY);
+    }
     // Soft-clip semantics mirror PuffAligner's flank `part_score` (mqe = read
     // flank fully consumed, reference free to overhang; mte = reference fully
     // consumed, read free to overhang the transcript end):
