@@ -583,7 +583,8 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
         cfg.collect.consensus_fraction,
     );
     let best = cands.iter().max_by_key(|c| c.chain.covered_read_bases())?;
-    let aln = align_chain(read, refs.ref_seq(best.tid), &best.chain, &cfg.align)?;
+    let aln =
+        crate::align::align_chain_exact(read, refs.ref_seq(best.tid), &best.chain, &cfg.align)?;
     Some(DebugMapping {
         tid: best.tid,
         is_fw: best.is_fw,

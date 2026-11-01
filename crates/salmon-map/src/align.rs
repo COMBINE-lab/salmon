@@ -138,11 +138,41 @@ pub fn min_accepted_score(read_len: usize, cfg: &AlignConfig) -> i32 {
 /// query (the chain is always expressed in the reference-forward frame).
 /// Returns `None` if a usable window cannot be formed (e.g. read shorter than
 /// nothing, or the window is empty).
+///
+/// The score of an alignment that is not `valid` is only an upper bound: flanks
+/// stop as soon as the read cannot be accepted. [`align_chain_exact`] gives the
+/// score regardless.
 pub fn align_chain(
     read: &[u8],
     ref_seq: &[u8],
     chain: &MemChain,
     cfg: &AlignConfig,
+) -> Option<Alignment> {
+    align_chain_above(
+        read,
+        ref_seq,
+        chain,
+        cfg,
+        min_accepted_score(read.len(), cfg),
+    )
+}
+
+/// [`align_chain`], with the exact score even when the alignment is not valid.
+pub fn align_chain_exact(
+    read: &[u8],
+    ref_seq: &[u8],
+    chain: &MemChain,
+    cfg: &AlignConfig,
+) -> Option<Alignment> {
+    align_chain_above(read, ref_seq, chain, cfg, NO_FLOOR)
+}
+
+fn align_chain_above(
+    read: &[u8],
+    ref_seq: &[u8],
+    chain: &MemChain,
+    cfg: &AlignConfig,
+    floor: i32,
 ) -> Option<Alignment> {
     if read.is_empty() || ref_seq.is_empty() {
         return None;
@@ -194,7 +224,7 @@ pub fn align_chain(
             ksw2_align_score(query, rwin, cfg)
         } else {
             // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
-            anchored_align_score(query, ref_seq, &chain.mems, cfg)
+            anchored_score_above(query, ref_seq, &chain.mems, cfg, floor)
         };
 
         let valid = score > min_accepted_score(query.len(), cfg);
@@ -305,6 +335,9 @@ enum GapKind {
     FlankLeftAnchored = 1,
     /// read flank anchored on its right (5' flank)
     FlankRightAnchored = 2,
+    /// the same two flanks, holding a score their true score is known to be under
+    FlankLeftBelow = 3,
+    FlankRightBelow = 4,
 }
 
 /// One cached DP score. `seqs` holds the query bytes followed by the target
@@ -386,6 +419,16 @@ impl GapCache {
             .map(|e| e.score)
     }
 
+    /// Lower the bound held for this key, or record it.
+    fn lower(&mut self, kind: GapKind, q: &[u8], t: &[u8], bound: i32) {
+        let h = gap_hash(&self.hasher, kind, q, t);
+        if let Some(e) = self.table.find_mut(h, |e| Self::eq(e, kind, q, t)) {
+            e.score = e.score.min(bound);
+        } else {
+            self.insert(kind, q, t, bound);
+        }
+    }
+
     /// Record a score, clearing the whole table first if it has reached the cap.
     fn insert(&mut self, kind: GapKind, q: &[u8], t: &[u8], score: i32) {
         let GapCache { table, hasher } = self;
@@ -416,11 +459,28 @@ impl GapCache {
 /// cached results for repeated substrings. Treating MEMs as fixed exact matches
 /// is what makes this cheaper than a full-read DP; it can be marginally lower
 /// than the global optimum when re-aligning across a MEM boundary would help.
+#[cfg(test)]
 fn anchored_align_score(
     query: &[u8],
     ref_seq: &[u8],
     mems: &[crate::mem::Mem],
     cfg: &AlignConfig,
+) -> i32 {
+    anchored_score_above(query, ref_seq, mems, cfg, NO_FLOOR)
+}
+
+/// A floor no score reaches down to, for when every score matters.
+const NO_FLOOR: i32 = i32::MIN / 2;
+
+/// [`anchored_align_score`] for a caller that only tells apart scores above
+/// `floor`: the score if it is above, otherwise `floor` or less. The flanks run
+/// last, knowing what they must reach, since they take most of the DP.
+fn anchored_score_above(
+    query: &[u8],
+    ref_seq: &[u8],
+    mems: &[crate::mem::Mem],
+    cfg: &AlignConfig,
+    floor: i32,
 ) -> i32 {
     if mems.is_empty() {
         return i32::MIN / 4;
@@ -429,16 +489,6 @@ fn anchored_align_score(
     let reflen = ref_seq.len() as i32;
     let m = cfg.match_score as i32;
     let mut score = 0i32;
-
-    // 5' flank: read before the first MEM, anchored on its right at the MEM.
-    let first = &mems[0];
-    if first.read_start > 0 {
-        let qf = &query[0..first.read_start as usize];
-        let r_lo = (first.ref_start - first.read_start - cfg.indel_margin as i32).max(0);
-        let r_hi = first.ref_start.max(0);
-        let tf = &ref_seq[r_lo as usize..r_hi as usize];
-        score += cached_flank_score(qf, tf, cfg, /*anchor_right=*/ true);
-    }
 
     // MEM exact-match segments + inter-MEM gaps.
     for (i, mem) in mems.iter().enumerate() {
@@ -470,14 +520,37 @@ fn anchored_align_score(
         }
     }
 
-    // 3' flank: read after the last MEM, anchored on its left at the MEM.
     let last = mems.last().unwrap();
-    if last.read_end() < qlen {
+    let q3 = (qlen - last.read_end()).max(0);
+
+    // 5' flank: read before the first MEM, anchored on its right at the MEM. No
+    // read base of the other flank can score more than a match.
+    let first = &mems[0];
+    if first.read_start > 0 {
+        let qf = &query[0..first.read_start as usize];
+        let r_lo = (first.ref_start - first.read_start - cfg.indel_margin as i32).max(0);
+        let r_hi = first.ref_start.max(0);
+        let tf = &ref_seq[r_lo as usize..r_hi as usize];
+        let need = floor + 1 - score - q3 * m;
+        let s = cached_flank_score(qf, tf, cfg, /*anchor_right=*/ true, need);
+        if s < need {
+            return floor;
+        }
+        score += s;
+    }
+
+    // 3' flank: read after the last MEM, anchored on its left at the MEM.
+    if q3 > 0 {
         let qf = &query[last.read_end() as usize..qlen as usize];
         let r_hi =
             (last.ref_end() + (qlen - last.read_end()) + cfg.indel_margin as i32).min(reflen);
         let tf = &ref_seq[last.ref_end() as usize..r_hi as usize];
-        score += cached_flank_score(qf, tf, cfg, /*anchor_right=*/ false);
+        let need = floor + 1 - score;
+        let s = cached_flank_score(qf, tf, cfg, /*anchor_right=*/ false, need);
+        if s < need {
+            return floor;
+        }
+        score += s;
     }
 
     score
@@ -544,7 +617,25 @@ fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
 /// flank must be fully consumed; the reference may extend freely outward. For a
 /// 5' flank (`anchor_right`) the sequences are reversed so the anchor is on the
 /// left, matching ksw2's left-anchored extension.
+#[cfg(test)]
 fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool) -> i32 {
+    ksw2_flank_extend_in_band(
+        qf,
+        tf,
+        cfg,
+        anchor_right,
+        cfg.bandwidth.max(qf.len() as i32),
+    )
+}
+
+/// [`ksw2_flank_extend`] restricted to `band` diagonals either side of the anchor.
+fn ksw2_flank_extend_in_band(
+    qf: &[u8],
+    tf: &[u8],
+    cfg: &AlignConfig,
+    anchor_right: bool,
+    band: i32,
+) -> i32 {
     use ksw2rs::{Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qf.is_empty() {
         return 0;
@@ -578,7 +669,7 @@ fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool
             mat: &mat,
             q: cfg.gap_open_pen,
             e: cfg.gap_extend_pen,
-            w: cfg.bandwidth.max(qf.len() as i32),
+            w: band,
             zdrop: -1,
             end_bonus: 0,
             // Score-only: we read `mqe`/`max`, never the CIGAR (see ksw2_gap_global).
@@ -635,8 +726,11 @@ fn cached_gap_score(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
 enum FlankShortcut<'a> {
     /// the DP's score, without running it
     Score(i32),
-    /// the part of the reference the DP can use
-    Target(&'a [u8]),
+    /// no alignment reaches the score asked for
+    Below,
+    /// the DP's cache key (the reference it could need whatever is asked for),
+    /// and the reference and band it needs for this request
+    Target(&'a [u8], &'a [u8], i32),
 }
 
 /// Settle a read flank from its ungapped alignment where the scoring allows.
@@ -647,7 +741,11 @@ enum FlankShortcut<'a> {
 /// for at least one gap. So if `s0` reaches `ma·q − go − ge` no gap can beat it
 /// and `s0` is the DP's answer, and otherwise only `d < (ma·q − s0 − go) / ge`
 /// can, which bounds the reference the DP needs far below the indel margin it
-/// is handed. Both hold exactly, so this cannot change a score.
+/// is handed. A path leaving the diagonal by `d` pays the same, so `d` also
+/// bounds the band. Both hold exactly, so this cannot change a score.
+///
+/// A caller that rejects anything under `need` raises the bar the same way: a
+/// path scoring less than `max(s0, need)` is of no use to it.
 ///
 /// Soft-clipping also reads the DP's `mte` and `max`, which a shorter target
 /// would change, and a reference shorter than the flank has no ungapped path.
@@ -657,7 +755,9 @@ fn flank_shortcut<'a>(
     tf: &'a [u8],
     cfg: &AlignConfig,
     anchor_right: bool,
+    need: i32,
 ) -> FlankShortcut<'a> {
+    let wide = cfg.bandwidth.max(qf.len() as i32);
     let (ma, mp) = (cfg.match_score as i32, cfg.mismatch_pen as i32);
     let (go, ge) = (cfg.gap_open_pen as i32, cfg.gap_extend_pen as i32);
     if cfg.softclip
@@ -668,7 +768,7 @@ fn flank_shortcut<'a>(
         || go <= 0
         || ge <= 0
     {
-        return FlankShortcut::Target(tf);
+        return FlankShortcut::Target(tf, tf, wide);
     }
     // An ambiguous base on the diagonal goes to the DP: its SIMD kernels score
     // those by their own rule, not from the matrix. Elsewhere it is no matter,
@@ -685,42 +785,75 @@ fn flank_shortcut<'a>(
         s0 += if a == b { ma } else { -mp };
     }
     if ambiguous {
-        return FlankShortcut::Target(tf);
+        return FlankShortcut::Target(tf, tf, wide);
     }
     let room = ma * qf.len() as i32 - s0 - go;
     if room <= ge {
-        return FlankShortcut::Score(s0);
+        return if s0 >= need {
+            FlankShortcut::Score(s0)
+        } else {
+            FlankShortcut::Below
+        };
     }
-    let keep = (qf.len() + (room / ge) as usize).min(tf.len());
-    FlankShortcut::Target(if anchor_right {
-        &tf[tf.len() - keep..]
-    } else {
-        &tf[..keep]
-    })
+    if s0 < need && ma * qf.len() as i32 - go - ge < need {
+        // Not even a single-base gap gets there, and the diagonal did not.
+        return FlankShortcut::Below;
+    }
+    let keep_for = |d: i32| {
+        let keep = (qf.len() + d as usize).min(tf.len());
+        if anchor_right {
+            &tf[tf.len() - keep..]
+        } else {
+            &tf[..keep]
+        }
+    };
+    let band = (room - (need - s0).max(0)) / ge;
+    FlankShortcut::Target(keep_for(room / ge), keep_for(band), wide.min(band))
 }
 
-fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool) -> i32 {
+/// The flank's score if it reaches `need`, otherwise some score below `need`.
+fn cached_flank_score(
+    qf: &[u8],
+    tf: &[u8],
+    cfg: &AlignConfig,
+    anchor_right: bool,
+    need: i32,
+) -> i32 {
     if qf.is_empty() {
         return 0;
     }
     // Most flanks are settled without a DP, and the rest need far less of the
     // reference than they are given.
-    let tf = match flank_shortcut(qf, tf, cfg, anchor_right) {
+    let (key, tf, band) = match flank_shortcut(qf, tf, cfg, anchor_right, need) {
         FlankShortcut::Score(s) => return s,
-        FlankShortcut::Target(t) => t,
+        FlankShortcut::Below => return need - 1,
+        FlankShortcut::Target(key, t, band) => (key, t, band),
     };
     // The anchor side selects a different DP, so it is part of the key.
-    let kind = if anchor_right {
-        GapKind::FlankRightAnchored
+    let (kind, below) = if anchor_right {
+        (GapKind::FlankRightAnchored, GapKind::FlankRightBelow)
     } else {
-        GapKind::FlankLeftAnchored
+        (GapKind::FlankLeftAnchored, GapKind::FlankLeftBelow)
     };
     GAP_CACHE.with(|c| {
-        if let Some(s) = c.borrow().get(kind, qf, tf) {
-            return s;
+        {
+            let c = c.borrow();
+            if let Some(s) = c.get(kind, qf, key) {
+                return s;
+            }
+            // A rejected flank recurs across the candidates of a read.
+            if c.get(below, qf, key).is_some_and(|b| b <= need) {
+                return need - 1;
+            }
         }
-        let s = ksw2_flank_extend(qf, tf, cfg, anchor_right);
-        c.borrow_mut().insert(kind, qf, tf, s);
+        let s = ksw2_flank_extend_in_band(qf, tf, cfg, anchor_right, band);
+        // Under `need` the band may have cut off the true score, which is then
+        // only known to be under `need`.
+        if s >= need {
+            c.borrow_mut().insert(kind, qf, key, s);
+        } else {
+            c.borrow_mut().lower(below, qf, key, need);
+        }
         s
     })
 }
@@ -898,7 +1031,7 @@ mod tests {
             seed ^= seed << 17;
             seed % n
         };
-        let (mut settled, mut trimmed) = (0, 0);
+        let (mut settled, mut trimmed, mut below) = (0, 0, 0);
         for &(ma, mp, go, ge) in &[
             (2i8, 4i8, 6i8, 2i8),
             (1, 3, 5, 1),
@@ -948,20 +1081,44 @@ mod tests {
                     }
                 }
                 let dp = ksw2_flank_extend(&q, &t, &cfg, anchor_right);
-                match flank_shortcut(&q, &t, &cfg, anchor_right) {
+                match flank_shortcut(&q, &t, &cfg, anchor_right, NO_FLOOR) {
                     FlankShortcut::Score(s) => {
                         settled += 1;
                         assert_eq!(s, dp, "settled {q:?} {t:?} {anchor_right} {cfg:?}");
                     }
-                    FlankShortcut::Target(k) => {
+                    FlankShortcut::Below => panic!("nothing is below no floor"),
+                    FlankShortcut::Target(key, k, band) => {
+                        assert_eq!(key, k);
                         trimmed += usize::from(k.len() < t.len());
-                        let got = ksw2_flank_extend(&q, k, &cfg, anchor_right);
+                        let got = ksw2_flank_extend_in_band(&q, k, &cfg, anchor_right, band);
                         assert_eq!(got, dp, "trimmed {q:?} {t:?} {anchor_right} {cfg:?}");
+                    }
+                }
+                // Asked for a score around the true one: exact from there up,
+                // and below it otherwise.
+                for need in [dp - 7, dp - 1, dp, dp + 1, dp + 2, dp + 9] {
+                    let got = match flank_shortcut(&q, &t, &cfg, anchor_right, need) {
+                        FlankShortcut::Score(s) => s,
+                        FlankShortcut::Below => {
+                            below += 1;
+                            need - 1
+                        }
+                        FlankShortcut::Target(_, k, band) => {
+                            ksw2_flank_extend_in_band(&q, k, &cfg, anchor_right, band)
+                        }
+                    };
+                    if dp >= need {
+                        assert_eq!(got, dp, "need {need} {q:?} {t:?} {anchor_right} {cfg:?}");
+                    } else {
+                        assert!(got < need, "need {need} got {got} dp {dp} {q:?} {t:?}");
                     }
                 }
             }
         }
-        assert!(settled > 10_000 && trimmed > 10_000, "{settled} {trimmed}");
+        assert!(
+            settled > 10_000 && trimmed > 10_000 && below > 1_000,
+            "{settled} {trimmed} {below}"
+        );
     }
 
     /// Soft-clipping reads more of the DP than the shortcuts can stand in for.
@@ -978,8 +1135,9 @@ mod tests {
                 ..AlignConfig::default()
             },
         ] {
-            match flank_shortcut(q, t, &cfg, false) {
-                FlankShortcut::Target(k) => assert_eq!(k, t),
+            match flank_shortcut(q, t, &cfg, false, NO_FLOOR) {
+                FlankShortcut::Target(_, k, _) => assert_eq!(k, t),
+                FlankShortcut::Below => panic!("below under soft-clipping"),
                 FlankShortcut::Score(_) => panic!("settled under soft-clipping"),
             }
         }
