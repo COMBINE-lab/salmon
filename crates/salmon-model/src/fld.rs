@@ -674,7 +674,7 @@ impl DiscreteFld {
     /// unique fragment also counts towards the library-format tally, since an
     /// ambiguous fragment's placements can disagree on orientation.
     pub fn add_fragment(&self, unique: bool, pairs: impl IntoIterator<Item = PairObs>) {
-        let Some(p) = pairs.into_iter().min_by_key(|p| (p.len, p.tid)) else {
+        let Some(p) = shortest_pair(pairs) else {
             return;
         };
         if unique {
@@ -698,31 +698,45 @@ impl DiscreteFld {
     /// tally; returns the observed format.
     fn add_len(&self, len: usize, is_fw: bool, mate_fw: bool) -> LibraryFormat {
         let l = len.min(self.max_len);
-        // opposite-strand (inward/outward) vs same-strand, exactly as the RAD
-        // reader classifies placements.
-        let (orientation, strandedness) = if is_fw != mate_fw {
-            let s = if is_fw {
-                ReadStrandedness::SA
-            } else {
-                ReadStrandedness::AS
-            };
-            (ReadOrientation::Toward, s)
-        } else {
-            let s = if is_fw {
-                ReadStrandedness::S
-            } else {
-                ReadStrandedness::A
-            };
-            (ReadOrientation::Same, s)
-        };
-        if orientation == ReadOrientation::Same {
+        let fmt = observed_pair_format(is_fw, mate_fw);
+        if fmt.orientation == ReadOrientation::Same {
             self.same[l].fetch_add(1, Ordering::Relaxed);
             self.n_same.fetch_add(1, Ordering::Relaxed);
         } else {
             self.opp[l].fetch_add(1, Ordering::Relaxed);
             self.n_opp.fetch_add(1, Ordering::Relaxed);
         }
-        LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)
+        fmt
+    }
+
+    /// A per-thread tally for this accumulator, to be merged back with
+    /// [`absorb`](Self::absorb).
+    pub fn local(&self) -> LocalFld {
+        LocalFld {
+            opp: vec![0; self.max_len + 1],
+            same: vec![0; self.max_len + 1],
+            fmt_counts: [0; 12],
+            max_len: self.max_len,
+        }
+    }
+
+    /// Add a per-thread tally from [`local`](Self::local).
+    pub fn absorb(&self, local: &LocalFld) {
+        let add = |dst: &[AtomicU64], src: &[u64]| -> u64 {
+            let mut n = 0;
+            for (a, &c) in dst.iter().zip(src) {
+                if c > 0 {
+                    a.fetch_add(c, Ordering::Relaxed);
+                    n += c;
+                }
+            }
+            n
+        };
+        let n_opp = add(&self.opp, &local.opp);
+        let n_same = add(&self.same, &local.same);
+        self.n_opp.fetch_add(n_opp, Ordering::Relaxed);
+        self.n_same.fetch_add(n_same, Ordering::Relaxed);
+        add(&self.fmt_counts, &local.fmt_counts);
     }
 
     /// Total proper pairs seen across both orientation buckets.
@@ -773,6 +787,70 @@ impl DiscreteFld {
         };
         (fld, detected)
     }
+}
+
+/// A single thread's share of a [`DiscreteFld`], with the same
+/// [`add_fragment`](Self::add_fragment) rule but plain counters.
+///
+/// The mapping pass adds a length for nearly every fragment, so tallying
+/// straight into the shared atomics would have every thread contending for the
+/// same few cache lines (the counts near the distribution's mode). Each worker
+/// fills one of these instead and merges it once, at the end, with
+/// [`DiscreteFld::absorb`]; integer counts make the result independent of the
+/// merge order.
+#[derive(Debug, Clone)]
+pub struct LocalFld {
+    opp: Vec<u64>,
+    same: Vec<u64>,
+    fmt_counts: [u64; 12],
+    max_len: usize,
+}
+
+impl LocalFld {
+    /// See [`DiscreteFld::add_fragment`].
+    pub fn add_fragment(&mut self, unique: bool, pairs: impl IntoIterator<Item = PairObs>) {
+        let Some(p) = shortest_pair(pairs) else {
+            return;
+        };
+        let l = p.len.min(self.max_len);
+        let fmt = observed_pair_format(p.is_fw, p.mate_fw);
+        if fmt.orientation == ReadOrientation::Same {
+            self.same[l] += 1;
+        } else {
+            self.opp[l] += 1;
+        }
+        if unique {
+            self.fmt_counts[fmt.format_id() as usize] += 1;
+        }
+    }
+}
+
+/// The proper pair that stands for a fragment in the FLD: the shortest implied
+/// length, ties to the lowest transcript id (see [`DiscreteFld::add_fragment`]).
+fn shortest_pair(pairs: impl IntoIterator<Item = PairObs>) -> Option<PairObs> {
+    pairs.into_iter().min_by_key(|p| (p.len, p.tid))
+}
+
+/// A proper pair's observed format from its mate strands: opposite-strand
+/// (inward/outward) or same-strand, exactly as the RAD reader classifies
+/// placements.
+fn observed_pair_format(is_fw: bool, mate_fw: bool) -> LibraryFormat {
+    let (orientation, strandedness) = if is_fw != mate_fw {
+        let s = if is_fw {
+            ReadStrandedness::SA
+        } else {
+            ReadStrandedness::AS
+        };
+        (ReadOrientation::Toward, s)
+    } else {
+        let s = if is_fw {
+            ReadStrandedness::S
+        } else {
+            ReadStrandedness::A
+        };
+        (ReadOrientation::Same, s)
+    };
+    LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)
 }
 
 /// Where a run's fragment-length distribution came from, reported as
@@ -863,6 +941,37 @@ mod tests {
         assert_eq!(acc.opp[210].load(Ordering::Relaxed), 1);
         assert_eq!(acc.count(), 3);
         assert!(acc.finish(200.0, 80.0).1.is_some());
+
+        // The per-thread tally, merged, gives the same accumulator.
+        let shared = DiscreteFld::new(1000);
+        let mut local = shared.local();
+        local.add_fragment(
+            false,
+            [
+                obs(300, 2, true, false),
+                obs(150, 5, true, false),
+                obs(150, 1, true, true),
+            ],
+        );
+        local.add_fragment(
+            false,
+            [
+                obs(150, 1, true, true),
+                obs(150, 5, true, false),
+                obs(300, 2, true, false),
+            ],
+        );
+        local.add_fragment(true, [obs(210, 3, true, false)]);
+        shared.absorb(&local);
+        let counts = |a: &DiscreteFld| {
+            let v = |x: &[AtomicU64]| {
+                x.iter()
+                    .map(|c| c.load(Ordering::Relaxed))
+                    .collect::<Vec<_>>()
+            };
+            (v(&a.opp), v(&a.same), v(&a.fmt_counts), a.count())
+        };
+        assert_eq!(counts(&shared), counts(&acc));
     }
 
     /// A probability distribution must sum to 1; this catches an error in the

@@ -66,7 +66,7 @@ pub use bias::{
 pub use fld::FragLengthSource;
 pub use fld::{
     ambig_frag_log_prob, smoothed_effective_length, DiscreteFld, FragmentLengthDistribution,
-    LengthCorrection, PairObs, NO_LENGTH_CORRECTION_EFF_LEN,
+    LengthCorrection, LocalFld, PairObs, NO_LENGTH_CORRECTION_EFF_LEN,
 };
 pub use gcbias::{
     build_expected_gc, gc_desc, gc_prefix, gc_ratio, GcFragModel, GcRank, GcStore, GcView,

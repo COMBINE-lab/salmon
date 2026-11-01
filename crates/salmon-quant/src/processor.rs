@@ -245,6 +245,8 @@ pub(crate) struct Counters {
     pub dovetail: u64,
     pub frags_filtered_vm: u64,
     pub below_threshold_vm: u64,
+    /// this worker's share of [`Shared::discrete_fld`], created on first use
+    pub fld: Option<salmon_model::LocalFld>,
 }
 
 impl Counters {
@@ -266,6 +268,9 @@ impl Counters {
         add(sh.num_dovetail, self.dovetail);
         add(sh.num_frags_filtered_vm, self.frags_filtered_vm);
         add(sh.num_below_threshold_vm, self.below_threshold_vm);
+        if let (Some(local), Some(acc)) = (&self.fld, sh.discrete_fld) {
+            acc.absorb(local);
+        }
     }
 }
 
@@ -736,8 +741,9 @@ fn record_discrete(
     // records written this pass, and like the reader's `derive_fld`), so a baked
     // FLD matches a re-derived one. Orientation comes from the mate strands
     // rather than `m.format`, exactly as `build_rad_record` derives the RAD hit,
-    // for the same reason.
-    acc.add_fragment(
+    // for the same reason. Tallied per worker and merged at thread end.
+    let fld = counters.fld.get_or_insert_with(|| acc.local());
+    fld.add_fragment(
         placements.len() == 1,
         placements
             .iter()
