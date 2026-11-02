@@ -164,3 +164,99 @@ fn single_end_frag_length_source_is_the_prior() {
         "a single-end run's FLD is the prior, and provenance must say so: {meta}"
     );
 }
+
+fn revcomp(s: &str) -> String {
+    s.chars()
+        .rev()
+        .map(|c| match c {
+            'A' => 'T',
+            'C' => 'G',
+            'G' => 'C',
+            _ => 'A',
+        })
+        .collect()
+}
+
+/// An orphan's SAM record must carry its own mate's strand. Every orphan keeps
+/// its strand in `is_fw`, but a right orphan's record read `r2_fw`, which only a
+/// proper pair sets, so each was written as reverse (FLAG 0x10) with its
+/// sequence reverse-complemented, whatever its orientation (#1272).
+#[test]
+fn an_orphan_record_carries_its_own_strand() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fasta, _, _, _) = fixture(dir.path());
+    let index = dir.path().join("idx");
+    assert!(Command::new(SALMON)
+        .args(["index", "-t"])
+        .arg(&fasta)
+        .arg("-i")
+        .arg(&index)
+        .args(["-p", "2"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+
+    // One mate from txA, on the strand named, and one that maps nowhere.
+    let a = sequence(5, 3000);
+    let junk = sequence(777, 100);
+    let fragments = [
+        ("r1_fw", a[500..600].to_string(), junk.clone()),
+        ("r1_rc", revcomp(&a[900..1000]), junk.clone()),
+        ("r2_fw", junk.clone(), a[1300..1400].to_string()),
+        ("r2_rc", junk.clone(), revcomp(&a[1700..1800])),
+    ];
+    let qual = "I".repeat(100);
+    let (mut r1, mut r2) = (String::new(), String::new());
+    for (name, m1, m2) in &fragments {
+        r1.push_str(&format!("@{name}\n{m1}\n+\n{qual}\n"));
+        r2.push_str(&format!("@{name}\n{m2}\n+\n{qual}\n"));
+    }
+    let (p1, p2) = (dir.path().join("o1.fq"), dir.path().join("o2.fq"));
+    std::fs::write(&p1, r1).unwrap();
+    std::fs::write(&p2, r2).unwrap();
+
+    for mode in [None, Some("--sketch")] {
+        let out = dir.path().join(format!("q{}", mode.is_some()));
+        let sam = dir.path().join(format!("o{}.sam", mode.is_some()));
+        let o = Command::new(SALMON)
+            .args(["quant", "-l", "IU", "-p", "2", "-i"])
+            .arg(&index)
+            .arg("-1")
+            .arg(&p1)
+            .arg("-2")
+            .arg(&p2)
+            .arg("-o")
+            .arg(&out)
+            .arg(format!("--writeMappings={}", sam.display()))
+            .args(mode)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let sam = std::fs::read_to_string(&sam).unwrap();
+        for (name, m1, m2) in &fragments {
+            let rec: Vec<&str> = sam
+                .lines()
+                .find(|l| l.split('\t').next() == Some(*name))
+                .unwrap_or_else(|| panic!("{mode:?}: no record for {name}:\n{sam}"))
+                .split('\t')
+                .collect();
+            let flag: u16 = rec[1].parse().unwrap();
+            let (read2, given) = if name.starts_with("r2") {
+                (true, m2)
+            } else {
+                (false, m1)
+            };
+            let reverse = name.ends_with("rc");
+            assert_eq!(flag & 0x80 != 0, read2, "{mode:?} {name}: FLAG {flag}");
+            assert_eq!(flag & 0x10 != 0, reverse, "{mode:?} {name}: FLAG {flag}");
+            // SEQ is on the reference's forward strand.
+            let seq = if reverse {
+                revcomp(given)
+            } else {
+                given.to_string()
+            };
+            assert_eq!(rec[9], seq, "{mode:?} {name}: SEQ");
+        }
+    }
+}
