@@ -31,6 +31,43 @@ salmon quant -i salmon_index -l A \
   -o out
 ```
 
+## What replicates do not measure
+
+Both methods work from a single library's mapping results. Bootstrapping resamples
+that library's equivalence-class counts and re-runs the optimizer; Gibbs sampling
+explores the abundances those same classes support. The equivalence classes, their
+conditional weights and the bias-corrected effective lengths stay as they were in
+the original run.
+
+Replicates therefore describe the uncertainty **within one library**. They do not
+include what changes when the same RNA goes through a new library preparation or
+sequencing run, such as fragmentation, complexity, duplication or read length. They
+can understate the differences seen between technical replicate libraries, and
+should not be used as an estimate of that variance. Only sequencing replicate
+libraries measures it directly.
+
+This matters most for isoform proportions, and for anything derived from them. The
+gene-level average transcript length that `tximport` turns into DESeq2 offsets is
+an abundance-weighted mean of effective lengths, so it inherits any instability in
+how a gene's reads are divided among its isoforms. In [one report on technical
+replicates of whole-blood total RNA at 2x51 and 2x59
+bp](https://github.com/COMBINE-lab/salmon/issues/1229), the between-library spread
+of this quantity was about twice what 30 bootstraps predicted. That is a single
+dataset, not a general calibration factor.
+
+If you have technical replicates and proportions do not reproduce, these are useful
+checks:
+
+- Fix each gene's isoform proportions at their mean across samples and recompute
+  the average transcript length. If the instability disappears, it comes from the
+  proportions rather than the bias-corrected effective lengths.
+- Re-run with `--useEM`. When isoforms are nearly identical the likelihood can be
+  almost flat across them, so the allocation may be sensitive to the optimizer. A
+  large difference from the default VBEM points to this; it does not show which
+  result is correct.
+- Compare downstream results with and without the length offsets, to see how much
+  of a change between conditions comes from the offsets alone.
+
 ## Output
 
 Replicates are written to `aux_info/bootstrap/`:
