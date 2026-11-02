@@ -652,6 +652,7 @@ fn preprocess_fasta(
         // transcriptome. salmon itself keys on a 64-bit digest; at 128 bits an
         // accidental collision among even 10^9 sequences has probability ~10^-21.
         let mut seen: ahash::AHashMap<u128, Vec<u8>> = ahash::AHashMap::new();
+        let mut names_seen: ahash::AHashSet<Vec<u8>> = ahash::AHashSet::new();
         'records: for path in inputs {
             let mut reader = open_fasta(path, threads)?;
             while let Some(rec) = reader.next() {
@@ -661,6 +662,15 @@ fn preprocess_fasta(
                 let id = rec.id();
                 let name = processed_name(id, gencode);
                 let orig = rec.seq();
+                // Everything downstream identifies a reference by name: two with one
+                // name become rows that gene maps and `quantmerge` cannot tell apart.
+                if !names_seen.insert(name.to_vec()) {
+                    anyhow::bail!(
+                        "reference name {:?} appears more than once in the FASTA input; \
+                         names must be unique",
+                        String::from_utf8_lossy(name)
+                    );
+                }
                 let is_decoy = decoy_names.contains(name);
                 // salmon requires every decoy record to appear, contiguously, at the
                 // end of the input — reject a real transcript after any decoy.
@@ -1884,6 +1894,35 @@ mod tests {
             writeln!(f, ">{name}\n{seq}").unwrap();
         }
         path
+    }
+
+    /// Two records named `t1` gave two `t1` rows in `quant.sf`, which gene maps
+    /// and `quantmerge` cannot tell apart. Refused whether or not the sequences
+    /// match, and however the build treats duplicate sequences.
+    #[test]
+    fn a_repeated_transcript_name_is_refused() {
+        let random = |mut x: u64| -> String {
+            (0..300)
+                .map(|_| {
+                    x = x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    ['A', 'C', 'G', 'T'][(x >> 33) as usize & 3]
+                })
+                .collect()
+        };
+        let (a, b) = (random(1), random(2));
+        for (keep_duplicates, second) in [(false, &b), (false, &a), (true, &a)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let fasta = tmp.path().join("t.fa");
+            std::fs::write(&fasta, format!(">t1\n{a}\n>t2\n{b}\n>t1 again\n{second}\n")).unwrap();
+            let mut opts = IndexBuildOptions::new(vec![fasta], tmp.path().join("idx"));
+            opts.threads = 1;
+            opts.keep_duplicates = keep_duplicates;
+            let err = build(&opts).map(|_| ()).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("\"t1\""), "{msg}");
+        }
     }
 
     /// The end-to-end contract: a build produces a loadable index whose names,
