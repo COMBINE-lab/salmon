@@ -258,9 +258,6 @@ fn no_length_correction_conflicts_with_bias_correction() {
     );
 }
 
-/// A truncated FASTQ was quantified up to its last complete record and reported
-/// as a normal run. The trailing-line cases were also inconsistent with each
-/// other: 1 or 2 orphaned lines were dropped in silence while 3 errored.
 /// Run paired `salmon quant` over two FIFOs fed by `feed`, a shell command given
 /// the source file as `$1` and writing FASTQ (of any compression) to stdout.
 ///
@@ -445,6 +442,9 @@ fn index_reads_references_from_a_stream() {
     assert!(!o.status.success(), "a truncated gzip stream must fail");
 }
 
+/// A truncated FASTQ was quantified up to its last complete record and reported
+/// as a normal run. The trailing-line cases were also inconsistent with each
+/// other: 1 or 2 orphaned lines were dropped in silence while 3 errored.
 #[test]
 fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
     let dir = tempfile::tempdir().unwrap();
