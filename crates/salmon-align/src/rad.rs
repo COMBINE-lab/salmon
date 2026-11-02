@@ -171,7 +171,12 @@ impl RadFragment for SalmonBulkRecord {
             score: h.score,
             is_fw: h.is_fw,
             mate_fw: h.mate_fw,
-            status,
+            // See `SalmonBulkRecord::from_placements`.
+            status: match status {
+                MateStatus::PairedEndLeft if h.mate_fw => MateStatus::PairedEndRight,
+                MateStatus::PairedEndRight if h.mate_fw => MateStatus::PairedEndLeft,
+                s => s,
+            },
             pos: h.pos,
             frag_len: h.frag_len,
         }));

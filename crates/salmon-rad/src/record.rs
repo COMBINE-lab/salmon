@@ -30,6 +30,7 @@ use libradicl::rad_types::TagSection;
 use libradicl::record::{MappedRecord, RecordContext};
 
 use crate::{RadHit, RadProfile};
+use salmon_core::MateStatus;
 
 /// Parsing context for [`SalmonBulkRecord`]: which profile (and hence whether a
 /// per-hit `alignment_score` is present).
@@ -98,6 +99,26 @@ impl SalmonBulkRecord {
             hits,
             refs: std::cell::OnceCell::new(),
         }
+    }
+
+    /// Build a record from a fragment's placements: their statuses and their
+    /// hits, in the same order.
+    ///
+    /// A record has one `frag_type`, but one fragment can be a left orphan on
+    /// one transcript and a right orphan on another. The strand filters need to
+    /// know which, so a hit of the side `frag_type` does not name sets its
+    /// `mate_fw` bit, which an orphan hit otherwise leaves unset. See
+    /// [`RadHit::for_placement`].
+    pub fn from_placements(statuses: &[MateStatus], mut hits: Vec<RadHit>) -> Self {
+        use crate::frag_map_type::{fragment_level, from_mate_status, LEFT_ORPHAN, RIGHT_ORPHAN};
+        let frag_type = fragment_level(statuses.iter().copied());
+        if matches!(frag_type, LEFT_ORPHAN | RIGHT_ORPHAN) {
+            for (hit, &status) in hits.iter_mut().zip(statuses) {
+                let code = from_mate_status(status);
+                hit.mate_fw = matches!(code, LEFT_ORPHAN | RIGHT_ORPHAN) && code != frag_type;
+            }
+        }
+        Self::new(frag_type, hits)
     }
 }
 

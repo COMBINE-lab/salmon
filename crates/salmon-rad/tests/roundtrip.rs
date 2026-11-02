@@ -525,3 +525,22 @@ fn source_programs_round_trip() {
         other => panic!("mapping_type should be a string, got {other:?}"),
     }
 }
+
+/// One fragment's left and right orphans keep their sides in the encoded hit,
+/// and a one-sided record stays byte-identical to what older RADs hold.
+#[test]
+fn mixed_orphan_sides_are_marked_in_the_encoded_hit() {
+    use salmon_core::MateStatus::{PairedEndLeft, PairedEndRight};
+    let hit = |tid| RadHit::for_placement(tid, true, false, 10, false, 0, 100, 5);
+    let hits = || vec![hit(0), hit(1)];
+
+    let mixed = SalmonBulkRecord::from_placements(&[PairedEndLeft, PairedEndRight], hits());
+    assert_eq!(mixed.frag_type, frag_map_type::RIGHT_ORPHAN);
+    let decoded = |h: &RadHit| RadHit::decode_ori_ref(h.compressed_ori_ref());
+    assert_eq!(decoded(&mixed.hits[0]), (0, true, true));
+    assert_eq!(decoded(&mixed.hits[1]), (1, true, false));
+
+    let one_side = SalmonBulkRecord::from_placements(&[PairedEndLeft, PairedEndLeft], hits());
+    assert_eq!(one_side.frag_type, frag_map_type::LEFT_ORPHAN);
+    assert_eq!(one_side.hits, hits());
+}
