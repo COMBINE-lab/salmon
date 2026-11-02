@@ -31,6 +31,24 @@ salmon quant -i salmon_index -l A \
   -o out
 ```
 
+## Bootstrap or Gibbs
+
+The two methods answer different questions, which is why salmon provides both:
+
+- **Bootstrap:** how much would the estimates move if this library had yielded
+  slightly different counts? Each replicate resamples the equivalence-class counts
+  and re-runs the optimizer.
+- **Gibbs sampling:** which abundances does the model support, given these
+  counts? The sampler repeatedly reassigns fragments to transcripts in proportion
+  to the current abundances, and draws the abundances again from the result, so
+  its samples come from the posterior.
+
+They differ most where the likelihood is nearly flat, as it is across isoforms
+that share almost all of their sequence. Each bootstrap replicate re-runs the
+optimizer from the same starting point, so replicates can settle on similar
+allocations even when the data barely distinguish them. The Gibbs sampler moves
+along such directions, so it shows that ambiguity more fully.
+
 ## What replicates do not measure
 
 Both methods work from a single library's mapping results. Bootstrapping resamples
@@ -44,16 +62,18 @@ include what changes when the same RNA goes through a new library preparation or
 sequencing run, such as fragmentation, complexity, duplication or read length. They
 can understate the differences seen between technical replicate libraries, and
 should not be used as an estimate of that variance. Only sequencing replicate
-libraries measures it directly.
+libraries measures it.
 
 This matters most for isoform proportions, and for anything derived from them. The
 gene-level average transcript length that `tximport` turns into DESeq2 offsets is
 an abundance-weighted mean of effective lengths, so it inherits any instability in
 how a gene's reads are divided among its isoforms. In [one report on technical
-replicates of whole-blood total RNA at 2x51 and 2x59
-bp](https://github.com/COMBINE-lab/salmon/issues/1229), the between-library spread
-of this quantity was about twice what 30 bootstraps predicted. That is a single
-dataset, not a general calibration factor.
+replicates of whole-blood total RNA](https://github.com/COMBINE-lab/salmon/issues/1229),
+sequenced two years apart at 2x51 and 2x59 bp, the between-library spread of this
+quantity was about twice what 30 bootstraps predicted. That is a single dataset,
+whose two runs also differed in platform and duplication rate, not a general
+calibration factor, and its replicates were bootstraps, which can understate
+isoform ambiguity as described above.
 
 If you have technical replicates and proportions do not reproduce, these are useful
 checks:
@@ -65,6 +85,8 @@ checks:
   almost flat across them, so the allocation may be sensitive to the optimizer. A
   large difference from the default VBEM points to this; it does not show which
   result is correct.
+- Draw Gibbs samples (`--numGibbsSamples`) as well as bootstraps, and compare their
+  spread for the affected genes with the bootstrap spread.
 - Compare downstream results with and without the length offsets, to see how much
   of a change between conditions comes from the offsets alone.
 
