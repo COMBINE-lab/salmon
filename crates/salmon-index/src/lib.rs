@@ -307,7 +307,7 @@ pub struct IndexInfo {
     pub decoy_name_hash: String,
 }
 
-/// Compute the reference sequence/name SHA-256 and SHA-512 hashes exactly as
+/// The reference sequence/name SHA-256 and SHA-512 hashes, computed exactly as
 /// salmon's pufferfish `FixFasta` does, so the values byte-match a salmon index
 /// built from the same FASTA(s):
 /// - sequences are hashed in FASTA order, with non-printable bytes removed but
@@ -315,86 +315,171 @@ pub struct IndexInfo {
 ///   original-case printable sequence), for every record;
 /// - names are the header up to the first space or tab (salmon's `sepStr=" \t"`),
 ///   hashed for every record whose (printable) sequence is non-empty;
-/// - decoy records (named in `decoy_names`) are routed to dedicated decoy
+/// - decoy records (named in the decoy list) are routed to dedicated decoy
 ///   hashers, so a decoy-aware index gets real decoy digests; with no decoys
 ///   those hashers stay empty ⇒ SHA of "", matching salmon's no-decoy case.
 ///
 /// Every one of those "before"s matters: hashing the *input* rather than the
 /// processed sequence is what lets the digest identify the FASTA the user
 /// supplied, independently of how salmon later transforms it.
+#[derive(Default)]
+struct RefDigests {
+    seq256: sha2::Sha256,
+    name256: sha2::Sha256,
+    seq512: sha2::Sha512,
+    name512: sha2::Sha512,
+    // Decoy sequences/names are routed to their own hashers (salmon's
+    // `update_seq_hash(isDecoy,..)` / `update_name_hash`); with no decoys these
+    // stay empty → SHA of "" (matches salmon's no-decoy case). Only the SHA-256
+    // decoy digests are recorded by salmon, so we only need those.
+    decoy_seq256: sha2::Sha256,
+    decoy_name256: sha2::Sha256,
+    /// the printable bytes of a record that has others
+    printable: Vec<u8>,
+}
+
+impl RefDigests {
+    /// Add one record: its processed name and its sequence as read.
+    fn add(&mut self, name: &[u8], seq: &[u8], is_decoy: bool) {
+        use sha2::Digest;
+        // Keep only C-`isprint` bytes (0x20..=0x7e); preserve original case.
+        // This drops line endings and stray control bytes so the digest does
+        // not depend on how the FASTA was wrapped.
+        let seq = if is_printable(seq) {
+            seq
+        } else {
+            self.printable.clear();
+            self.printable
+                .extend(seq.iter().copied().filter(|b| (0x20..=0x7e).contains(b)));
+            &self.printable
+        };
+        if is_decoy {
+            self.decoy_seq256.update(seq);
+        } else {
+            self.seq256.update(seq);
+            self.seq512.update(seq);
+        }
+        // Empty-sequence records contribute no name, matching salmon.
+        if !seq.is_empty() {
+            if is_decoy {
+                self.decoy_name256.update(name);
+            } else {
+                self.name256.update(name);
+                self.name512.update(name);
+            }
+        }
+    }
+
+    fn finish(self) -> RefHashes {
+        use sha2::Digest;
+        // Render a digest as lowercase hex, the conventional textual form.
+        let hex = |bytes: &[u8]| -> String {
+            let mut s = String::with_capacity(bytes.len() * 2);
+            for b in bytes {
+                s.push_str(&format!("{b:02x}"));
+            }
+            s
+        };
+        RefHashes {
+            seq_hash: hex(&self.seq256.finalize()),
+            name_hash: hex(&self.name256.finalize()),
+            seq_hash512: hex(&self.seq512.finalize()),
+            name_hash512: hex(&self.name512.finalize()),
+            decoy_seq_hash: hex(&self.decoy_seq256.finalize()),
+            decoy_name_hash: hex(&self.decoy_name256.finalize()),
+        }
+    }
+}
+
+/// Whether every byte of `seq` is C-`isprint` (0x20..=0x7e), written to
+/// vectorize like [`is_pure_acgt`].
+fn is_printable(seq: &[u8]) -> bool {
+    seq.chunks(64).all(|block| {
+        block
+            .iter()
+            .fold(0u8, |bad, &b| bad | (b.wrapping_sub(0x20) > 0x5e) as u8)
+            == 0
+    })
+}
+
+/// Hash the reference inputs in a pass of their own, on a thread that overlaps
+/// the whole build: SHA-512 costs about twice what the parallel-decoded
+/// preprocessing pass does (1.5 Gbases of GENCODE), so it must not hold that
+/// pass back, and nothing reads the digests until `info.json` is written.
+///
+/// This reads every input a second time, which only a regular file allows; see
+/// [`HashFeed`] for streams.
 fn compute_ref_hashes(
     transcripts: &[PathBuf],
     decoy_names: &ahash::AHashSet<Vec<u8>>,
     gencode: bool,
 ) -> Result<RefHashes> {
-    use sha2::{Digest, Sha256, Sha512};
-    // A hasher is fed incrementally and finalized once, so the whole
-    // transcriptome never needs to be in memory at once.
-    let mut seq256 = Sha256::new();
-    let mut name256 = Sha256::new();
-    let mut seq512 = Sha512::new();
-    let mut name512 = Sha512::new();
-    // Decoy sequences/names are routed to their own hashers (salmon's
-    // `update_seq_hash(isDecoy,..)` / `update_name_hash`); with no decoys these
-    // stay empty → SHA of "" (matches salmon's no-decoy case). Only the SHA-256
-    // decoy digests are recorded by salmon, so we only need those.
-    let mut decoy_seq256 = Sha256::new();
-    let mut decoy_name256 = Sha256::new();
-
+    let mut digests = RefDigests::default();
     for path in transcripts {
         let mut reader = needletail::parse_fastx_file(path)
             .with_context(|| format!("opening {} for hashing", path.display()))?;
         while let Some(rec) = reader.next() {
             let rec = rec.context("reading FASTA record for hashing")?;
-            // Keep only C-`isprint` bytes (0x20..=0x7e); preserve original case.
-            // This drops line endings and stray control bytes so the digest does
-            // not depend on how the FASTA was wrapped.
-            let seq: Vec<u8> = rec
-                .seq()
-                .iter()
-                .copied()
-                .filter(|&b| (0x20..=0x7e).contains(&b))
-                .collect();
             // Header up to the first ' '/'\t' (and first '|' under --gencode).
-            let id = rec.id();
-            let name = processed_name(id, gencode);
-            let is_decoy = decoy_names.contains(name);
-            if is_decoy {
-                decoy_seq256.update(&seq);
-            } else {
-                seq256.update(&seq);
-                seq512.update(&seq);
-            }
-            // Empty-sequence records contribute no name, matching salmon.
-            if !seq.is_empty() {
-                if is_decoy {
-                    decoy_name256.update(name);
-                } else {
-                    name256.update(name);
-                    name512.update(name);
-                }
-            }
+            let name = processed_name(rec.id(), gencode);
+            digests.add(name, &rec.seq(), decoy_names.contains(name));
         }
     }
-    // Render a digest as lowercase hex, the conventional textual form.
-    let hex = |bytes: &[u8]| -> String {
-        let mut s = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            s.push_str(&format!("{b:02x}"));
-        }
-        s
-    };
-    Ok(RefHashes {
-        seq_hash: hex(&seq256.finalize()),
-        name_hash: hex(&name256.finalize()),
-        seq_hash512: hex(&seq512.finalize()),
-        name_hash512: hex(&name512.finalize()),
-        decoy_seq_hash: hex(&decoy_seq256.finalize()),
-        decoy_name_hash: hex(&decoy_name256.finalize()),
-    })
+    Ok(digests.finish())
 }
 
-/// The six digests [`compute_ref_hashes`] produces, grouped so the function can
+/// The digests of inputs that cannot be read twice (a FIFO, or process
+/// substitution such as `-t <(curl ...)`), fed by [`preprocess_fasta`] as it
+/// reads them, so that every input is read exactly once.
+///
+/// It hashes on a thread of its own, from the batches preprocessing hands the
+/// writers: a record that leaves preprocessing unchanged is hashed from its
+/// batch, and only one that was changed or dropped is sent as read. A stream is
+/// decoded serially, which is slower than hashing, so the thread keeps up; the
+/// queue lets it fall behind by about 1 GiB at most.
+struct HashFeed {
+    tx: std::sync::mpsc::SyncSender<(Batch, Vec<HashItem>)>,
+}
+
+/// A batch of processed `(name, sequence)` records, shared by the writers.
+type Batch = std::sync::Arc<Vec<(Vec<u8>, Vec<u8>)>>;
+
+impl HashFeed {
+    /// Start the hashing thread in `scope`; it ends, with the digests, once the
+    /// `HashFeed` is dropped.
+    fn spawn<'scope>(
+        scope: &'scope std::thread::Scope<'scope, '_>,
+    ) -> (
+        Self,
+        std::thread::ScopedJoinHandle<'scope, Result<RefHashes>>,
+    ) {
+        // Batches hold about 4 Mbases each.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(Batch, Vec<HashItem>)>(256);
+        let handle = scope.spawn(move || {
+            let mut digests = RefDigests::default();
+            for (batch, items) in rx {
+                for item in items {
+                    match item {
+                        HashItem::Kept(i, is_decoy) => {
+                            let (name, seq) = &batch[i as usize];
+                            digests.add(name, seq, is_decoy);
+                        }
+                        HashItem::Own(name, seq, is_decoy) => digests.add(&name, &seq, is_decoy),
+                    }
+                }
+            }
+            Ok(digests.finish())
+        });
+        (Self { tx }, handle)
+    }
+
+    fn send(&self, batch: Batch, items: Vec<HashItem>) {
+        // The thread only stops early by panicking, which the join re-raises.
+        let _ = self.tx.send((batch, items));
+    }
+}
+
+/// The six digests [`RefDigests`] produces, grouped so the function can
 /// return them all without a six-element tuple.
 struct RefHashes {
     seq_hash: String,
@@ -428,6 +513,15 @@ struct PreprocessResult {
     short_decoys_dropped: Vec<Vec<u8>>,
     /// the reference sequence store, written alongside the cleaned FASTA
     refseq: StagedRefseq,
+}
+
+/// What a [`HashFeed`] is sent for one input record, in input order.
+enum HashItem {
+    /// The record is entry `.0` of the batch it travels with, unchanged.
+    Kept(u32, bool),
+    /// The record as read, because it was changed or dropped:
+    /// `(name, sequence, is_decoy)`.
+    Own(Vec<u8>, Vec<u8>, bool),
 }
 
 /// salmon/pufferfish `FixFasta` clips a reference iff its (cleaned) sequence ends
@@ -469,6 +563,8 @@ fn longest_acgt_run(seq: &[u8]) -> usize {
 /// clip poly-A tails, drop untileable decoys.
 ///
 /// Every reference written to the cleaned FASTA is also staged into `refseq`.
+/// With a `hash_feed`, every record read, written or not, is also sent to be
+/// hashed for `info.json`, so that each input is read exactly once.
 #[allow(clippy::too_many_arguments)]
 fn preprocess_fasta(
     inputs: &[PathBuf],
@@ -480,6 +576,7 @@ fn preprocess_fasta(
     gencode: bool,
     clip_polya: bool,
     k: usize,
+    hash_feed: Option<HashFeed>,
 ) -> Result<PreprocessResult> {
     use std::io::Write as _;
     const B: [u8; 4] = *b"ACGT";
@@ -493,7 +590,6 @@ fn preprocess_fasta(
     // The cleaned FASTA and the refseq store are written by threads of their
     // own, fed batches of processed records, so this thread only parses and
     // cleans: the two writes cost as much as everything else here combined.
-    type Batch = std::sync::Arc<Vec<(Vec<u8>, Vec<u8>)>>;
     const BATCH_BASES: usize = 1 << 22;
     std::thread::scope(|scope| {
         let (fasta_tx, fasta_rx) = std::sync::mpsc::sync_channel::<Batch>(4);
@@ -522,12 +618,18 @@ fn preprocess_fasta(
             }
             refseq.finish()
         });
-        // Hand a batch to both writers; `false` once either has stopped (failed).
-        let send = |batch: Vec<(Vec<u8>, Vec<u8>)>| {
+        // Hand a batch to both writers and the hasher; `false` once a writer has
+        // stopped (failed).
+        let send = |batch: Vec<(Vec<u8>, Vec<u8>)>, items: Vec<HashItem>| {
             let batch = std::sync::Arc::new(batch);
+            if let Some(feed) = &hash_feed {
+                feed.send(batch.clone(), items);
+            }
             fasta_tx.send(batch.clone()).is_ok() && refseq_tx.send(batch).is_ok()
         };
         let mut batch = Vec::new();
+        let mut hash_items: Vec<HashItem> = Vec::new();
+        let feeding = hash_feed.is_some();
         let mut batch_bases = 0usize;
         let mut replaced = 0u64;
         let mut polya_clipped = 0u64;
@@ -591,6 +693,10 @@ fn preprocess_fasta(
                         if !keep_duplicates {
                             // `continue` skips the write below, so the duplicate never
                             // reaches the index.
+                            if feeding {
+                                let seq = orig.into_owned();
+                                hash_items.push(HashItem::Own(name.to_vec(), seq, is_decoy));
+                            }
                             continue;
                         }
                     } else {
@@ -599,6 +705,8 @@ fn preprocess_fasta(
                 }
 
                 let mut seq = orig.into_owned();
+                // The sequence as read, kept for the hasher once `seq` changes.
+                let mut as_read: Option<Vec<u8>> = None;
                 // Transcripts: replace non-ACGT bases with pseudo-random ACGT so the
                 // processed sequence is fully k-mer-able (salmon FixFasta behavior).
                 // DECOYS: leave non-ACGT bases (e.g. genome N-runs) in place — cf1-rs
@@ -611,6 +719,9 @@ fn preprocess_fasta(
                 //
                 // A pure-ACGT sequence (nearly every transcript) has nothing to replace.
                 if !is_decoy && !pure_acgt {
+                    if feeding {
+                        as_read = Some(seq.clone());
+                    }
                     for b in seq.iter_mut() {
                         if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
                             // A linear congruential generator: multiply, add, and take
@@ -638,6 +749,9 @@ fn preprocess_fasta(
                     // `rposition` finds the last non-`A`, i.e. where the tail begins.
                     match seq.iter().rposition(|&b| !matches!(b, b'A' | b'a')) {
                         Some(last) => {
+                            if feeding && as_read.is_none() {
+                                as_read = Some(seq.clone());
+                            }
                             seq.truncate(last + 1);
                             polya_clipped += 1;
                         }
@@ -646,6 +760,10 @@ fn preprocess_fasta(
                             // counted as retained), matching salmon.
                             polya_clipped += 1;
                             polya_dropped.push(name.to_vec());
+                            if feeding {
+                                let seq = as_read.unwrap_or(seq);
+                                hash_items.push(HashItem::Own(name.to_vec(), seq, is_decoy));
+                            }
                             continue;
                         }
                     }
@@ -662,21 +780,32 @@ fn preprocess_fasta(
                 // above transcripts have no N-runs, so only decoys are affected here.
                 if is_decoy && longest_acgt_run(&seq) < k {
                     short_decoys_dropped.push(name.to_vec());
+                    if feeding {
+                        let seq = as_read.unwrap_or(seq);
+                        hash_items.push(HashItem::Own(name.to_vec(), seq, is_decoy));
+                    }
                     continue;
                 }
 
+                if feeding {
+                    hash_items.push(match as_read {
+                        Some(read) => HashItem::Own(name.to_vec(), read, is_decoy),
+                        None => HashItem::Kept(batch.len() as u32, is_decoy),
+                    });
+                }
                 batch_bases += seq.len();
                 batch.push((name.to_vec(), seq));
                 if batch_bases >= BATCH_BASES {
                     batch_bases = 0;
-                    if !send(std::mem::take(&mut batch)) {
+                    let items = std::mem::take(&mut hash_items);
+                    if !send(std::mem::take(&mut batch), items) {
                         // A writer failed; its error is reported below.
                         break 'records;
                     }
                 }
             }
         }
-        send(batch);
+        send(batch, hash_items);
         drop((fasta_tx, refseq_tx));
         // A writer panic is re-raised here rather than reported as an error.
         fasta_writer
@@ -722,14 +851,24 @@ const MAX_DECODE_THREADS: usize = 4;
 /// A gzipped regular file is decoded in parallel (up to `threads` workers, at
 /// most [`MAX_DECODE_THREADS`]); anything else goes through needletail's own
 /// (serial) decompression.
+///
+/// Anything but a regular file (a FIFO, or process substitution such as
+/// `-t <(curl ...)`) is opened exactly once and handed to needletail, which
+/// detects compression from the stream itself: sniffing the magic through a
+/// second open would consume the start of the stream.
 fn open_fasta(path: &Path, threads: usize) -> Result<Box<dyn needletail::FastxReader>> {
     use std::io::Read as _;
+    if !path.metadata().is_ok_and(|m| m.is_file()) {
+        let file =
+            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        return needletail::parse_fastx_reader(file)
+            .with_context(|| format!("opening {}", path.display()));
+    }
     let mut magic = [0u8; 2];
     let gzipped = std::fs::File::open(path)
         .and_then(|mut f| f.read_exact(&mut magic))
         .is_ok()
-        && magic == [0x1f, 0x8b]
-        && path.metadata().is_ok_and(|m| m.is_file());
+        && magic == [0x1f, 0x8b];
     let reader = if gzipped {
         let decoder = rapidgzip_core::Decoder::builder()
             .decoder_threads(threads.clamp(1, MAX_DECODE_THREADS))
@@ -970,13 +1109,24 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     };
 
     // The reference digests cover the *input* FASTA and nothing reads them
-    // until `info.json` is written, so they are computed on their own thread,
-    // overlapping the whole build instead of adding a second full pass over the
-    // (typically gzipped) input plus SHA-256/SHA-512 passes at the end. The
-    // scope joins that thread even if the build fails.
+    // until `info.json` is written, so they are computed on a thread of their
+    // own that overlaps the whole build. Regular files are hashed in a pass of
+    // their own, as before; when any input is a stream, which can be read only
+    // once, preprocessing feeds the hashing instead. The scope joins the thread
+    // even if the build fails.
+    let streamed = opts
+        .transcripts
+        .iter()
+        .any(|p| !p.metadata().is_ok_and(|m| m.is_file()));
     std::thread::scope(|scope| {
-        let ref_hashes =
-            scope.spawn(|| compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode));
+        let (hash_feed, ref_hashes) = if streamed {
+            let (feed, handle) = HashFeed::spawn(scope);
+            (Some(feed), handle)
+        } else {
+            let handle =
+                scope.spawn(|| compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode));
+            (None, handle)
+        };
 
         // Preprocess the references into the cleaned FASTA that feeds both the cDBG
         // build and the refseq store (the hashes below use the original input):
@@ -995,6 +1145,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             opts.gencode,
             opts.clip_polya,
             opts.k,
+            hash_feed,
         )
         .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
         // Everything below reports what the preprocessing did. Silent transformation

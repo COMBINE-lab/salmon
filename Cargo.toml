@@ -78,7 +78,7 @@ cf1-rs = "0.6.0"
 # budget shared between gzip decoding and mapping, solved from live measurement
 # rather than split by a fixed guess. `rapidgzip` enables the parallel decoder
 # that budget is worth dividing in the first place.
-piscem-rs = { version = "0.12.2", features = ["rapidgzip"] }
+piscem-rs = { version = "0.12.3", features = ["rapidgzip"] }
 # The control law piscem-rs 0.9.0 is built on. Taken directly so salmon can
 # implement `Consumer` for its own mapping pool; must resolve to the same
 # version piscem-rs uses or the trait would not match across the boundary.
@@ -98,11 +98,11 @@ tempfile = "3"
 divan = "0.1"
 
 # io / parsing
-# TEMPORARY: a republication of paraseq's released 0.5.0 plus the resizable
-# worker pool offered upstream as noamteyssier/paraseq#78 (fixed spawn set with
-# parking; worker count bounded by construction). `ThreadPool` is what lets the
-# mapping thread count change mid-run, which the broker requires. `paraseq` is
-# the official crate -- move back once the pool lands there. Must match what
+# TEMPORARY: a republication of paraseq's released 0.6.2 plus two fixes offered
+# upstream: a FASTQ cut short inside its last record is an error rather than
+# reading as complete (which is what lets salmon detect truncation in a single
+# read, pipes included), and format errors name their input. `paraseq` is the
+# official crate -- move back once a release includes both. Must match what
 # piscem-rs resolves, or two paraseq copies end up either side of its API.
 #
 # Declared under its real name rather than renamed to `paraseq`: the rename was
@@ -112,7 +112,7 @@ divan = "0.1"
 # (`next unless name == name_from_declaration(...)`), so this crate reached it
 # only through Cargo.lock, as an indirect dependency no version update would
 # ever be raised for.
-paraseq-temp = { version = "=0.6.2-pre.1", default-features = false }
+paraseq-temp = { version = "=0.6.3-pre.1", default-features = false }
 
 # Workspace-wide lints. Member crates opt in with `[lints] workspace = true`.
 [workspace.lints.rust]

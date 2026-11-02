@@ -258,9 +258,216 @@ fn no_length_correction_conflicts_with_bias_correction() {
     );
 }
 
+/// Run paired `salmon quant` over two FIFOs fed by `feed`, a shell command given
+/// the source file as `$1` and writing FASTQ (of any compression) to stdout.
+///
+/// A regression here is as likely to hang as to fail (an input opened and
+/// closed before mapping leaves the mapper's open waiting for a writer that has
+/// gone), so the run is bounded rather than left to hang the suite.
+#[cfg(unix)]
+fn quant_over_fifos(fx: &Fx, dir: &Path, feed: &str, out: &Path) -> (bool, String) {
+    use std::time::{Duration, Instant};
+
+    let mut writers = Vec::new();
+    let mut fifos = Vec::new();
+    for (name, source) in [("f1", &fx.r1), ("f2", &fx.r2)] {
+        let fifo = dir.join(format!("{name}-{}", out.file_name().unwrap().display()));
+        assert!(Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        writers.push(
+            Command::new("sh")
+                .arg("-c")
+                .arg(format!("{feed} > \"$2\""))
+                .args([os("sh"), source.as_os_str(), fifo.as_os_str()])
+                .spawn()
+                .unwrap(),
+        );
+        fifos.push(fifo);
+    }
+    let log = std::fs::File::create(dir.join("fifo.log")).unwrap();
+    let mut child = Command::new(SALMON)
+        .args(["quant", "-l", "A", "-p", "2", "-i"])
+        .arg(&fx.index)
+        .arg("-1")
+        .arg(&fifos[0])
+        .arg("-2")
+        .arg(&fifos[1])
+        .arg("-o")
+        .arg(out)
+        .stderr(log)
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if start.elapsed() > Duration::from_secs(120) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    for writer in &mut writers {
+        writer.kill().ok();
+        writer.wait().ok();
+    }
+    let status = status.expect("salmon hung on a FIFO input");
+    let stderr = std::fs::read_to_string(dir.join("fifo.log")).unwrap();
+    (status.success(), stderr)
+}
+
+/// The FASTQ preflight opened every input to sniff its magic. On a pipe that
+/// took the first bytes and then either failed the rewind ("Illegal seek", for
+/// plain FASTQ) or left the mapper a gzip stream with no header ("Invalid start
+/// character"), so process substitution could not work at all. A stream read
+/// must see the same reads as the file it carries.
+#[cfg(unix)]
+#[test]
+fn a_fifo_input_quantifies_like_the_file_it_carries() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let baseline = dir.path().join("baseline");
+    let o = run(&[
+        os("quant"),
+        os("-l"),
+        os("A"),
+        os("-p"),
+        os("2"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-1"),
+        fx.r1.as_os_str(),
+        os("-2"),
+        fx.r2.as_os_str(),
+        os("-o"),
+        baseline.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let expected = std::fs::read_to_string(baseline.join("quant.sf")).unwrap();
+
+    for (name, feed) in [("plain", "cat \"$1\""), ("gzip", "gzip -c \"$1\"")] {
+        let out = dir.path().join(name);
+        let (ok, stderr) = quant_over_fifos(&fx, dir.path(), feed, &out);
+        assert!(ok, "{name} over a FIFO must succeed: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(out.join("quant.sf")).unwrap(),
+            expected,
+            "{name} over a FIFO must see every read of the file"
+        );
+        let meta = std::fs::read_to_string(out.join("aux_info/meta_info.json")).unwrap();
+        assert!(meta.contains("\"num_processed\": 200"), "{name}: {meta}");
+    }
+}
+
+/// The preflight cannot vouch for a stream, so a transfer cut short has to fail
+/// in the decompressor: exit 0 here would be a partial quantification presented
+/// as a complete one.
+#[cfg(unix)]
+#[test]
+fn a_gzip_stream_cut_short_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("cut");
+    let (ok, stderr) = quant_over_fifos(&fx, dir.path(), "gzip -c \"$1\" | head -c 2000", &out);
+    assert!(!ok, "a truncated gzip stream must fail: {stderr}");
+}
+
+/// A plain stream cut inside a record must fail like a file does, and with two
+/// inputs the error must say which one was cut.
+#[cfg(unix)]
+#[test]
+fn a_plain_stream_cut_mid_record_is_refused_and_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("cut");
+    // `head -c` lands inside a record of either mate's file.
+    let (ok, stderr) = quant_over_fifos(&fx, dir.path(), "head -c 3001 \"$1\"", &out);
+    assert!(!ok, "a plain stream cut mid-record must fail: {stderr}");
+    assert!(
+        stderr.contains("probably truncated") || stderr.contains("do not match"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("f1-cut") || stderr.contains("f2-cut"),
+        "the error must name the input:\n{stderr}"
+    );
+}
+
+/// `salmon index` sniffed each reference's compression through a second open,
+/// and hashed it in a second pass, so a pipe lost its first bytes. Each input is
+/// now read once, so a stream must build the same index as the file it carries.
+#[cfg(unix)]
+#[test]
+fn index_reads_references_from_a_stream() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let fasta = dir.path().join("txome.fa");
+    let info = |idx: &Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(idx.join("info.json")).unwrap()).unwrap()
+    };
+    let index_over_fifo = |feed: &str, name: &str| {
+        let fifo = dir.path().join(format!("{name}.fifo"));
+        assert!(Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        let mut writer = Command::new("sh")
+            .arg("-c")
+            .arg(format!("{feed} > \"$2\""))
+            .args([os("sh"), fasta.as_os_str(), fifo.as_os_str()])
+            .spawn()
+            .unwrap();
+        let idx = dir.path().join(name);
+        let o = run(&[
+            os("index"),
+            os("-t"),
+            fifo.as_os_str(),
+            os("-i"),
+            idx.as_os_str(),
+            os("-p"),
+            os("2"),
+        ]);
+        writer.wait().ok();
+        (o, idx)
+    };
+
+    let expected = info(&fx.index);
+    for (name, feed) in [("plain", "cat \"$1\""), ("gzip", "gzip -c \"$1\"")] {
+        let (o, idx) = index_over_fifo(feed, name);
+        assert!(
+            o.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        for key in ["seq_hash", "name_hash", "seq_hash512", "name_hash512"] {
+            assert_eq!(
+                info(&idx)[key],
+                expected[key],
+                "{name}: a stream must index the same references as the file"
+            );
+        }
+        assert_eq!(
+            std::fs::read(idx.join("refseq.bin")).unwrap(),
+            std::fs::read(fx.index.join("refseq.bin")).unwrap(),
+            "{name}: a stream must store the same sequences as the file"
+        );
+    }
+
+    let (o, _) = index_over_fifo("gzip -c \"$1\" | head -c 200", "cut");
+    assert!(!o.status.success(), "a truncated gzip stream must fail");
+}
+
 /// A truncated FASTQ was quantified up to its last complete record and reported
 /// as a normal run. The trailing-line cases were also inconsistent with each
-/// other: 1 or 2 orphaned lines were dropped in silence while 3 errored.
+/// other: 1 or 2 orphaned lines were dropped in silence while 3 errored. The
+/// reader now refuses any partial final record, so this holds for a file and a
+/// stream alike, without reading the input twice.
 #[test]
 fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
     let dir = tempfile::tempdir().unwrap();
@@ -292,13 +499,13 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
         !o.status.success(),
         "a byte-truncated FASTQ must be refused"
     );
-    // Two wordings are correct here and which one fires depends on where the
-    // cut landed: a short file reports its line count, a file whose final
-    // record is malformed reports that instead (salmon cannot tell a truncated
-    // transfer from a corrupted one, and says so rather than guessing).
+    // Which wording fires depends on where the cut landed: a partial record
+    // is reported as truncation, and a final quality line cut short as a
+    // malformed record (a truncated transfer and a corrupted file look the
+    // same there).
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        err.contains("looks truncated") || err.contains("final FASTQ record is incomplete"),
+        err.contains("probably truncated") || err.contains("do not match"),
         "{err}"
     );
     assert!(
@@ -307,7 +514,7 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
     );
 
     // Line-boundary truncation: 1, 2 and 3 orphaned lines must all be refused,
-    // where 1 and 2 used to pass silently.
+    // where 1 and 2 used to pass silently, and the error must name the file.
     let lines: Vec<&str> = full.lines().collect();
     for extra in 1..=3 {
         let cut = dir.path().join(format!("cut{extra}.fq"));
@@ -318,13 +525,26 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
             !o.status.success(),
             "a FASTQ ending {extra} line(s) into a record must be refused"
         );
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains(&format!("cut{extra}.fq")),
+            "the error must name the file:\n{err}"
+        );
     }
 
-    // Control: the intact file, and a compressed copy, still run. (Compressed
-    // truncation is caught by the decompressor, so the preflight skips it.)
+    // Control: the intact file still runs, and so does one ending in a blank
+    // line, which is not a partial record.
     assert!(
         quant(&fx.se, &out).status.success(),
         "intact FASTQ must run"
+    );
+    let blank = dir.path().join("blank.fq");
+    std::fs::write(&blank, format!("{full}\n")).unwrap();
+    let o = quant(&blank, &out);
+    assert!(
+        o.status.success(),
+        "a FASTQ ending in a blank line must run:\n{}",
+        String::from_utf8_lossy(&o.stderr)
     );
 
     // FASTA reads have no 4-line records, so the check must not apply to them:

@@ -249,7 +249,13 @@ pub fn plan(
 
     let mut readers = Vec::with_capacity(num_files);
     let mut handles = Vec::new();
-    for path in groups.iter().flatten() {
+    for (path, mate) in groups.iter().flat_map(|g| {
+        g.iter().zip(if g.len() == 2 {
+            ["-1", "-2"].as_slice()
+        } else {
+            ["-r"].as_slice()
+        })
+    }) {
         let opened = piscem_rs::io::fastx::open_input_pooled(
             path,
             decode_pool.as_ref(),
@@ -257,10 +263,19 @@ pub fn plan(
         )
         .with_context(|| format!("opening {}", path.display()))?;
         handles.extend(opened.handle.clone());
-        readers.push(
-            piscem_rs::io::fastx::reader_with_batch_size(opened.reader)
-                .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?,
-        );
+        let mut reader = piscem_rs::io::fastx::reader_with_batch_size(opened.reader)
+            .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?;
+        // A truncated or malformed record then names its file: with paired or
+        // several inputs, the error alone would not say which one. A stream's
+        // path (`/dev/fd/62` for `-2 <(curl ...)`) says little, so it also
+        // carries the option it was given to.
+        let name = if path.metadata().is_ok_and(|m| m.is_file()) {
+            path.display().to_string()
+        } else {
+            format!("{} ({mate})", path.display())
+        };
+        reader.set_source_name(name);
+        readers.push(reader);
     }
 
     // Inputs that turned out not to be parallel-decodable (not gzip, or not
