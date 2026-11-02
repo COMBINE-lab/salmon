@@ -47,7 +47,7 @@ pub enum SeedMode {
     #[default]
     UniMem,
 }
-use crate::pair::{join_reads_and_filter, PairingConfig};
+use crate::pair::{extents_dovetail, join_reads_and_filter, PairingConfig};
 use crate::score::{
     finalize_mappings_counted_into, MapScratch, RawMapping, ScoreConfig, ScoredMapping,
 };
@@ -735,7 +735,8 @@ fn push_orphan_or_recovered<R: RefProvider>(
 }
 
 /// Try to place the partner mate within a fragment-length window of the anchor.
-/// Returns `(partner_alignment_score, fragment_length)` on success.
+/// Returns `(partner_alignment_score, fragment_length)` on success. A placement
+/// that normal pairing would reject (too long, or dovetailed) is not a success.
 fn recover_mate(
     partner_read: &[u8],
     refseq: RefView<'_>,
@@ -749,8 +750,10 @@ fn recover_mate(
     // Projected read extent (may overhang the transcript ends).
     let a_s = anchor.proj_start();
     let a_e = anchor.proj_end();
+    let plen = partner_read.len() as i32;
+    let allow_dovetail = cfg.pair.allow_dovetail;
 
-    if anchor.is_fw {
+    let (score, frag_len) = if anchor.is_fw {
         // The partner lies downstream and maps to the reverse strand.
         let win_start = a_s.max(0);
         let win_end = (a_s + max_frag).min(reflen);
@@ -767,7 +770,11 @@ fn recover_mate(
             return None;
         }
         // partner ends `end_col` bases past the window start -> fragment length
-        Some((aln.score, win_start - a_s + aln.end_col as i32))
+        let partner_end = win_start + aln.end_col as i32;
+        if !allow_dovetail && extents_dovetail((a_s, a_e), (partner_end - plen, partner_end)) {
+            return None;
+        }
+        (aln.score, partner_end - a_s)
     } else {
         // The partner lies upstream and maps to the forward strand.
         let win_end = a_e.min(reflen);
@@ -784,9 +791,13 @@ fn recover_mate(
             return None;
         }
         let partner_end_abs = win_start + aln.end_col as i32;
-        let partner_start_abs = partner_end_abs - partner_read.len() as i32;
-        Some((aln.score, (a_e - partner_start_abs).max(0)))
-    }
+        let partner_start_abs = partner_end_abs - plen;
+        if !allow_dovetail && extents_dovetail((partner_start_abs, partner_end_abs), (a_s, a_e)) {
+            return None;
+        }
+        (aln.score, (a_e - partner_start_abs).max(0))
+    };
+    (frag_len > 0 && frag_len <= max_frag).then_some((score, frag_len))
 }
 
 #[cfg(test)]
