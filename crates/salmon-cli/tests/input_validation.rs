@@ -922,3 +922,73 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
         "under --online the knob is honoured, not warned about"
     );
 }
+
+/// A number out of range used to run anyway: `--vbPrior NaN` kept 6931 of 10000
+/// reads with exit 0, and `--fldMax 0` moved TPMs with no warning.
+#[test]
+fn numeric_flags_out_of_range_are_refused() {
+    for (flag, value) in [
+        ("--vbPrior", "NaN"),
+        ("--vbPrior", "0"),
+        ("--vbPrior", "-1"),
+        ("--fldMax", "0"),
+        ("--incompatPrior", "NaN"),
+        ("--incompatPrior", "2"),
+        ("--scoreExp", "inf"),
+        ("--scoreExp", "-1"),
+        ("--minScoreFraction", "1.5"),
+        ("--orphanChainSubThresh", "NaN"),
+        ("--consensusSlack", "-0.1"),
+        ("--preMergeChainSubThresh", "2"),
+        ("--postMergeChainSubThresh", "2"),
+        ("--minAlnProb", "NaN"),
+        ("--decoyThreshold", "NaN"),
+        ("--forgettingFactor", "0.5"),
+        ("--forgettingFactor", "1.5"),
+    ] {
+        // `=`, so clap hands a negative value to the parser rather than reading
+        // it as another flag.
+        let arg = format!("{flag}={value}");
+        let o = run(&[
+            os("quant"),
+            os("-i"),
+            os("no-index"),
+            os("-l"),
+            os("A"),
+            os("-r"),
+            os("no-reads"),
+            os("-o"),
+            os("no-output"),
+            os(&arg),
+        ]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "{flag} {value}: {err}");
+        assert!(err.contains(flag), "{flag} {value}: {err}");
+    }
+}
+
+/// Above k = 31 the build panicked after writing files; `m >= k` failed after
+/// writing them too. Both are known before any work starts.
+#[test]
+fn an_impossible_k_or_m_is_refused_before_writing_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let fasta = dir.path().join("t.fa");
+    std::fs::write(&fasta, format!(">t1\n{}\n", sequence(1, 2000))).unwrap();
+    for args in [["-k", "33", "-m", "0"], ["-k", "21", "-m", "21"]] {
+        let index = dir.path().join("i");
+        let o = run(&[
+            os("index"),
+            os("-t"),
+            fasta.as_os_str(),
+            os("-i"),
+            index.as_os_str(),
+            os(args[0]),
+            os(args[1]),
+            os(args[2]),
+            os(args[3]),
+        ]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {err}");
+        assert!(!index.exists(), "{args:?} wrote {}", index.display());
+    }
+}

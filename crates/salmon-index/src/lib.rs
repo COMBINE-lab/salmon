@@ -1073,11 +1073,18 @@ fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Resu
 /// store, and clean up intermediates.
 pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     anyhow::ensure!(!opts.transcripts.is_empty(), "no transcript files provided");
-    // 63 is the largest k that fits in a 2-bit-per-base 128-bit word; odd is
+    // tiny-dict panics above 31, after the build has written files; odd is
     // required so no k-mer equals its own reverse complement.
     anyhow::ensure!(
-        opts.k >= 1 && opts.k <= 63 && opts.k % 2 == 1,
-        "k must be odd in [1, 63]"
+        opts.k >= 1 && opts.k <= 31 && opts.k % 2 == 1,
+        "k must be odd in [1, 31], got {}",
+        opts.k
+    );
+    anyhow::ensure!(
+        opts.m < opts.k,
+        "the minimizer length must be less than k, got m={}, k={}",
+        opts.m,
+        opts.k
     );
 
     std::fs::create_dir_all(&opts.output_dir)
