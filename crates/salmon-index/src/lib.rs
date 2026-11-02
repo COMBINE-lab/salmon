@@ -1381,6 +1381,11 @@ pub enum RefseqLoad {
 struct PackedRefseq {
     bits: Vec<u8>,
     other: Vec<salmon_core::OtherRun>,
+    /// For each reference, the range of `other` that overlaps it (a run that
+    /// crosses from one reference into the next is in both). Looking the runs
+    /// up by binary search on every `ref_view` cost 5% of a genome-decoy run,
+    /// which calls it once per seed.
+    runs_of: Vec<(u32, u32)>,
 }
 
 impl PackedRefseq {
@@ -1429,7 +1434,11 @@ impl PackedRefseq {
         // A run can cross from one block or thread into the next, which only
         // leaves it in two pieces: lookups take the first that covers a position.
         let other = parts.concat();
-        Ok(Self { bits, other })
+        Ok(Self {
+            bits,
+            other,
+            runs_of: Vec::new(),
+        })
     }
 }
 
@@ -1549,6 +1558,18 @@ impl SalmonIndex {
                     .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
             )?
         };
+        let mut packed = packed;
+        if !packed.bits.is_empty() {
+            let other = &packed.other;
+            packed.runs_of = ref_offsets
+                .windows(2)
+                .map(|w| {
+                    let lo = other.partition_point(|r| r.start + u64::from(r.len) <= w[0]);
+                    let hi = other.partition_point(|r| r.start < w[1]);
+                    (lo as u32, hi.max(lo) as u32)
+                })
+                .collect();
+        }
         Ok(Self {
             inner,
             info,
@@ -1646,12 +1667,15 @@ impl salmon_core::RefProvider for SalmonIndex {
         if self.packed.bits.is_empty() {
             return salmon_core::RefView::Bytes(self.ref_seq(tid));
         }
-        salmon_core::RefView::packed(
-            &self.packed.bits,
-            self.ref_offsets[tid as usize],
-            self.ref_offsets[tid as usize + 1],
-            &self.packed.other,
-        )
+        let start = self.ref_offsets[tid as usize];
+        let end = self.ref_offsets[tid as usize + 1];
+        let (lo, hi) = self.packed.runs_of[tid as usize];
+        salmon_core::RefView::Packed {
+            bits: &self.packed.bits,
+            start,
+            len: (end - start) as usize,
+            other: &self.packed.other[lo as usize..hi as usize],
+        }
     }
     fn is_decoy(&self, tid: u32) -> bool {
         // O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`). The

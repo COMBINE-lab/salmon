@@ -459,7 +459,11 @@ mod tests {
                 let mut q: Vec<u8> = seq[5 + r..5 + r + n].to_ascii_lowercase();
                 for cut in [n, n / 2] {
                     if cut < n {
-                        q[cut] = b'A' + b'C' - q[cut].to_ascii_uppercase().min(b'C').max(b'A');
+                        q[cut] = if q[cut].eq_ignore_ascii_case(&b'A') {
+                            b'C'
+                        } else {
+                            b'A'
+                        };
                     }
                     let want = (0..n).take_while(|&i| eq(q[i], v.base(r + i))).count();
                     assert_eq!(
