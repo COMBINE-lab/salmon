@@ -534,13 +534,13 @@ fn mixed_orphan_sides_are_marked_in_the_encoded_hit() {
     let hit = |tid| RadHit::for_placement(tid, true, false, 10, false, 0, 100, 5);
     let hits = || vec![hit(0), hit(1)];
 
-    let mixed = SalmonBulkRecord::from_placements(&[PairedEndLeft, PairedEndRight], hits());
+    let mixed = SalmonBulkRecord::from_placements([PairedEndLeft, PairedEndRight], hits());
     assert_eq!(mixed.frag_type, frag_map_type::RIGHT_ORPHAN);
     let decoded = |h: &RadHit| RadHit::decode_ori_ref(h.compressed_ori_ref());
     assert_eq!(decoded(&mixed.hits[0]), (0, true, true));
     assert_eq!(decoded(&mixed.hits[1]), (1, true, false));
 
-    let one_side = SalmonBulkRecord::from_placements(&[PairedEndLeft, PairedEndLeft], hits());
+    let one_side = SalmonBulkRecord::from_placements([PairedEndLeft, PairedEndLeft], hits());
     assert_eq!(one_side.frag_type, frag_map_type::LEFT_ORPHAN);
     assert_eq!(one_side.hits, hits());
 }

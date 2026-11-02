@@ -526,8 +526,7 @@ fn write_record(
             )
         })
         .collect();
-    let statuses: Vec<MateStatus> = data.infos.iter().map(|i| i.status).collect();
-    let rec = SalmonBulkRecord::from_placements(&statuses, hits);
+    let rec = SalmonBulkRecord::from_placements(data.infos.iter().map(|i| i.status), hits);
     buf.write(&rec, writer.context())?;
     if buf.byte_len() >= CHUNK_FLUSH_BYTES {
         let bytes = buf.take_bytes()?;

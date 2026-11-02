@@ -109,11 +109,16 @@ impl SalmonBulkRecord {
     /// know which, so a hit of the side `frag_type` does not name sets its
     /// `mate_fw` bit, which an orphan hit otherwise leaves unset. See
     /// [`RadHit::for_placement`].
-    pub fn from_placements(statuses: &[MateStatus], mut hits: Vec<RadHit>) -> Self {
+    pub fn from_placements<I>(statuses: I, mut hits: Vec<RadHit>) -> Self
+    where
+        I: IntoIterator<Item = MateStatus>,
+        I::IntoIter: Clone,
+    {
         use crate::frag_map_type::{fragment_level, from_mate_status, LEFT_ORPHAN, RIGHT_ORPHAN};
-        let frag_type = fragment_level(statuses.iter().copied());
+        let statuses = statuses.into_iter();
+        let frag_type = fragment_level(statuses.clone());
         if matches!(frag_type, LEFT_ORPHAN | RIGHT_ORPHAN) {
-            for (hit, &status) in hits.iter_mut().zip(statuses) {
+            for (hit, status) in hits.iter_mut().zip(statuses) {
                 let code = from_mate_status(status);
                 hit.mate_fw = matches!(code, LEFT_ORPHAN | RIGHT_ORPHAN) && code != frag_type;
             }

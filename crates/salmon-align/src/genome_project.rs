@@ -557,7 +557,7 @@ fn build_projected_record(
         }
     }
     Some((
-        SalmonBulkRecord::from_placements(&statuses, hits),
+        SalmonBulkRecord::from_placements(statuses.iter().copied(), hits),
         (single_tid, fld_pairs),
         naive_sig,
     ))

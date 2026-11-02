@@ -1704,7 +1704,6 @@ fn flush_bam(proc: &mut QuantProcessor) -> paraseq::Result<()> {
 /// otherwise. `score` is recorded for the selective-alignment profile and
 /// ignored when writing the sketch profile.
 fn build_rad_record(placements: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecord {
-    let statuses: Vec<MateStatus> = placements.iter().map(|m| m.status).collect();
     let hits = placements
         .iter()
         .map(|m| {
@@ -1740,7 +1739,7 @@ fn build_rad_record(placements: &[ScoredMapping]) -> salmon_rad::SalmonBulkRecor
             )
         })
         .collect();
-    salmon_rad::SalmonBulkRecord::from_placements(&statuses, hits)
+    salmon_rad::SalmonBulkRecord::from_placements(placements.iter().map(|m| m.status), hits)
 }
 
 /// Flush this thread's accumulated RAD records as one chunk to the shared writer.
