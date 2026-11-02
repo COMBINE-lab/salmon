@@ -14,13 +14,20 @@
 #
 # USAGE
 #
-#   quant_ena_stream.sh -i INDEX -o OUTDIR (-a ACCESSION | -t REPORT.tsv)
-#                       [-j JOBS] [-p THREADS] [-l LIBTYPE] [-- SALMON_QUANT_ARGS...]
+#   quant_ena_stream.sh -i INDEX -o OUTDIR (-a IDS [-a IDS...] | -t REPORT.tsv)
+#                       [-n] [-j JOBS] [-p THREADS] [-l LIBTYPE] [-- SALMON_QUANT_ARGS...]
 #
-#   -a  study or run accession ENA knows (PRJNA..., SRP..., SRR...); GEO series
-#       (GSE...) must be translated to one of these first
+#   -a  what to quantify, comma-separated and repeatable, in any mix of:
+#         GEO series or samples     GSE312440, GSM9345836
+#         ENA/SRA/DDBJ projects     PRJNA..., SRP..., ERP..., DRP...
+#         samples and experiments   SAMN..., SRS..., SRX...
+#         runs                      SRR..., ERR..., DRR...
+#       Every ID has to resolve, and every sample of a GEO series has to have a
+#       run at ENA, or nothing is quantified: a study quietly missing samples is
+#       worse than an error. The list is saved as OUTDIR/ena_report.tsv.
 #   -t  an ENA filereport saved earlier, with the columns run_accession,
 #       read_count and fastq_ftp, in any order
+#   -n  stop after resolving: list the runs, quantify nothing
 #   -j  runs quantified at once (default 4)
 #   -p  threads per run (default 3)
 #   -l  library type (default A, detected from the reads)
@@ -41,12 +48,13 @@ usage() {
     exit 2
 }
 
-INDEX="" OUTDIR="" ACCESSION="" REPORT="" JOBS=4 THREADS=3 LIBTYPE=A
-while getopts "i:o:a:t:j:p:l:h" opt; do
+INDEX="" OUTDIR="" IDS="" REPORT="" DRY_RUN="" JOBS=4 THREADS=3 LIBTYPE=A
+while getopts "i:o:a:t:j:p:l:nh" opt; do
     case "$opt" in
     i) INDEX=$OPTARG ;;
     o) OUTDIR=$OPTARG ;;
-    a) ACCESSION=$OPTARG ;;
+    a) IDS="$IDS $(printf '%s' "$OPTARG" | tr ',' ' ')" ;;
+    n) DRY_RUN=1 ;;
     t) REPORT=$OPTARG ;;
     j) JOBS=$OPTARG ;;
     p) THREADS=$OPTARG ;;
@@ -56,7 +64,8 @@ while getopts "i:o:a:t:j:p:l:h" opt; do
 done
 shift $((OPTIND - 1))
 [ -n "$INDEX" ] && [ -n "$OUTDIR" ] || usage
-if { [ -n "$ACCESSION" ] && [ -n "$REPORT" ]; } || { [ -z "$ACCESSION" ] && [ -z "$REPORT" ]; }; then
+IDS=$(printf '%s' "$IDS" | tr 'a-z' 'A-Z' | xargs)
+if { [ -n "$IDS" ] && [ -n "$REPORT" ]; } || { [ -z "$IDS" ] && [ -z "$REPORT" ]; }; then
     usage
 fi
 
@@ -65,14 +74,124 @@ EXTRA_ARGS=""
 [ "$#" -gt 0 ] && EXTRA_ARGS=$(printf '%q ' "$@")
 mkdir -p "$OUTDIR" || exit 1
 
-if [ -n "$ACCESSION" ]; then
-    REPORT=$OUTDIR/ena_report.tsv
-    curl -sSf --retry 5 --retry-all-errors -o "$REPORT" \
-        "https://www.ebi.ac.uk/ena/portal/api/filereport?accession=$ACCESSION&result=read_run&fields=run_accession,read_count,fastq_ftp&format=tsv" ||
-        {
-            echo "could not fetch the ENA report for $ACCESSION" >&2
-            exit 1
+ENA_API=https://www.ebi.ac.uk/ena/portal/api
+ENA_FIELDS=run_accession,read_count,fastq_ftp,sample_alias
+
+# Fetch a list, whole or not at all. Captured before anything reads it, since in
+# `curl | ...` a transfer dropped midway would pass for a shorter list, and so
+# for a study with fewer samples.
+fetch() {
+    local body
+    body=$(curl -sSf --retry 5 "$@") || return 1
+    printf '%s\n' "$body"
+}
+
+# The runs of one accession ENA indexes directly, without the header line. An
+# accession ENA does not know is not an error to its API, just an empty report.
+ena_runs() {
+    local body
+    body=$(fetch "$ENA_API/filereport?accession=$1&result=read_run&fields=$ENA_FIELDS&format=tsv") || return 1
+    printf '%s\n' "$body" | tail -n +2
+}
+
+# The runs of the GEO samples on stdin. ENA has no idea what a GSM is as an
+# accession, but keeps it as the sample alias. Batched because a large series
+# would not fit in one query.
+ena_runs_of_gsm() {
+    xargs -n 100 | while read -r batch; do
+        query=$(printf '%s\n' $batch | sed 's/.*/sample_alias="&"/' | sed '$!s/$/ OR /' | tr -d '\n')
+        body=$(fetch "$ENA_API/search" -d result=read_run -d limit=0 \
+            -d "fields=$ENA_FIELDS" -d format=tsv --data-urlencode "query=$query") || exit 1
+        printf '%s\n' "$body" | tail -n +2
+    done
+}
+
+# The samples of a GEO series. Asking GEO rather than following its BioProject
+# link gives the list to check ENA's answer against, and covers a SuperSeries,
+# whose samples sit under the BioProjects of its SubSeries.
+geo_samples() {
+    local body
+    body=$(fetch "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=$1&targ=self&form=text&view=brief") || return 1
+    printf '%s\n' "$body" | sed -n 's/^!Series_sample_id = //p' | tr -d '\r'
+}
+
+# Fail, naming them, if any of the GSMs in $1 has no run in the report in $2.
+check_gsm_found() {
+    awk -F'\t' -v id="$3" '
+        NR == FNR { found[$4]; next }
+        !($0 in found) { missing = missing " " $0; n++ }
+        END {
+            if (n) print "no run at ENA for " n " sample(s) of " id ":" missing > "/dev/stderr"
+            exit n > 0
+        }' "$2" "$1"
+}
+
+resolve_ids() {
+    local id runs samples
+    runs=$OUTDIR/.resolve.runs
+    samples=$OUTDIR/.resolve.samples
+    printf 'run_accession\tread_count\tfastq_ftp\tsample_alias\n'
+    for id in $IDS; do
+        : >"$runs"
+        case "$id" in
+        *[!A-Z0-9_.-]*)
+            echo "not an accession: $id" >&2
+            return 1
+            ;;
+        GSE*)
+            geo_samples "$id" >"$samples" || {
+                echo "could not reach GEO for $id" >&2
+                return 1
+            }
+            [ -s "$samples" ] || {
+                echo "GEO has no samples for $id" >&2
+                return 1
+            }
+            ena_runs_of_gsm <"$samples" >"$runs" || {
+                echo "could not reach ENA for $id" >&2
+                return 1
+            }
+            check_gsm_found "$samples" "$runs" "$id" || return 1
+            ;;
+        GSM*)
+            printf '%s\n' "$id" | ena_runs_of_gsm >"$runs" || {
+                echo "could not reach ENA for $id" >&2
+                return 1
+            }
+            ;;
+        *)
+            ena_runs "$id" >"$runs" || {
+                echo "ENA refused $id, or could not be reached" >&2
+                return 1
+            }
+            ;;
+        esac
+        [ -s "$runs" ] || {
+            echo "ENA has no runs for $id" >&2
+            return 1
         }
+        cat "$runs"
+    done
+}
+
+if [ -n "$IDS" ]; then
+    REPORT=$OUTDIR/ena_report.tsv
+    # IDs can overlap (a study and one of its runs): a run is quantified once.
+    resolve_ids >"$REPORT.tmp"
+    resolved=$?
+    rm -f "$OUTDIR/.resolve.runs" "$OUTDIR/.resolve.samples"
+    if [ "$resolved" -ne 0 ]; then
+        rm -f "$REPORT.tmp"
+        exit 1
+    fi
+    awk -F'\t' '!seen[$1]++' "$REPORT.tmp" >"$REPORT"
+    rm -f "$REPORT.tmp"
+fi
+
+if [ -n "$DRY_RUN" ]; then
+    echo "$(($(wc -l <"$REPORT") - 1)) runs in $REPORT"
+    cut -f1,2 "$REPORT"
+    exit 0
 fi
 
 # No `--retry` on the streams: curl cannot take back what it already wrote to a
