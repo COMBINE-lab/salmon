@@ -579,3 +579,26 @@ fn no_single_frag_prob_changes_orphan_weighting_on_the_rad_path() {
         "flat: equal orphan weights leave effective length to decide: {flat:?}"
     );
 }
+
+/// Only `/1` and `/2` are mate suffixes. Stripping any `/x` merged reads whose
+/// names merely end that way into one fragment.
+#[test]
+fn only_mate_suffixes_are_stripped_from_read_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = dir.path().join("names.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    for (name, p) in [("r/a", 1000), ("r/b", 2000), ("s/1", 3000), ("s/2", 3200)] {
+        writeln!(f, "{name}\t0\ttxA\t{p}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0").unwrap();
+    }
+    drop(f);
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "U".to_string();
+    let summary = write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    // r/a and r/b are two fragments; s/1 and s/2 are the mates of one.
+    assert_eq!(summary.num_processed, 3);
+}
