@@ -638,6 +638,8 @@ fn preprocess_fasta(
         let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         // Tracks whether a decoy has been seen, to enforce the "decoys last" rule.
         let mut saw_decoy = false;
+        // Names from the decoy list not yet found in the input.
+        let mut unmatched_decoys = decoy_names.clone();
         // Exact original (pure-ACGT) sequence -> name of the first transcript that
         // carried it. salmon collapses transcripts whose *processed* sequences match;
         // because it randomizes non-ACGT bases with a position-advancing RNG, two
@@ -670,6 +672,7 @@ fn preprocess_fasta(
                 // when the only symptom is wrong abundances.
                 if is_decoy {
                     saw_decoy = true;
+                    unmatched_decoys.remove(name);
                 } else if saw_decoy {
                     anyhow::bail!(
                         "non-decoy reference {:?} appears after a decoy; decoy records must be \
@@ -815,6 +818,21 @@ fn preprocess_fasta(
         let refseq = refseq_writer
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+        // Without this, a list that matches nothing builds "successfully" and
+        // quantifies the genome as if it were a transcript.
+        if !unmatched_decoys.is_empty() {
+            let mut names: Vec<_> = unmatched_decoys
+                .iter()
+                .map(|n| String::from_utf8_lossy(n))
+                .collect();
+            names.sort();
+            anyhow::bail!(
+                "{} name(s) in the decoy list match no reference in the FASTA, e.g. {:?}. \
+                 Names must be the header up to the first space, with no leading `>`.",
+                names.len(),
+                &names[..names.len().min(5)]
+            );
+        }
         Ok(PreprocessResult {
             replaced,
             duplicate_clusters,
@@ -2080,6 +2098,21 @@ mod tests {
             5,
             "all 5 decoy Ns preserved in the reference store"
         );
+    }
+
+    /// A decoy list that names something absent from the FASTA is a mismatch to
+    /// report, not a reason to index the genome as transcripts.
+    #[test]
+    fn unmatched_decoy_names_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let decoys = tmp.path().join("decoys.txt");
+        std::fs::write(&decoys, ">t3\n").unwrap();
+        let mut opts = IndexBuildOptions::new(vec![fasta], tmp.path().join("idx"));
+        opts.threads = 1;
+        opts.decoys = Some(decoys);
+        let err = format!("{:#}", build(&opts).unwrap_err());
+        assert!(err.contains(">t3"), "{err}");
     }
 
     /// An index too old to trust must be refused with a message that says what to
