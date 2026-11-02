@@ -590,6 +590,26 @@ fn score_weight_basis(scored: bool, score_kind: u8, score_exp: f64, best: i32, s
     }
 }
 
+/// Whether a placement fits `expected`. A hit's orientation is unknowable (see
+/// [`rad_frag_format`]), so under an outward `-l` only its strand can be judged:
+/// the pair is taken as outward, or the whole library would be dropped.
+fn rad_compatible(
+    expected: LibraryFormat,
+    obs: Option<LibraryFormat>,
+    is_fw: bool,
+    status: MateStatus,
+) -> bool {
+    let obs = obs.map(|o| {
+        if expected.orientation == ReadOrientation::Away && o.orientation == ReadOrientation::Toward
+        {
+            LibraryFormat::new(o.read_type, ReadOrientation::Away, o.strandedness)
+        } else {
+            o
+        }
+    });
+    is_compatible(expected, obs, is_fw, status)
+}
+
 /// Weight one fragment's placements and add the equivalence class. Returns
 /// `true` if the fragment was assigned (had a surviving placement). A trimmed
 /// analog of [`crate::process_fragment`] with no error model, bias, or online
@@ -681,7 +701,7 @@ fn process_rad_fragment(
                 .unwrap_or_else(|| salmon_core::observed_single_format(is_fw))
                 .format_id();
         if let Some(exp) = cfg.expected_format {
-            let compat = is_compatible(exp, obs, is_fw, status);
+            let compat = rad_compatible(exp, obs, is_fw, status);
             strand_judged = Some(strand_judged.unwrap_or(false) || compat);
             if !compat {
                 if cfg.ignore_incompat {
@@ -1560,7 +1580,7 @@ fn collect_bias_fragment(
         let mut aux = basis + log_frag_prob;
         if let Some(exp) = cfg.expected_format {
             let (obs, is_fw, status) = rad_frag_format(p);
-            if !is_compatible(exp, obs, is_fw, status) {
+            if !rad_compatible(exp, obs, is_fw, status) {
                 if cfg.ignore_incompat {
                     continue;
                 }
