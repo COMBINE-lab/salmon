@@ -1021,8 +1021,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     }
     // The packed CSR layout is built ONCE and reused by every consumer below: the
     // burn-in EM, the warm-started EM after bias correction, and bootstrap /
-    // Gibbs. `optimize`/`optimize_with_init` each build their own internally, so
-    // going through them meant re-copying labels, counts and weights (hundreds of
+    // Gibbs. `optimize` builds its own internally, so
+    // going through it meant re-copying labels, counts and weights (hundreds of
     // MB on a human-scale run) two to three times over data that is bit-identical
     // apart from `combined`, which `refresh_combined` rewrites in place.
     //

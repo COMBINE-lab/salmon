@@ -700,61 +700,13 @@ impl<'a> DisjointOut<'a> {
     }
 }
 
-/// The convergence check an M-step can evaluate on its output as it writes it:
-/// the input it is measured against, and [`crate::max_rel_diff`]'s cutoff.
-#[derive(Clone, Copy)]
-pub(crate) struct RelDiffCheck<'a> {
-    pub(crate) alpha_in: &'a [f64],
-    pub(crate) cutoff: f64,
-}
-
-impl RelDiffCheck<'_> {
-    /// Fold transcript `tid`'s output `a_out` into the running maximum `max_d`,
-    /// exactly as [`crate::max_rel_diff`] does.
-    #[inline]
-    fn fold(&self, max_d: f64, tid: usize, a_out: f64) -> f64 {
-        let a_in = self.alpha_in[tid];
-        if a_in > self.cutoff && a_out > 0.0 {
-            let d = (a_out - a_in).abs() / a_out;
-            if d > max_d {
-                return d;
-            }
-        }
-        max_d
-    }
-}
-
-/// The larger of two partial maxima of the convergence criterion. Neither is
-/// ever NaN (the criterion never admits one), so maxima combine in any order.
-#[inline]
-fn max_of(a: f64, b: f64) -> f64 {
-    if b > a {
-        b
-    } else {
-        a
-    }
-}
-
 /// Write shard `s`'s exclusive transcripts (see [`ShardPlan::exclusive`]) from
-/// its finished accumulator, returning the convergence criterion over them
-/// when `check` asks for it (else `-inf`).
+/// its finished accumulator.
 #[inline]
-fn write_exclusive(
-    plan: &ShardPlan,
-    s: usize,
-    buf: &[f64],
-    out: &DisjointOut,
-    check: Option<RelDiffCheck>,
-) -> f64 {
-    let mut max_d = f64::NEG_INFINITY;
+fn write_exclusive(plan: &ShardPlan, s: usize, buf: &[f64], out: &DisjointOut) {
     for &(local, tid) in plan.exclusive(s) {
-        let v = buf[local as usize];
-        out.write(tid as usize, v);
-        if let Some(c) = check {
-            max_d = c.fold(max_d, tid as usize, v);
-        }
+        out.write(tid as usize, buf[local as usize]);
     }
-    max_d
 }
 
 /// Sum the shard accumulators of the transcripts several shards touch into
@@ -765,34 +717,18 @@ fn write_exclusive(
 /// ascending shard order from the plan's inverted index. Total work is the
 /// number of shared contributions — where an early dense reduction cost
 /// `nshards × num_txps` regardless of the data.
-///
-/// Returns the convergence criterion over the shared transcripts when `check`
-/// asks for it, else `-inf`.
-fn reduce_shards_sparse(
-    shards: &[Vec<f64>],
-    plan: &ShardPlan,
-    out: &DisjointOut,
-    check: Option<RelDiffCheck>,
-) -> f64 {
-    plan.shared
-        .par_chunks(REFERENCED_CHUNK)
-        .map(|tids| {
-            let mut max_d = f64::NEG_INFINITY;
-            for &tid in tids {
-                let lo = plan.contrib_start[tid as usize] as usize;
-                let hi = plan.contrib_start[tid as usize + 1] as usize;
-                let mut s = 0.0;
-                for contributor in &plan.contributors[lo..hi] {
-                    s += shards[contributor.shard as usize][contributor.local as usize];
-                }
-                out.write(tid as usize, s);
-                if let Some(c) = check {
-                    max_d = c.fold(max_d, tid as usize, s);
-                }
+fn reduce_shards_sparse(shards: &[Vec<f64>], plan: &ShardPlan, out: &DisjointOut) {
+    plan.shared.par_chunks(REFERENCED_CHUNK).for_each(|tids| {
+        for &tid in tids {
+            let lo = plan.contrib_start[tid as usize] as usize;
+            let hi = plan.contrib_start[tid as usize + 1] as usize;
+            let mut s = 0.0;
+            for contributor in &plan.contributors[lo..hi] {
+                s += shards[contributor.shard as usize][contributor.local as usize];
             }
-            max_d
-        })
-        .reduce(|| f64::NEG_INFINITY, max_of)
+            out.write(tid as usize, s);
+        }
+    });
 }
 
 /// Parallel EM M-step. Each shard owns a private compressed buffer containing
@@ -817,8 +753,7 @@ pub(crate) fn em_step_par<const LL: bool>(
     alpha_out: &mut [f64],
     shards: &mut [Vec<f64>],
     plan: &ShardPlan,
-    check: Option<RelDiffCheck>,
-) -> (f64, f64) {
+) -> f64 {
     let out = DisjointOut::new(alpha_out);
     let parts = shards.par_iter_mut().enumerate().map(|(s, buf)| {
         let mut ll = 0.0;
@@ -857,32 +792,25 @@ pub(crate) fn em_step_par<const LL: bool>(
                 buf[locals[0] as usize] += count;
             }
         }
-        (ll, write_exclusive(plan, s, buf, &out, check))
+        write_exclusive(plan, s, buf, &out);
+        ll
     });
-    let (ll, exclusive_d) = sum_shard_parts::<LL>(parts);
-    let shared_d = reduce_shards_sparse(shards, plan, &out, check);
-    (ll, max_of(exclusive_d, shared_d))
+    let ll = sum_shard_parts::<LL>(parts);
+    reduce_shards_sparse(shards, plan, &out);
+    ll
 }
 
-/// Drive the per-shard closures, each returning its objective partial and its
-/// convergence-criterion partial. The objective partials, when requested, are
-/// added in shard order (`collect` preserves order, so the grouping of the
-/// floating-point sum is fixed by the data-derived plan, not by scheduling);
-/// the criterion is a maximum, which any order gives exactly.
-fn sum_shard_parts<const LL: bool>(
-    parts: impl IndexedParallelIterator<Item = (f64, f64)>,
-) -> (f64, f64) {
+/// Drive the per-shard closures, each returning its objective partial. The
+/// partials, when requested, are added in shard order (`collect` preserves order,
+/// so the grouping of the floating-point sum is fixed by the data-derived plan,
+/// not by scheduling).
+fn sum_shard_parts<const LL: bool>(parts: impl IndexedParallelIterator<Item = f64>) -> f64 {
     if LL {
-        let v: Vec<(f64, f64)> = parts.collect();
-        (
-            v.iter().map(|&(ll, _)| ll).sum(),
-            v.iter().fold(f64::NEG_INFINITY, |m, &(_, d)| max_of(m, d)),
-        )
+        let v: Vec<f64> = parts.collect();
+        v.iter().sum()
     } else {
-        (
-            0.0,
-            parts.map(|(_, d)| d).reduce(|| f64::NEG_INFINITY, max_of),
-        )
+        parts.for_each(|_| ());
+        0.0
     }
 }
 
@@ -1057,8 +985,7 @@ pub(crate) fn vbem_step_par<const LL: bool>(
     expectations: &mut Expectations,
     shards: &mut [Vec<f64>],
     plan: &ShardPlan,
-    check: Option<RelDiffCheck>,
-) -> (f64, f64) {
+) -> f64 {
     // Computed once, before the parallel region: it depends on a global sum over
     // all transcripts, so it cannot be sharded.
     fill_exp_theta_par(alpha_in, prior_alphas, plan, expectations);
@@ -1104,11 +1031,12 @@ pub(crate) fn vbem_step_par<const LL: bool>(
                 buf[locals[0] as usize] += count;
             }
         }
-        (ll, write_exclusive(plan, s, buf, &out, check))
+        write_exclusive(plan, s, buf, &out);
+        ll
     });
-    let (ll, exclusive_d) = sum_shard_parts::<LL>(parts);
-    let shared_d = reduce_shards_sparse(shards, plan, &out, check);
-    (ll, max_of(exclusive_d, shared_d))
+    let ll = sum_shard_parts::<LL>(parts);
+    reduce_shards_sparse(shards, plan, &out);
+    ll
 }
 
 #[cfg(test)]
@@ -1477,7 +1405,6 @@ mod shard_plan_determinism {
             &mut em_out,
             &mut em_shards,
             &plan,
-            None,
         );
         assert!(em_reference
             .iter()
@@ -1497,7 +1424,6 @@ mod shard_plan_determinism {
             &mut expectations,
             &mut vb_shards,
             &plan,
-            None,
         );
         assert!(vb_reference
             .iter()
