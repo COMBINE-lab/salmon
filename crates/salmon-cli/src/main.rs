@@ -513,7 +513,7 @@ struct QuantArgs {
     /// rather than merely move threads around -- a threshold that is higher in
     /// selective-alignment mode than in sketch, because more work per fragment
     /// means a smaller share of the budget should be decoding.
-    #[arg(long = "decoder", value_parser = ["auto", "serial", "parallel", "libz", "libdeflate", "rapidgzip"])]
+    #[arg(long = "decoder", value_parser = parse_decoder)]
     decoder: Option<String>,
     /// JSON file overriding thread and decoder policy.
     ///
@@ -982,6 +982,12 @@ struct QuantArgs {
 }
 
 /// clap value parser for a finite, strictly positive `f64` (`--fldMean`, `--fldSD`).
+/// Check `--decoder` with the parser that will read it, so the two cannot
+/// disagree about which forms exist.
+fn parse_decoder(s: &str) -> Result<String, String> {
+    piscem_rs::io::calibrate::DecoderPreference::parse(s).map(|_| s.to_string())
+}
+
 fn parse_positive_f64(s: &str) -> Result<f64, String> {
     let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
     if v.is_finite() && v > 0.0 {

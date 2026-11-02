@@ -922,3 +922,42 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
         "under --online the knob is honoured, not warned about"
     );
 }
+
+/// `parallel=N` is in the flag's help and the docs, but the parser refused it.
+#[test]
+fn the_documented_decoder_forms_are_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let quant = |decoder: &str, tag: &str| {
+        let out = dir.path().join(tag);
+        let arg = format!("--decoder={decoder}");
+        run(&[
+            os("quant"),
+            os("-i"),
+            fx.index.as_os_str(),
+            os("-l"),
+            os("U"),
+            os("-r"),
+            fx.se.as_os_str(),
+            os("-p"),
+            os("2"),
+            os("-o"),
+            out.as_os_str(),
+            os(&arg),
+        ])
+    };
+    for (i, d) in ["auto", "serial", "parallel", "parallel=2"]
+        .iter()
+        .enumerate()
+    {
+        let o = quant(d, &format!("ok{i}"));
+        assert!(
+            o.status.success(),
+            "{d}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+    for d in ["bogus", "parallel=x", "serial=2"] {
+        assert_eq!(quant(d, "bad").status.code(), Some(2), "{d}");
+    }
+}
