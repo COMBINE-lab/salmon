@@ -142,8 +142,8 @@ fn recovered_pairs_keep_their_strand_when_mate_two_anchors() {
     // Mate 1 is 25 bp: below k=31, so it cannot seed and mate 2 must anchor.
     let (index, p1, p2) = fixture(dir.path(), 25);
 
-    let run = |lib: &str, out: &Path| {
-        assert!(Command::new(SALMON)
+    let run = |lib: &str, out: &Path, expect_success: bool| {
+        let status = Command::new(SALMON)
             .args(["quant", "-i"])
             .arg(&index)
             .args(["-l", lib, "-1"])
@@ -153,14 +153,15 @@ fn recovered_pairs_keep_their_strand_when_mate_two_anchors() {
             .args(["--recoverOrphans", "-p", "2", "-o"])
             .arg(out)
             .status()
-            .unwrap()
-            .success());
+            .unwrap();
+        assert_eq!(status.success(), expect_success, "-l {lib}");
     };
 
     let isf = dir.path().join("isf");
     let isr = dir.path().join("isr");
-    run("ISF", &isf);
-    run("ISR", &isr);
+    run("ISF", &isf, true);
+    // Every fragment is rejected, so the run reports failure, output kept.
+    run("ISR", &isr, false);
 
     // The fixture is ISF by construction, so ISF must keep the fragments and
     // ISR must reject them. Inverted, this assertion reads exactly backwards.

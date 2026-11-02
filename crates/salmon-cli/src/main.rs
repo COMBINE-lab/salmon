@@ -3135,7 +3135,11 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Index(args) => run_index(args),
-        Command::Quant(args) => run_quant(args, cli.quiet),
+        Command::Quant(args) => {
+            let out_dir = args.output.clone();
+            run_quant(args, cli.quiet)?;
+            fail_on_error_diagnostics(&out_dir)
+        }
         Command::Quantmerge(args) => run_quantmerge(args),
         Command::DebugMap(args) => run_debug_map(args),
         Command::Alevin(_) => unreachable!("alevin handled before logging init"),
@@ -3144,6 +3148,30 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Fail the process when the run recorded an error-severity diagnostic (no input,
+/// nothing mapped). The output files stay, for inspection, but exit 0 would let a
+/// pipeline carry an all-zero `quant.sf` into its next step as if it were a result.
+///
+/// Reads `meta_info.json` back because that is the one place every input mode
+/// merges its diagnostics into, and it is what the exit code should agree with.
+fn fail_on_error_diagnostics(out_dir: &std::path::Path) -> Result<()> {
+    let path = out_dir.join("aux_info").join("meta_info.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Ok(());
+    };
+    let meta: serde_json::Value =
+        serde_json::from_slice(&bytes).with_context(|| format!("reading {}", path.display()))?;
+    let errors: Vec<&str> = meta["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|d| d["severity"] == "error")
+        .filter_map(|d| d["message"].as_str())
+        .collect();
+    anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
+    Ok(())
 }
 
 /// `salmon swim` — the super-secret operation. (An easter egg carried over from

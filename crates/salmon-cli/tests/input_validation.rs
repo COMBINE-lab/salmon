@@ -142,7 +142,7 @@ fn an_invalid_library_type_is_refused_in_every_mode() {
     }
 
     // Control: a valid type still runs, and `A` (auto) is not mistaken for one.
-    for lib in ["IU", "A", "ISR"] {
+    for lib in ["IU", "A", "ISF"] {
         let o = run(&[
             os("quant"),
             os("-i"),
@@ -921,4 +921,38 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
         !String::from_utf8_lossy(&online.stderr).contains("configures the online inference path"),
         "under --online the knob is honoured, not warned about"
     );
+}
+
+/// A run where nothing maps must not exit 0: pipelines read the exit code, and
+/// an all-zero `quant.sf` would otherwise reach their next step as a result. The
+/// output files stay, because they say what happened.
+#[test]
+fn a_run_that_maps_nothing_fails_but_keeps_its_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let q = "I".repeat(100);
+    let junk: String = (0..50)
+        .map(|i| format!("@j{i}\n{}\n+\n{q}\n", sequence(1000 + i, 100)))
+        .collect();
+    let reads = dir.path().join("junk.fq");
+    std::fs::write(&reads, junk).unwrap();
+
+    let out = dir.path().join("q");
+    let run = Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&fx.index)
+        .args(["-l", "U", "-r"])
+        .arg(&reads)
+        .args(["-p", "2", "-o"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(!run.status.success(), "must fail when nothing maps");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("0 fragments mapped"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(out.join("quant.sf").exists());
+    assert!(out.join("aux_info/meta_info.json").exists());
 }
