@@ -579,3 +579,68 @@ fn no_single_frag_prob_changes_orphan_weighting_on_the_rad_path() {
         "flat: equal orphan weights leave effective length to decide: {flat:?}"
     );
 }
+
+/// A secondary record often has no bases (SEQ `*`). Scored as nothing, it got
+/// log-likelihood 0, which beats any real alignment with a mismatch, so reads moved
+/// to whichever transcript was reported second. The bases of the primary record
+/// are the same read, so they score it: here txA really is the better placement.
+#[test]
+fn a_secondary_without_bases_is_scored_from_its_primary() {
+    let dir = tempfile::tempdir().unwrap();
+    let random = |mut x: u64, n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                b"ACGT"[(x >> 33) as usize & 3]
+            })
+            .collect()
+    };
+    // Unrelated transcripts: a read from txA does not fit txB at all.
+    let tx_a = random(5, 3000);
+    let tx_b = random(19, 3000);
+    let flip = |b: u8| if b == b'A' { b'C' } else { b'A' };
+    let fasta = dir.path().join("t.fa");
+    std::fs::write(
+        &fasta,
+        format!(
+            ">txA\n{}\n>txB\n{}\n",
+            String::from_utf8_lossy(&tx_a),
+            String::from_utf8_lossy(&tx_b)
+        ),
+    )
+    .unwrap();
+
+    let sam = dir.path().join("a.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:unsorted").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:3000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:3000").unwrap();
+    for i in 0..1000 {
+        let p = (i * 3) % 2800;
+        // Two sequencing errors, so the read does not fit even txA perfectly.
+        let mut read = tx_a[p..p + 100].to_vec();
+        read[30] = flip(read[30]);
+        read[70] = flip(read[70]);
+        let read = String::from_utf8_lossy(&read);
+        let (q, one) = ("I".repeat(100), p + 1);
+        writeln!(f, "r{i}\t0\ttxA\t{one}\t60\t100M\t*\t0\t0\t{read}\t{q}").unwrap();
+        writeln!(f, "r{i}\t256\ttxB\t{one}\t0\t100M\t*\t0\t0\t*\t*").unwrap();
+    }
+    drop(f);
+
+    let out = dir.path().join("q");
+    let mut opts = AlignQuantOptions::new(sam, out.clone());
+    opts.lib_type = "U".to_string();
+    opts.deterministic_error_model = true;
+    opts.transcripts = Some(fasta);
+    let rad = dir.path().join("a.rad");
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    quantify_rad(&opts, &rad).unwrap();
+    let counts = quant_counts(&out);
+    assert!(
+        counts[0].1 > counts[1].1,
+        "txA fits the reads better, so it must get more of them: {counts:?}"
+    );
+}

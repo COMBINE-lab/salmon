@@ -421,7 +421,10 @@ fn analyze_group<R: sam::alignment::Record>(
     if scratch.is_empty() {
         return None;
     }
-    let frags = std::mem::take(scratch);
+    let mut frags = std::mem::take(scratch);
+    if need_seq {
+        crate::fill_missing_bases(&mut frags);
+    }
     let mut placements = pair_records(&frags);
     // `--discardOrphans`: drop half-mapped fragments before they reach the RAD,
     // by the same rule the online path applies at weighting time (a placement
@@ -728,7 +731,7 @@ impl GroupWorker for ScoreWriteWorker<'_> {
         };
         // Per placement: Σ(fg−bg) over its mate(s) under the fixed model (0 when
         // the reference is missing, matching the online path), quantized to i32.
-        let scores: Vec<i32> = data
+        let mut scores: Vec<i32> = data
             .infos
             .iter()
             .map(|info| {
@@ -760,6 +763,27 @@ impl GroupWorker for ScoreWriteWorker<'_> {
                     .clamp(i32::MIN as f64, i32::MAX as f64) as i32
             })
             .collect();
+        // A placement that still has a record without bases could not be scored,
+        // and its 0 would beat the real ones. Rank it with the worst of them.
+        let scored = |info: &PlacementInfo| {
+            info.idxs
+                .iter()
+                .all(|&i| !data.frags[i].read_2bit.is_empty())
+        };
+        let worst = data
+            .infos
+            .iter()
+            .zip(&scores)
+            .filter(|(info, _)| scored(info))
+            .map(|(_, &s)| s)
+            .min();
+        if let Some(worst) = worst {
+            for (info, s) in data.infos.iter().zip(&mut scores) {
+                if !scored(info) {
+                    *s = worst;
+                }
+            }
+        }
         write_record(&data, &scores, &mut self.buf, self.writer)?;
         self.mapped += 1;
         self.scratch = data.frags;

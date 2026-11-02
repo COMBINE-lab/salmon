@@ -839,6 +839,36 @@ fn canonical_name(name: &[u8]) -> &[u8] {
     }
 }
 
+/// Give records without bases (SEQ `*`, usual on secondary alignments) those of
+/// another record of the same read. Scored as nothing, such a record gets
+/// log-likelihood 0, which beats any real alignment. Needs the same query length,
+/// so a hard-clipped record whose bases cannot be lined up stays empty.
+fn fill_missing_bases(frags: &mut [FragRecord]) {
+    for i in 0..frags.len() {
+        if !frags[i].read_2bit.is_empty() {
+            continue;
+        }
+        let query_len: usize = frags[i]
+            .ops
+            .iter()
+            .filter(|(op, _)| op.consume_seq())
+            .map(|(_, len)| len)
+            .sum();
+        let donor = frags.iter().find(|d| {
+            d.is_read1 == frags[i].is_read1 && d.read_2bit.len() == query_len && query_len > 0
+        });
+        let Some(donor) = donor else { continue };
+        // Bases are stored in reference orientation, so the other strand needs
+        // the reverse complement (`3 - b` in this encoding).
+        let bases = if donor.is_reverse == frags[i].is_reverse {
+            donor.read_2bit.clone()
+        } else {
+            donor.read_2bit.iter().rev().map(|b| 3 - b).collect()
+        };
+        frags[i].read_2bit = bases;
+    }
+}
+
 /// Map a noodles CIGAR op kind to our `AlnOp`.
 fn kind_to_op(k: Kind) -> AlnOp {
     match k {
@@ -1203,6 +1233,9 @@ where
                             if let Some((_, f)) = record_to_frag(r, header, need_seq) {
                                 frags.push(f);
                             }
+                        }
+                        if need_seq {
+                            fill_missing_bases(&mut frags);
                         }
                         let (outcome, strand_judged, fmt_mask) =
                             process_fragment(&frags, &ctx, &mut local);
@@ -3399,6 +3432,32 @@ mod tests {
             mate_pos: None,
             hi: None,
         }
+    }
+
+    /// Bases come from a record of the same read, reverse-complemented when the
+    /// strands differ, and never from the other mate or a read of another length.
+    #[test]
+    fn missing_bases_come_from_the_same_read() {
+        let with = |bases: &[u8], is_reverse: bool, is_read1: bool| FragRecord {
+            read_2bit: bases.to_vec(),
+            ops: vec![(AlnOp::Match, 3)],
+            ..frag(is_reverse, is_read1, true)
+        };
+        let mut frags = vec![
+            with(&[0, 0, 1], false, true),
+            with(&[], false, true),
+            with(&[], true, true),
+            with(&[], false, false),
+            FragRecord {
+                ops: vec![(AlnOp::Match, 2)],
+                ..with(&[], false, true)
+            },
+        ];
+        fill_missing_bases(&mut frags);
+        assert_eq!(frags[1].read_2bit, [0, 0, 1], "same strand");
+        assert_eq!(frags[2].read_2bit, [2, 3, 3], "other strand");
+        assert!(frags[3].read_2bit.is_empty(), "other mate");
+        assert!(frags[4].read_2bit.is_empty(), "other length");
     }
 
     /// A genuine single-end read (BAM `0x1` unset) is classified `SingleEnd`, so
