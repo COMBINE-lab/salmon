@@ -63,6 +63,9 @@ const INDEX_PREFIX: &str = "index";
 const INFO_FILE: &str = "info.json";
 /// Concatenated reference sequences (forward strand), in transcript-id order.
 const REFSEQ_FILE: &str = "refseq.bin";
+/// Where `REFSEQ_FILE` is staged, so a rebuild that fails on bad input leaves
+/// the existing store untouched.
+const REFSEQ_STAGED_FILE: &str = "refseq.bin.partial";
 /// Per-reference offsets into `REFSEQ_FILE` (`num_refs + 1` entries).
 const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 
@@ -989,8 +992,11 @@ fn finish_refseq_store(
             "index reference order differs from the preprocessed order; \
              rebuilding {REFSEQ_FILE} from the cleaned FASTA"
         );
+        let _ = std::fs::remove_file(dir.join(REFSEQ_STAGED_FILE));
         return write_refseq_store(dir, std::slice::from_ref(&cleaned.to_path_buf()), idx);
     }
+    std::fs::rename(dir.join(REFSEQ_STAGED_FILE), dir.join(REFSEQ_FILE))
+        .with_context(|| format!("writing {REFSEQ_FILE}"))?;
     std::fs::write(
         dir.join(REFSEQ_OFFSETS_FILE),
         serde_json::to_vec(&staged.offsets)?,
@@ -1069,8 +1075,8 @@ fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Resu
 ///
 /// The whole build in order: validate options, read the decoy list, preprocess
 /// the FASTA, build the cDBG (stage 1), build the SSHash index (stage 2), locate
-/// and verify the decoy block, write `info.json` and the reference-sequence
-/// store, and clean up intermediates.
+/// and verify the decoy block, write the reference-sequence store and `info.json`,
+/// and clean up intermediates.
 pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     anyhow::ensure!(!opts.transcripts.is_empty(), "no transcript files provided");
     // 63 is the largest k that fits in a 2-bit-per-base 128-bit word; odd is
@@ -1134,7 +1140,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         // FixFasta behavior); decoys keep their non-ACGT bases (e.g. genome N-runs) so
         // Cuttlefish splits the graph on them instead of tiling random replacements.
         let cleaned = intermediate_dir.join("cleaned_refs.fa");
-        let refseq = RefseqWriter::create(&opts.output_dir.join(REFSEQ_FILE), opts.k)?;
+        let refseq_staged = opts.output_dir.join(REFSEQ_STAGED_FILE);
+        let refseq = RefseqWriter::create(&refseq_staged, opts.k)?;
         let pre = preprocess_fasta(
             &opts.transcripts,
             &cleaned,
@@ -1147,7 +1154,19 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             opts.k,
             hash_feed,
         )
-        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
+        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&refseq_staged);
+        })?;
+        // The input is good, so the rebuild is committed: from here the directory
+        // holds a mix of old and new files until the final `info.json` is written.
+        // An index with no `info.json` refuses to load, which is the safe failure.
+        match std::fs::remove_file(opts.output_dir.join(INFO_FILE)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).context("removing the previous info.json");
+            }
+            _ => {}
+        }
         // Everything below reports what the preprocessing did. Silent transformation
         // of a user's reference would be indefensible, so each rule that fired is
         // logged, with the destructive ones (dropped references) as warnings.
@@ -1360,12 +1379,13 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             decoy_seq_hash: h.decoy_seq_hash,
             decoy_name_hash: h.decoy_name_hash,
         };
-        write_info(&opts.output_dir, &info)?;
 
         // Persist the (cleaned) reference sequences (piscem does not retain them) so
         // the selective-alignment step fetches windows matching the indexed k-mers.
         finish_refseq_store(&opts.output_dir, pre.refseq, &cleaned, &idx)
             .context("writing reference sequence store")?;
+        // Last, because it is what marks the index complete.
+        write_info(&opts.output_dir, &info)?;
 
         if !opts.keep_intermediate {
             remove_cdbg_intermediates(&cdbg_prefix);
@@ -1709,6 +1729,19 @@ impl SalmonIndex {
                     .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
             )?
         };
+        // A store that disagrees with the index would panic at the first slice or,
+        // worse, align reads against the wrong bases.
+        if load_refseq != RefseqLoad::None {
+            let store_len = std::fs::metadata(dir.join(REFSEQ_FILE))
+                .with_context(|| format!("reading {REFSEQ_FILE}"))?
+                .len();
+            anyhow::ensure!(
+                ref_offsets.len() == inner.num_refs() + 1 && ref_offsets.last() == Some(&store_len),
+                "{} is damaged: {REFSEQ_FILE} does not match the index. Rebuild it with \
+                 `salmon index`.",
+                dir.display()
+            );
+        }
         let mut packed = packed;
         if !packed.bits.is_empty() {
             let other = &packed.other;
@@ -1929,6 +1962,43 @@ mod tests {
             );
             assert!(seq.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')));
         }
+    }
+
+    /// A rebuild that fails on bad input must leave the existing index working.
+    #[test]
+    fn failed_rebuild_keeps_the_existing_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+        let before = std::fs::read(out.join(REFSEQ_FILE)).unwrap();
+
+        opts.transcripts = vec![tmp.path().join("typo.fa")];
+        assert!(build(&opts).is_err());
+
+        assert_eq!(std::fs::read(out.join(REFSEQ_FILE)).unwrap(), before);
+        assert!(!out.join(REFSEQ_STAGED_FILE).exists());
+        assert_eq!(SalmonIndex::load(&out).expect("index load").num_refs(), 3);
+    }
+
+    /// A store cut short (by anything) is refused at load rather than panicking
+    /// at the first read that lands in the missing bases.
+    #[test]
+    fn a_truncated_reference_store_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+        std::fs::write(out.join(REFSEQ_FILE), b"").unwrap();
+        let err = SalmonIndex::load(&out)
+            .err()
+            .expect("must refuse")
+            .to_string();
+        assert!(err.contains("damaged"), "{err}");
     }
 
     /// The sshash scratch dir honors an explicit override and the
