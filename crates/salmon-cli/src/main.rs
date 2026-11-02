@@ -1396,6 +1396,22 @@ fn preflight_rad_space(rad_path: &std::path::Path, input_bytes: u64) {
 // with order-independent models baked into the header; the second quantifies
 // from it. Splitting the run this way is what makes the result independent of
 // the thread count.
+/// Remove the previous run's abundance tables before this one starts. Results
+/// are written as the run goes, so one killed partway would otherwise leave them
+/// beside new metadata, where a later step reads the two as one result.
+fn remove_previous_quant_files(out_dir: &std::path::Path) -> Result<()> {
+    for name in ["quant.sf", "quant.genes.sf"] {
+        let path = out_dir.join(name);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("removing old {}", path.display()));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn run_deterministic(
     mut map_opts: QuantOptions,
     rad_out: Option<PathBuf>,
@@ -1486,6 +1502,7 @@ fn run_deterministic(
     // bake them (see `QuantOptions::deterministic_fld`), so phase 2 is a single
     // pass and the whole result is byte-identical across thread counts.
     map_opts.deterministic_fld = true;
+    remove_previous_quant_files(out_dir)?;
     let map_res = match quantify(&map_opts) {
         Ok(r) => r,
         Err(e) => {
@@ -1662,6 +1679,7 @@ fn run_deterministic_align(
 
     // Phase 1 — one BAM pass: write placements + bake FLD / library format
     // (+ rough abundances when bias is on) so phase 2 is a single baked pass.
+    remove_previous_quant_files(&out_dir)?;
     let summary = match salmon_align::write_alignment_rad(&opts, &rad_path, codec) {
         Ok(r) => r,
         Err(e) => {
@@ -1807,6 +1825,7 @@ fn run_genome_project(
     preflight_rad_space(&rad_path, total_file_bytes(std::iter::once(&gp.bam)));
 
     // Phase 1 — project the genome BAM into a fully-baked transcriptome RAD.
+    remove_previous_quant_files(&out_dir)?;
     let art = match project_genome_bam_to_rad(&gp, &rad_path) {
         Ok(r) => r,
         Err(e) => {
@@ -2463,6 +2482,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         } else {
             None
         };
+        remove_previous_quant_files(&opts.output_dir)?;
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         drop(guard); // stop + clear the spinner before the summary
         let pct = if res.num_processed > 0 {
@@ -2633,6 +2653,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
         opts.thinning_factor = args.thinning_factor.unwrap_or(16);
+        remove_previous_quant_files(&opts.output_dir)?;
         let res = quantify_rad(&opts, &rad_path).context("RAD-input quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64
@@ -3030,6 +3051,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     } else {
         None
     };
+    remove_previous_quant_files(&opts.output_dir)?;
     let res = quantify(&opts).context("quantification failed")?;
     drop(guard); // stop + clear the spinner before the summary
     let pct = if res.num_processed > 0 {
