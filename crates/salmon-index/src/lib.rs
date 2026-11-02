@@ -926,6 +926,60 @@ fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Resu
     Ok(())
 }
 
+/// Stream inputs copied to regular files for the length of a build, removed on
+/// drop so that a failed build does not leave them behind either.
+struct SpooledInputs {
+    paths: Vec<PathBuf>,
+    spooled: Vec<PathBuf>,
+}
+
+impl Drop for SpooledInputs {
+    fn drop(&mut self) {
+        for path in &self.spooled {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Copy any FIFO or process substitution among `inputs` into `dir`.
+///
+/// A build reads each reference twice, concurrently (digests and preprocessing),
+/// and a pipe can be read once. Compressed streams are copied as they are, which
+/// also gives them the parallel decoder. Regular files are passed through
+/// untouched, and so are paths that cannot be statted or are directories, which
+/// the readers report in their own words.
+fn spool_stream_inputs(inputs: &[PathBuf], dir: &Path) -> Result<SpooledInputs> {
+    let mut spool = SpooledInputs {
+        paths: Vec::with_capacity(inputs.len()),
+        spooled: Vec::new(),
+    };
+    for (i, path) in inputs.iter().enumerate() {
+        let is_stream = std::fs::metadata(path)
+            .is_ok_and(|m| !m.file_type().is_file() && !m.file_type().is_dir());
+        if !is_stream {
+            spool.paths.push(path.clone());
+            continue;
+        }
+        let target = dir.join(format!("stream_input_{i}"));
+        // Recorded before the copy: a stream that fails midway leaves a partial
+        // file, which is the one that most needs removing.
+        spool.spooled.push(target.clone());
+        let mut from = std::fs::File::open(path)
+            .with_context(|| format!("opening stream input {}", path.display()))?;
+        let mut to = std::fs::File::create(&target)
+            .with_context(|| format!("creating {}", target.display()))?;
+        let bytes = std::io::copy(&mut from, &mut to)
+            .with_context(|| format!("reading stream input {}", path.display()))?;
+        info!(
+            "read stream input {} ({bytes} bytes) into {}",
+            path.display(),
+            target.display()
+        );
+        spool.paths.push(target);
+    }
+    Ok(spool)
+}
+
 /// Build a salmon index from a transcriptome FASTA into `opts.output_dir`.
 ///
 /// The whole build in order: validate options, read the decoy list, preprocess
@@ -963,6 +1017,9 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     let cdbg_prefix = intermediate_dir.join(CDBG_PREFIX);
     let index_prefix = opts.output_dir.join(INDEX_PREFIX);
 
+    let spool = spool_stream_inputs(&opts.transcripts, &intermediate_dir)?;
+    let transcripts = &spool.paths;
+
     // Decoy names (genome/contamination sequences indexed but never quantified).
     let decoy_names = match &opts.decoys {
         Some(p) => read_decoy_names(p)?,
@@ -976,7 +1033,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // scope joins that thread even if the build fails.
     std::thread::scope(|scope| {
         let ref_hashes =
-            scope.spawn(|| compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode));
+            scope.spawn(|| compute_ref_hashes(transcripts, &decoy_names, opts.gencode));
 
         // Preprocess the references into the cleaned FASTA that feeds both the cDBG
         // build and the refseq store (the hashes below use the original input):
@@ -986,7 +1043,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         let cleaned = intermediate_dir.join("cleaned_refs.fa");
         let refseq = RefseqWriter::create(&opts.output_dir.join(REFSEQ_FILE), opts.k)?;
         let pre = preprocess_fasta(
-            &opts.transcripts,
+            transcripts,
             &cleaned,
             refseq,
             threads,

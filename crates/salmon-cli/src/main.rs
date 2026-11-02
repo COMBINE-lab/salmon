@@ -1908,9 +1908,20 @@ fn run_genome_project(
 /// no trailing newline still counts as a line. The cost is one sequential pass
 /// over uncompressed input; large FASTQ is essentially always compressed, and
 /// mapping will read the file again anyway.
+///
+/// Only regular files can be checked. A FIFO or process substitution
+/// (`-1 <(curl ...)`) can be read once, and that read belongs to the mapper: the
+/// magic sniff alone would take its first bytes, leaving the mapper a gzip stream
+/// with no header, and rewinding a plain one fails outright ("Illegal seek").
+/// Telling them apart needs metadata only, so a pipe is never touched.
 fn preflight_fastq_complete(paths: &[PathBuf]) -> Result<()> {
     use std::io::Read;
     for path in paths {
+        if piscem_rs::io::calibrate::classify_input(path)
+            != piscem_rs::io::calibrate::InputKind::Regular
+        {
+            continue;
+        }
         let mut f = match std::fs::File::open(path) {
             Ok(f) => f,
             // Missing/unreadable inputs are reported by the reader, with its
