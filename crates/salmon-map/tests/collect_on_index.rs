@@ -439,3 +439,34 @@ fn unmappable_read_yields_no_candidates() {
         "foreign read unexpectedly mapped: {cands:?}"
     );
 }
+
+/// A mate shorter than k skips `map_read`, which is what clears its cache, so the
+/// next fragment must not inherit the previous fragment's hits.
+#[test]
+fn sketch_short_mate_does_not_reuse_previous_hits() {
+    let transcript = gen_seq(600, 0x5EED);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
+    let mut map = |r1: &[u8], r2: &[u8]| {
+        map_read_pair_sketch(
+            idx.inner(),
+            &mut hs,
+            &mut scratch,
+            r1,
+            r2,
+            false,
+            false,
+            SkippingStrategy::Permissive,
+            256,
+            2500,
+            &idx,
+            false,
+        )
+    };
+    let first = map(&transcript[50..130], &revcomp(&transcript[350..430]));
+    assert!(!first.is_empty(), "the full pair should map");
+    // A 25 nt R1 and an R2 from nowhere: nothing here can map.
+    let second = map(&transcript[50..75], &gen_seq(80, 0xBAD));
+    assert!(second.is_empty(), "stale hits reused: {second:?}");
+}
