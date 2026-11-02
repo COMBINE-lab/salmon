@@ -922,3 +922,33 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
         "under --online the knob is honoured, not warned about"
     );
 }
+
+/// `-p` above the machine's threads is capped with a warning. The cap must reach
+/// mapping too, not only the EM's pool, or the bad scheduler variable it warns
+/// about still oversubscribes the node.
+#[test]
+fn an_oversized_thread_count_is_capped_for_mapping_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("q");
+    let o = run(&[
+        os("quant"),
+        os("-l"),
+        os("A"),
+        os("-p"),
+        os("100000"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-1"),
+        fx.r1.as_os_str(),
+        os("-2"),
+        fx.r2.as_os_str(),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let info = std::fs::read_to_string(out.join("cmd_info.json")).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&info).unwrap();
+    let available = std::thread::available_parallelism().unwrap().get() as u64;
+    assert_eq!(info["threads"], available);
+}
