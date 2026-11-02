@@ -837,9 +837,6 @@ where
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(MINIBATCH);
             for result in records {
                 let rec = result.context("reading alignment record")?;
-                if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
-                    continue;
-                }
                 let Some(name) = rec.name() else { continue };
                 let cname = crate::canonical_name(name.as_ref()).to_vec();
                 if !have {

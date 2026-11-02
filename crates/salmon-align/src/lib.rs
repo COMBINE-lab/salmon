@@ -1107,9 +1107,6 @@ where
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(minibatch);
             for result in records {
                 let rec = result.context("reading alignment record")?;
-                if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
-                    continue;
-                }
                 let Some(name) = rec.name() else { continue };
                 let cname = canonical_name(name.as_ref()).to_vec();
                 if !have {
@@ -1308,9 +1305,9 @@ where
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
         acc.pos_obs = merged.pos_obs;
-        // num_processed = every aligned fragment in the BAM; num_mapped = those
-        // with a surviving strand-compatible placement (assigned to an eq-class).
-        // They differ only for stranded libraries; matches reads-mode (#1025).
+        // num_processed = every fragment in the BAM, aligned or not; num_mapped =
+        // those with a surviving strand-compatible placement (assigned to an
+        // eq-class). Matches reads-mode (#1025).
         acc.num_processed = total;
         acc.num_mapped = total_mapped;
         acc.num_orphan = total_orphan;
@@ -1505,6 +1502,10 @@ fn process_fragment(
     local: &mut Local,
 ) -> (FragmentOutcome, Option<bool>, u16) {
     use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
+    // A wholly unmapped fragment: counted as processed, with nothing to judge.
+    if recs.is_empty() {
+        return (FragmentOutcome::Unmapped, None, 0);
+    }
     // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
     const LOG_EPSILON: f64 = -23.998_158_637_57;
 
@@ -3266,10 +3267,9 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
             .context("writing bias_models.txt")?;
     }
     std::fs::create_dir_all(dir.join("logs")).context("creating logs")?;
-    // In alignment mode the input records are already aligned, so `num_processed`
-    // is the count of aligned fragments and `num_mapped` is those with a strand-
-    // compatible placement that were quantified; label them accordingly so a
-    // <100% rate on a stranded library is not read as lost alignments.
+    // In alignment mode `num_processed` is every fragment in the input, aligned or
+    // not, and `num_mapped` is those with a strand-compatible placement that were
+    // quantified; label them accordingly.
     // This writer serves every RAD-based driver, so the log must describe the run
     // the *user* asked for. It used to hard-code "alignment mode" and alignment
     // wording, so a default reads run — the 2.6.0 default — was labelled as
@@ -3293,8 +3293,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         ("observed fragments", "mapped fragments", "mapping rate")
     } else {
         (
-            "aligned fragments",
-            "strand-compatible (quantified)",
+            "observed fragments",
+            "aligned and strand-compatible (quantified)",
             "compatible rate",
         )
     };
