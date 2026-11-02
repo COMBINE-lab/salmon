@@ -1105,6 +1105,7 @@ where
             let mut have = false;
             let mut group: Vec<R> = Vec::new();
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(minibatch);
+            let mut grouping = GroupingCheck::default();
             for result in records {
                 let rec = result.context("reading alignment record")?;
                 if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
@@ -1116,6 +1117,7 @@ where
                     cur_name = cname;
                     have = true;
                 } else if cname != cur_name {
+                    grouping.observe(&group);
                     batch.push(std::mem::take(&mut group));
                     cur_name = cname;
                     if batch.len() >= minibatch {
@@ -1129,13 +1131,14 @@ where
                 group.push(rec);
             }
             if have && !group.is_empty() {
+                grouping.observe(&group);
                 batch.push(group);
             }
             if !batch.is_empty() {
                 let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
                 let _ = tx.send((fm, batch));
             }
-            Ok(())
+            grouping.finish()
         });
 
         // Persistent worker pool: each pulls minibatches until the queue closes.
@@ -1993,6 +1996,54 @@ pub fn parse_source_programs(lines: &[String]) -> Vec<SourceProgram> {
             prog
         })
         .collect()
+}
+
+/// Spots input whose mates are not next to each other, which the header check
+/// below cannot do when the header says nothing (`SO:unknown`, or no `@HD`). Each
+/// mate then forms a fragment of its own, so every count doubles while each record
+/// looks like an orphan. Tallied on the reader thread, from flags alone.
+#[derive(Default)]
+pub(crate) struct GroupingCheck {
+    fragments: u64,
+    /// fragments with a record whose mate is marked mapped, but no such mate
+    split: u64,
+}
+
+impl GroupingCheck {
+    pub(crate) fn observe<R: sam::alignment::Record>(&mut self, group: &[R]) {
+        let (mut first, mut last, mut expects_mate) = (false, false, false);
+        for flags in group.iter().filter_map(|r| r.flags().ok()) {
+            if flags.is_unmapped() {
+                continue;
+            }
+            first |= flags.is_first_segment();
+            last |= flags.is_last_segment();
+            expects_mate |= flags.is_segmented() && !flags.is_mate_unmapped();
+        }
+        self.fragments += 1;
+        self.split += u64::from(expects_mate && !(first && last));
+    }
+
+    /// Refuses input where at least half the fragments are split: that is not a
+    /// filtered BAM but one in the wrong order, and its numbers would be wrong.
+    /// A smaller share can be real (a filter that kept one mate), so it only warns.
+    pub(crate) fn finish(&self) -> Result<()> {
+        let Self { fragments, split } = *self;
+        let hint = "Records of one read must be consecutive: group them by name with \
+                    `samtools collate` or `samtools sort -n`";
+        anyhow::ensure!(
+            split * 2 < fragments || fragments == 0,
+            "{split} of {fragments} fragments have a mate marked as mapped that is not next \
+             to them, so the input is not grouped by read name. {hint}."
+        );
+        if split * 20 >= fragments && split > 0 {
+            tracing::warn!(
+                "{split} of {fragments} fragments have a mate marked as mapped that is not next \
+                 to them. They are quantified as orphans. If the mates are really there: {hint}."
+            );
+        }
+        Ok(())
+    }
 }
 
 fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {

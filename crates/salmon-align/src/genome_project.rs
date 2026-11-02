@@ -638,6 +638,7 @@ where
             let mut have = false;
             let mut group: Vec<R> = Vec::new();
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(MINIBATCH);
+            let mut grouping = crate::GroupingCheck::default();
             for result in records {
                 let rec = result.context("reading alignment record")?;
                 if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
@@ -649,6 +650,7 @@ where
                     cur_name = cname;
                     have = true;
                 } else if cname != cur_name {
+                    grouping.observe(&group);
                     batch.push(std::mem::take(&mut group));
                     cur_name = cname;
                     if batch.len() >= MINIBATCH {
@@ -661,12 +663,13 @@ where
                 group.push(rec);
             }
             if have && !group.is_empty() {
+                grouping.observe(&group);
                 batch.push(group);
             }
             if !batch.is_empty() {
                 let _ = tx.send(batch);
             }
-            Ok(())
+            grouping.finish()
         });
 
         let mut workers = Vec::with_capacity(nthreads);

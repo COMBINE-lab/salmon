@@ -295,3 +295,36 @@ fn align_auto_library_type_detects_from_alignments() {
     let bias = v["strand_mapping_bias"].as_f64().unwrap();
     assert!((bias - 0.96).abs() < 1e-12, "bias {bias} != 0.96");
 }
+
+/// Mates apart (a position-sorted file whose header does not say so) make every
+/// mate a fragment of its own, which doubled NumReads with no error naming why.
+#[test]
+fn input_not_grouped_by_read_name_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("aln.sam");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:unknown").unwrap();
+    writeln!(f, "@SQ\tSN:tx0\tLN:5000").unwrap();
+    for i in 0..4 {
+        let (l, r) = (1 + i * 400, 201 + i * 400);
+        writeln!(f, "f{i}\t99\ttx0\t{l}\t60\t100M\t=\t{r}\t300\t*\t*").unwrap();
+    }
+    for i in 0..4 {
+        let (l, r) = (1 + i * 400, 201 + i * 400);
+        writeln!(f, "f{i}\t147\ttx0\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*").unwrap();
+    }
+    drop(f);
+
+    let mut opts = AlignQuantOptions::new(path, tmp.path().join("out"));
+    opts.lib_type = "IU".to_string();
+    opts.no_error_model = true;
+    let online = quantify_alignments(&opts).unwrap_err();
+    let rad = tmp.path().join("a.rad");
+    let default = salmon_align::write_alignment_rad(&opts, &rad, salmon_rad::ChunkCodec::None)
+        .map(|_| ())
+        .unwrap_err();
+    for err in [online, default] {
+        let err = format!("{err:#}");
+        assert!(err.contains("not grouped by read name"), "{err}");
+    }
+}
