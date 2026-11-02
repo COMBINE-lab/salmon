@@ -261,9 +261,9 @@ fn no_length_correction_conflicts_with_bias_correction() {
 /// Run paired `salmon quant` over two FIFOs fed by `feed`, a shell command given
 /// the source file as `$1` and writing FASTQ (of any compression) to stdout.
 ///
-/// A regression here is as likely to hang as to fail (an input closed by a
-/// preflight leaves the mapper's open waiting for a writer that has gone), so
-/// the run is bounded rather than left to hang the suite.
+/// A regression here is as likely to hang as to fail (an input opened and
+/// closed before mapping leaves the mapper's open waiting for a writer that has
+/// gone), so the run is bounded rather than left to hang the suite.
 #[cfg(unix)]
 fn quant_over_fifos(fx: &Fx, dir: &Path, feed: &str, out: &Path) -> (bool, String) {
     use std::time::{Duration, Instant};
@@ -377,6 +377,27 @@ fn a_gzip_stream_cut_short_is_refused() {
     assert!(!ok, "a truncated gzip stream must fail: {stderr}");
 }
 
+/// A plain stream cut inside a record must fail like a file does, and with two
+/// inputs the error must say which one was cut.
+#[cfg(unix)]
+#[test]
+fn a_plain_stream_cut_mid_record_is_refused_and_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("cut");
+    // `head -c` lands inside a record of either mate's file.
+    let (ok, stderr) = quant_over_fifos(&fx, dir.path(), "head -c 3001 \"$1\"", &out);
+    assert!(!ok, "a plain stream cut mid-record must fail: {stderr}");
+    assert!(
+        stderr.contains("probably truncated") || stderr.contains("do not match"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("f1-cut") || stderr.contains("f2-cut"),
+        "the error must name the input:\n{stderr}"
+    );
+}
+
 /// `salmon index` sniffed each reference's compression through a second open,
 /// and hashed it in a second pass, so a pipe lost its first bytes. Each input is
 /// now read once, so a stream must build the same index as the file it carries.
@@ -444,7 +465,9 @@ fn index_reads_references_from_a_stream() {
 
 /// A truncated FASTQ was quantified up to its last complete record and reported
 /// as a normal run. The trailing-line cases were also inconsistent with each
-/// other: 1 or 2 orphaned lines were dropped in silence while 3 errored.
+/// other: 1 or 2 orphaned lines were dropped in silence while 3 errored. The
+/// reader now refuses any partial final record, so this holds for a file and a
+/// stream alike, without reading the input twice.
 #[test]
 fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
     let dir = tempfile::tempdir().unwrap();
@@ -476,13 +499,13 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
         !o.status.success(),
         "a byte-truncated FASTQ must be refused"
     );
-    // Two wordings are correct here and which one fires depends on where the
-    // cut landed: a short file reports its line count, a file whose final
-    // record is malformed reports that instead (salmon cannot tell a truncated
-    // transfer from a corrupted one, and says so rather than guessing).
+    // Which wording fires depends on where the cut landed: a partial record
+    // is reported as truncation, and a final quality line cut short as a
+    // malformed record (a truncated transfer and a corrupted file look the
+    // same there).
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        err.contains("looks truncated") || err.contains("final FASTQ record is incomplete"),
+        err.contains("probably truncated") || err.contains("do not match"),
         "{err}"
     );
     assert!(
@@ -491,7 +514,7 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
     );
 
     // Line-boundary truncation: 1, 2 and 3 orphaned lines must all be refused,
-    // where 1 and 2 used to pass silently.
+    // where 1 and 2 used to pass silently, and the error must name the file.
     let lines: Vec<&str> = full.lines().collect();
     for extra in 1..=3 {
         let cut = dir.path().join(format!("cut{extra}.fq"));
@@ -502,13 +525,26 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
             !o.status.success(),
             "a FASTQ ending {extra} line(s) into a record must be refused"
         );
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains(&format!("cut{extra}.fq")),
+            "the error must name the file:\n{err}"
+        );
     }
 
-    // Control: the intact file, and a compressed copy, still run. (Compressed
-    // truncation is caught by the decompressor, so the preflight skips it.)
+    // Control: the intact file still runs, and so does one ending in a blank
+    // line, which is not a partial record.
     assert!(
         quant(&fx.se, &out).status.success(),
         "intact FASTQ must run"
+    );
+    let blank = dir.path().join("blank.fq");
+    std::fs::write(&blank, format!("{full}\n")).unwrap();
+    let o = quant(&blank, &out);
+    assert!(
+        o.status.success(),
+        "a FASTQ ending in a blank line must run:\n{}",
+        String::from_utf8_lossy(&o.stderr)
     );
 
     // FASTA reads have no 4-line records, so the check must not apply to them:

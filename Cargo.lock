@@ -2187,9 +2187,9 @@ dependencies = [
 
 [[package]]
 name = "paraseq-temp"
-version = "0.6.2-pre.1"
+version = "0.6.3-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b3557bbf59512a3e10d973bba6f26f6531bc3b7cf95381d07cdeb04cf65d4fd"
+checksum = "ea290fbfc62e5abfee846800eca397a837d1d817a3474c209c7fbf6fcd5f0ad3"
 dependencies = [
  "crossbeam-channel",
  "either",
@@ -2236,9 +2236,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.12.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c12807a35c0f91ac18b14bdf3feea2b07e855b025bf8067b0e0746de39d75e"
+checksum = "42878edafb89034c612379fa69561e117e6480573a69332e4f13b98373bf97f7"
 dependencies = [
  "ahash",
  "anyhow",

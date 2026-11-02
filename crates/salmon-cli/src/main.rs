@@ -1888,125 +1888,6 @@ fn run_genome_project(
 // or deterministic), validating that the combination makes sense, and reporting
 // clearly when it does not — a wrong mode chosen silently would be far worse
 // than an error.
-/// Reject an obviously incomplete uncompressed FASTQ before mapping it.
-///
-/// A truncated FASTQ — interrupted download, aborted rsync, full disk — was
-/// read up to its last complete record and quantified silently: 8 KB of an
-/// 84 KB file produced a clean `quant.sf` over 38 of 400 reads, exit 0, with
-/// nothing said. That is a wrong answer presented as a right one, and salmon
-/// already rejects the equivalent for its other inputs (a truncated RAD says
-/// "the RAD file may be truncated" and exits 1).
-///
-/// Only uncompressed inputs need this. A truncated gzip/zstd/bzip2 stream
-/// already fails in the decompressor ("unexpected end of file"), which covers
-/// the form real sequencing data almost always arrives in. A truncated *plain*
-/// file has no such envelope, so the completeness has to be checked here.
-///
-/// The check is exact rather than heuristic: a valid FASTQ is a whole number of
-/// 4-line records, so a line count that is not a multiple of 4 is incomplete,
-/// full stop. It cannot reject a valid file — in particular a final record with
-/// no trailing newline still counts as a line. The cost is one sequential pass
-/// over uncompressed input; large FASTQ is essentially always compressed, and
-/// mapping will read the file again anyway.
-///
-/// Only regular files can be checked. A FIFO or process substitution
-/// (`-1 <(curl ...)`) can be read once, and that read belongs to the mapper: the
-/// magic sniff alone would take its first bytes, leaving the mapper a gzip stream
-/// with no header, and rewinding a plain one fails outright ("Illegal seek").
-/// Telling them apart needs metadata only, so a pipe is never touched.
-fn preflight_fastq_complete(paths: &[PathBuf]) -> Result<()> {
-    use std::io::Read;
-    for path in paths {
-        if piscem_rs::io::calibrate::classify_input(path)
-            != piscem_rs::io::calibrate::InputKind::Regular
-        {
-            continue;
-        }
-        let mut f = match std::fs::File::open(path) {
-            Ok(f) => f,
-            // Missing/unreadable inputs are reported by the reader, with its
-            // own wording; do not pre-empt it with a worse message.
-            Err(_) => continue,
-        };
-        let mut magic = [0u8; 4];
-        let n = f.read(&mut magic).unwrap_or(0);
-        // Compressed: the decompressor owns this check (see above).
-        let compressed = (n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b)          // gzip
-            || (n >= 4 && magic[..4] == [0x28, 0xb5, 0x2f, 0xfd])                  // zstd
-            || (n >= 3 && &magic[..3] == b"BZh")                                   // bzip2
-            || (n >= 4 && magic[..4] == [0xfd, 0x37, 0x7a, 0x58]); // xz
-                                                                   // FASTA reads have no 4-line record structure to check (and a record
-                                                                   // may span several lines), so there is nothing to verify here.
-        if compressed || n == 0 || magic[0] == b'>' {
-            continue;
-        }
-        use std::io::{BufReader, Seek, SeekFrom};
-        f.seek(SeekFrom::Start(0))?;
-        let mut reader = BufReader::with_capacity(1 << 20, f);
-        let mut buf = vec![0u8; 1 << 20];
-        let (mut lines, mut last) = (0u64, 0u8);
-        loop {
-            let got = reader.read(&mut buf)?;
-            if got == 0 {
-                break;
-            }
-            lines += bytecount_newlines(&buf[..got]);
-            last = buf[got - 1];
-        }
-        // A final record with no trailing newline is still a line.
-        if last != b'\n' {
-            lines += 1;
-        }
-        if !lines.is_multiple_of(4) {
-            anyhow::bail!(
-                "{} looks truncated: it holds {lines} lines, which is not a whole number of \
-                 4-line FASTQ records. Quantifying it would silently report results for only \
-                 the part that survived. Re-transfer or re-generate the file.",
-                path.display()
-            );
-        }
-
-        // The line count alone is not enough: a byte-level cut can land such
-        // that the surviving lines still number a multiple of 4, with the last
-        // one a partial quality string. So check the final record's shape,
-        // which is exact and does not depend on a trailing newline (some valid
-        // files have none): the separator line starts with `+`, and the
-        // sequence and quality lines are the same length.
-        let tail_len = 1 << 20;
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        let mut f = std::fs::File::open(path)?;
-        f.seek(SeekFrom::Start(size.saturating_sub(tail_len)))?;
-        let mut tail = Vec::new();
-        f.take(tail_len).read_to_end(&mut tail)?;
-        let tail_lines: Vec<&[u8]> = tail
-            .split(|&c| c == b'\n')
-            .filter(|l| !l.is_empty())
-            .collect();
-        if tail_lines.len() >= 4 {
-            let n = tail_lines.len();
-            let (seq, sep, qual) = (tail_lines[n - 3], tail_lines[n - 2], tail_lines[n - 1]);
-            if !sep.starts_with(b"+") || seq.len() != qual.len() {
-                anyhow::bail!(
-                    "{}: its final FASTQ record is incomplete — the `+` separator is \
-                     missing, or the sequence and quality lines differ in length. That is \
-                     what a truncated transfer looks like, but a corrupted or mis-generated \
-                     file looks the same from here, so check the file rather than assuming \
-                     either. Quantifying it would silently report results for only the part \
-                     that parsed.",
-                    path.display()
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Count `b'\n'` in a slice. Split out so the hot loop above stays readable.
-#[inline]
-fn bytecount_newlines(b: &[u8]) -> u64 {
-    b.iter().filter(|&&c| c == b'\n').count() as u64
-}
-
 /// Warn, by name, about flags the selected mode cannot act on.
 ///
 /// The rule this serves: a flag that does nothing must say so. Salmon already
@@ -2912,9 +2793,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             ],
         );
     }
-    preflight_fastq_complete(&args.mates1)?;
-    preflight_fastq_complete(&args.mates2)?;
-    preflight_fastq_complete(&args.unmated)?;
     anyhow::ensure!(
         args.mates1.len() == args.mates2.len(),
         "the number of -1 and -2 files must match"

@@ -108,6 +108,30 @@ input path: gzip (including BGZF and multi-member), bzip2, xz and zstd all
 work for reads, targets, alignments and `--geneMap` — including a gzip file
 under a misleading name.
 
+### Reading from streams
+
+Reads (`-1/-2`, `-r`) can come from a FIFO or process substitution as well as a
+file, so a run can be quantified as it downloads, without storing the FASTQ:
+
+```sh
+salmon quant -i salmon_index -l A -o SRR000001 \
+  -1 <(curl -sSf https://ftp.sra.ebi.ac.uk/vol1/fastq/.../SRR000001_1.fastq.gz) \
+  -2 <(curl -sSf https://ftp.sra.ebi.ac.uk/vol1/fastq/.../SRR000001_2.fastq.gz)
+```
+
+`salmon index -t` and `-d` accept streams too. Each input is read once.
+
+- A stream is decoded serially: the parallel gzip decoder needs a file it can
+  seek in.
+- A stream cut short inside a record, or a gzip stream that ends early, fails
+  the run, and the error names the input.
+- A plain stream cut exactly between two records cannot be told from a
+  complete one. Where the source states the read count (ENA's `read_count`,
+  for example), compare it with `num_processed` in `aux_info/meta_info.json`.
+- Don't let the downloader retry into the same pipe (`curl --retry`): what it
+  has already written cannot be taken back, so a retry would feed some reads
+  twice. Let the run fail and start it again.
+
 ### Mapping
 
 | Option | Description |
