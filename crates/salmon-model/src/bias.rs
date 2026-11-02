@@ -85,8 +85,9 @@ pub fn positional_factor_into(obs: &[f64], exp: &[f64], out: &mut Vec<f64>) {
 #[derive(Clone, Copy, Default)]
 pub struct BiasInputs<'a> {
     /// `(fw, rc)` precomputed `obs − exp` log-bias tables for the 5′/3′
-    /// sequence-bias factors (`--seqBias`). Built once per quant run.
-    pub seq: Option<(&'a LogBiasTable, &'a LogBiasTable)>,
+    /// sequence-bias factors (`--seqBias`), built once per quant run, and this
+    /// transcript's sequence, which only this term reads.
+    pub seq: Option<(&'a LogBiasTable, &'a LogBiasTable, &'a [u8])>,
     /// GC ratio model + this transcript's cumulative-GC view (`--gcBias`)
     pub gc: Option<(&'a GcFragModel, GcView<'a>)>,
     /// per-position 5'/3' positional-bias factors (`--posBias`), transcript-length sized
@@ -113,7 +114,7 @@ impl BiasInputs<'_> {
 /// the correction is allowed to shrink the length only so far.
 #[allow(clippy::too_many_arguments)]
 pub fn corrected_effective_length_full(
-    seq: &[u8],
+    ref_len: usize,
     cdf: &[f64],
     fld_low: usize,
     fld_high: usize,
@@ -132,7 +133,6 @@ pub fn corrected_effective_length_full(
     } else {
         1
     };
-    let ref_len = seq.len();
     // How much of the transcript the uncorrected effective length has "used up";
     // also the floor's basis below.
     let unprocessed = (ref_len as i32 - elen as i32).max(0);
@@ -153,7 +153,8 @@ pub fn corrected_effective_length_full(
     let have_seq = bias.seq.is_some();
     let mut fw: Vec<f64> = Vec::new();
     let mut rc: Vec<f64> = Vec::new();
-    if let Some((tab_fw, tab_rc)) = bias.seq {
+    if let Some((tab_fw, tab_rc, seq)) = bias.seq {
+        debug_assert_eq!(seq.len(), ref_len);
         fw = vec![1.0f64; ref_len];
         rc = vec![1.0f64; ref_len];
         let cu = CONTEXT_LEFT;

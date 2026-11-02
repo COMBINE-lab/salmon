@@ -95,7 +95,7 @@ fn main() {
                 pos: None,
             };
             acc += corrected_effective_length_full(
-                seq,
+                seq.len(),
                 &cdf,
                 fld_low,
                 fld_high,

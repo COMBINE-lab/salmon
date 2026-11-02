@@ -55,7 +55,9 @@ pub mod pair;
 pub mod score;
 pub mod sketch;
 
-pub use align::{align_chain, align_in_window, perfect_score, AlignConfig, Alignment};
+pub use align::{
+    align_chain, align_chain_view, align_in_window, perfect_score, AlignConfig, Alignment,
+};
 pub use chain::{chain_mems, ChainConfig, MemChain};
 pub use collect::{
     best_per_target, candidates_from_raw_hits, collect_read_mems, MappingCandidate,

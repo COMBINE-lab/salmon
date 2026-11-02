@@ -650,8 +650,8 @@ mod tests {
         fn num_refs(&self) -> usize {
             u32::MAX as usize
         }
-        fn ref_seq(&self, _tid: u32) -> &[u8] {
-            &[]
+        fn ref_view(&self, _tid: u32) -> salmon_core::RefView<'_> {
+            salmon_core::RefView::Bytes(&[])
         }
         fn is_decoy(&self, tid: u32) -> bool {
             tid >= self.0

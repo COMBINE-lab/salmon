@@ -49,7 +49,7 @@ use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 
 use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
-use salmon_index::SalmonIndex;
+use salmon_index::{RefseqLoad, SalmonIndex};
 use salmon_infer::optimize_packed_with_init;
 pub use salmon_infer::{EmAccel, EmOptions, EmStop};
 use salmon_map::MapConfig;
@@ -438,8 +438,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // (seq/GC; positional bias is sequence-free). In sketch mode without seq/GC
     // bias we can skip loading them entirely — with a genome decoy this is a
     // multi-GB resident-memory saving.
-    let need_refseq = !opts.sketch || opts.seq_bias || opts.gc_bias;
-    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, need_refseq)
+    // The bias models read whole transcripts as bytes; mapping only reads short
+    // windows, so it holds them at two bits per base.
+    let refseq_load = if opts.seq_bias || opts.gc_bias {
+        RefseqLoad::Bytes
+    } else if !opts.sketch {
+        RefseqLoad::Packed
+    } else {
+        RefseqLoad::None
+    };
+    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
         .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
     let num_refs = salmon.num_refs();
     timer.mark("index_load");
@@ -1238,8 +1246,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 if tid >= num_targets || em.alphas[tid] < 1e-8 {
                     return eff_lengths[tid];
                 }
-                let s = salmon.ref_seq(tid as u32);
-                let ref_len = s.len();
+                // Only sequence bias reads the bases; the other terms need the
+                // length alone, so `--posBias` needs no sequence held as bytes.
+                let ref_len = salmon.ref_len(tid) as usize;
                 // Per-position 5'/3' positional-bias factors (obs/exp projected).
                 // `project_weights` derives its output length from the slice it is
                 // given, so each buffer is resized to this transcript before use.
@@ -1264,7 +1273,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     salmon_model::positional_factor_into(&scratch.o3, &scratch.e3, &mut scratch.pr);
                 }
                 let bias = salmon_model::BiasInputs {
-                    seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
+                    seq: seq_tab
+                        .as_ref()
+                        .map(|(f, r)| (f, r, salmon.ref_seq(tid as u32))),
                     gc: gc_ratio_model
                         .as_ref()
                         .map(|g| (g, store.unwrap().view(tid))),
@@ -1273,7 +1284,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                         .map(|_| (scratch.pf.as_slice(), scratch.pr.as_slice())),
                 };
                 salmon_model::corrected_effective_length_full(
-                    s,
+                    ref_len,
                     &fld_cdf,
                     fld_low,
                     fld_high,

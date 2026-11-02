@@ -1355,10 +1355,91 @@ pub struct SalmonIndex {
     /// needed for selective-alignment extension and seq/GC bias, so skipping the
     /// read avoids holding a multi-GB decoy genome resident.
     refseq: Vec<u8>,
+    /// the same sequences at two bits per base, in place of `refseq` under
+    /// [`RefseqLoad::Packed`]
+    packed: PackedRefseq,
     /// offsets into `refseq` (`num_refs + 1` entries); empty iff `!refseq_loaded`
     ref_offsets: Vec<u64>,
     /// whether the reference sequence bytes were loaded
     refseq_loaded: bool,
+}
+
+/// How [`SalmonIndex::load_with_opts`] holds the reference sequences.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefseqLoad {
+    /// Not at all: nothing will read them.
+    None,
+    /// One byte per base, for callers of [`SalmonIndex::ref_seq`] (bias models).
+    Bytes,
+    /// Two bits per base, for mapping, which reads them through
+    /// [`RefProvider::ref_view`](salmon_core::RefProvider::ref_view).
+    Packed,
+}
+
+/// `refseq.bin` at two bits per base; see [`salmon_core::pack_bases`].
+#[derive(Default)]
+struct PackedRefseq {
+    bits: Vec<u8>,
+    other: Vec<salmon_core::OtherRun>,
+    /// For each reference, the range of `other` that overlaps it (a run that
+    /// crosses from one reference into the next is in both). Looking the runs
+    /// up by binary search on every `ref_view` cost 5% of a genome-decoy run,
+    /// which calls it once per seed.
+    runs_of: Vec<(u32, u32)>,
+}
+
+impl PackedRefseq {
+    /// Pack the file directly into its final buffer, so that one byte per base
+    /// is never in memory; block by block across threads, so loading takes no
+    /// longer than reading the file whole.
+    fn load(path: &Path) -> Result<Self> {
+        use std::io::{Read, Seek, SeekFrom};
+        /// bases per block; a multiple of 4 so that blocks start on a packed byte
+        const BLOCK: usize = 1 << 22;
+        let len = std::fs::metadata(path)
+            .with_context(|| format!("reading {REFSEQ_FILE}"))?
+            .len() as usize;
+        let mut bits = vec![0u8; len.div_ceil(4)];
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+        let per_thread = (bits.len().div_ceil(threads)).max(1);
+        let parts: Vec<Vec<salmon_core::OtherRun>> = std::thread::scope(|scope| {
+            let workers: Vec<_> = bits
+                .chunks_mut(per_thread)
+                .enumerate()
+                .map(|(t, out)| {
+                    scope.spawn(move || -> Result<Vec<salmon_core::OtherRun>> {
+                        let first = (t * per_thread * 4) as u64;
+                        let mut f = std::fs::File::open(path)?;
+                        f.seek(SeekFrom::Start(first))?;
+                        let total = (len - first as usize).min(out.len() * 4);
+                        let mut buf = vec![0u8; BLOCK.min(total)];
+                        let mut runs = Vec::new();
+                        let mut done = 0;
+                        for o in out.chunks_mut(BLOCK / 4) {
+                            let n = (total - done).min(BLOCK);
+                            f.read_exact(&mut buf[..n])?;
+                            salmon_core::pack_bases(&buf[..n], o, first + done as u64, &mut runs);
+                            done += n;
+                        }
+                        Ok(runs)
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|w| w.join().expect("refseq loader panicked"))
+                .collect::<Result<Vec<_>>>()
+        })
+        .with_context(|| format!("reading {REFSEQ_FILE}"))?;
+        // A run can cross from one block or thread into the next, which only
+        // leaves it in two pieces: lookups take the first that covers a position.
+        let other = parts.concat();
+        Ok(Self {
+            bits,
+            other,
+            runs_of: Vec::new(),
+        })
+    }
 }
 
 /// Load just the per-reference forward sequences from an index directory, in
@@ -1387,7 +1468,7 @@ impl SalmonIndex {
     /// Load a salmon index from a directory produced by [`build`], including the
     /// reference sequence bytes (needed for selective alignment and seq/GC bias).
     pub fn load(dir: impl AsRef<Path>) -> Result<Self> {
-        Self::load_with_opts(dir, true)
+        Self::load_with_opts(dir, RefseqLoad::Bytes)
     }
 
     /// Load a salmon index, optionally skipping the reference sequence bytes.
@@ -1397,7 +1478,7 @@ impl SalmonIndex {
     /// `--gcBias`): [`ref_seq`](Self::ref_seq) / [`refseq_concat`](Self::refseq_concat)
     /// then must not be called, but the index loads without the (potentially
     /// multi-GB, with a genome decoy) reference sequence resident.
-    pub fn load_with_opts(dir: impl AsRef<Path>, load_refseq: bool) -> Result<Self> {
+    pub fn load_with_opts(dir: impl AsRef<Path>, load_refseq: RefseqLoad) -> Result<Self> {
         let dir = dir.as_ref();
         // Guard: a C++ salmon (pufferfish) index is not readable by salmon 2.0 —
         // the index format changed. Detect it (no sshash `index.ssi`, but
@@ -1460,23 +1541,42 @@ impl SalmonIndex {
         // Load the EC table when the index has one (enables pseudoalignment-only mode).
         let inner = ReferenceIndex::load(&index_prefix, info.has_ec_table, false)
             .with_context(|| format!("loading piscem index at {}", index_prefix.display()))?;
-        let (refseq, ref_offsets) = if load_refseq {
-            let refseq = std::fs::read(dir.join(REFSEQ_FILE))
-                .with_context(|| format!("reading {REFSEQ_FILE}"))?;
-            let ref_offsets: Vec<u64> = serde_json::from_slice(
+        let refseq = match load_refseq {
+            RefseqLoad::Bytes => std::fs::read(dir.join(REFSEQ_FILE))
+                .with_context(|| format!("reading {REFSEQ_FILE}"))?,
+            _ => Vec::new(),
+        };
+        let packed = match load_refseq {
+            RefseqLoad::Packed => PackedRefseq::load(&dir.join(REFSEQ_FILE))?,
+            _ => PackedRefseq::default(),
+        };
+        let ref_offsets: Vec<u64> = if load_refseq == RefseqLoad::None {
+            Vec::new()
+        } else {
+            serde_json::from_slice(
                 &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
                     .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
-            )?;
-            (refseq, ref_offsets)
-        } else {
-            (Vec::new(), Vec::new())
+            )?
         };
+        let mut packed = packed;
+        if !packed.bits.is_empty() {
+            let other = &packed.other;
+            packed.runs_of = ref_offsets
+                .windows(2)
+                .map(|w| {
+                    let lo = other.partition_point(|r| r.start + u64::from(r.len) <= w[0]);
+                    let hi = other.partition_point(|r| r.start < w[1]);
+                    (lo as u32, hi.max(lo) as u32)
+                })
+                .collect();
+        }
         Ok(Self {
             inner,
             info,
             refseq,
+            packed,
             ref_offsets,
-            refseq_loaded: load_refseq,
+            refseq_loaded: load_refseq != RefseqLoad::None,
         })
     }
 
@@ -1487,9 +1587,9 @@ impl SalmonIndex {
 
     /// Forward-strand sequence of reference `tid`.
     ///
-    /// Panics if the index was loaded without the reference sequence
-    /// (`load_refseq == false`); callers in sketch-without-bias mode must not
-    /// reach the alignment/bias paths that call this.
+    /// Panics unless the index was loaded with [`RefseqLoad::Bytes`]; callers
+    /// in sketch-without-bias mode must not reach the alignment/bias paths that
+    /// call this, and mapping reads through `ref_view`.
     pub fn ref_seq(&self, tid: u32) -> &[u8] {
         debug_assert!(
             self.refseq_loaded,
@@ -1562,8 +1662,20 @@ impl salmon_core::RefProvider for SalmonIndex {
     fn num_refs(&self) -> usize {
         self.num_refs()
     }
-    fn ref_seq(&self, tid: u32) -> &[u8] {
-        self.ref_seq(tid)
+    #[inline]
+    fn ref_view(&self, tid: u32) -> salmon_core::RefView<'_> {
+        if self.packed.bits.is_empty() {
+            return salmon_core::RefView::Bytes(self.ref_seq(tid));
+        }
+        let start = self.ref_offsets[tid as usize];
+        let end = self.ref_offsets[tid as usize + 1];
+        let (lo, hi) = self.packed.runs_of[tid as usize];
+        salmon_core::RefView::Packed {
+            bits: &self.packed.bits,
+            start,
+            len: (end - start) as usize,
+            other: &self.packed.other[lo as usize..hi as usize],
+        }
     }
     fn is_decoy(&self, tid: u32) -> bool {
         // O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`). The
