@@ -380,9 +380,9 @@ fn a_gzip_stream_cut_short_is_refused() {
     assert!(!ok, "a truncated gzip stream must fail: {stderr}");
 }
 
-/// `salmon index` reads each reference twice, so a pipe has to be spooled for
-/// the build. The index must not be able to tell, and the spool must not outlive
-/// the build, whether it succeeded or not.
+/// `salmon index` sniffed each reference's compression through a second open,
+/// and hashed it in a second pass, so a pipe lost its first bytes. Each input is
+/// now read once, so a stream must build the same index as the file it carries.
 #[cfg(unix)]
 #[test]
 fn index_reads_references_from_a_stream() {
@@ -391,14 +391,6 @@ fn index_reads_references_from_a_stream() {
     let fasta = dir.path().join("txome.fa");
     let info = |idx: &Path| -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(idx.join("info.json")).unwrap()).unwrap()
-    };
-    let spool_left = |idx: &Path| {
-        std::fs::read_dir(idx)
-            .map(|d| {
-                d.flatten()
-                    .any(|e| e.file_name().to_string_lossy().starts_with("stream_input"))
-            })
-            .unwrap_or(false)
     };
     let index_over_fifo = |feed: &str, name: &str| {
         let fifo = dir.path().join(format!("{name}.fifo"));
@@ -435,17 +427,22 @@ fn index_reads_references_from_a_stream() {
             "{name}: {}",
             String::from_utf8_lossy(&o.stderr)
         );
+        for key in ["seq_hash", "name_hash", "seq_hash512", "name_hash512"] {
+            assert_eq!(
+                info(&idx)[key],
+                expected[key],
+                "{name}: a stream must index the same references as the file"
+            );
+        }
         assert_eq!(
-            info(&idx)["seq_hash"],
-            expected["seq_hash"],
-            "{name}: a stream must index the same references as the file"
+            std::fs::read(idx.join("refseq.bin")).unwrap(),
+            std::fs::read(fx.index.join("refseq.bin")).unwrap(),
+            "{name}: a stream must store the same sequences as the file"
         );
-        assert!(!spool_left(&idx), "{name}: the spool outlived the build");
     }
 
-    let (o, idx) = index_over_fifo("gzip -c \"$1\" | head -c 200", "cut");
+    let (o, _) = index_over_fifo("gzip -c \"$1\" | head -c 200", "cut");
     assert!(!o.status.success(), "a truncated gzip stream must fail");
-    assert!(!spool_left(&idx), "a failed build left its spool behind");
 }
 
 #[test]
