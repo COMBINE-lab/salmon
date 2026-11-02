@@ -137,6 +137,9 @@ fn reads_mapping_flags_warn_in_alignment_and_rad_modes() {
         os("IU"),
         os("--minScoreFraction"),
         os("0.8"),
+        os("--errorModel"),
+        os("--numErrorBins"),
+        os("6"),
         os("-o"),
         out.as_os_str(),
     ]);
@@ -150,6 +153,11 @@ fn reads_mapping_flags_warn_in_alignment_and_rad_modes() {
     assert!(
         err.contains("--minScoreFraction has no effect"),
         "one flag must take a singular verb:\n{err}"
+    );
+
+    assert!(
+        err.contains("--errorModel, --numErrorBins have no effect in RAD-input mode"),
+        "the alignment error model must warn under --rad:\n{err}"
     );
 
     // Control: a run that passes none of them says nothing about applicability.

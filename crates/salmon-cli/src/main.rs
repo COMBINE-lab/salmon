@@ -2538,6 +2538,18 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                  only the fragments that mapped, and no read names"
             );
         }
+        // The alignment error model scores CIGARs and base qualities, which a RAD
+        // does not keep.
+        warn_inert_in_mode(
+            "RAD-input mode (--rad)",
+            Some(("configures", "configure")),
+            "the alignment error model, and a RAD holds no CIGARs or qualities",
+            &[
+                ("--errorModel", args.error_model),
+                ("--noErrorModel", args.no_error_model),
+                ("--numErrorBins", args.num_error_bins.is_some()),
+            ],
+        );
         // The input *is* the RAD; the flags that would place or shape a new
         // one have nothing to act on (#1140).
         warn_inert_in_mode(
