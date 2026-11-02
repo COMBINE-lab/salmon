@@ -49,7 +49,7 @@ use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 
 use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
-use salmon_index::SalmonIndex;
+use salmon_index::{RefseqLoad, SalmonIndex};
 use salmon_infer::optimize_packed_with_init;
 pub use salmon_infer::{EmAccel, EmOptions, EmStop};
 use salmon_map::MapConfig;
@@ -438,8 +438,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // (seq/GC; positional bias is sequence-free). In sketch mode without seq/GC
     // bias we can skip loading them entirely — with a genome decoy this is a
     // multi-GB resident-memory saving.
-    let need_refseq = !opts.sketch || opts.seq_bias || opts.gc_bias;
-    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, need_refseq)
+    // The bias models read whole transcripts as bytes; mapping only reads short
+    // windows, so it holds them at two bits per base.
+    let refseq_load = if opts.seq_bias || opts.gc_bias {
+        RefseqLoad::Bytes
+    } else if !opts.sketch {
+        RefseqLoad::Packed
+    } else {
+        RefseqLoad::None
+    };
+    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
         .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
     let num_refs = salmon.num_refs();
     timer.mark("index_load");

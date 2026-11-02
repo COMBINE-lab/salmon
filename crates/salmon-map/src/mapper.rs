@@ -26,7 +26,7 @@ use piscem_rs::index::reference_index::ReferenceIndex;
 use piscem_rs::mapping::hit_searcher::HitSearcher;
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
-use crate::align::{align_chain, align_in_window, AlignConfig};
+use crate::align::{align_chain_view as align_chain, align_in_window, AlignConfig};
 use crate::collect::{
     best_per_target, collect_read_mems, consensus_filter, MappingCandidate, MemCollectorConfig,
 };
@@ -51,7 +51,7 @@ use crate::pair::{join_reads_and_filter, PairingConfig};
 use crate::score::{
     finalize_mappings_counted_into, MapScratch, RawMapping, ScoreConfig, ScoredMapping,
 };
-use salmon_core::RefProvider;
+use salmon_core::{RefProvider, RefView};
 
 /// Full mapper configuration.
 #[derive(Debug, Clone, Default)]
@@ -192,7 +192,7 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
     );
     raw.reserve(cands.len());
     for c in cands {
-        if let Some(aln) = align_chain(read, refs.ref_seq(c.tid), &c.chain, &cfg.align) {
+        if let Some(aln) = align_chain(read, refs.ref_view(c.tid), &c.chain, &cfg.align) {
             if aln.valid {
                 // single-end observed strandedness: sense if forward, else antisense
                 let strand = if c.is_fw {
@@ -331,7 +331,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
             if !matches!(j.status, MateStatus::PairedEndPaired) {
                 continue;
             }
-            let refseq = refs.ref_seq(j.tid);
+            let refseq = refs.ref_view(j.tid);
             let al = align_chain(r1, refseq, &j.left.as_ref().unwrap().chain, &cfg.align);
             let ar = align_chain(r2, refseq, &j.right.as_ref().unwrap().chain, &cfg.align);
             pre.push((k, al, ar));
@@ -348,7 +348,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
             MateStatus::PairedEndPaired => {
                 let l = j.left.as_ref().unwrap();
                 let r = j.right.as_ref().unwrap();
-                let refseq = refs.ref_seq(j.tid);
+                let refseq = refs.ref_view(j.tid);
                 let (al, ar) = match scratch.pair_alns.get(pre_next) {
                     Some(&(pk, al, ar)) if pk == k => {
                         pre_next += 1;
@@ -429,7 +429,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                 let anchor = j.left.as_ref().unwrap();
                 push_orphan_or_recovered(
                     raw,
-                    index_seq(refs, j.tid),
+                    refs.ref_view(j.tid),
                     r1,
                     r2,
                     anchor,
@@ -444,7 +444,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                 let anchor = j.right.as_ref().unwrap();
                 push_orphan_or_recovered(
                     raw,
-                    index_seq(refs, j.tid),
+                    refs.ref_view(j.tid),
                     r2,
                     r1,
                     anchor,
@@ -486,11 +486,6 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
         dovetail,
         alns_below_threshold: below + below_final,
     });
-}
-
-#[inline]
-fn index_seq<R: RefProvider>(refs: &R, tid: u32) -> &[u8] {
-    refs.ref_seq(tid)
 }
 
 /// read1's `AS` component for an orphan, given the anchor (placed mate) score.
@@ -589,7 +584,7 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
     );
     let best = cands.iter().max_by_key(|c| c.chain.covered_read_bases())?;
     let aln =
-        crate::align::align_chain_exact(read, refs.ref_seq(best.tid), &best.chain, &cfg.align)?;
+        crate::align::align_chain_exact(read, refs.ref_view(best.tid), &best.chain, &cfg.align)?;
     Some(DebugMapping {
         tid: best.tid,
         is_fw: best.is_fw,
@@ -611,7 +606,7 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
 #[allow(clippy::too_many_arguments)]
 fn push_orphan_or_recovered<R: RefProvider>(
     raw: &mut Vec<RawMapping>,
-    refseq: &[u8],
+    refseq: RefView<'_>,
     anchor_read: &[u8],
     partner_read: &[u8],
     anchor: &MappingCandidate,
@@ -743,13 +738,14 @@ fn push_orphan_or_recovered<R: RefProvider>(
 /// Returns `(partner_alignment_score, fragment_length)` on success.
 fn recover_mate(
     partner_read: &[u8],
-    refseq: &[u8],
+    refseq: RefView<'_>,
     anchor: &MappingCandidate,
     cfg: &MapConfig,
     revcomp_buf: &mut Vec<u8>,
 ) -> Option<(i32, i32)> {
     let max_frag = cfg.pair.max_fragment_len;
     let reflen = refseq.len() as i32;
+    let mut window = Vec::new();
     // Projected read extent (may overhang the transcript ends).
     let a_s = anchor.proj_start();
     let a_e = anchor.proj_end();
@@ -764,7 +760,7 @@ fn recover_mate(
         crate::align::revcomp_into(partner_read, revcomp_buf);
         let aln = align_in_window(
             revcomp_buf,
-            &refseq[win_start as usize..win_end as usize],
+            refseq.slice(win_start as usize, win_end as usize, &mut window),
             &cfg.align,
         )?;
         if !aln.valid {
@@ -781,7 +777,7 @@ fn recover_mate(
         }
         let aln = align_in_window(
             partner_read,
-            &refseq[win_start as usize..win_end as usize],
+            refseq.slice(win_start as usize, win_end as usize, &mut window),
             &cfg.align,
         )?;
         if !aln.valid {

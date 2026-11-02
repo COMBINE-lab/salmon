@@ -57,7 +57,7 @@ pub use libtype::{
     LibFormatSummary, NUM_LIB_FORMATS,
 };
 pub use progress::ProgressCounters;
-pub use refprovider::RefProvider;
+pub use refprovider::{pack_bases, OtherRun, RefProvider, RefView};
 pub use timing::PhaseTimer;
 
 pub use error::{Result, SalmonError};

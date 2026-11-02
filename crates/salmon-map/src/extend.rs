@@ -40,7 +40,7 @@ use piscem_rs::mapping::projected_hits::ProjectedHits;
 use piscem_rs::mapping::streaming_query::PiscemStreamingQuery;
 use sshash_lib::dispatch_on_k;
 
-use salmon_core::RefProvider;
+use salmon_core::{RefProvider, RefView};
 
 use crate::align::revcomp;
 use crate::chain::chain_mems;
@@ -62,7 +62,7 @@ fn base_eq(a: u8, b: u8) -> bool {
 /// `query`/`ref_seq` are in the query frame: the caller passes the forward read
 /// (forward group) or its reverse complement (reverse group), and `m`'s
 /// coordinates are already expressed in that frame.
-pub fn extend_mem(query: &[u8], ref_seq: &[u8], m: Mem) -> Mem {
+pub fn extend_mem(query: &[u8], ref_seq: RefView<'_>, m: Mem) -> Mem {
     extend_mem_within(query, ref_seq, m, 0, ref_seq.len() as i32)
 }
 
@@ -76,7 +76,7 @@ pub fn extend_mem(query: &[u8], ref_seq: &[u8], m: Mem) -> Mem {
 /// exactly as pufferfish's `expandHitEfficient` (which stops at `CONTIG_END`).
 pub fn extend_mem_within(
     query: &[u8],
-    ref_seq: &[u8],
+    ref_seq: RefView<'_>,
     mut m: Mem,
     ref_lo: i32,
     ref_hi: i32,
@@ -85,12 +85,25 @@ pub fn extend_mem_within(
     let reflen = ref_seq.len() as i32;
     let hi = ref_hi.min(reflen);
 
+    // A packed reference compares a word's worth of bases at a time.
+    let left = m.read_start.min(m.ref_start - ref_lo).max(0) as usize;
+    let right = (qlen - m.read_end()).min(hi - m.ref_end()).max(0) as usize;
+    let lq = &query[m.read_start as usize - left..m.read_start as usize];
+    let rq = &query[m.read_end() as usize..m.read_end() as usize + right];
+    if let (Some(l), Some(r)) = (
+        ref_seq.match_left(lq, m.ref_start as usize),
+        ref_seq.match_right(rq, m.ref_end() as usize),
+    ) {
+        let (l, r) = (l as i32, r as i32);
+        return Mem::new(m.read_start - l, m.ref_start - l, m.len + l + r);
+    }
+
     // Extend left along the shared diagonal, not past the unitig start.
     while m.read_start > 0
         && m.ref_start > ref_lo
         && base_eq(
             query[(m.read_start - 1) as usize],
-            ref_seq[(m.ref_start - 1) as usize],
+            ref_seq.base((m.ref_start - 1) as usize),
         )
     {
         m.read_start -= 1;
@@ -101,7 +114,10 @@ pub fn extend_mem_within(
     // Extend right along the shared diagonal, not past the unitig end.
     while m.read_end() < qlen
         && m.ref_end() < hi
-        && base_eq(query[m.read_end() as usize], ref_seq[m.ref_end() as usize])
+        && base_eq(
+            query[m.read_end() as usize],
+            ref_seq.base(m.ref_end() as usize),
+        )
     {
         m.len += 1;
     }
@@ -131,7 +147,7 @@ pub fn candidates_from_raw_hits_unimems<R: RefProvider>(
 
     let mut candidates = Vec::new();
     for ((tid, is_fw), seeds) in groups {
-        let ref_seq = refs.ref_seq(tid);
+        let ref_seq = refs.ref_view(tid);
         let query: &[u8] = if is_fw { read } else { &rc };
 
         // Extend each seed to its uni-MEM; same-diagonal seeds extend to an
@@ -395,7 +411,7 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
                 let seed = Mem::new(rs, rp.pos as i32, k);
                 let e = extend_mem_within(
                     query,
-                    refs.ref_seq(tid),
+                    refs.ref_view(tid),
                     seed,
                     base_pos,
                     base_pos + contig_len,
@@ -626,8 +642,8 @@ mod tests {
         fn num_refs(&self) -> usize {
             self.seqs.len()
         }
-        fn ref_seq(&self, tid: u32) -> &[u8] {
-            &self.seqs[tid as usize]
+        fn ref_view(&self, tid: u32) -> RefView<'_> {
+            RefView::Bytes(&self.seqs[tid as usize])
         }
     }
 
@@ -653,7 +669,7 @@ mod tests {
         let reference = gen_seq(300, 7);
         let read = reference[50..130].to_vec();
         let seed = Mem::new(0, 50, 31);
-        let e = extend_mem(&read, &reference, seed);
+        let e = extend_mem(&read, RefView::Bytes(&reference), seed);
         assert_eq!(e.read_start, 0);
         assert_eq!(e.ref_start, 50);
         assert_eq!(e.len, 80, "seed should extend to the full 80 bp match");
@@ -670,9 +686,9 @@ mod tests {
         let reference = gen_seq(300, 7);
         let read = reference[50..130].to_vec();
         let seed = Mem::new(0, 50, 31);
-        let ref_mem = extend_mem(&read, &reference, seed);
+        let ref_mem = extend_mem(&read, RefView::Bytes(&reference), seed);
         assert_eq!(ref_mem.len, 80, "reference MEM crosses freely");
-        let uni = extend_mem_within(&read, &reference, seed, 50, 100);
+        let uni = extend_mem_within(&read, RefView::Bytes(&reference), seed, 50, 100);
         assert_eq!(uni.ref_start, 50);
         assert_eq!(uni.ref_end(), 100, "uni-MEM must stop at the unitig end");
         assert_eq!(uni.len, 50);
@@ -691,7 +707,7 @@ mod tests {
         } else {
             b'A'
         };
-        let e = extend_mem(&read, &reference, Mem::new(0, 50, 31));
+        let e = extend_mem(&read, RefView::Bytes(&reference), Mem::new(0, 50, 31));
         // right edge stops just before the mismatch; left edge reaches read 0.
         assert_eq!(e.read_start, 0);
         assert_eq!(e.ref_end(), break_at as i32);

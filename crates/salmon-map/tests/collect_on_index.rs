@@ -21,8 +21,8 @@ impl RefProvider for IdxRefs<'_> {
     fn num_refs(&self) -> usize {
         self.0.num_refs()
     }
-    fn ref_seq(&self, tid: u32) -> &[u8] {
-        self.0.ref_seq(tid)
+    fn ref_view(&self, tid: u32) -> salmon_core::RefView<'_> {
+        salmon_core::RefView::Bytes(self.0.ref_seq(tid))
     }
 }
 
