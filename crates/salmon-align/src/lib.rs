@@ -2176,14 +2176,14 @@ fn apply_bias_correction(
                     )
                 });
             let bias = salmon_model::BiasInputs {
-                seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
+                seq: seq_tab.as_ref().map(|(f, r)| (f, r, s)),
                 gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
                 pos: pos_vecs
                     .as_ref()
                     .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
             };
             *eff_length = salmon_model::corrected_effective_length_full(
-                s,
+                s.len(),
                 &fld_cdf,
                 fld_low,
                 fld_high,

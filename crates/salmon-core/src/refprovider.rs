@@ -203,43 +203,46 @@ impl<'a> RefView<'a> {
     }
 
     /// How many leading bases of `query` match the reference from position `r`
-    /// on, as [`Self::base`] compared without regard to case; `query` must fit.
-    /// `None` when this view has no fast path and the bases must be compared one
-    /// at a time.
+    /// on, as [`Self::base`] compared without regard to case, with `N` never
+    /// matching; `query` must fit. `None` when this view has no fast path and
+    /// the bases must be compared one at a time.
+    ///
+    /// Packed bases are compared a word at a time, and the bytes of a run one
+    /// at a time, so a reference with a few `N` runs (a genome decoy) keeps the
+    /// fast path everywhere else.
     #[inline]
     pub fn match_right(&self, query: &[u8], r: usize) -> Option<usize> {
         let Self::Packed {
-            bits,
-            start,
-            other: [],
-            ..
+            bits, start, other, ..
         } = *self
         else {
             return None;
         };
-        let mut abs = start as usize + r;
-        let mut i = 0;
-        while i < query.len() {
-            let idx = abs >> 2;
-            let mut w = match bits.get(idx..idx + 8) {
-                Some(b) => u64::from_le_bytes(b.try_into().unwrap()),
-                None => {
-                    let mut t = [0u8; 8];
-                    t[..bits.len() - idx].copy_from_slice(&bits[idx..]);
-                    u64::from_le_bytes(t)
-                }
-            } >> ((abs & 3) * 2);
-            let take = (32 - (abs & 3)).min(query.len() - i);
-            for &q in &query[i..i + take] {
-                if q & 0xDF != BASES[(w & 3) as usize] {
-                    return Some(i);
-                }
-                w >>= 2;
-                i += 1;
+        let begin = start as usize + r;
+        let end = begin + query.len();
+        // The runs that overlap `begin..end`, in order.
+        let first = other.partition_point(|x| run_end(x) <= begin);
+        let mut abs = begin;
+        for run in &other[first..] {
+            let rs = (run.start as usize).max(abs);
+            if rs >= end {
+                break;
             }
-            abs += take;
+            let i = abs - begin;
+            let n = words_right(bits, abs, &query[i..i + (rs - abs)]);
+            if abs + n < rs {
+                return Some(i + n);
+            }
+            abs = rs;
+            while abs < run_end(run).min(end) {
+                if !run_base_eq(query[abs - begin], run.byte) {
+                    return Some(abs - begin);
+                }
+                abs += 1;
+            }
         }
-        Some(i)
+        let i = abs - begin;
+        Some(i + words_right(bits, abs, &query[i..]))
     }
 
     /// How many trailing bases of `query` match the reference just before
@@ -247,38 +250,109 @@ impl<'a> RefView<'a> {
     #[inline]
     pub fn match_left(&self, query: &[u8], r: usize) -> Option<usize> {
         let Self::Packed {
-            bits,
-            start,
-            other: [],
-            ..
+            bits, start, other, ..
         } = *self
         else {
             return None;
         };
-        // One past the base to compare next.
-        let mut abs = start as usize + r;
-        let mut i = 0;
-        while i < query.len() {
-            let idx = (abs - 1) >> 2;
-            let lo = idx.saturating_sub(7);
-            let mut t = [0u8; 8];
-            t[7 - (idx - lo)..].copy_from_slice(&bits[lo..=idx]);
-            // The next base on top.
-            let p = (abs - 1) & 3;
-            let mut w = u64::from_le_bytes(t) << ((3 - p) * 2);
-            let take = ((idx - lo) * 4 + p + 1).min(query.len() - i);
-            let end = query.len() - i;
-            for &q in query[end - take..end].iter().rev() {
-                if q & 0xDF != BASES[(w >> 62) as usize] {
-                    return Some(i);
-                }
-                w <<= 2;
-                i += 1;
+        // One past the base to compare next, walking down to `floor`.
+        let top = start as usize + r;
+        let floor = top - query.len();
+        // The runs that overlap `floor..top`, walked from the last.
+        let last = other.partition_point(|x| (x.start as usize) < top);
+        let first = other[..last].partition_point(|x| run_end(x) <= floor);
+        let mut abs = top;
+        for run in other[first..last].iter().rev() {
+            let re = run_end(run).min(abs);
+            if re <= floor {
+                break;
             }
-            abs -= take;
+            let done = top - abs;
+            let q = &query[..query.len() - done];
+            let n = words_left(bits, abs, &q[q.len() - (abs - re)..]);
+            if abs - n > re {
+                return Some(done + n);
+            }
+            abs = re;
+            while abs > (run.start as usize).max(floor) {
+                if !run_base_eq(query[abs - 1 - floor], run.byte) {
+                    return Some(top - abs);
+                }
+                abs -= 1;
+            }
         }
-        Some(i)
+        let done = top - abs;
+        Some(done + words_left(bits, abs, &query[..query.len() - done]))
     }
+}
+
+/// One past the last position of `run`.
+#[inline]
+fn run_end(run: &OtherRun) -> usize {
+    (run.start + u64::from(run.len)) as usize
+}
+
+/// [`RefView::base`]'s comparison for a reference byte held in a run: equal
+/// without regard to case, and never for `N`.
+#[inline]
+fn run_base_eq(q: u8, r: u8) -> bool {
+    let u = q.to_ascii_uppercase();
+    u == r.to_ascii_uppercase() && u != b'N'
+}
+
+/// How many leading bases of `query` match the packed bases from `abs` on,
+/// where no run overlaps them.
+#[inline]
+fn words_right(bits: &[u8], mut abs: usize, query: &[u8]) -> usize {
+    let mut i = 0;
+    while i < query.len() {
+        let idx = abs >> 2;
+        let mut w = match bits.get(idx..idx + 8) {
+            Some(b) => u64::from_le_bytes(b.try_into().unwrap()),
+            None => {
+                let mut t = [0u8; 8];
+                t[..bits.len() - idx].copy_from_slice(&bits[idx..]);
+                u64::from_le_bytes(t)
+            }
+        } >> ((abs & 3) * 2);
+        let take = (32 - (abs & 3)).min(query.len() - i);
+        for &q in &query[i..i + take] {
+            if q & 0xDF != BASES[(w & 3) as usize] {
+                return i;
+            }
+            w >>= 2;
+            i += 1;
+        }
+        abs += take;
+    }
+    i
+}
+
+/// How many trailing bases of `query` match the packed bases just before
+/// `abs`, where no run overlaps them.
+#[inline]
+fn words_left(bits: &[u8], mut abs: usize, query: &[u8]) -> usize {
+    let mut i = 0;
+    while i < query.len() {
+        let idx = (abs - 1) >> 2;
+        let lo = idx.saturating_sub(7);
+        let mut t = [0u8; 8];
+        t[7 - (idx - lo)..].copy_from_slice(&bits[lo..=idx]);
+        // The next base on top.
+        let p = (abs - 1) & 3;
+        let mut w = u64::from_le_bytes(t) << ((3 - p) * 2);
+        let take = ((idx - lo) * 4 + p + 1).min(query.len() - i);
+        let end = query.len() - i;
+        for &q in query[end - take..end].iter().rev() {
+            if q & 0xDF != BASES[(w >> 62) as usize] {
+                return i;
+            }
+            w <<= 2;
+            i += 1;
+        }
+        abs -= take;
+    }
+    i
 }
 
 /// The bytes of `lo..hi`, decoded into `out`, which they need not start.
@@ -297,7 +371,8 @@ fn decode<'b>(bits: &[u8], lo: u64, hi: u64, other: &[OtherRun], out: &'b mut Ve
         *c = UNPACKED[b as usize];
     }
     let bases = &mut out[skip..skip + n];
-    for r in other {
+    let first = other.partition_point(|r| r.start + u64::from(r.len) <= lo);
+    for r in other[first..].iter().take_while(|r| r.start < hi) {
         let s = r.start.max(lo);
         let e = (r.start + u64::from(r.len)).min(hi);
         if s < e {
@@ -337,6 +412,68 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// With runs of `N` and IUPAC codes in the reference, including one that
+    /// crosses the boundary between two packed blocks, the comparisons still
+    /// agree with comparing base by base, `N` never matching.
+    #[test]
+    fn matches_agree_with_bases_across_runs() {
+        let mut x = 99u64;
+        let mut seq: Vec<u8> = (0..400)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                b"ACGT"[(x >> 60) as usize & 3]
+            })
+            .collect();
+        for (at, run) in [
+            (0, &b"NN"[..]),
+            (37, b"NNNNN"),
+            (61, b"NNNNNN"),
+            (67, b"R"),
+            (130, b"Y"),
+            (131, b"YY"),
+            (398, b"NN"),
+        ] {
+            seq[at..at + run.len()].copy_from_slice(run);
+        }
+        let mut bits = vec![0u8; seq.len().div_ceil(4)];
+        let mut runs = Vec::new();
+        // Two blocks, split inside the run at 61..67, as the loader can.
+        let (a, b) = seq.split_at(64);
+        let (oa, ob) = bits.split_at_mut(16);
+        pack_bases(a, oa, 0, &mut runs);
+        pack_bases(b, ob, 64, &mut runs);
+        let eq = |q: u8, r: u8| {
+            let u = q.to_ascii_uppercase();
+            u == r.to_ascii_uppercase() && u != b'N'
+        };
+        let v = RefView::packed(&bits, 5, 395, &runs);
+        for r in 0..=v.len() {
+            for take in [0, 1, 3, 31, 33, 70, 200] {
+                let n = take.min(v.len() - r);
+                let mut q: Vec<u8> = seq[5 + r..5 + r + n].to_ascii_lowercase();
+                for cut in [n, n / 2] {
+                    if cut < n {
+                        q[cut] = b'A' + b'C' - q[cut].to_ascii_uppercase().min(b'C').max(b'A');
+                    }
+                    let want = (0..n).take_while(|&i| eq(q[i], v.base(r + i))).count();
+                    assert_eq!(
+                        v.match_right(&q, r),
+                        Some(want),
+                        "right r={r} n={n} cut={cut}"
+                    );
+                }
+                let n = take.min(r);
+                let q: Vec<u8> = seq[5 + r - n..5 + r].to_vec();
+                let want = (0..n)
+                    .take_while(|&i| eq(q[n - 1 - i], v.base(r - 1 - i)))
+                    .count();
+                assert_eq!(v.match_left(&q, r), Some(want), "left r={r} n={n}");
             }
         }
     }

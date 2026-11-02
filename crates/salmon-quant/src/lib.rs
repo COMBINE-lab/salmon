@@ -1246,8 +1246,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 if tid >= num_targets || em.alphas[tid] < 1e-8 {
                     return eff_lengths[tid];
                 }
-                let s = salmon.ref_seq(tid as u32);
-                let ref_len = s.len();
+                // Only sequence bias reads the bases; the other terms need the
+                // length alone, so `--posBias` needs no sequence held as bytes.
+                let ref_len = salmon.ref_len(tid) as usize;
                 // Per-position 5'/3' positional-bias factors (obs/exp projected).
                 // `project_weights` derives its output length from the slice it is
                 // given, so each buffer is resized to this transcript before use.
@@ -1272,7 +1273,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     salmon_model::positional_factor_into(&scratch.o3, &scratch.e3, &mut scratch.pr);
                 }
                 let bias = salmon_model::BiasInputs {
-                    seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
+                    seq: seq_tab
+                        .as_ref()
+                        .map(|(f, r)| (f, r, salmon.ref_seq(tid as u32))),
                     gc: gc_ratio_model
                         .as_ref()
                         .map(|g| (g, store.unwrap().view(tid))),
@@ -1281,7 +1284,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                         .map(|_| (scratch.pf.as_slice(), scratch.pr.as_slice())),
                 };
                 salmon_model::corrected_effective_length_full(
-                    s,
+                    ref_len,
                     &fld_cdf,
                     fld_low,
                     fld_high,
