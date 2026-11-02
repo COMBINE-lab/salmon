@@ -560,10 +560,6 @@ pub fn eff_len_from_xcorr(
     let ref_len = a.len();
     debug_assert_eq!(ref_len, b.len());
     let max_len = (ref_len as i32).min(fld_high as i32 + 1);
-    if (fld_low as i32) >= max_len {
-        let offset = (unprocessed as f64).max(1.0);
-        return elen.max(elen.min(offset));
-    }
     // Lags needed: Δ = fl-1 for fl in [fld_low, max_len). The scalar inner loop
     // stops at kstart < ref_len-fl (so frag_end ≤ ref_len-2), i.e. it excludes
     // the single fragment ending at ref_len-1; the zero-padded xcorr includes it
