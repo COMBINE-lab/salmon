@@ -376,7 +376,11 @@ pub fn map_read_pair_sketch_into<'idx, R: RefProvider>(
                         r1_pos,
                         r2_pos,
                         r2_fw,
-                        r1_score: h.score as i32,
+                        r1_score: if status == MateStatus::PairedEndRight {
+                            0
+                        } else {
+                            h.score as i32
+                        },
                     }
                 }),
             ),

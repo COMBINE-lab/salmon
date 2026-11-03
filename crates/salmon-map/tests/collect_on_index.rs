@@ -324,6 +324,45 @@ fn orphan_recovery_refuses_a_dovetailed_mate() {
 }
 
 #[test]
+/// `AS` on read 2 is `score - r1_score`, so a right orphan must keep its score out
+/// of `r1_score`, under sketch as under selective alignment.
+fn sketch_right_orphan_keeps_its_score_on_read2() {
+    let transcript = gen_seq(600, 0xBEEF);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
+    let elsewhere = gen_seq(80, 0xD00D);
+
+    let mut map = |r1: &[u8], r2: &[u8]| {
+        let m = map_read_pair_sketch(
+            idx.inner(),
+            &mut hs,
+            &mut scratch,
+            r1,
+            r2,
+            false,
+            false,
+            SkippingStrategy::Permissive,
+            256,
+            2500,
+            &idx,
+            false,
+        );
+        assert_eq!(m.len(), 1, "{m:?}");
+        m[0]
+    };
+    let left = map(&transcript[100..180], &elsewhere);
+    assert_eq!(left.status, MateStatus::PairedEndLeft);
+    assert!(left.score > 0, "{left:?}");
+    assert_eq!(left.r1_score, left.score);
+
+    let right = map(&elsewhere, &transcript[100..180]);
+    assert_eq!(right.status, MateStatus::PairedEndRight);
+    assert_eq!(right.score - right.r1_score, left.score, "{right:?}");
+    assert_eq!(right.r1_score, 0, "{right:?}");
+}
+
+#[test]
 /// The alignment-free path must map the same easy read the full path does.
 fn pseudoalignment_only_mode() {
     let transcript = gen_seq(600, 0x5EED);
