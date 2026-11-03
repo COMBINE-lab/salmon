@@ -1000,12 +1000,15 @@ pub(crate) fn run(
     let (iters, converged, summary) = match set.stop {
         EmStop::Global => {
             let (it, ok) = run_tiled(plan, &mut states, set);
+            // Cut off by the cap: only the components whose own criterion still
+            // failed held the run up, and each knows from its last step.
+            let capped = states.iter().filter(|(_, s)| !ok && s.changed);
             let summary = ComponentSummary {
                 stop: set.stop,
                 num_components: plan.num_components(),
-                num_unconverged: if ok { 0 } else { plan.num_components() },
-                num_at_max_iter: if ok { 0 } else { plan.num_components() },
-                reads_at_max_iter: if ok { 0.0 } else { total_reads },
+                num_unconverged: capped.clone().count(),
+                num_at_max_iter: capped.clone().count(),
+                reads_at_max_iter: capped.map(|(c, _)| reads[*c]).sum(),
                 total_reads,
                 median_iters: it,
             };
@@ -1957,6 +1960,38 @@ mod tests {
         };
         let (_, _, converged, summary) = run(&mut plan, &init, &prior, &short);
         assert!(!converged && summary.num_unconverged >= 1);
+    }
+
+    /// A global run stopped by the cap names the components that held it up, not
+    /// every component. Six iterations in, the criterion holds on the near-identical
+    /// pair, whose relative changes are tiny, but not yet on the small component.
+    #[test]
+    fn a_capped_global_run_blames_only_the_unsettled_component() {
+        let b = EquivalenceClassBuilder::new();
+        b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 100_000);
+        b.add_group(TranscriptGroup::new(vec![0]), vec![1.0], 60);
+        b.add_group(TranscriptGroup::new(vec![1]), vec![1.0], 20);
+        b.add_group(TranscriptGroup::new(vec![2, 3]), vec![1.0, 1.0], 50);
+        b.add_group(TranscriptGroup::new(vec![2]), vec![1.0], 40);
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[1000.0; 4]);
+        let p = PackedEqClasses::from_collapsed(&eq, 4);
+        let (init, prior) = start(&p);
+        let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, false);
+        let set = Settings {
+            stop: EmStop::Global,
+            max_iter: 6,
+            min_iter: 1,
+            ..settings(false, false)
+        };
+        let (_, iters, converged, summary) = run(&mut plan, &init, &prior, &set);
+        assert_eq!(iters, 6);
+        assert!(!converged);
+        assert_eq!(summary.num_components, 2);
+        assert_eq!(summary.num_unconverged, 1, "{summary:?}");
+        assert_eq!(summary.num_at_max_iter, 1);
+        assert_eq!(summary.reads_at_max_iter, 90.0);
+        assert_eq!(summary.total_reads, 100_170.0);
     }
 
     /// `exp_digamma` agrees with `statrs`'s `digamma(x).exp()` over the range
