@@ -632,3 +632,62 @@ fn hard_filter_ignores_the_score_of_a_wrong_strand_placement() {
         "{counts:?}"
     );
 }
+
+/// Quantify `body` (SAM records over txA and txB) under `lib`, returning the
+/// counts of txA and txB and `num_mapped`.
+fn quant_records(dir: &Path, lib: &str, body: &str) -> (f64, f64, u64) {
+    let sam = dir.join("mix.sam");
+    std::fs::write(
+        &sam,
+        format!("@HD\tVN:1.6\tSO:queryname\n@SQ\tSN:txA\tLN:5000\n@SQ\tSN:txB\tLN:5000\n{body}"),
+    )
+    .unwrap();
+    let out = dir.join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = lib.to_string();
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    let res = quantify_rad(&opts, &rad).unwrap();
+    let counts = quant_counts(&out);
+    let get = |n: &str| counts.iter().find(|(x, _)| x == n).unwrap().1;
+    (get("txA"), get("txB"), res.num_mapped)
+}
+
+/// R1 alone on txA and R2 alone on txB: each placement must be judged on its
+/// own mate's strand, whatever the other one is. Both agree with ISR here, so
+/// neither may be filtered and the two transcripts are symmetric.
+#[test]
+fn left_and_right_orphans_of_one_fragment_keep_their_own_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = String::new();
+    for i in 0..1000 {
+        // Mid-transcript, so neither side's weight is cut by a transcript end.
+        let p = 2000 + (i * 3) % 1000;
+        body += &format!("r{i}\t89\ttxA\t{p}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0\n");
+        body += &format!("r{i}\t137\ttxB\t{p}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0\n");
+    }
+    let (a, b, mapped) = quant_records(dir.path(), "ISR", &body);
+    assert_eq!(mapped, 1000);
+    assert!((a - 500.0).abs() < 1.0, "txA={a} txB={b}");
+    assert!((b - 500.0).abs() < 1.0, "txA={a} txB={b}");
+}
+
+/// A proper pair on txA beats an orphan on txB: the orphan's read length must
+/// not be read back as a fragment length. It is the pairs' 300 here, so that
+/// misreading would give txB as much weight as txA.
+#[test]
+fn an_orphan_beside_a_proper_pair_takes_no_mass() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = String::new();
+    for i in 0..500 {
+        let l = 1 + (i * 3) % 3000;
+        let r = l + 200;
+        body += &format!("r{i}\t99\ttxA\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\tAS:i:0\n");
+        body += &format!("r{i}\t147\ttxA\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\tAS:i:0\n");
+        body += &format!("r{i}\t73\ttxB\t{l}\t60\t300M\t*\t0\t0\t*\t*\tAS:i:0\n");
+    }
+    let (a, b, mapped) = quant_records(dir.path(), "IU", &body);
+    assert_eq!(mapped, 500);
+    assert!((a - 500.0).abs() < 1.0 && b < 1.0, "txA={a} txB={b}");
+}
