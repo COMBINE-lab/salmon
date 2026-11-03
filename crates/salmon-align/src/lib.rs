@@ -717,7 +717,10 @@ fn base_2bit(b: u8) -> u8 {
 ///
 /// Compression is detected from content, so gzip/BGZF, bzip2, xz and zstd all
 /// work regardless of how the file is named.
-fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
+///
+/// `lengths` are the input's own reference lengths: a same-named sequence of
+/// another length is another sequence, so positions would read the wrong bases.
+fn load_ref_bytes(path: &Path, names: &[String], lengths: &[u32]) -> Result<Vec<Vec<u8>>> {
     let reader: Box<dyn BufRead> = salmon_core::compress::open_maybe_compressed(path)
         .with_context(|| format!("opening {}", path.display()))?;
 
@@ -773,7 +776,39 @@ fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
             path.display()
         );
     }
+    let (wrong, example) = length_mismatches(names, &seqs, lengths);
+    if let Some((name, fasta_len, input_len)) = example {
+        tracing::warn!(
+            "{wrong} reference(s) in {} have a different length from the alignment input \
+             (e.g. {name}: {fasta_len} in the FASTA, {input_len} in the input). The error \
+             and bias models would read the wrong bases: check that this is the \
+             transcriptome the input was aligned against.",
+            path.display()
+        );
+    }
     Ok(seqs)
+}
+
+/// How many same-named references differ in length, and the first of them as
+/// `(name, FASTA length, input length)`. An absent reference is not a mismatch
+/// (see above), nor is a FASTA sequence longer only by a poly-A tail: the salmon
+/// index clips those, so a RAD's lengths legitimately lack them.
+fn length_mismatches<'a>(
+    names: &'a [String],
+    seqs: &[Vec<u8>],
+    lengths: &[u32],
+) -> (usize, Option<(&'a str, usize, u32)>) {
+    let mut wrong = 0;
+    let mut first = None;
+    for ((name, seq), &len) in names.iter().zip(seqs).zip(lengths) {
+        let l = len as usize;
+        let clipped_tail = seq.len() > l && seq[l..].iter().all(|b| b.eq_ignore_ascii_case(&b'A'));
+        if !seq.is_empty() && seq.len() != l && !clipped_tail {
+            wrong += 1;
+            first.get_or_insert((name.as_str(), seq.len(), len));
+        }
+    }
+    (wrong, first)
 }
 
 /// One alignment record needed by the error model / weighting.
@@ -832,7 +867,7 @@ impl FragRecord {
 #[inline]
 fn canonical_name(name: &[u8]) -> &[u8] {
     let l = name.len();
-    if l > 2 && name[l - 2] == b'/' {
+    if l > 2 && name[l - 2] == b'/' && matches!(name[l - 1], b'1' | b'2') {
         &name[..l - 2]
     } else {
         name
@@ -2426,6 +2461,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         salmon_core::RefSeqs::from_sequences(load_ref_bytes(
             opts.transcripts.as_ref().unwrap(),
             &names,
+            &lengths,
         )?)
     } else {
         salmon_core::RefSeqs::default()
@@ -2979,16 +3015,24 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     // Skipped under --skipQuant (no abundances), like salmon.
     if !opts.skip_quant {
         let sd = opts.sig_digits as usize;
-        let mut w = std::io::BufWriter::new(std::fs::File::create(dir.join("quant.sf"))?);
-        writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-        for &i in &rows {
-            writeln!(
-                w,
-                "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
-                res.names[i], res.lengths[i], sd, res.eff_lengths[i], res.tpm[i], sd, res.counts[i]
-            )?;
-        }
-        w.flush()?;
+        salmon_core::write_via_rename(&dir.join("quant.sf"), |w| {
+            writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
+            for &i in &rows {
+                writeln!(
+                    w,
+                    "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
+                    res.names[i],
+                    res.lengths[i],
+                    sd,
+                    res.eff_lengths[i],
+                    res.tpm[i],
+                    sd,
+                    res.counts[i]
+                )?;
+            }
+            Ok(())
+        })
+        .context("writing quant.sf")?;
     }
 
     /// Shape of the positional-bias model: one model per transcript length
@@ -3694,7 +3738,7 @@ mod tests {
         ] {
             let p = dir.path().join("ref.fa");
             std::fs::write(&p, contents).unwrap();
-            let err = load_ref_bytes(&p, &names).unwrap_err();
+            let err = load_ref_bytes(&p, &names, &[]).unwrap_err();
             let msg = format!("{err:#}");
             assert!(
                 msg.contains("no sequences found") && msg.contains("ref.fa"),
@@ -3718,12 +3762,30 @@ mod tests {
         let full = enc.finish().unwrap();
         std::fs::write(&p, &full[..full.len() - 6]).unwrap();
 
-        let err = load_ref_bytes(&p, &["t0".to_string()]).unwrap_err();
+        let err = load_ref_bytes(&p, &["t0".to_string()], &[]).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("truncated.fa.gz"),
             "a mid-stream failure should still name the file, got: {msg}"
         );
+    }
+
+    #[test]
+    fn a_wrong_length_is_a_mismatch_but_absent_or_a_clipped_tail_is_not() {
+        let names: Vec<String> = ["ok", "absent", "tail", "short", "long"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let seqs: Vec<Vec<u8>> = vec![
+            b"ACGT".to_vec(),
+            vec![],
+            b"ACGTAAaa".to_vec(),
+            b"AC".to_vec(),
+            b"ACGTC".to_vec(),
+        ];
+        let (wrong, first) = length_mismatches(&names, &seqs, &[4, 4, 4, 4, 4]);
+        assert_eq!(wrong, 2);
+        assert_eq!(first, Some(("short", 2, 4)));
     }
 
     /// Partial coverage is legitimate — a transcriptome need not cover every
@@ -3733,7 +3795,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("ref.fa");
         std::fs::write(&p, ">t0\nACGT\n").unwrap();
-        let got = load_ref_bytes(&p, &["t0".to_string(), "absent".to_string()]).unwrap();
+        let got = load_ref_bytes(&p, &["t0".to_string(), "absent".to_string()], &[]).unwrap();
         assert_eq!(got[0], b"ACGT");
         assert!(
             got[1].is_empty(),

@@ -595,7 +595,7 @@ impl CompView<'_> {
         s: &mut CompState,
         cutoff: f64,
     ) -> (f64, f64) {
-        const CH: usize = 2048;
+        const CH: usize = L1_CHUNK;
         if VB {
             s.et.par_chunks_mut(CH)
                 .zip(s.alpha.par_chunks(CH))
@@ -655,7 +655,8 @@ impl CompView<'_> {
                 (max_d, l1)
             })
             // Collected in chunk order and folded sequentially, so the L1 sum
-            // (unlike a rayon reduce tree) does not depend on the thread count.
+            // (unlike a rayon reduce tree) does not depend on the thread count,
+            // and groups its terms exactly as `criterion` does.
             .collect::<Vec<_>>()
             .into_iter()
             .fold((f64::NEG_INFINITY, 0.0), |a, b| {
@@ -750,15 +751,26 @@ impl CompView<'_> {
     }
 }
 
+/// Transcripts per chunk of [`CompView::step_pull`]. A step's L1 size is summed
+/// per chunk of this many transcripts and then over the chunks in order, by
+/// [`criterion`] too, so a pushed and a gathered step of one component give the
+/// same bits: float addition is not associative, and the projected stopping
+/// test reads this sum.
+const L1_CHUNK: usize = 2048;
+
 /// The convergence criterion over a component's transcripts and the L1 size
-/// of its step from `alpha` to `next`.
+/// of its step from `alpha` to `next`, summed as [`L1_CHUNK`] says.
 #[inline]
 fn criterion(alpha: &[f64], next: &[f64], cutoff: f64) -> (f64, f64) {
     let mut max_d = f64::NEG_INFINITY;
     let mut l1 = 0.0f64;
-    for (&a_in, &a_out) in alpha.iter().zip(next.iter()) {
-        max_d = fold_d(max_d, a_in, a_out, cutoff);
-        l1 += (a_out - a_in).abs();
+    for (al, nx) in alpha.chunks(L1_CHUNK).zip(next.chunks(L1_CHUNK)) {
+        let mut part = 0.0f64;
+        for (&a_in, &a_out) in al.iter().zip(nx) {
+            max_d = fold_d(max_d, a_in, a_out, cutoff);
+            part += (a_out - a_in).abs();
+        }
+        l1 += part;
     }
     (max_d, l1)
 }
@@ -1000,12 +1012,15 @@ pub(crate) fn run(
     let (iters, converged, summary) = match set.stop {
         EmStop::Global => {
             let (it, ok) = run_tiled(plan, &mut states, set);
+            // Cut off by the cap: only the components whose own criterion still
+            // failed held the run up, and each knows from its last step.
+            let capped = states.iter().filter(|(_, s)| !ok && s.changed);
             let summary = ComponentSummary {
                 stop: set.stop,
                 num_components: plan.num_components(),
-                num_unconverged: if ok { 0 } else { plan.num_components() },
-                num_at_max_iter: if ok { 0 } else { plan.num_components() },
-                reads_at_max_iter: if ok { 0.0 } else { total_reads },
+                num_unconverged: capped.clone().count(),
+                num_at_max_iter: capped.clone().count(),
+                reads_at_max_iter: capped.map(|(c, _)| reads[*c]).sum(),
                 total_reads,
                 median_iters: it,
             };
@@ -1882,6 +1897,33 @@ mod tests {
         }
     }
 
+    /// A step's L1 size feeds the projected stopping test, so a gathered step must
+    /// sum it exactly as a pushed one does, across its chunks of transcripts too.
+    #[test]
+    fn a_gathered_step_of_a_large_component_has_the_same_l1_bits() {
+        let b = EquivalenceClassBuilder::new();
+        for t in 0..6000u32 {
+            let count = 1 + u64::from(t.wrapping_mul(2_654_435_761) % 997);
+            b.add_group(TranscriptGroup::new(vec![t, t + 1]), vec![0.3, 0.7], count);
+        }
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&vec![1000.0; 6001]);
+        let p = PackedEqClasses::from_collapsed(&eq, 6001);
+        let (init, prior) = start(&p);
+        let set = settings(false, false);
+        let step = |pull_min| {
+            let plan = ComponentPlan::with_pull_min(&p, &p.counts, pull_min, true);
+            assert_eq!(plan.num_components(), 1);
+            let mut buffers = Buffers::new(&plan, &init, &prior, set.vb);
+            let mut states = buffers.states(&plan);
+            let (c, s) = &mut states[0];
+            (0..3)
+                .map(|_| step_component_l1(&plan, *c, s, &set).1.to_bits())
+                .collect::<Vec<u64>>()
+        };
+        assert_eq!(step(usize::MAX), step(0));
+    }
+
     /// Two near-identical transcripts that differ by a handful of unique
     /// reads: each step moves little, so salmon's criterion holds long before
     /// the split is near its fixpoint. The projected rule keeps iterating and
@@ -1957,6 +1999,38 @@ mod tests {
         };
         let (_, _, converged, summary) = run(&mut plan, &init, &prior, &short);
         assert!(!converged && summary.num_unconverged >= 1);
+    }
+
+    /// A global run stopped by the cap names the components that held it up, not
+    /// every component. Six iterations in, the criterion holds on the near-identical
+    /// pair, whose relative changes are tiny, but not yet on the small component.
+    #[test]
+    fn a_capped_global_run_blames_only_the_unsettled_component() {
+        let b = EquivalenceClassBuilder::new();
+        b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 100_000);
+        b.add_group(TranscriptGroup::new(vec![0]), vec![1.0], 60);
+        b.add_group(TranscriptGroup::new(vec![1]), vec![1.0], 20);
+        b.add_group(TranscriptGroup::new(vec![2, 3]), vec![1.0, 1.0], 50);
+        b.add_group(TranscriptGroup::new(vec![2]), vec![1.0], 40);
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[1000.0; 4]);
+        let p = PackedEqClasses::from_collapsed(&eq, 4);
+        let (init, prior) = start(&p);
+        let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, false);
+        let set = Settings {
+            stop: EmStop::Global,
+            max_iter: 6,
+            min_iter: 1,
+            ..settings(false, false)
+        };
+        let (_, iters, converged, summary) = run(&mut plan, &init, &prior, &set);
+        assert_eq!(iters, 6);
+        assert!(!converged);
+        assert_eq!(summary.num_components, 2);
+        assert_eq!(summary.num_unconverged, 1, "{summary:?}");
+        assert_eq!(summary.num_at_max_iter, 1);
+        assert_eq!(summary.reads_at_max_iter, 90.0);
+        assert_eq!(summary.total_reads, 100_170.0);
     }
 
     /// `exp_digamma` agrees with `statrs`'s `digamma(x).exp()` over the range

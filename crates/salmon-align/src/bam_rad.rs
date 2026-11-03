@@ -139,7 +139,7 @@ pub fn write_alignment_rad(
         Some(rs.clone())
     } else if let Some(t) = &opts.transcripts {
         Some(salmon_core::RefSeqs::from_sequences(load_ref_bytes(
-            t, &names,
+            t, &names, &lengths,
         )?))
     } else {
         None

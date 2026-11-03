@@ -229,12 +229,10 @@ pub(crate) struct Shared<'a> {
 /// is invisible at low thread counts. Accumulating privately and merging once
 /// per thread is the same pattern the bias models already use.
 ///
-/// `num_processed` is deliberately NOT here: it is also *read* on the hot path,
-/// to gate `use_aux`, so making it thread-local would change which fragments see
-/// the auxiliary model and therefore the output. That gate is its own question
-/// (see the `use_aux` issue); this change is output-preserving.
+/// `processed` alone merges once per batch, so the progress display stays live.
 #[derive(Default)]
 pub(crate) struct Counters {
+    pub processed: u64,
     pub orphan: u64,
     /// see [`Shared::num_frags_compat`]
     pub frags_compat: u64,
@@ -700,7 +698,7 @@ fn record_discrete(
     acc: &salmon_model::DiscreteFld,
     counters: &mut Counters,
 ) {
-    sh.num_processed.fetch_add(1, Ordering::Relaxed);
+    counters.processed += 1;
     if placements.is_empty() {
         return;
     }
@@ -820,9 +818,7 @@ fn record(
     gcbias: Option<&mut GcFragModel>,
     posbias: Option<&mut (Vec<SimplePosBias>, Vec<SimplePosBias>)>,
 ) {
-    // Still a shared atomic: unlike the other counters this one is *read* below,
-    // to gate `use_aux`. See `Counters`.
-    sh.num_processed.fetch_add(1, Ordering::Relaxed);
+    counters.processed += 1;
     if placements.is_empty() {
         return;
     }
@@ -1502,6 +1498,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // next batch's per-fragment reads are stable (see `record`). No-op once the
         // final FLD cache is taken; amortized over the whole batch.
         self.shared.fld.refresh_online();
+        flush_processed(self);
         flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;
@@ -1655,6 +1652,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // next batch's per-fragment reads are stable (see `record`). No-op once the
         // final FLD cache is taken; amortized over the whole batch.
         self.shared.fld.refresh_online();
+        flush_processed(self);
         flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;
@@ -1671,6 +1669,13 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         flush_rad(self)?;
         Ok(())
     }
+}
+
+/// Add this worker's fragments to the shared total: at batch boundaries, so every
+/// worker does not write the same cache line once per fragment.
+fn flush_processed(proc: &mut QuantProcessor) {
+    let n = std::mem::take(&mut proc.counters.processed);
+    proc.shared.num_processed.fetch_add(n, Ordering::Relaxed);
 }
 
 /// Flush this thread's accumulated SAM buffer to the shared writer (under lock).

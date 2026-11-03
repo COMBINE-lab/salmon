@@ -1056,3 +1056,250 @@ fn a_run_that_maps_nothing_fails_but_keeps_its_output() {
     assert!(out.join("quant.sf").exists());
     assert!(out.join("aux_info/meta_info.json").exists());
 }
+
+/// A rerun that dies partway must not leave the old `quant.sf` beside the new
+/// metadata, where a later step would read them as one result.
+#[test]
+fn a_failed_rerun_does_not_leave_the_previous_quant_sf() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("q");
+    let quant = |reads: &Path| {
+        run(&[
+            os("quant"),
+            os("-i"),
+            fx.index.as_os_str(),
+            os("-l"),
+            os("U"),
+            os("-r"),
+            reads.as_os_str(),
+            os("-p"),
+            os("2"),
+            os("-o"),
+            out.as_os_str(),
+        ])
+    };
+
+    let o = quant(&fx.se);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(out.join("quant.sf").exists());
+    // The write goes through a temporary name, which must not outlive it.
+    assert!(!out.join("quant.sf.tmp").exists());
+
+    let full = std::fs::read_to_string(&fx.se).unwrap();
+    let cut = dir.path().join("cut.fq");
+    std::fs::write(&cut, &full[..full.len() / 3]).unwrap();
+    assert!(!quant(&cut).status.success());
+    assert!(!out.join("quant.sf").exists());
+}
+
+/// `parallel=N` is in the flag's help and the docs, but the parser refused it.
+#[test]
+fn the_documented_decoder_forms_are_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let quant = |decoder: &str, tag: &str| {
+        let out = dir.path().join(tag);
+        let arg = format!("--decoder={decoder}");
+        run(&[
+            os("quant"),
+            os("-i"),
+            fx.index.as_os_str(),
+            os("-l"),
+            os("U"),
+            os("-r"),
+            fx.se.as_os_str(),
+            os("-p"),
+            os("2"),
+            os("-o"),
+            out.as_os_str(),
+            os(&arg),
+        ])
+    };
+    for (i, d) in ["auto", "serial", "parallel", "parallel=2"]
+        .iter()
+        .enumerate()
+    {
+        let o = quant(d, &format!("ok{i}"));
+        assert!(
+            o.status.success(),
+            "{d}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+    for d in ["bogus", "parallel=x", "serial=2"] {
+        assert_eq!(quant(d, "bad").status.code(), Some(2), "{d}");
+    }
+}
+
+/// The default mode promises one answer for one input, so a single-end `-l A`
+/// run decides on every fragment. A forward prefix longer than the detector's
+/// budget, then as many reverse reads, is an unstranded library: deciding on
+/// the prefix calls it `SF` and throws the reverse half away.
+#[test]
+fn single_end_auto_detection_reads_the_whole_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let tx = sequence(23, 3000);
+    let rc: String = tx
+        .chars()
+        .rev()
+        .map(|c| match c {
+            'A' => 'T',
+            'C' => 'G',
+            'G' => 'C',
+            _ => 'A',
+        })
+        .collect();
+    let fasta = dir.path().join("txome.fa");
+    std::fs::write(&fasta, format!(">txA\n{tx}\n")).unwrap();
+    let index = dir.path().join("idx");
+    assert!(Command::new(SALMON)
+        .args(["index", "-t"])
+        .arg(&fasta)
+        .arg("-i")
+        .arg(&index)
+        .args(["-p", "2"])
+        .status()
+        .unwrap()
+        .success());
+
+    let q = "I".repeat(60);
+    let mut reads = String::new();
+    for (strand, s) in [&tx, &rc].into_iter().enumerate() {
+        for i in 0..60_000 {
+            let st = i % (s.len() - 60);
+            reads.push_str(&format!("@s{strand}_{i}\n{}\n+\n{q}\n", &s[st..st + 60]));
+        }
+    }
+    let se = dir.path().join("se.fq");
+    std::fs::write(&se, reads).unwrap();
+
+    let out = dir.path().join("out");
+    let o = run(&[
+        os("quant"),
+        os("-i"),
+        index.as_os_str(),
+        os("-l"),
+        os("A"),
+        os("-r"),
+        se.as_os_str(),
+        os("-p"),
+        os("2"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("aux_info/meta_info.json")).unwrap())
+            .unwrap();
+    assert_eq!(meta["library_types"][0], "U", "{meta}");
+    let quant = std::fs::read_to_string(out.join("quant.sf")).unwrap();
+    let reads: f64 = quant
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split('\t')
+        .nth(4)
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(reads > 119_000.0, "reverse reads were filtered: {quant}");
+}
+
+/// `ambig_info.tsv` is read row for row against `quant.sf`, on every path: a
+/// decoy row would shift every transcript after it.
+#[test]
+fn ambig_info_has_one_row_per_quant_row_under_online() {
+    let dir = tempfile::tempdir().unwrap();
+    let txs = [sequence(5, 3000), sequence(19, 3000)];
+    let fasta = dir.path().join("gentrome.fa");
+    std::fs::write(
+        &fasta,
+        format!(
+            ">txA\n{}\n>txB\n{}\n>dec\n{}\n",
+            txs[0],
+            txs[1],
+            sequence(31, 3000)
+        ),
+    )
+    .unwrap();
+    let decoys = dir.path().join("decoys.txt");
+    std::fs::write(&decoys, "dec\n").unwrap();
+    let index = dir.path().join("idx");
+    assert!(Command::new(SALMON)
+        .args(["index", "-t"])
+        .arg(&fasta)
+        .arg("-d")
+        .arg(&decoys)
+        .arg("-i")
+        .arg(&index)
+        .args(["-p", "2"])
+        .status()
+        .unwrap()
+        .success());
+
+    let q = "I".repeat(100);
+    let reads: String = (0..200)
+        .map(|i| {
+            let s = &txs[i % 2];
+            let st = (i * 11) % (s.len() - 100);
+            format!("@s{i}\n{}\n+\n{q}\n", &s[st..st + 100])
+        })
+        .collect();
+    let se = dir.path().join("se.fq");
+    std::fs::write(&se, reads).unwrap();
+
+    let out = dir.path().join("out");
+    let o = run(&[
+        os("quant"),
+        os("--online"),
+        os("-i"),
+        index.as_os_str(),
+        os("-l"),
+        os("U"),
+        os("-r"),
+        se.as_os_str(),
+        os("-p"),
+        os("2"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let lines = |p: PathBuf| std::fs::read_to_string(p).unwrap().lines().count();
+    assert_eq!(lines(out.join("quant.sf")), 1 + 2);
+    assert_eq!(lines(out.join("aux_info/ambig_info.tsv")), 1 + 2);
+}
+
+/// The EM that seeds the bias models is cut short on purpose, so stopping early
+/// says nothing about convergence. Only the run's real EM may warn about it.
+#[test]
+fn the_bias_seed_em_is_not_reported_as_unconverged() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("out");
+    let o = run(&[
+        os("quant"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-l"),
+        os("IU"),
+        os("-1"),
+        fx.r1.as_os_str(),
+        os("-2"),
+        fx.r2.as_os_str(),
+        os("--seqBias"),
+        os("--biasSeedEMIters"),
+        os("1"),
+        os("-p"),
+        os("2"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    assert!(err.contains("to seed the bias models"), "{err}");
+    assert!(
+        !err.contains("never met the convergence criterion"),
+        "{err}"
+    );
+}

@@ -126,31 +126,18 @@ fn annotate_read_error(path: &Path, err: io::Error) -> io::Error {
     )
 }
 
-/// Compression suffixes stripped before deciding GTF-vs-TSV, one per format
-/// `niffler` decodes. Content detection is the reader's job; this is only about
-/// the *name*, and a name that ends in a codec suffix says nothing about the
-/// format underneath it.
-const COMPRESSION_SUFFIXES: [&str; 6] = ["gz", "bgz", "bgzf", "bz2", "xz", "zst"];
-
 /// Whether the path names a GTF/GFF, ignoring a trailing compression suffix:
 /// the last extension of `annotation.gtf.gz` is `gz`, but the content is GTF.
 /// Getting this wrong is not a cosmetic error — a GTF handed to the TSV branch
 /// parses into `{sequence name: source}` pairs, which is a non-empty map that
 /// matches no transcript, so it fails silently rather than loudly.
 fn has_gtf_extension(path: &Path) -> bool {
-    let ext = |p: &Path| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-    };
-    let outer = ext(path);
-    let effective = match outer.as_deref() {
-        Some(e) if COMPRESSION_SUFFIXES.contains(&e) => {
-            ext(Path::new(path.file_stem().unwrap_or_default()))
-        }
-        _ => outer,
-    };
-    matches!(effective.as_deref(), Some("gtf" | "gff" | "gff3"))
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let underneath = crate::compress::strip_compression_extension(&name);
+    Path::new(underneath)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "gtf" | "gff" | "gff3"))
 }
 
 /// Open `path`, transparently decompressing it when it is compressed.
@@ -213,6 +200,9 @@ pub const LOW_MATCH_RATE: f64 = 0.5;
 /// What gene-level aggregation actually did, for the caller to report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GeneQuantSummary {
+    /// gene map entries that, with versions ignored, name a different gene from
+    /// another version of the same transcript
+    pub version_collisions: usize,
     /// Quantified transcripts that found an entry in the gene map.
     pub matched: usize,
     /// Quantified transcripts with no entry. They are still written, each as its
@@ -313,12 +303,19 @@ pub fn write_gene_quant(
     ignore_tx_version: bool,
     unmatched_out: Option<&Path>,
 ) -> io::Result<GeneQuantSummary> {
-    // Re-key the map once when versions are ignored, rather than per lookup.
+    let mut summary = GeneQuantSummary::default();
+    // Re-key the map once when versions are ignored, rather than per lookup. Two
+    // versions of one transcript can name different genes, so the map is walked in
+    // sorted order: the lowest identifier wins, whatever the hash order.
     let stripped: Option<HashMap<&str, &str>> = ignore_tx_version.then(|| {
-        gene_map
-            .iter()
-            .map(|(t, g)| (strip_tx_version(t), g.as_str()))
-            .collect()
+        let mut entries: Vec<_> = gene_map.iter().collect();
+        entries.sort();
+        let mut m: HashMap<&str, &str> = HashMap::with_capacity(entries.len());
+        for (t, g) in entries {
+            let gene = *m.entry(strip_tx_version(t)).or_insert(g.as_str());
+            summary.version_collisions += usize::from(gene != g.as_str());
+        }
+        m
     });
 
     // Group transcript indices by gene (gene name order is sorted for determinism).
@@ -327,13 +324,14 @@ pub fn write_gene_quant(
     // whole reason it is used here, so the output file is byte-identical between
     // runs.
     let mut genes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    let mut summary = GeneQuantSummary::default();
     let mut unmatched: Vec<&str> = Vec::new();
     for (i, name) in names.iter().enumerate() {
-        let gene = match &stripped {
-            Some(m) => m.get(strip_tx_version(name)).copied(),
-            None => gene_map.get(name).map(String::as_str),
-        };
+        // An exact match outranks a version-stripped one.
+        let gene = gene_map.get(name).map(String::as_str).or_else(|| {
+            stripped
+                .as_ref()
+                .and_then(|m| m.get(strip_tx_version(name)).copied())
+        });
         match gene {
             Some(g) => {
                 genes.entry(g).or_default().push(i);
@@ -438,6 +436,25 @@ fn write_unmatched_list(path: &Path, unmatched: &[&str]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_gtf_is_recognised_under_every_suffix_the_reader_can_decode() {
+        for name in [
+            "a.gtf",
+            "a.gff3",
+            "a.gtf.gz",
+            "a.gtf.bgz",
+            "a.gtf.bgzf",
+            "a.gtf.zst",
+            "a.gtf.zstd",
+            "a.gtf.bz2",
+            "a.gtf.xz",
+            "a.gtf.lzma",
+        ] {
+            assert!(super::has_gtf_extension(Path::new(name)), "{name}");
+        }
+        assert!(!super::has_gtf_extension(Path::new("a.tsv.zstd")));
+    }
+
     use super::*;
 
     fn scratch(case: &str) -> std::path::PathBuf {
@@ -647,6 +664,42 @@ mod tests {
             .find(|l| l.starts_with("ENSG00000290825\t"))
             .unwrap();
         assert_eq!(row.split('\t').nth(4), Some("100.000"));
+    }
+
+    /// Two versions of one transcript in different genes must resolve the same way
+    /// every run: an exact name to its own gene, any other to the lowest identifier.
+    #[test]
+    fn ignore_tx_version_resolves_a_collision_independently_of_hash_order() {
+        let mut gm = HashMap::new();
+        gm.insert("t.1".to_string(), "G1".to_string());
+        gm.insert("t.2".to_string(), "G2".to_string());
+        gm.insert("t.3".to_string(), "G3".to_string());
+        gm.insert("u.1".to_string(), "G4".to_string());
+        gm.insert("u.2".to_string(), "G4".to_string());
+        let names = vec!["t.2".to_string(), "t.9".to_string()];
+        let out = scratch("ignorever_collision").join("quant.genes.sf");
+        let s = write_gene_quant(
+            &out,
+            &names,
+            &[10, 10],
+            &[8.0, 8.0],
+            &[1.0, 1.0],
+            &[3.0, 3.0],
+            &gm,
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.matched, 2);
+        // t.2 and t.3 disagree with t.1; u.2 agrees with u.1.
+        assert_eq!(s.version_collisions, 2);
+        let text = std::fs::read_to_string(&out).unwrap();
+        let genes: Vec<&str> = text
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').next().unwrap())
+            .collect();
+        assert_eq!(genes, ["G1", "G2"], "{text}");
     }
 
     /// Stripping applies to both sides, so a versioned gene map joins to

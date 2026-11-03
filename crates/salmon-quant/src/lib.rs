@@ -588,7 +588,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // `library_type_mismatch` diagnostic. It never overrides an explicit `-l` —
     // the resolution below gates its format on `auto_detect`. The cost is bounded
     // (sampling stops after the detector locks in) → effectively free.
-    let detector = Some(LibraryTypeDetector::new(read_type));
+    //
+    // `--deterministic` single-end: the prefix would depend on the thread order,
+    // and the paired accumulator below has no single-end form, so tally everything.
+    let whole_input_detector = opts.deterministic_fld && !opts.is_paired();
+    let detector = Some(if whole_input_detector {
+        LibraryTypeDetector::over_whole_input(read_type)
+    } else {
+        LibraryTypeDetector::new(read_type)
+    });
 
     // `--deterministic`: an order-independent FLD / library-format accumulator,
     // populated during the mapping pass instead of the online FLD + prefix
@@ -731,14 +739,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             expected_format,
             incompat_prior: opts.incompat_prior,
             ignore_incompat,
-            collect_seqbias: opts.seq_bias,
+            collect_seqbias: seqbias_obs.is_some(),
             seqbias_obs: seqbias_obs.as_ref(),
-            collect_gcbias: opts.gc_bias,
+            collect_gcbias: gcbias_obs.is_some(),
             cond_gc_bins: opts.cond_gc_bins,
             gc_bins: opts.gc_bins,
             gc_store,
             gcbias_obs: gcbias_obs.as_ref(),
-            collect_posbias: opts.pos_bias,
+            collect_posbias: posbias_obs.is_some(),
             length_class: length_class.as_deref(),
             posbias_obs: posbias_obs.as_ref(),
             online: online.as_ref(),
@@ -900,6 +908,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let (df, fmt) = acc.finish(opts.fld_mean, opts.fld_sd);
         fld = df;
         fmt
+    } else if whole_input_detector {
+        detector.as_ref().map(|d| d.final_format())
     } else {
         None
     };
@@ -1021,8 +1031,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     }
     // The packed CSR layout is built ONCE and reused by every consumer below: the
     // burn-in EM, the warm-started EM after bias correction, and bootstrap /
-    // Gibbs. `optimize`/`optimize_with_init` each build their own internally, so
-    // going through them meant re-copying labels, counts and weights (hundreds of
+    // Gibbs. `optimize` builds its own internally, so
+    // going through it meant re-copying labels, counts and weights (hundreds of
     // MB on a human-scale run) two to three times over data that is bit-identical
     // apart from `combined`, which `refresh_combined` rewrites in place.
     //
@@ -1318,7 +1328,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
     let em_components = em.components.clone();
-    if let Some(c) = &em_components {
+    if opts.skip_quant && want_rough_abund {
+        // Cut short on purpose (see above): its stopping is not a convergence claim.
+        tracing::info!("EM: {em_iters} iterations to seed the bias models");
+    } else if let Some(c) = &em_components {
         let (line, warn) = c.describe(em_iters);
         if warn {
             tracing::warn!("{line}");
