@@ -4,11 +4,8 @@
 //! conserved, and the whole pipeline is reproducible run-to-run.
 
 use salmon_align::{quantify_rad, write_alignment_rad, AlignQuantOptions};
-
 use salmon_rad::ChunkCodec;
-
 use std::io::Write;
-
 use std::path::{Path, PathBuf};
 
 /// Tiny two-transcript transcriptome SAM, name-grouped (queryname), with inward
