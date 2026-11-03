@@ -1413,6 +1413,17 @@ fn peek_alignment_is_paired(path: &Path) -> Result<Option<bool>> {
     }
 }
 
+/// Whether a RAD writer's library is paired: under `-l A` the input decides,
+/// otherwise a single-end `-l` says no and anything else says yes.
+pub(crate) fn rad_library_is_paired(path: &Path, lib_type: &str) -> Result<bool> {
+    let peeked = if LibraryFormat::is_auto(lib_type) {
+        peek_alignment_is_paired(path)?
+    } else {
+        None
+    };
+    Ok(peeked.unwrap_or(!matches!(lib_type, "U" | "SF" | "SR" | "S")))
+}
+
 fn stream_online_pass(bam_path: &Path, cfg: &PassCfg, acc: &mut PassAccum) -> Result<()> {
     if is_sam_path(bam_path) {
         let mut reader = open_sam_reader(bam_path)?;

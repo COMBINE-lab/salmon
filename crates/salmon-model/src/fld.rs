@@ -694,6 +694,18 @@ impl DiscreteFld {
         self.fmt_counts[fmt.format_id() as usize].fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record the strand of one uniquely-mapped single-end read, for `-l A`.
+    /// Such a read has no fragment length, so only the format tally moves.
+    pub fn add_single_end(&self, is_fw: bool) {
+        let strand = if is_fw {
+            ReadStrandedness::S
+        } else {
+            ReadStrandedness::A
+        };
+        let fmt = LibraryFormat::new(ReadType::SingleEnd, ReadOrientation::None, strand);
+        self.fmt_counts[fmt.format_id() as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Add a fragment length to its orientation bucket, without the format
     /// tally; returns the observed format.
     fn add_len(&self, len: usize, is_fw: bool, mate_fw: bool) -> LibraryFormat {
@@ -747,7 +759,7 @@ impl DiscreteFld {
     /// Build the FLD from the majority-orientation bucket (deterministically, in
     /// fixed length order) and infer the library format from the format tally.
     /// `fld_mean`/`fld_sd` seed the prior. Returns the cached FLD and the detected
-    /// format (`None` when no proper pairs were seen).
+    /// format (`None` when no proper pairs or single-end reads were seen).
     pub fn finish(
         &self,
         fld_mean: f64,
@@ -780,8 +792,22 @@ impl DiscreteFld {
             .iter()
             .map(|a| a.load(Ordering::Relaxed))
             .collect();
-        let detected = if tally.iter().sum::<u64>() > 0 {
-            Some(crate::infer_format_from_counts(&tally, ReadType::PairedEnd))
+        let total = tally.iter().sum::<u64>();
+        let detected = if total > 0 {
+            let single_end: u64 = tally
+                .iter()
+                .enumerate()
+                .filter(|(id, _)| {
+                    LibraryFormat::from_format_id(*id as u8).read_type == ReadType::SingleEnd
+                })
+                .map(|(_, &c)| c)
+                .sum();
+            let read_type = if single_end > total - single_end {
+                ReadType::SingleEnd
+            } else {
+                ReadType::PairedEnd
+            };
+            Some(crate::infer_format_from_counts(&tally, read_type))
         } else {
             None
         };

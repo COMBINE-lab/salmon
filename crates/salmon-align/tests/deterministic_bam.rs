@@ -691,3 +691,130 @@ fn an_orphan_beside_a_proper_pair_takes_no_mass() {
     assert_eq!(mapped, 500);
     assert!((a - 500.0).abs() < 1.0 && b < 1.0, "txA={a} txB={b}");
 }
+
+/// Single-end SAM: `n_a` forward reads on txA, `n_b` reverse reads on txB, so
+/// the library is stranded (SF) and txB's reads are all antisense.
+fn write_single_end_sam(dir: &Path, n_a: usize, n_b: usize) -> PathBuf {
+    let path = dir.join("se.sam");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:5000").unwrap();
+    for i in 0..n_a + n_b {
+        let (tx, flag) = if i < n_a { ("txA", 0) } else { ("txB", 16) };
+        let p = 1 + (i * 7) % 4000;
+        writeln!(
+            f,
+            "r{i}\t{flag}\t{tx}\t{p}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0"
+        )
+        .unwrap();
+    }
+    path
+}
+
+fn meta_info(out: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(out.join("aux_info/meta_info.json")).unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+
+/// `-l A` on a stranded single-end BAM must find the strand from the reads, as
+/// `-l SF` is told it, and filter antisense reads the same way.
+#[test]
+fn auto_detects_strand_of_a_single_end_bam() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_single_end_sam(dir.path(), 1500, 500);
+    let quant = |lib: &str| {
+        let out = dir.path().join(lib);
+        std::fs::create_dir_all(&out).unwrap();
+        let rad = out.join("aln.rad");
+        let mut opts = opts_for(&sam, &out);
+        opts.lib_type = lib.to_string();
+        write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+        let res = quantify_rad(&opts, &rad).unwrap();
+        (res.num_mapped, quant_counts(&out), meta_info(&out))
+    };
+
+    let (auto_mapped, auto_counts, auto_meta) = quant("A");
+    let (sf_mapped, sf_counts, sf_meta) = quant("SF");
+
+    assert_eq!(auto_meta["detected_library_type"], "SF");
+    assert_eq!(auto_mapped, sf_mapped);
+    assert_eq!(auto_counts, sf_counts);
+    assert_eq!(
+        auto_meta["frag_length_source"],
+        sf_meta["frag_length_source"]
+    );
+}
+
+/// A single-end read is not an orphan, so `--discardOrphans` under `-l A` must
+/// not empty the run.
+#[test]
+fn discard_orphans_keeps_a_single_end_bam_under_auto() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_single_end_sam(dir.path(), 300, 0);
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "A".to_string();
+    opts.discard_orphans = true;
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    let res = quantify_rad(&opts, &rad).unwrap();
+    assert_eq!(res.num_mapped, 300);
+}
+
+/// The genome path takes the same answer from the projection: reads running
+/// with the transcript are sense, on either genomic strand.
+#[test]
+fn auto_detects_strand_of_a_single_end_genome_bam() {
+    let dir = tempfile::tempdir().unwrap();
+    let gtf = dir.path().join("a.gtf");
+    let mut f = std::fs::File::create(&gtf).unwrap();
+    for (tx, start, end, strand) in [("txA", 1001, 3000, '+'), ("txB", 5001, 7000, '-')] {
+        let attrs = format!("gene_id \"g{tx}\"; transcript_id \"{tx}\";");
+        for kind in ["transcript", "exon"] {
+            writeln!(
+                f,
+                "chr1\tt\t{kind}\t{start}\t{end}\t.\t{strand}\t.\t{attrs}"
+            )
+            .unwrap();
+        }
+    }
+    let sam = dir.path().join("g.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:chr1\tLN:10000").unwrap();
+    for i in 0..200 {
+        let (flag, p) = if i % 2 == 0 { (0, 1001) } else { (16, 5001) };
+        writeln!(
+            f,
+            "r{i}\t{flag}\tchr1\t{}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0",
+            p + i
+        )
+        .unwrap();
+    }
+
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let gp = salmon_align::GenomeProjectOptions {
+        bam: sam.clone(),
+        annotation: gtf,
+        genome_fasta: None,
+        lib_type: "A".to_string(),
+        junc_miss_discount: None,
+        bias: false,
+        fld_mean: 250.0,
+        fld_sd: 25.0,
+        fld_max: 1000,
+        bias_seed_em_iters: 0,
+        em: Default::default(),
+        rad_codec: ChunkCodec::None,
+    };
+    salmon_align::project_genome_bam_to_rad(&gp, &rad).unwrap();
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "A".to_string();
+    let res = quantify_rad(&opts, &rad).unwrap();
+    assert_eq!(res.num_mapped, 200);
+    assert_eq!(meta_info(&out)["detected_library_type"], "SF");
+}
