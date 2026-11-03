@@ -1269,3 +1269,37 @@ fn ambig_info_has_one_row_per_quant_row_under_online() {
     assert_eq!(lines(out.join("quant.sf")), 1 + 2);
     assert_eq!(lines(out.join("aux_info/ambig_info.tsv")), 1 + 2);
 }
+
+/// The EM that seeds the bias models is cut short on purpose, so stopping early
+/// says nothing about convergence. Only the run's real EM may warn about it.
+#[test]
+fn the_bias_seed_em_is_not_reported_as_unconverged() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("out");
+    let o = run(&[
+        os("quant"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-l"),
+        os("IU"),
+        os("-1"),
+        fx.r1.as_os_str(),
+        os("-2"),
+        fx.r2.as_os_str(),
+        os("--seqBias"),
+        os("--biasSeedEMIters"),
+        os("1"),
+        os("-p"),
+        os("2"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    assert!(err.contains("to seed the bias models"), "{err}");
+    assert!(
+        !err.contains("never met the convergence criterion"),
+        "{err}"
+    );
+}
