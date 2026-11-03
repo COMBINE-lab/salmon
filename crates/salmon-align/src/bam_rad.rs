@@ -51,8 +51,7 @@ use salmon_core::{LibraryFormat, MateStatus};
 use salmon_eqclass::{NaiveEqBuilder, NaivePlacement, NAIVE_NO_FMT};
 use salmon_model::{smoothed_effective_length, DiscreteFld, PairObs};
 use salmon_rad::{
-    frag_map_type, ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile,
-    SalmonBulkRecord,
+    ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile, SalmonBulkRecord,
 };
 
 use crate::error_model::{AlignmentModel, CountingAlignmentModel};
@@ -474,6 +473,11 @@ fn analyze_group<R: sam::alignment::Record>(
             fmt_id: fmt.map(|f| f.format_id()).unwrap_or(NAIVE_NO_FMT),
         });
     }
+    // A proper pair discards the fragment's orphans, as in the mapper: a record
+    // has one type, so an orphan beside a pair would be read back as a pair.
+    if infos.iter().any(|i| i.paired) {
+        infos.retain(|i| i.paired);
+    }
     Some(GroupData { frags, infos })
 }
 
@@ -524,8 +528,7 @@ fn write_record(
             )
         })
         .collect();
-    let frag_type = frag_map_type::fragment_level(data.infos.iter().map(|i| i.status));
-    let rec = SalmonBulkRecord::new(frag_type, hits);
+    let rec = SalmonBulkRecord::from_placements(data.infos.iter().map(|i| i.status), hits);
     buf.write(&rec, writer.context())?;
     if buf.byte_len() >= CHUNK_FLUSH_BYTES {
         let bytes = buf.take_bytes()?;
