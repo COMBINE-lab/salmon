@@ -108,7 +108,8 @@ fn write_quant_log(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
     Ok(())
 }
 
-/// `aux_info/ambig_info.tsv`: `UniqueCount\tAmbigCount` per transcript (id order).
+/// `aux_info/ambig_info.tsv`: `UniqueCount\tAmbigCount` per `quant.sf` row, so the
+/// two files stay row-aligned (no decoys, like `quant_row_indices` everywhere else).
 ///
 /// A cheap confidence indicator: a transcript whose evidence is mostly unique is
 /// well determined, one whose evidence is mostly shared is not.
@@ -118,9 +119,10 @@ fn write_ambig_info(path: &Path, res: &QuantResult) -> Result<()> {
         std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
     );
     writeln!(w, "UniqueCount\tAmbigCount")?;
-    for i in 0..uniq.len() {
+    for i in salmon_core::quant_row_indices(uniq.len(), res.first_decoy_index, res.num_decoys) {
         writeln!(w, "{}\t{}", uniq[i], ambig[i])?;
     }
+    w.flush()?;
     Ok(())
 }
 

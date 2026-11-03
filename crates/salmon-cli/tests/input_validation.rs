@@ -1205,3 +1205,67 @@ fn single_end_auto_detection_reads_the_whole_input() {
         .unwrap();
     assert!(reads > 119_000.0, "reverse reads were filtered: {quant}");
 }
+
+/// `ambig_info.tsv` is read row for row against `quant.sf`, on every path: a
+/// decoy row would shift every transcript after it.
+#[test]
+fn ambig_info_has_one_row_per_quant_row_under_online() {
+    let dir = tempfile::tempdir().unwrap();
+    let txs = [sequence(5, 3000), sequence(19, 3000)];
+    let fasta = dir.path().join("gentrome.fa");
+    std::fs::write(
+        &fasta,
+        format!(
+            ">txA\n{}\n>txB\n{}\n>dec\n{}\n",
+            txs[0],
+            txs[1],
+            sequence(31, 3000)
+        ),
+    )
+    .unwrap();
+    let decoys = dir.path().join("decoys.txt");
+    std::fs::write(&decoys, "dec\n").unwrap();
+    let index = dir.path().join("idx");
+    assert!(Command::new(SALMON)
+        .args(["index", "-t"])
+        .arg(&fasta)
+        .arg("-d")
+        .arg(&decoys)
+        .arg("-i")
+        .arg(&index)
+        .args(["-p", "2"])
+        .status()
+        .unwrap()
+        .success());
+
+    let q = "I".repeat(100);
+    let reads: String = (0..200)
+        .map(|i| {
+            let s = &txs[i % 2];
+            let st = (i * 11) % (s.len() - 100);
+            format!("@s{i}\n{}\n+\n{q}\n", &s[st..st + 100])
+        })
+        .collect();
+    let se = dir.path().join("se.fq");
+    std::fs::write(&se, reads).unwrap();
+
+    let out = dir.path().join("out");
+    let o = run(&[
+        os("quant"),
+        os("--online"),
+        os("-i"),
+        index.as_os_str(),
+        os("-l"),
+        os("U"),
+        os("-r"),
+        se.as_os_str(),
+        os("-p"),
+        os("2"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let lines = |p: PathBuf| std::fs::read_to_string(p).unwrap().lines().count();
+    assert_eq!(lines(out.join("quant.sf")), 1 + 2);
+    assert_eq!(lines(out.join("aux_info/ambig_info.tsv")), 1 + 2);
+}
