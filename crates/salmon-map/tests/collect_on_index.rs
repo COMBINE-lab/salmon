@@ -283,6 +283,47 @@ fn orphan_recovery_promotes_to_pair() {
 }
 
 #[test]
+/// A rescue may not pair mates that normal pairing rejects as dovetailed: here
+/// the rescued mate lies inside the anchor, so the anchor's overhang stays an
+/// orphan, whichever mate anchored.
+fn orphan_recovery_refuses_a_dovetailed_mate() {
+    let transcript = gen_seq(600, 0xFACE);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let refs = IdxRefs(&idx);
+    let recover = MapConfig {
+        recover_orphans: true,
+        ..Default::default()
+    };
+
+    // A forward anchor whose rescued reverse mate ends before the anchor does.
+    let r1 = transcript[200..300].to_vec();
+    let r2 = break_kmers(&revcomp(&transcript[220..280]), 25);
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &recover);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].status, MateStatus::PairedEndLeft, "{m:?}");
+
+    // A reverse anchor whose rescued forward mate starts after the anchor does.
+    let r1 = break_kmers(&transcript[220..280], 25);
+    let r2 = revcomp(&transcript[200..300]);
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &recover);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].status, MateStatus::PairedEndRight, "{m:?}");
+
+    // Allowing dovetails allows the rescue too.
+    let allow = MapConfig {
+        recover_orphans: true,
+        pair: salmon_map::PairingConfig {
+            allow_dovetail: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
+    assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
+}
+
+#[test]
 /// The alignment-free path must map the same easy read the full path does.
 fn pseudoalignment_only_mode() {
     let transcript = gen_seq(600, 0x5EED);

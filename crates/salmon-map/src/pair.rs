@@ -164,9 +164,17 @@ fn is_dovetailed(l: &MappingCandidate, r: &MappingCandidate) -> bool {
         return false;
     }
     let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
-    // The forward mate should nest upstream of the reverse mate; an overhang on
-    // either side is a dovetail.
-    fw.proj_start() > rc.proj_start() || fw.proj_end() > rc.proj_end()
+    extents_dovetail(
+        (fw.proj_start(), fw.proj_end()),
+        (rc.proj_start(), rc.proj_end()),
+    )
+}
+
+/// [`is_dovetailed`] over `(start, end)` extents, for a mate that has no candidate
+/// (one rescued by orphan recovery). The forward mate should nest upstream of the
+/// reverse mate; an overhang on either side is a dovetail.
+pub(crate) fn extents_dovetail(fw: (i32, i32), rc: (i32, i32)) -> bool {
+    fw.0 > rc.0 || fw.1 > rc.1
 }
 
 thread_local! {
