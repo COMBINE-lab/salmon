@@ -595,7 +595,7 @@ impl CompView<'_> {
         s: &mut CompState,
         cutoff: f64,
     ) -> (f64, f64) {
-        const CH: usize = 2048;
+        const CH: usize = L1_CHUNK;
         if VB {
             s.et.par_chunks_mut(CH)
                 .zip(s.alpha.par_chunks(CH))
@@ -655,7 +655,8 @@ impl CompView<'_> {
                 (max_d, l1)
             })
             // Collected in chunk order and folded sequentially, so the L1 sum
-            // (unlike a rayon reduce tree) does not depend on the thread count.
+            // (unlike a rayon reduce tree) does not depend on the thread count,
+            // and groups its terms exactly as `criterion` does.
             .collect::<Vec<_>>()
             .into_iter()
             .fold((f64::NEG_INFINITY, 0.0), |a, b| {
@@ -750,15 +751,26 @@ impl CompView<'_> {
     }
 }
 
+/// Transcripts per chunk of [`CompView::step_pull`]. A step's L1 size is summed
+/// per chunk of this many transcripts and then over the chunks in order, by
+/// [`criterion`] too, so a pushed and a gathered step of one component give the
+/// same bits: float addition is not associative, and the projected stopping
+/// test reads this sum.
+const L1_CHUNK: usize = 2048;
+
 /// The convergence criterion over a component's transcripts and the L1 size
-/// of its step from `alpha` to `next`.
+/// of its step from `alpha` to `next`, summed as [`L1_CHUNK`] says.
 #[inline]
 fn criterion(alpha: &[f64], next: &[f64], cutoff: f64) -> (f64, f64) {
     let mut max_d = f64::NEG_INFINITY;
     let mut l1 = 0.0f64;
-    for (&a_in, &a_out) in alpha.iter().zip(next.iter()) {
-        max_d = fold_d(max_d, a_in, a_out, cutoff);
-        l1 += (a_out - a_in).abs();
+    for (al, nx) in alpha.chunks(L1_CHUNK).zip(next.chunks(L1_CHUNK)) {
+        let mut part = 0.0f64;
+        for (&a_in, &a_out) in al.iter().zip(nx) {
+            max_d = fold_d(max_d, a_in, a_out, cutoff);
+            part += (a_out - a_in).abs();
+        }
+        l1 += part;
     }
     (max_d, l1)
 }
@@ -1883,6 +1895,33 @@ mod tests {
                 assert_eq!((iters, converged, &summary), (par.1, par.2, &par.3));
             }
         }
+    }
+
+    /// A step's L1 size feeds the projected stopping test, so a gathered step must
+    /// sum it exactly as a pushed one does, across its chunks of transcripts too.
+    #[test]
+    fn a_gathered_step_of_a_large_component_has_the_same_l1_bits() {
+        let b = EquivalenceClassBuilder::new();
+        for t in 0..6000u32 {
+            let count = 1 + u64::from(t.wrapping_mul(2_654_435_761) % 997);
+            b.add_group(TranscriptGroup::new(vec![t, t + 1]), vec![0.3, 0.7], count);
+        }
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&vec![1000.0; 6001]);
+        let p = PackedEqClasses::from_collapsed(&eq, 6001);
+        let (init, prior) = start(&p);
+        let set = settings(false, false);
+        let step = |pull_min| {
+            let plan = ComponentPlan::with_pull_min(&p, &p.counts, pull_min, true);
+            assert_eq!(plan.num_components(), 1);
+            let mut buffers = Buffers::new(&plan, &init, &prior, set.vb);
+            let mut states = buffers.states(&plan);
+            let (c, s) = &mut states[0];
+            (0..3)
+                .map(|_| step_component_l1(&plan, *c, s, &set).1.to_bits())
+                .collect::<Vec<u64>>()
+        };
+        assert_eq!(step(usize::MAX), step(0));
     }
 
     /// Two near-identical transcripts that differ by a handful of unique
