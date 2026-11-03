@@ -588,7 +588,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // `library_type_mismatch` diagnostic. It never overrides an explicit `-l` —
     // the resolution below gates its format on `auto_detect`. The cost is bounded
     // (sampling stops after the detector locks in) → effectively free.
-    let detector = Some(LibraryTypeDetector::new(read_type));
+    //
+    // `--deterministic` single-end: the prefix would depend on the thread order,
+    // and the paired accumulator below has no single-end form, so tally everything.
+    let whole_input_detector = opts.deterministic_fld && !opts.is_paired();
+    let detector = Some(if whole_input_detector {
+        LibraryTypeDetector::over_whole_input(read_type)
+    } else {
+        LibraryTypeDetector::new(read_type)
+    });
 
     // `--deterministic`: an order-independent FLD / library-format accumulator,
     // populated during the mapping pass instead of the online FLD + prefix
@@ -900,6 +908,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let (df, fmt) = acc.finish(opts.fld_mean, opts.fld_sd);
         fld = df;
         fmt
+    } else if whole_input_detector {
+        detector.as_ref().map(|d| d.final_format())
     } else {
         None
     };
