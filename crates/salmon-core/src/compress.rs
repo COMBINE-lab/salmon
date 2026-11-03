@@ -73,7 +73,9 @@ pub fn open_maybe_compressed_raw(path: &Path) -> io::Result<Box<dyn Read + Send>
 /// remains. The suffixes are the ones [`open_maybe_compressed`] can actually
 /// decode.
 pub fn strip_compression_extension(name: &str) -> &str {
-    const EXTENSIONS: [&str; 7] = [".gz", ".bgz", ".zst", ".zstd", ".bz2", ".xz", ".lzma"];
+    const EXTENSIONS: [&str; 8] = [
+        ".gz", ".bgz", ".bgzf", ".zst", ".zstd", ".bz2", ".xz", ".lzma",
+    ];
     let lower = name.to_ascii_lowercase();
     for ext in EXTENSIONS {
         if lower.ends_with(ext) {
@@ -172,6 +174,7 @@ mod tests {
             ("a.sam.ZST", "a.sam"),
             ("a.sam.bz2", "a.sam"),
             ("a.sam.xz", "a.sam"),
+            ("a.sam.bgzf", "a.sam"),
             ("a.sam", "a.sam"),
             ("a.bam", "a.bam"),
             // Only one is removed: the remaining name is what the caller asks about.
