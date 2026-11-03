@@ -34,6 +34,7 @@
 //! ksw2 charges `gapo + gape * len` per gap, which we pass through directly.
 
 use crate::chain::MemChain;
+use salmon_core::RefView;
 
 /// Affine-gap scoring and validation thresholds (salmon `--ma/--mp/--go/--ge`,
 /// `--minScoreFraction`). Penalties are positive magnitudes.
@@ -148,6 +149,16 @@ pub fn align_chain(
     chain: &MemChain,
     cfg: &AlignConfig,
 ) -> Option<Alignment> {
+    align_chain_view(read, RefView::Bytes(ref_seq), chain, cfg)
+}
+
+/// [`align_chain`], reading the reference through a view.
+pub fn align_chain_view(
+    read: &[u8],
+    ref_seq: RefView<'_>,
+    chain: &MemChain,
+    cfg: &AlignConfig,
+) -> Option<Alignment> {
     align_chain_above(
         read,
         ref_seq,
@@ -160,7 +171,7 @@ pub fn align_chain(
 /// [`align_chain`], with the exact score even when the alignment is not valid.
 pub fn align_chain_exact(
     read: &[u8],
-    ref_seq: &[u8],
+    ref_seq: RefView<'_>,
     chain: &MemChain,
     cfg: &AlignConfig,
 ) -> Option<Alignment> {
@@ -169,7 +180,7 @@ pub fn align_chain_exact(
 
 fn align_chain_above(
     read: &[u8],
-    ref_seq: &[u8],
+    ref_seq: RefView<'_>,
     chain: &MemChain,
     cfg: &AlignConfig,
     floor: i32,
@@ -220,8 +231,11 @@ fn align_chain_above(
             if win_end <= win_start {
                 return None;
             }
-            let rwin = &ref_seq[win_start as usize..win_end as usize];
-            ksw2_align_score(query, rwin, cfg)
+            REF_WINDOW.with(|buf| {
+                let buf = &mut buf.borrow_mut();
+                let rwin = ref_seq.slice(win_start as usize, win_end as usize, buf);
+                ksw2_align_score(query, rwin, cfg)
+            })
         } else {
             // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
             anchored_score_above(query, ref_seq, &chain.mems, cfg, floor)
@@ -246,6 +260,9 @@ thread_local! {
     /// the DNA5-encoded query/target buffers between small gap/flank DPs.
     static KSW_SCRATCH: std::cell::RefCell<KswScratch> =
         std::cell::RefCell::new(KswScratch::default());
+    /// Per-thread buffer for the reference bytes of one gap or flank.
+    static REF_WINDOW: std::cell::RefCell<Vec<u8>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     /// Per-thread reverse complements for [`align_chain`].
     static ALIGN_QUERY: std::cell::RefCell<RevcompMemo> =
         std::cell::RefCell::new(RevcompMemo::default());
@@ -466,7 +483,7 @@ fn anchored_align_score(
     mems: &[crate::mem::Mem],
     cfg: &AlignConfig,
 ) -> i32 {
-    anchored_score_above(query, ref_seq, mems, cfg, NO_FLOOR)
+    anchored_score_above(query, RefView::Bytes(ref_seq), mems, cfg, NO_FLOOR)
 }
 
 /// A floor no score reaches down to, for when every score matters.
@@ -477,7 +494,7 @@ const NO_FLOOR: i32 = i32::MIN / 2;
 /// last, knowing what they must reach, since they take most of the DP.
 fn anchored_score_above(
     query: &[u8],
-    ref_seq: &[u8],
+    ref_seq: RefView<'_>,
     mems: &[crate::mem::Mem],
     cfg: &AlignConfig,
     floor: i32,
@@ -485,6 +502,20 @@ fn anchored_score_above(
     if mems.is_empty() {
         return i32::MIN / 4;
     }
+    let mut buf = REF_WINDOW.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    let score = anchored_score_in(query, ref_seq, mems, cfg, floor, &mut buf);
+    REF_WINDOW.with(|b| *b.borrow_mut() = buf);
+    score
+}
+
+fn anchored_score_in(
+    query: &[u8],
+    ref_seq: RefView<'_>,
+    mems: &[crate::mem::Mem],
+    cfg: &AlignConfig,
+    floor: i32,
+    buf: &mut Vec<u8>,
+) -> i32 {
     let qlen = query.len() as i32;
     let reflen = ref_seq.len() as i32;
     let m = cfg.match_score as i32;
@@ -515,7 +546,7 @@ fn anchored_score_above(
                 .min(nxt.read_start) as usize;
             let t_lo = (mem.ref_end() - ov).max(mem.ref_start).min(nxt.ref_start) as usize;
             let qg = &query[q_lo..nxt.read_start as usize];
-            let tg = &ref_seq[t_lo..nxt.ref_start as usize];
+            let tg = ref_seq.slice(t_lo, nxt.ref_start as usize, buf);
             score += cached_gap_score(qg, tg, cfg);
         }
     }
@@ -530,7 +561,7 @@ fn anchored_score_above(
         let qf = &query[0..first.read_start as usize];
         let r_lo = (first.ref_start - first.read_start - cfg.indel_margin as i32).max(0);
         let r_hi = first.ref_start.max(0);
-        let tf = &ref_seq[r_lo as usize..r_hi as usize];
+        let tf = ref_seq.slice(r_lo as usize, r_hi as usize, buf);
         let need = floor + 1 - score - q3 * m;
         let s = cached_flank_score(qf, tf, cfg, /*anchor_right=*/ true, need);
         if s < need {
@@ -544,7 +575,7 @@ fn anchored_score_above(
         let qf = &query[last.read_end() as usize..qlen as usize];
         let r_hi =
             (last.ref_end() + (qlen - last.read_end()) + cfg.indel_margin as i32).min(reflen);
-        let tf = &ref_seq[last.ref_end() as usize..r_hi as usize];
+        let tf = ref_seq.slice(last.ref_end() as usize, r_hi as usize, buf);
         let need = floor + 1 - score;
         let s = cached_flank_score(qf, tf, cfg, /*anchor_right=*/ false, need);
         if s < need {

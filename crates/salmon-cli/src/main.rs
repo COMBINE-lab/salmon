@@ -340,7 +340,7 @@ struct IndexArgs {
     /// Output index directory.
     #[arg(short = 'i', long = "index", required = true)]
     index: PathBuf,
-    /// K-mer length (odd, ≤ 31 recommended).
+    /// K-mer length (odd, at most 31).
     #[arg(short = 'k', long = "kmerLen", default_value_t = 31)]
     kmer_len: usize,
     /// Minimizer length (0 = auto; 19 for the default k=31).
@@ -466,7 +466,7 @@ struct QuantArgs {
     genome: Option<PathBuf>,
     /// Genome-alignment projection: penalty multiplier per junction mismatch
     /// (bramble `junc_miss_discount`; default 1.0 = no penalty).
-    #[arg(long = "juncMissDiscount", value_name = "F", requires = "annotation")]
+    #[arg(long = "juncMissDiscount", value_name = "F", requires = "annotation", value_parser = parse_non_negative_f64)]
     junc_miss_discount: Option<f64>,
     /// Library type (e.g. IU, ISR, A for auto).
     #[arg(short = 'l', long = "libType", default_value = "A")]
@@ -513,7 +513,7 @@ struct QuantArgs {
     /// rather than merely move threads around -- a threshold that is higher in
     /// selective-alignment mode than in sketch, because more work per fragment
     /// means a smaller share of the budget should be decoding.
-    #[arg(long = "decoder", value_parser = ["auto", "serial", "parallel", "libz", "libdeflate", "rapidgzip"])]
+    #[arg(long = "decoder", value_parser = parse_decoder)]
     decoder: Option<String>,
     /// JSON file overriding thread and decoder policy.
     ///
@@ -548,7 +548,7 @@ struct QuantArgs {
     #[arg(long = "rangeFactorizationBins", default_value_t = 4)]
     range_factorization_bins: u32,
     /// Prior weight for strand-incompatible mappings (0 drops them).
-    #[arg(long = "incompatPrior", default_value_t = 0.0)]
+    #[arg(long = "incompatPrior", default_value_t = 0.0, value_parser = parse_unit_f64)]
     incompat_prior: f64,
     /// Dump equivalence classes to aux_info/eq_classes.txt.gz (salmon format).
     #[arg(long = "dumpEq")]
@@ -696,12 +696,12 @@ struct QuantArgs {
     /// Minimum alignment score as a fraction of the perfect score (default 0.65).
     /// Option-typed so passing it under `--sketch` — which computes no alignment
     /// scores — can warn instead of being silently inert (#1140).
-    #[arg(long = "minScoreFraction")]
+    #[arg(long = "minScoreFraction", value_parser = parse_unit_f32)]
     min_score_fraction: Option<f32>,
     /// Orphan chain sub-optimality threshold (salmon's `orphanChainSubThresh`).
     /// `0.0` (default) aligns every orphan candidate (more sensitive than salmon's
     /// 0.95, which prunes low-chain-coverage orphans before alignment).
-    #[arg(long = "orphanChainSubThresh")]
+    #[arg(long = "orphanChainSubThresh", value_parser = parse_unit_f32)]
     orphan_chain_sub_thresh: Option<f32>,
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
@@ -738,14 +738,14 @@ struct QuantArgs {
     /// Consensus slack: a target is kept only if its best chain score is at least
     /// `(1 - slack)` of the max chain score for that mate (salmon default 0.35;
     /// `1.0` keeps every target).
-    #[arg(long = "consensusSlack")]
+    #[arg(long = "consensusSlack", value_parser = parse_unit_f32)]
     consensus_slack: Option<f32>,
     /// Skip k-mers whose unitig occurs in more than this many references
     /// (repetitive-hit guard; salmon's `maxOccsPerHit`).
     #[arg(long = "maxOccsPerHit")]
     max_occs_per_hit: Option<usize>,
     /// VBEM per-feature Dirichlet prior weight.
-    #[arg(long = "vbPrior", default_value_t = 1e-2)]
+    #[arg(long = "vbPrior", default_value_t = 1e-2, value_parser = parse_positive_f64)]
     vb_prior: f64,
     /// EM/VBEM convergence acceleration. `squarem` needs fewer M-steps for a given
     /// accuracy (with VBEM it pays off at tighter tolerances); `daarem` requires
@@ -776,7 +776,7 @@ struct QuantArgs {
     fld_sd: Option<f64>,
     /// Maximum fragment length tracked by the fragment-length distribution
     /// [default: 1000].
-    #[arg(long = "fldMax")]
+    #[arg(long = "fldMax", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     fld_max: Option<usize>,
     /// Where the fragment-length distribution comes from when quantifying a RAD
     /// (`--rad` only) [default: baked].
@@ -792,7 +792,7 @@ struct QuantArgs {
     /// Online-phase forgetting factor in (0.5, 1.0]; default 0.65. Online-path
     /// only (--online, deprecated): ignored with a warning under the default
     /// deterministic mode.
-    #[arg(short = 'f', long = "forgettingFactor")]
+    #[arg(short = 'f', long = "forgettingFactor", value_parser = parse_forgetting_factor)]
     forgetting_factor: Option<f64>,
     /// Initialize the optimizer uniformly. In reads mode (one-pass and
     /// --deterministic) the optimizer already starts uniform, so this is the
@@ -835,16 +835,16 @@ struct QuantArgs {
     discard_orphans_quasi: bool,
     /// An alignment to an annotated transcript is invalid if its score is
     /// `< decoyThreshold * bestDecoyScore` (selective-alignment mode).
-    #[arg(long = "decoyThreshold")]
+    #[arg(long = "decoyThreshold", value_parser = parse_non_negative_f64)]
     decoy_threshold: Option<f64>,
     /// Drop any mapping whose alignment probability
     /// `exp(-scoreExp * (best - score))` is below this (selective-alignment mode).
-    #[arg(long = "minAlnProb")]
+    #[arg(long = "minAlnProb", value_parser = parse_unit_f64)]
     min_aln_prob: Option<f64>,
     /// Soft-weight decay: a mapping's probability is proportional to
     /// `exp(-scoreExp * (bestScore - score))`. Larger downweights sub-optimal
     /// mappings more steeply. (salmon's --scoreExp; default 1.0)
-    #[arg(long = "scoreExp")]
+    #[arg(long = "scoreExp", value_parser = parse_non_negative_f64)]
     score_exp: Option<f64>,
     /// Instead of soft-weighting multimapping locations by alignment score, keep
     /// only the best-scoring mapping(s), each with equal weight.
@@ -869,13 +869,13 @@ struct QuantArgs {
     /// Per-target pre-merge chain sub-optimality threshold: keep chains scoring
     /// `>= best_chain_score * thresh` (selective-alignment mode). Range [0,1].
     /// Rust default 0.8 (salmon's default is 0.75).
-    #[arg(long = "preMergeChainSubThresh")]
+    #[arg(long = "preMergeChainSubThresh", value_parser = parse_unit_f32)]
     pre_merge_chain_sub_thresh: Option<f32>,
     /// Post-merge concordant chain-pair sub-optimality threshold: after pairing,
     /// keep pairs whose read-coverage is `>= best_pair_coverage * thresh`
     /// (paired-end, selective-alignment mode). Range [0,1]. Default 0.0 (off);
     /// salmon's default is 0.9, thresholded on chain score rather than coverage.
-    #[arg(long = "postMergeChainSubThresh")]
+    #[arg(long = "postMergeChainSubThresh", value_parser = parse_unit_f32)]
     post_merge_chain_sub_thresh: Option<f32>,
     /// Fragment-length sampling stride for the GC bias eff-length convolution.
     /// Larger = faster bias correction, coarser. (salmon's --biasSpeedSamp)
@@ -982,12 +982,49 @@ struct QuantArgs {
 }
 
 /// clap value parser for a finite, strictly positive `f64` (`--fldMean`, `--fldSD`).
+/// Check `--decoder` with the parser that will read it, so the two cannot
+/// disagree about which forms exist.
+fn parse_decoder(s: &str) -> Result<String, String> {
+    piscem_rs::io::calibrate::DecoderPreference::parse(s).map(|_| s.to_string())
+}
+
 fn parse_positive_f64(s: &str) -> Result<f64, String> {
     let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
     if v.is_finite() && v > 0.0 {
         Ok(v)
     } else {
         Err(format!("must be a positive number (got {s})"))
+    }
+}
+
+fn parse_non_negative_f64(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if v.is_finite() && v >= 0.0 {
+        Ok(v)
+    } else {
+        Err(format!("must be a number of at least 0 (got {s})"))
+    }
+}
+
+fn parse_unit_f64(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if (0.0..=1.0).contains(&v) {
+        Ok(v)
+    } else {
+        Err(format!("must be between 0 and 1 (got {s})"))
+    }
+}
+
+fn parse_unit_f32(s: &str) -> Result<f32, String> {
+    parse_unit_f64(s).map(|v| v as f32)
+}
+
+fn parse_forgetting_factor(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if v > 0.5 && v <= 1.0 {
+        Ok(v)
+    } else {
+        Err(format!("must be in (0.5, 1.0] (got {s})"))
     }
 }
 
@@ -1109,12 +1146,23 @@ const UNMATCHED_TXP_FILE: &str = "genemap_unmatched_txps.json";
 fn write_gene_level(
     out_dir: &std::path::Path,
     gene_map: &GeneMapOpts,
+    rows: &[usize],
     names: &[String],
     lengths: &[u32],
     eff_lengths: &[f64],
     tpm: &[f64],
     counts: &[f64],
 ) -> Result<()> {
+    // The same rows as quant.sf: a decoy is neither a gene nor a transcript the
+    // annotation failed to cover.
+    fn pick<T: Clone>(rows: &[usize], v: &[T]) -> Vec<T> {
+        rows.iter().map(|&i| v[i].clone()).collect()
+    }
+    let names = &pick(rows, names)[..];
+    let lengths = &pick(rows, lengths)[..];
+    let eff_lengths = &pick(rows, eff_lengths)[..];
+    let tpm = &pick(rows, tpm)[..];
+    let counts = &pick(rows, counts)[..];
     // Parsed up front by `load_gene_map`, so nothing here can fail on a bad path.
     let map = &gene_map.map;
     // Listed by name rather than only counted, so the failure survives a lost
@@ -1133,6 +1181,15 @@ fn write_gene_level(
     )
     .context("writing quant.genes.sf")?;
 
+    if summary.version_collisions > 0 {
+        eprintln!(
+            "warning: with --ignoreTxVersion, {} entries of the gene map {} name a different \
+             gene from another version of the same transcript. A transcript with no exact \
+             match joins to the lowest identifier's gene.",
+            summary.version_collisions,
+            gene_map.path.display(),
+        );
+    }
     if summary.unmatched > 0 {
         eprintln!(
             "warning: {} of {} transcript(s) had no entry in the gene map {}. Each was \
@@ -1392,6 +1449,22 @@ fn preflight_rad_space(rad_path: &std::path::Path, input_bytes: u64) {
     }
 }
 
+/// Remove the previous run's abundance tables before this one starts. Results
+/// are written as the run goes, so one killed partway would otherwise leave them
+/// beside new metadata, where a later step reads the two as one result.
+fn remove_previous_quant_files(out_dir: &std::path::Path) -> Result<()> {
+    for name in ["quant.sf", "quant.genes.sf"] {
+        let path = out_dir.join(name);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("removing old {}", path.display()));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 // `--deterministic` (reads mode): a two-pass run. The first pass maps to a RAD
 // with order-independent models baked into the header; the second quantifies
 // from it. Splitting the run this way is what makes the result independent of
@@ -1486,6 +1559,7 @@ fn run_deterministic(
     // bake them (see `QuantOptions::deterministic_fld`), so phase 2 is a single
     // pass and the whole result is byte-identical across thread counts.
     map_opts.deterministic_fld = true;
+    remove_previous_quant_files(out_dir)?;
     let map_res = match quantify(&map_opts) {
         Ok(r) => r,
         Err(e) => {
@@ -1587,6 +1661,7 @@ fn run_deterministic(
         write_gene_level(
             out_dir,
             gm,
+            &res.quant_rows(),
             &res.names,
             &res.lengths,
             &res.eff_lengths,
@@ -1662,6 +1737,7 @@ fn run_deterministic_align(
 
     // Phase 1 — one BAM pass: write placements + bake FLD / library format
     // (+ rough abundances when bias is on) so phase 2 is a single baked pass.
+    remove_previous_quant_files(&out_dir)?;
     let summary = match salmon_align::write_alignment_rad(&opts, &rad_path, codec) {
         Ok(r) => r,
         Err(e) => {
@@ -1677,7 +1753,7 @@ fn run_deterministic_align(
         0.0
     };
     tracing::info!(
-        "deterministic: wrote {} / {} aligned fragments ({:.2}%) to the intermediate RAD; quantifying",
+        "deterministic: wrote {} / {} fragments ({:.2}%) to the intermediate RAD; quantifying",
         summary.num_mapped,
         summary.num_processed,
         pct
@@ -1729,6 +1805,7 @@ fn run_deterministic_align(
         write_gene_level(
             &out_dir,
             gm,
+            &res.quant_rows(),
             &res.names,
             &res.lengths,
             &res.eff_lengths,
@@ -1807,6 +1884,7 @@ fn run_genome_project(
     preflight_rad_space(&rad_path, total_file_bytes(std::iter::once(&gp.bam)));
 
     // Phase 1 — project the genome BAM into a fully-baked transcriptome RAD.
+    remove_previous_quant_files(&out_dir)?;
     let art = match project_genome_bam_to_rad(&gp, &rad_path) {
         Ok(r) => r,
         Err(e) => {
@@ -1868,6 +1946,7 @@ fn run_genome_project(
         write_gene_level(
             &out_dir,
             gm,
+            &res.quant_rows(),
             &res.names,
             &res.lengths,
             &res.eff_lengths,
@@ -1888,114 +1967,6 @@ fn run_genome_project(
 // or deterministic), validating that the combination makes sense, and reporting
 // clearly when it does not — a wrong mode chosen silently would be far worse
 // than an error.
-/// Reject an obviously incomplete uncompressed FASTQ before mapping it.
-///
-/// A truncated FASTQ — interrupted download, aborted rsync, full disk — was
-/// read up to its last complete record and quantified silently: 8 KB of an
-/// 84 KB file produced a clean `quant.sf` over 38 of 400 reads, exit 0, with
-/// nothing said. That is a wrong answer presented as a right one, and salmon
-/// already rejects the equivalent for its other inputs (a truncated RAD says
-/// "the RAD file may be truncated" and exits 1).
-///
-/// Only uncompressed inputs need this. A truncated gzip/zstd/bzip2 stream
-/// already fails in the decompressor ("unexpected end of file"), which covers
-/// the form real sequencing data almost always arrives in. A truncated *plain*
-/// file has no such envelope, so the completeness has to be checked here.
-///
-/// The check is exact rather than heuristic: a valid FASTQ is a whole number of
-/// 4-line records, so a line count that is not a multiple of 4 is incomplete,
-/// full stop. It cannot reject a valid file — in particular a final record with
-/// no trailing newline still counts as a line. The cost is one sequential pass
-/// over uncompressed input; large FASTQ is essentially always compressed, and
-/// mapping will read the file again anyway.
-fn preflight_fastq_complete(paths: &[PathBuf]) -> Result<()> {
-    use std::io::Read;
-    for path in paths {
-        let mut f = match std::fs::File::open(path) {
-            Ok(f) => f,
-            // Missing/unreadable inputs are reported by the reader, with its
-            // own wording; do not pre-empt it with a worse message.
-            Err(_) => continue,
-        };
-        let mut magic = [0u8; 4];
-        let n = f.read(&mut magic).unwrap_or(0);
-        // Compressed: the decompressor owns this check (see above).
-        let compressed = (n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b)          // gzip
-            || (n >= 4 && magic[..4] == [0x28, 0xb5, 0x2f, 0xfd])                  // zstd
-            || (n >= 3 && &magic[..3] == b"BZh")                                   // bzip2
-            || (n >= 4 && magic[..4] == [0xfd, 0x37, 0x7a, 0x58]); // xz
-                                                                   // FASTA reads have no 4-line record structure to check (and a record
-                                                                   // may span several lines), so there is nothing to verify here.
-        if compressed || n == 0 || magic[0] == b'>' {
-            continue;
-        }
-        use std::io::{BufReader, Seek, SeekFrom};
-        f.seek(SeekFrom::Start(0))?;
-        let mut reader = BufReader::with_capacity(1 << 20, f);
-        let mut buf = vec![0u8; 1 << 20];
-        let (mut lines, mut last) = (0u64, 0u8);
-        loop {
-            let got = reader.read(&mut buf)?;
-            if got == 0 {
-                break;
-            }
-            lines += bytecount_newlines(&buf[..got]);
-            last = buf[got - 1];
-        }
-        // A final record with no trailing newline is still a line.
-        if last != b'\n' {
-            lines += 1;
-        }
-        if !lines.is_multiple_of(4) {
-            anyhow::bail!(
-                "{} looks truncated: it holds {lines} lines, which is not a whole number of \
-                 4-line FASTQ records. Quantifying it would silently report results for only \
-                 the part that survived. Re-transfer or re-generate the file.",
-                path.display()
-            );
-        }
-
-        // The line count alone is not enough: a byte-level cut can land such
-        // that the surviving lines still number a multiple of 4, with the last
-        // one a partial quality string. So check the final record's shape,
-        // which is exact and does not depend on a trailing newline (some valid
-        // files have none): the separator line starts with `+`, and the
-        // sequence and quality lines are the same length.
-        let tail_len = 1 << 20;
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        let mut f = std::fs::File::open(path)?;
-        f.seek(SeekFrom::Start(size.saturating_sub(tail_len)))?;
-        let mut tail = Vec::new();
-        f.take(tail_len).read_to_end(&mut tail)?;
-        let tail_lines: Vec<&[u8]> = tail
-            .split(|&c| c == b'\n')
-            .filter(|l| !l.is_empty())
-            .collect();
-        if tail_lines.len() >= 4 {
-            let n = tail_lines.len();
-            let (seq, sep, qual) = (tail_lines[n - 3], tail_lines[n - 2], tail_lines[n - 1]);
-            if !sep.starts_with(b"+") || seq.len() != qual.len() {
-                anyhow::bail!(
-                    "{}: its final FASTQ record is incomplete — the `+` separator is \
-                     missing, or the sequence and quality lines differ in length. That is \
-                     what a truncated transfer looks like, but a corrupted or mis-generated \
-                     file looks the same from here, so check the file rather than assuming \
-                     either. Quantifying it would silently report results for only the part \
-                     that parsed.",
-                    path.display()
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Count `b'\n'` in a slice. Split out so the hot loop above stays readable.
-#[inline]
-fn bytecount_newlines(b: &[u8]) -> u64 {
-    b.iter().filter(|&&c| c == b'\n').count() as u64
-}
-
 /// Warn, by name, about flags the selected mode cannot act on.
 ///
 /// The rule this serves: a flag that does nothing must say so. Salmon already
@@ -2571,6 +2542,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         } else {
             None
         };
+        remove_previous_quant_files(&opts.output_dir)?;
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         drop(guard); // stop + clear the spinner before the summary
         let pct = if res.num_processed > 0 {
@@ -2585,7 +2557,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // stranded library reads as "strand-incompatible", not "lost alignments".
         if res.num_processed > res.num_mapped {
             tracing::info!(
-                "{} aligned fragments; {} strand-compatible and quantified ({:.2}%); \
+                "{} fragments; {} aligned, strand-compatible and quantified ({:.2}%); \
                  {} dropped as incompatible with library type {}; {} equivalence classes",
                 res.num_processed,
                 res.num_mapped,
@@ -2596,7 +2568,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             );
         } else {
             tracing::info!(
-                "{} aligned fragments, all strand-compatible and quantified; {} equivalence classes",
+                "{} fragments, all aligned, strand-compatible and quantified; {} equivalence classes",
                 res.num_processed,
                 res.num_eq_classes
             );
@@ -2615,6 +2587,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             write_gene_level(
                 &out_dir,
                 gm,
+                &res.quant_rows(),
                 &res.names,
                 &res.lengths,
                 &res.eff_lengths,
@@ -2646,6 +2619,18 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
                  only the fragments that mapped, and no read names"
             );
         }
+        // The alignment error model scores CIGARs and base qualities, which a RAD
+        // does not keep.
+        warn_inert_in_mode(
+            "RAD-input mode (--rad)",
+            Some(("configures", "configure")),
+            "the alignment error model, and a RAD holds no CIGARs or qualities",
+            &[
+                ("--errorModel", args.error_model),
+                ("--noErrorModel", args.no_error_model),
+                ("--numErrorBins", args.num_error_bins.is_some()),
+            ],
+        );
         // The input *is* the RAD; the flags that would place or shape a new
         // one have nothing to act on (#1140).
         warn_inert_in_mode(
@@ -2741,6 +2726,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
         opts.thinning_factor = args.thinning_factor.unwrap_or(16);
+        remove_previous_quant_files(&opts.output_dir)?;
         let res = quantify_rad(&opts, &rad_path).context("RAD-input quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64
@@ -2766,6 +2752,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             write_gene_level(
                 &out_dir,
                 gm,
+                &res.quant_rows(),
                 &res.names,
                 &res.lengths,
                 &res.eff_lengths,
@@ -2901,9 +2888,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             ],
         );
     }
-    preflight_fastq_complete(&args.mates1)?;
-    preflight_fastq_complete(&args.mates2)?;
-    preflight_fastq_complete(&args.unmated)?;
     anyhow::ensure!(
         args.mates1.len() == args.mates2.len(),
         "the number of -1 and -2 files must match"
@@ -2925,7 +2909,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.mates2 = args.mates2;
     opts.unmated = args.unmated;
     opts.lib_type = args.lib_type;
-    opts.num_threads = args.threads;
+    // 0 means "all cores" further down, so it stays 0; anything else takes the cap.
+    opts.num_threads = if args.threads == 0 { 0 } else { nthreads };
     opts.decoder = piscem_rs::io::calibrate::DecoderPreference::parse(
         args.decoder.as_deref().unwrap_or("auto"),
     )
@@ -3141,6 +3126,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     } else {
         None
     };
+    remove_previous_quant_files(&opts.output_dir)?;
     let res = quantify(&opts).context("quantification failed")?;
     drop(guard); // stop + clear the spinner before the summary
     let pct = if res.num_processed > 0 {
@@ -3176,6 +3162,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         write_gene_level(
             &out_dir,
             gm,
+            &salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
+                .collect::<Vec<_>>(),
             &res.names,
             &res.lengths,
             &res.eff_lengths,
@@ -3246,7 +3234,11 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Index(args) => run_index(args),
-        Command::Quant(args) => run_quant(args, cli.quiet),
+        Command::Quant(args) => {
+            let out_dir = args.output.clone();
+            run_quant(args, cli.quiet)?;
+            fail_on_error_diagnostics(&out_dir)
+        }
         Command::Quantmerge(args) => run_quantmerge(args),
         Command::DebugMap(args) => run_debug_map(args),
         Command::Alevin(_) => unreachable!("alevin handled before logging init"),
@@ -3255,6 +3247,30 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Fail the process when the run recorded an error-severity diagnostic (no input,
+/// nothing mapped). The output files stay, for inspection, but exit 0 would let a
+/// pipeline carry an all-zero `quant.sf` into its next step as if it were a result.
+///
+/// Reads `meta_info.json` back because that is the one place every input mode
+/// merges its diagnostics into, and it is what the exit code should agree with.
+fn fail_on_error_diagnostics(out_dir: &std::path::Path) -> Result<()> {
+    let path = out_dir.join("aux_info").join("meta_info.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Ok(());
+    };
+    let meta: serde_json::Value =
+        serde_json::from_slice(&bytes).with_context(|| format!("reading {}", path.display()))?;
+    let errors: Vec<&str> = meta["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|d| d["severity"] == "error")
+        .filter_map(|d| d["message"].as_str())
+        .collect();
+    anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
+    Ok(())
 }
 
 /// `salmon swim` — the super-secret operation. (An easter egg carried over from

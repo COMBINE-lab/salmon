@@ -139,7 +139,6 @@ change the last bit of a sum. Plain EM (`--useEM`) is unchanged. (#1261)
   (piscem-rs 0.12.2, #1258)
 - **`--online`** (the deprecated one-pass mode) now says it will be removed
   in a future release, instead of naming a release that has passed. (#1258)
-- The Docker image builds with Rust 1.99. (#1262)
 
 ## Checked
 

@@ -717,7 +717,10 @@ fn base_2bit(b: u8) -> u8 {
 ///
 /// Compression is detected from content, so gzip/BGZF, bzip2, xz and zstd all
 /// work regardless of how the file is named.
-fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
+///
+/// `lengths` are the input's own reference lengths: a same-named sequence of
+/// another length is another sequence, so positions would read the wrong bases.
+fn load_ref_bytes(path: &Path, names: &[String], lengths: &[u32]) -> Result<Vec<Vec<u8>>> {
     let reader: Box<dyn BufRead> = salmon_core::compress::open_maybe_compressed(path)
         .with_context(|| format!("opening {}", path.display()))?;
 
@@ -773,7 +776,39 @@ fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
             path.display()
         );
     }
+    let (wrong, example) = length_mismatches(names, &seqs, lengths);
+    if let Some((name, fasta_len, input_len)) = example {
+        tracing::warn!(
+            "{wrong} reference(s) in {} have a different length from the alignment input \
+             (e.g. {name}: {fasta_len} in the FASTA, {input_len} in the input). The error \
+             and bias models would read the wrong bases: check that this is the \
+             transcriptome the input was aligned against.",
+            path.display()
+        );
+    }
     Ok(seqs)
+}
+
+/// How many same-named references differ in length, and the first of them as
+/// `(name, FASTA length, input length)`. An absent reference is not a mismatch
+/// (see above), nor is a FASTA sequence longer only by a poly-A tail: the salmon
+/// index clips those, so a RAD's lengths legitimately lack them.
+fn length_mismatches<'a>(
+    names: &'a [String],
+    seqs: &[Vec<u8>],
+    lengths: &[u32],
+) -> (usize, Option<(&'a str, usize, u32)>) {
+    let mut wrong = 0;
+    let mut first = None;
+    for ((name, seq), &len) in names.iter().zip(seqs).zip(lengths) {
+        let l = len as usize;
+        let clipped_tail = seq.len() > l && seq[l..].iter().all(|b| b.eq_ignore_ascii_case(&b'A'));
+        if !seq.is_empty() && seq.len() != l && !clipped_tail {
+            wrong += 1;
+            first.get_or_insert((name.as_str(), seq.len(), len));
+        }
+    }
+    (wrong, first)
 }
 
 /// One alignment record needed by the error model / weighting.
@@ -832,10 +867,110 @@ impl FragRecord {
 #[inline]
 fn canonical_name(name: &[u8]) -> &[u8] {
     let l = name.len();
-    if l > 2 && name[l - 2] == b'/' {
+    if l > 2 && name[l - 2] == b'/' && matches!(name[l - 1], b'1' | b'2') {
         &name[..l - 2]
     } else {
         name
+    }
+}
+
+/// Groups an alignment stream's consecutive records by read, for the reader
+/// threads. Only mapped records are kept: a read with none is counted here and
+/// never reaches the workers, so it costs no more than its decode, and the
+/// minibatches hold the same reads they would without it.
+pub(crate) struct ReadGrouper<R> {
+    name: Vec<u8>,
+    group: Vec<R>,
+    started: bool,
+    /// Reads seen with no mapped record: processed, never mapped.
+    pub(crate) unmapped_reads: u64,
+    /// Whether the mates of each read are next to each other.
+    pub(crate) grouping: GroupingCheck,
+}
+
+impl<R: sam::alignment::Record> ReadGrouper<R> {
+    pub(crate) fn new() -> Self {
+        Self {
+            name: Vec::new(),
+            group: Vec::new(),
+            started: false,
+            unmapped_reads: 0,
+            grouping: GroupingCheck::default(),
+        }
+    }
+
+    /// Add the next record. Returns the previous read's mapped records when this
+    /// record starts a new read.
+    pub(crate) fn push(&mut self, rec: R) -> Option<Vec<R>> {
+        let name = rec.name()?;
+        let name = canonical_name(name.as_ref());
+        let mut done = None;
+        if !self.started || name != self.name.as_slice() {
+            if self.started {
+                done = self.close();
+            }
+            self.name.clear();
+            self.name.extend_from_slice(name);
+            self.started = true;
+        }
+        match rec.flags() {
+            Ok(flags) if !flags.is_unmapped() => {
+                self.grouping.record(flags);
+                self.group.push(rec);
+            }
+            _ => {}
+        }
+        done
+    }
+
+    /// The last read's mapped records, at the end of the stream.
+    pub(crate) fn finish(&mut self) -> Option<Vec<R>> {
+        if self.started {
+            self.started = false;
+            self.close()
+        } else {
+            None
+        }
+    }
+
+    fn close(&mut self) -> Option<Vec<R>> {
+        if self.group.is_empty() {
+            self.unmapped_reads += 1;
+            None
+        } else {
+            self.grouping.end_read();
+            Some(std::mem::take(&mut self.group))
+        }
+    }
+}
+
+/// Give records without bases (SEQ `*`, usual on secondary alignments) those of
+/// another record of the same read. Scored as nothing, such a record gets
+/// log-likelihood 0, which beats any real alignment. Needs the same query length,
+/// so a hard-clipped record whose bases cannot be lined up stays empty.
+fn fill_missing_bases(frags: &mut [FragRecord]) {
+    for i in 0..frags.len() {
+        if !frags[i].read_2bit.is_empty() {
+            continue;
+        }
+        let query_len: usize = frags[i]
+            .ops
+            .iter()
+            .filter(|(op, _)| op.consume_seq())
+            .map(|(_, len)| len)
+            .sum();
+        let donor = frags.iter().find(|d| {
+            d.is_read1 == frags[i].is_read1 && d.read_2bit.len() == query_len && query_len > 0
+        });
+        let Some(donor) = donor else { continue };
+        // Bases are stored in reference orientation, so the other strand needs
+        // the reverse complement (`3 - b` in this encoding).
+        let bases = if donor.is_reverse == frags[i].is_reverse {
+            donor.read_2bit.clone()
+        } else {
+            donor.read_2bit.iter().rev().map(|b| 3 - b).collect()
+        };
+        frags[i].read_2bit = bases;
     }
 }
 
@@ -1100,42 +1235,30 @@ where
 
     std::thread::scope(|scope| -> Result<()> {
         // Reader/parser thread.
-        let reader = scope.spawn(move || -> Result<()> {
-            let mut cur_name: Vec<u8> = Vec::new();
-            let mut have = false;
-            let mut group: Vec<R> = Vec::new();
+        let reader = scope.spawn(move || -> Result<u64> {
+            let mut reads = ReadGrouper::new();
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(minibatch);
             for result in records {
                 let rec = result.context("reading alignment record")?;
-                if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
+                let Some(group) = reads.push(rec) else {
                     continue;
-                }
-                let Some(name) = rec.name() else { continue };
-                let cname = canonical_name(name.as_ref()).to_vec();
-                if !have {
-                    cur_name = cname;
-                    have = true;
-                } else if cname != cur_name {
-                    batch.push(std::mem::take(&mut group));
-                    cur_name = cname;
-                    if batch.len() >= minibatch {
-                        let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
-                        if tx.send((fm, std::mem::take(&mut batch))).is_err() {
-                            return Ok(()); // all workers gone
-                        }
-                        batch = Vec::with_capacity(minibatch);
-                    }
-                }
-                group.push(rec);
-            }
-            if have && !group.is_empty() {
+                };
                 batch.push(group);
+                if batch.len() >= minibatch {
+                    let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
+                    if tx.send((fm, std::mem::take(&mut batch))).is_err() {
+                        return Ok(reads.unmapped_reads); // all workers gone
+                    }
+                    batch = Vec::with_capacity(minibatch);
+                }
             }
+            batch.extend(reads.finish());
             if !batch.is_empty() {
                 let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
                 let _ = tx.send((fm, batch));
             }
-            Ok(())
+            reads.grouping.finish()?;
+            Ok(reads.unmapped_reads)
         });
 
         // Persistent worker pool: each pulls minibatches until the queue closes.
@@ -1204,6 +1327,9 @@ where
                                 frags.push(f);
                             }
                         }
+                        if need_seq {
+                            fill_missing_bases(&mut frags);
+                        }
                         let (outcome, strand_judged, fmt_mask) =
                             process_fragment(&frags, &ctx, &mut local);
                         match strand_judged {
@@ -1270,7 +1396,7 @@ where
         }
         drop(rx); // workers hold their own clones; lets the queue disconnect
 
-        reader
+        let unmapped_reads = reader
             .join()
             .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))??;
 
@@ -1284,7 +1410,7 @@ where
             cfg.gc_bins,
             cfg.pos_bias,
         );
-        let mut total = 0u64;
+        let mut total = unmapped_reads;
         let mut total_mapped = 0u64;
         let mut total_orphan = 0u64;
         let mut total_compat = 0u64;
@@ -1308,9 +1434,9 @@ where
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
         acc.pos_obs = merged.pos_obs;
-        // num_processed = every aligned fragment in the BAM; num_mapped = those
-        // with a surviving strand-compatible placement (assigned to an eq-class).
-        // They differ only for stranded libraries; matches reads-mode (#1025).
+        // num_processed = every fragment in the BAM, aligned or not; num_mapped =
+        // those with a surviving strand-compatible placement (assigned to an
+        // eq-class). Matches reads-mode (#1025).
         acc.num_processed = total;
         acc.num_mapped = total_mapped;
         acc.num_orphan = total_orphan;
@@ -1353,6 +1479,17 @@ fn peek_alignment_is_paired(path: &Path) -> Result<Option<bool>> {
         let _header = reader.read_header().context("reading BAM header")?;
         Ok(first_flag(reader.records()))
     }
+}
+
+/// Whether a RAD writer's library is paired: under `-l A` the input decides,
+/// otherwise a single-end `-l` says no and anything else says yes.
+pub(crate) fn rad_library_is_paired(path: &Path, lib_type: &str) -> Result<bool> {
+    let peeked = if LibraryFormat::is_auto(lib_type) {
+        peek_alignment_is_paired(path)?
+    } else {
+        None
+    };
+    Ok(peeked.unwrap_or(!matches!(lib_type, "U" | "SF" | "SR" | "S")))
 }
 
 fn stream_online_pass(bam_path: &Path, cfg: &PassCfg, acc: &mut PassAccum) -> Result<()> {
@@ -1995,6 +2132,60 @@ pub fn parse_source_programs(lines: &[String]) -> Vec<SourceProgram> {
         .collect()
 }
 
+/// Spots input whose mates are not next to each other, which the header check
+/// below cannot do when the header says nothing (`SO:unknown`, or no `@HD`). Each
+/// mate then forms a fragment of its own, so every count doubles while each record
+/// looks like an orphan. Tallied on the reader thread, from the flags
+/// [`ReadGrouper`] has already read.
+#[derive(Default)]
+pub(crate) struct GroupingCheck {
+    fragments: u64,
+    /// fragments with a record whose mate is marked mapped, but no such mate
+    split: u64,
+    first: bool,
+    last: bool,
+    expects_mate: bool,
+}
+
+impl GroupingCheck {
+    /// One mapped record of the current read.
+    fn record(&mut self, flags: sam::alignment::record::Flags) {
+        self.first |= flags.is_first_segment();
+        self.last |= flags.is_last_segment();
+        self.expects_mate |= flags.is_segmented() && !flags.is_mate_unmapped();
+    }
+
+    /// The current read, which had at least one mapped record, is complete.
+    fn end_read(&mut self) {
+        self.fragments += 1;
+        self.split += u64::from(self.expects_mate && !(self.first && self.last));
+        (self.first, self.last, self.expects_mate) = (false, false, false);
+    }
+
+    /// Refuses input where at least half the fragments are split: that is not a
+    /// filtered BAM but one in the wrong order, and its numbers would be wrong.
+    /// A smaller share can be real (a filter that kept one mate), so it only warns.
+    pub(crate) fn finish(&self) -> Result<()> {
+        let Self {
+            fragments, split, ..
+        } = *self;
+        let hint = "Records of one read must be consecutive: group them by name with \
+                    `samtools collate` or `samtools sort -n`";
+        anyhow::ensure!(
+            split * 2 < fragments || fragments == 0,
+            "{split} of {fragments} fragments have a mate marked as mapped that is not next \
+             to them, so the input is not grouped by read name. {hint}."
+        );
+        if split * 20 >= fragments && split > 0 {
+            tracing::warn!(
+                "{split} of {fragments} fragments have a mate marked as mapped that is not next \
+                 to them. They are quantified as orphans. If the mates are really there: {hint}."
+            );
+        }
+        Ok(())
+    }
+}
+
 fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
     let Some(hd) = header.header() else {
         return false;
@@ -2176,14 +2367,14 @@ fn apply_bias_correction(
                     )
                 });
             let bias = salmon_model::BiasInputs {
-                seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
+                seq: seq_tab.as_ref().map(|(f, r)| (f, r, s)),
                 gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
                 pos: pos_vecs
                     .as_ref()
                     .map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
             };
             *eff_length = salmon_model::corrected_effective_length_full(
-                s,
+                s.len(),
                 &fld_cdf,
                 fld_low,
                 fld_high,
@@ -2270,6 +2461,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         salmon_core::RefSeqs::from_sequences(load_ref_bytes(
             opts.transcripts.as_ref().unwrap(),
             &names,
+            &lengths,
         )?)
     } else {
         salmon_core::RefSeqs::default()
@@ -2786,6 +2978,25 @@ fn warn_mass_on_unreported_refs(res: &AlignQuantResult, rows: &[usize]) {
     );
 }
 
+impl AlignQuantResult {
+    /// The references that get an output row: everything except the
+    /// RAD-recorded decoy block.
+    pub fn quant_rows(&self) -> Vec<usize> {
+        let (first_decoy, num_decoys) = self
+            .provenance
+            .index
+            .as_ref()
+            .map(|ix| {
+                (
+                    ix.first_decoy_index.map(|v| v as usize),
+                    ix.num_decoys.unwrap_or(0) as usize,
+                )
+            })
+            .unwrap_or((None, 0));
+        salmon_core::quant_row_indices(self.names.len(), first_decoy, num_decoys).collect()
+    }
+}
+
 fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()> {
     let dir = &opts.output_dir;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating output dirs")?;
@@ -2797,35 +3008,31 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     // the recorded boundary (piscem, BAM-derived, or written before the
     // boundary tags existed) has no decoys to exclude and emits every row, as
     // before.
-    let (first_decoy, num_decoys) = res
-        .provenance
-        .index
-        .as_ref()
-        .map(|ix| {
-            (
-                ix.first_decoy_index.map(|v| v as usize),
-                ix.num_decoys.unwrap_or(0) as usize,
-            )
-        })
-        .unwrap_or((None, 0));
-    let rows: Vec<usize> =
-        salmon_core::quant_row_indices(res.names.len(), first_decoy, num_decoys).collect();
+    let rows = res.quant_rows();
     warn_mass_on_unreported_refs(res, &rows);
 
     // quant.sf (EffectiveLength + NumReads at --sigDigits decimals; TPM at 6).
     // Skipped under --skipQuant (no abundances), like salmon.
     if !opts.skip_quant {
         let sd = opts.sig_digits as usize;
-        let mut w = std::io::BufWriter::new(std::fs::File::create(dir.join("quant.sf"))?);
-        writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-        for &i in &rows {
-            writeln!(
-                w,
-                "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
-                res.names[i], res.lengths[i], sd, res.eff_lengths[i], res.tpm[i], sd, res.counts[i]
-            )?;
-        }
-        w.flush()?;
+        salmon_core::write_via_rename(&dir.join("quant.sf"), |w| {
+            writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
+            for &i in &rows {
+                writeln!(
+                    w,
+                    "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
+                    res.names[i],
+                    res.lengths[i],
+                    sd,
+                    res.eff_lengths[i],
+                    res.tpm[i],
+                    sd,
+                    res.counts[i]
+                )?;
+            }
+            Ok(())
+        })
+        .context("writing quant.sf")?;
     }
 
     /// Shape of the positional-bias model: one model per transcript length
@@ -3266,10 +3473,9 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
             .context("writing bias_models.txt")?;
     }
     std::fs::create_dir_all(dir.join("logs")).context("creating logs")?;
-    // In alignment mode the input records are already aligned, so `num_processed`
-    // is the count of aligned fragments and `num_mapped` is those with a strand-
-    // compatible placement that were quantified; label them accordingly so a
-    // <100% rate on a stranded library is not read as lost alignments.
+    // In alignment mode `num_processed` is every fragment in the input, aligned or
+    // not, and `num_mapped` is those with a strand-compatible placement that were
+    // quantified; label them accordingly.
     // This writer serves every RAD-based driver, so the log must describe the run
     // the *user* asked for. It used to hard-code "alignment mode" and alignment
     // wording, so a default reads run — the 2.6.0 default — was labelled as
@@ -3293,8 +3499,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         ("observed fragments", "mapped fragments", "mapping rate")
     } else {
         (
-            "aligned fragments",
-            "strand-compatible (quantified)",
+            "observed fragments",
+            "aligned and strand-compatible (quantified)",
             "compatible rate",
         )
     };
@@ -3399,6 +3605,32 @@ mod tests {
             mate_pos: None,
             hi: None,
         }
+    }
+
+    /// Bases come from a record of the same read, reverse-complemented when the
+    /// strands differ, and never from the other mate or a read of another length.
+    #[test]
+    fn missing_bases_come_from_the_same_read() {
+        let with = |bases: &[u8], is_reverse: bool, is_read1: bool| FragRecord {
+            read_2bit: bases.to_vec(),
+            ops: vec![(AlnOp::Match, 3)],
+            ..frag(is_reverse, is_read1, true)
+        };
+        let mut frags = vec![
+            with(&[0, 0, 1], false, true),
+            with(&[], false, true),
+            with(&[], true, true),
+            with(&[], false, false),
+            FragRecord {
+                ops: vec![(AlnOp::Match, 2)],
+                ..with(&[], false, true)
+            },
+        ];
+        fill_missing_bases(&mut frags);
+        assert_eq!(frags[1].read_2bit, [0, 0, 1], "same strand");
+        assert_eq!(frags[2].read_2bit, [2, 3, 3], "other strand");
+        assert!(frags[3].read_2bit.is_empty(), "other mate");
+        assert!(frags[4].read_2bit.is_empty(), "other length");
     }
 
     /// A genuine single-end read (BAM `0x1` unset) is classified `SingleEnd`, so
@@ -3506,7 +3738,7 @@ mod tests {
         ] {
             let p = dir.path().join("ref.fa");
             std::fs::write(&p, contents).unwrap();
-            let err = load_ref_bytes(&p, &names).unwrap_err();
+            let err = load_ref_bytes(&p, &names, &[]).unwrap_err();
             let msg = format!("{err:#}");
             assert!(
                 msg.contains("no sequences found") && msg.contains("ref.fa"),
@@ -3530,12 +3762,30 @@ mod tests {
         let full = enc.finish().unwrap();
         std::fs::write(&p, &full[..full.len() - 6]).unwrap();
 
-        let err = load_ref_bytes(&p, &["t0".to_string()]).unwrap_err();
+        let err = load_ref_bytes(&p, &["t0".to_string()], &[]).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("truncated.fa.gz"),
             "a mid-stream failure should still name the file, got: {msg}"
         );
+    }
+
+    #[test]
+    fn a_wrong_length_is_a_mismatch_but_absent_or_a_clipped_tail_is_not() {
+        let names: Vec<String> = ["ok", "absent", "tail", "short", "long"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let seqs: Vec<Vec<u8>> = vec![
+            b"ACGT".to_vec(),
+            vec![],
+            b"ACGTAAaa".to_vec(),
+            b"AC".to_vec(),
+            b"ACGTC".to_vec(),
+        ];
+        let (wrong, first) = length_mismatches(&names, &seqs, &[4, 4, 4, 4, 4]);
+        assert_eq!(wrong, 2);
+        assert_eq!(first, Some(("short", 2, 4)));
     }
 
     /// Partial coverage is legitimate — a transcriptome need not cover every
@@ -3545,7 +3795,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("ref.fa");
         std::fs::write(&p, ">t0\nACGT\n").unwrap();
-        let got = load_ref_bytes(&p, &["t0".to_string(), "absent".to_string()]).unwrap();
+        let got = load_ref_bytes(&p, &["t0".to_string(), "absent".to_string()], &[]).unwrap();
         assert_eq!(got[0], b"ACGT");
         assert!(
             got[1].is_empty(),

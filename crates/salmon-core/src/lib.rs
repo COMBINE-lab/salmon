@@ -57,12 +57,28 @@ pub use libtype::{
     LibFormatSummary, NUM_LIB_FORMATS,
 };
 pub use progress::ProgressCounters;
-pub use refprovider::RefProvider;
+pub use refprovider::{pack_bases, OtherRun, RefProvider, RefView};
 pub use timing::PhaseTimer;
 
 pub use error::{Result, SalmonError};
 pub use libtype::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 pub use mate::MateStatus;
+
+/// Write `path` through a temporary name and rename it into place, so a run
+/// killed mid-write leaves no truncated file under the real name.
+pub fn write_via_rename(
+    path: &std::path::Path,
+    write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let mut w = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+    write(&mut w)?;
+    w.flush()?;
+    drop(w);
+    std::fs::rename(&tmp, path)
+}
 
 /// The output-row indices for a reference table laid out as
 /// `[transcripts][decoys][shorts]`: quantified transcripts `[0, first_decoy)`,

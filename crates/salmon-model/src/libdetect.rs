@@ -68,6 +68,15 @@ impl LibraryTypeDetector {
         }
     }
 
+    /// A detector that never locks in: it tallies every fragment, so
+    /// [`Self::final_format`] answers for the whole input rather than for
+    /// whichever fragments the mapping threads happened to reach first.
+    pub fn over_whole_input(read_type: ReadType) -> Self {
+        let det = Self::new(read_type);
+        det.samples_needed.store(i64::MAX, Ordering::Relaxed);
+        det
+    }
+
     /// Whether the detector is still collecting samples.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::Relaxed)

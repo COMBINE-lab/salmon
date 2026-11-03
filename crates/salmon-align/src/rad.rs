@@ -171,7 +171,12 @@ impl RadFragment for SalmonBulkRecord {
             score: h.score,
             is_fw: h.is_fw,
             mate_fw: h.mate_fw,
-            status,
+            // See `SalmonBulkRecord::from_placements`.
+            status: match status {
+                MateStatus::PairedEndLeft if h.mate_fw => MateStatus::PairedEndRight,
+                MateStatus::PairedEndRight if h.mate_fw => MateStatus::PairedEndLeft,
+                s => s,
+            },
             pos: h.pos,
             frag_len: h.frag_len,
         }));
@@ -590,6 +595,50 @@ fn score_weight_basis(scored: bool, score_kind: u8, score_exp: f64, best: i32, s
     }
 }
 
+/// Whether a placement fits `expected`. A hit's orientation is unknowable (see
+/// [`rad_frag_format`]), so under an outward `-l` only its strand can be judged:
+/// the pair is taken as outward, or the whole library would be dropped.
+fn rad_compatible(
+    expected: LibraryFormat,
+    obs: Option<LibraryFormat>,
+    is_fw: bool,
+    status: MateStatus,
+) -> bool {
+    let obs = obs.map(|o| {
+        if expected.orientation == ReadOrientation::Away && o.orientation == ReadOrientation::Toward
+        {
+            LibraryFormat::new(o.read_type, ReadOrientation::Away, o.strandedness)
+        } else {
+            o
+        }
+    });
+    is_compatible(expected, obs, is_fw, status)
+}
+
+/// The best score among the placements the filters below keep. A placement they
+/// drop anyway must not set the bar for `--hardFilter`, or a fragment whose top
+/// score is on the wrong strand is lost whole.
+fn best_kept_score(
+    placements: &[RadPlacement],
+    discard_orphans: bool,
+    expected_format: Option<LibraryFormat>,
+    ignore_incompat: bool,
+) -> i32 {
+    placements
+        .iter()
+        .filter(|p| !(discard_orphans && is_orphan(p.status)))
+        .filter(|p| match expected_format {
+            Some(exp) if ignore_incompat => {
+                let (obs, is_fw, status) = rad_frag_format(p);
+                rad_compatible(exp, obs, is_fw, status)
+            }
+            _ => true,
+        })
+        .map(|p| p.score)
+        .max()
+        .unwrap_or(0)
+}
+
 /// Weight one fragment's placements and add the equivalence class. Returns
 /// `true` if the fragment was assigned (had a surviving placement). A trimmed
 /// analog of [`crate::process_fragment`] with no error model, bias, or online
@@ -622,7 +671,12 @@ fn process_rad_fragment(
     // any filtering, since it reports what was observed rather than what was
     // kept.
     let mut fmt_mask: u16 = 0;
-    let best = placements.iter().map(|p| p.score).max().unwrap_or(0);
+    let best = best_kept_score(
+        placements,
+        cfg.discard_orphans,
+        cfg.expected_format,
+        cfg.ignore_incompat,
+    );
     let at = |snap: &[f64], i: usize| -> f64 {
         if snap.is_empty() {
             0.0
@@ -681,7 +735,7 @@ fn process_rad_fragment(
                 .unwrap_or_else(|| salmon_core::observed_single_format(is_fw))
                 .format_id();
         if let Some(exp) = cfg.expected_format {
-            let compat = is_compatible(exp, obs, is_fw, status);
+            let compat = rad_compatible(exp, obs, is_fw, status);
             strand_judged = Some(strand_judged.unwrap_or(false) || compat);
             if !compat {
                 if cfg.ignore_incompat {
@@ -1518,7 +1572,12 @@ fn collect_bias_fragment(
     if placements.is_empty() {
         return;
     }
-    let best = placements.iter().map(|p| p.score).max().unwrap_or(0);
+    let best = best_kept_score(
+        placements,
+        cfg.discard_orphans,
+        cfg.expected_format,
+        cfg.ignore_incompat,
+    );
     let at = |snap: &[f64], i: usize| -> f64 {
         if snap.is_empty() {
             0.0
@@ -1560,7 +1619,7 @@ fn collect_bias_fragment(
         let mut aux = basis + log_frag_prob;
         if let Some(exp) = cfg.expected_format {
             let (obs, is_fw, status) = rad_frag_format(p);
-            if !is_compatible(exp, obs, is_fw, status) {
+            if !rad_compatible(exp, obs, is_fw, status) {
                 if cfg.ignore_incompat {
                     continue;
                 }
@@ -2123,6 +2182,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         salmon_core::RefSeqs::from_sequences(crate::load_ref_bytes(
             opts.transcripts.as_ref().unwrap(),
             &names,
+            &lengths,
         )?)
     };
     let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if opts.gc_bias {

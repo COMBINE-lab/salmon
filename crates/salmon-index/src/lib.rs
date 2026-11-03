@@ -63,6 +63,9 @@ const INDEX_PREFIX: &str = "index";
 const INFO_FILE: &str = "info.json";
 /// Concatenated reference sequences (forward strand), in transcript-id order.
 const REFSEQ_FILE: &str = "refseq.bin";
+/// Where `REFSEQ_FILE` is staged, so a rebuild that fails on bad input leaves
+/// the existing store untouched.
+const REFSEQ_STAGED_FILE: &str = "refseq.bin.partial";
 /// Per-reference offsets into `REFSEQ_FILE` (`num_refs + 1` entries).
 const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 
@@ -307,7 +310,7 @@ pub struct IndexInfo {
     pub decoy_name_hash: String,
 }
 
-/// Compute the reference sequence/name SHA-256 and SHA-512 hashes exactly as
+/// The reference sequence/name SHA-256 and SHA-512 hashes, computed exactly as
 /// salmon's pufferfish `FixFasta` does, so the values byte-match a salmon index
 /// built from the same FASTA(s):
 /// - sequences are hashed in FASTA order, with non-printable bytes removed but
@@ -315,86 +318,171 @@ pub struct IndexInfo {
 ///   original-case printable sequence), for every record;
 /// - names are the header up to the first space or tab (salmon's `sepStr=" \t"`),
 ///   hashed for every record whose (printable) sequence is non-empty;
-/// - decoy records (named in `decoy_names`) are routed to dedicated decoy
+/// - decoy records (named in the decoy list) are routed to dedicated decoy
 ///   hashers, so a decoy-aware index gets real decoy digests; with no decoys
 ///   those hashers stay empty ⇒ SHA of "", matching salmon's no-decoy case.
 ///
 /// Every one of those "before"s matters: hashing the *input* rather than the
 /// processed sequence is what lets the digest identify the FASTA the user
 /// supplied, independently of how salmon later transforms it.
+#[derive(Default)]
+struct RefDigests {
+    seq256: sha2::Sha256,
+    name256: sha2::Sha256,
+    seq512: sha2::Sha512,
+    name512: sha2::Sha512,
+    // Decoy sequences/names are routed to their own hashers (salmon's
+    // `update_seq_hash(isDecoy,..)` / `update_name_hash`); with no decoys these
+    // stay empty → SHA of "" (matches salmon's no-decoy case). Only the SHA-256
+    // decoy digests are recorded by salmon, so we only need those.
+    decoy_seq256: sha2::Sha256,
+    decoy_name256: sha2::Sha256,
+    /// the printable bytes of a record that has others
+    printable: Vec<u8>,
+}
+
+impl RefDigests {
+    /// Add one record: its processed name and its sequence as read.
+    fn add(&mut self, name: &[u8], seq: &[u8], is_decoy: bool) {
+        use sha2::Digest;
+        // Keep only C-`isprint` bytes (0x20..=0x7e); preserve original case.
+        // This drops line endings and stray control bytes so the digest does
+        // not depend on how the FASTA was wrapped.
+        let seq = if is_printable(seq) {
+            seq
+        } else {
+            self.printable.clear();
+            self.printable
+                .extend(seq.iter().copied().filter(|b| (0x20..=0x7e).contains(b)));
+            &self.printable
+        };
+        if is_decoy {
+            self.decoy_seq256.update(seq);
+        } else {
+            self.seq256.update(seq);
+            self.seq512.update(seq);
+        }
+        // Empty-sequence records contribute no name, matching salmon.
+        if !seq.is_empty() {
+            if is_decoy {
+                self.decoy_name256.update(name);
+            } else {
+                self.name256.update(name);
+                self.name512.update(name);
+            }
+        }
+    }
+
+    fn finish(self) -> RefHashes {
+        use sha2::Digest;
+        // Render a digest as lowercase hex, the conventional textual form.
+        let hex = |bytes: &[u8]| -> String {
+            let mut s = String::with_capacity(bytes.len() * 2);
+            for b in bytes {
+                s.push_str(&format!("{b:02x}"));
+            }
+            s
+        };
+        RefHashes {
+            seq_hash: hex(&self.seq256.finalize()),
+            name_hash: hex(&self.name256.finalize()),
+            seq_hash512: hex(&self.seq512.finalize()),
+            name_hash512: hex(&self.name512.finalize()),
+            decoy_seq_hash: hex(&self.decoy_seq256.finalize()),
+            decoy_name_hash: hex(&self.decoy_name256.finalize()),
+        }
+    }
+}
+
+/// Whether every byte of `seq` is C-`isprint` (0x20..=0x7e), written to
+/// vectorize like [`is_pure_acgt`].
+fn is_printable(seq: &[u8]) -> bool {
+    seq.chunks(64).all(|block| {
+        block
+            .iter()
+            .fold(0u8, |bad, &b| bad | (b.wrapping_sub(0x20) > 0x5e) as u8)
+            == 0
+    })
+}
+
+/// Hash the reference inputs in a pass of their own, on a thread that overlaps
+/// the whole build: SHA-512 costs about twice what the parallel-decoded
+/// preprocessing pass does (1.5 Gbases of GENCODE), so it must not hold that
+/// pass back, and nothing reads the digests until `info.json` is written.
+///
+/// This reads every input a second time, which only a regular file allows; see
+/// [`HashFeed`] for streams.
 fn compute_ref_hashes(
     transcripts: &[PathBuf],
     decoy_names: &ahash::AHashSet<Vec<u8>>,
     gencode: bool,
 ) -> Result<RefHashes> {
-    use sha2::{Digest, Sha256, Sha512};
-    // A hasher is fed incrementally and finalized once, so the whole
-    // transcriptome never needs to be in memory at once.
-    let mut seq256 = Sha256::new();
-    let mut name256 = Sha256::new();
-    let mut seq512 = Sha512::new();
-    let mut name512 = Sha512::new();
-    // Decoy sequences/names are routed to their own hashers (salmon's
-    // `update_seq_hash(isDecoy,..)` / `update_name_hash`); with no decoys these
-    // stay empty → SHA of "" (matches salmon's no-decoy case). Only the SHA-256
-    // decoy digests are recorded by salmon, so we only need those.
-    let mut decoy_seq256 = Sha256::new();
-    let mut decoy_name256 = Sha256::new();
-
+    let mut digests = RefDigests::default();
     for path in transcripts {
         let mut reader = needletail::parse_fastx_file(path)
             .with_context(|| format!("opening {} for hashing", path.display()))?;
         while let Some(rec) = reader.next() {
             let rec = rec.context("reading FASTA record for hashing")?;
-            // Keep only C-`isprint` bytes (0x20..=0x7e); preserve original case.
-            // This drops line endings and stray control bytes so the digest does
-            // not depend on how the FASTA was wrapped.
-            let seq: Vec<u8> = rec
-                .seq()
-                .iter()
-                .copied()
-                .filter(|&b| (0x20..=0x7e).contains(&b))
-                .collect();
             // Header up to the first ' '/'\t' (and first '|' under --gencode).
-            let id = rec.id();
-            let name = processed_name(id, gencode);
-            let is_decoy = decoy_names.contains(name);
-            if is_decoy {
-                decoy_seq256.update(&seq);
-            } else {
-                seq256.update(&seq);
-                seq512.update(&seq);
-            }
-            // Empty-sequence records contribute no name, matching salmon.
-            if !seq.is_empty() {
-                if is_decoy {
-                    decoy_name256.update(name);
-                } else {
-                    name256.update(name);
-                    name512.update(name);
-                }
-            }
+            let name = processed_name(rec.id(), gencode);
+            digests.add(name, &rec.seq(), decoy_names.contains(name));
         }
     }
-    // Render a digest as lowercase hex, the conventional textual form.
-    let hex = |bytes: &[u8]| -> String {
-        let mut s = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            s.push_str(&format!("{b:02x}"));
-        }
-        s
-    };
-    Ok(RefHashes {
-        seq_hash: hex(&seq256.finalize()),
-        name_hash: hex(&name256.finalize()),
-        seq_hash512: hex(&seq512.finalize()),
-        name_hash512: hex(&name512.finalize()),
-        decoy_seq_hash: hex(&decoy_seq256.finalize()),
-        decoy_name_hash: hex(&decoy_name256.finalize()),
-    })
+    Ok(digests.finish())
 }
 
-/// The six digests [`compute_ref_hashes`] produces, grouped so the function can
+/// The digests of inputs that cannot be read twice (a FIFO, or process
+/// substitution such as `-t <(curl ...)`), fed by [`preprocess_fasta`] as it
+/// reads them, so that every input is read exactly once.
+///
+/// It hashes on a thread of its own, from the batches preprocessing hands the
+/// writers: a record that leaves preprocessing unchanged is hashed from its
+/// batch, and only one that was changed or dropped is sent as read. A stream is
+/// decoded serially, which is slower than hashing, so the thread keeps up; the
+/// queue lets it fall behind by about 1 GiB at most.
+struct HashFeed {
+    tx: std::sync::mpsc::SyncSender<(Batch, Vec<HashItem>)>,
+}
+
+/// A batch of processed `(name, sequence)` records, shared by the writers.
+type Batch = std::sync::Arc<Vec<(Vec<u8>, Vec<u8>)>>;
+
+impl HashFeed {
+    /// Start the hashing thread in `scope`; it ends, with the digests, once the
+    /// `HashFeed` is dropped.
+    fn spawn<'scope>(
+        scope: &'scope std::thread::Scope<'scope, '_>,
+    ) -> (
+        Self,
+        std::thread::ScopedJoinHandle<'scope, Result<RefHashes>>,
+    ) {
+        // Batches hold about 4 Mbases each.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(Batch, Vec<HashItem>)>(256);
+        let handle = scope.spawn(move || {
+            let mut digests = RefDigests::default();
+            for (batch, items) in rx {
+                for item in items {
+                    match item {
+                        HashItem::Kept(i, is_decoy) => {
+                            let (name, seq) = &batch[i as usize];
+                            digests.add(name, seq, is_decoy);
+                        }
+                        HashItem::Own(name, seq, is_decoy) => digests.add(&name, &seq, is_decoy),
+                    }
+                }
+            }
+            Ok(digests.finish())
+        });
+        (Self { tx }, handle)
+    }
+
+    fn send(&self, batch: Batch, items: Vec<HashItem>) {
+        // The thread only stops early by panicking, which the join re-raises.
+        let _ = self.tx.send((batch, items));
+    }
+}
+
+/// The six digests [`RefDigests`] produces, grouped so the function can
 /// return them all without a six-element tuple.
 struct RefHashes {
     seq_hash: String,
@@ -428,6 +516,15 @@ struct PreprocessResult {
     short_decoys_dropped: Vec<Vec<u8>>,
     /// the reference sequence store, written alongside the cleaned FASTA
     refseq: StagedRefseq,
+}
+
+/// What a [`HashFeed`] is sent for one input record, in input order.
+enum HashItem {
+    /// The record is entry `.0` of the batch it travels with, unchanged.
+    Kept(u32, bool),
+    /// The record as read, because it was changed or dropped:
+    /// `(name, sequence, is_decoy)`.
+    Own(Vec<u8>, Vec<u8>, bool),
 }
 
 /// salmon/pufferfish `FixFasta` clips a reference iff its (cleaned) sequence ends
@@ -469,6 +566,8 @@ fn longest_acgt_run(seq: &[u8]) -> usize {
 /// clip poly-A tails, drop untileable decoys.
 ///
 /// Every reference written to the cleaned FASTA is also staged into `refseq`.
+/// With a `hash_feed`, every record read, written or not, is also sent to be
+/// hashed for `info.json`, so that each input is read exactly once.
 #[allow(clippy::too_many_arguments)]
 fn preprocess_fasta(
     inputs: &[PathBuf],
@@ -480,6 +579,7 @@ fn preprocess_fasta(
     gencode: bool,
     clip_polya: bool,
     k: usize,
+    hash_feed: Option<HashFeed>,
 ) -> Result<PreprocessResult> {
     use std::io::Write as _;
     const B: [u8; 4] = *b"ACGT";
@@ -493,7 +593,6 @@ fn preprocess_fasta(
     // The cleaned FASTA and the refseq store are written by threads of their
     // own, fed batches of processed records, so this thread only parses and
     // cleans: the two writes cost as much as everything else here combined.
-    type Batch = std::sync::Arc<Vec<(Vec<u8>, Vec<u8>)>>;
     const BATCH_BASES: usize = 1 << 22;
     std::thread::scope(|scope| {
         let (fasta_tx, fasta_rx) = std::sync::mpsc::sync_channel::<Batch>(4);
@@ -522,12 +621,18 @@ fn preprocess_fasta(
             }
             refseq.finish()
         });
-        // Hand a batch to both writers; `false` once either has stopped (failed).
-        let send = |batch: Vec<(Vec<u8>, Vec<u8>)>| {
+        // Hand a batch to both writers and the hasher; `false` once a writer has
+        // stopped (failed).
+        let send = |batch: Vec<(Vec<u8>, Vec<u8>)>, items: Vec<HashItem>| {
             let batch = std::sync::Arc::new(batch);
+            if let Some(feed) = &hash_feed {
+                feed.send(batch.clone(), items);
+            }
             fasta_tx.send(batch.clone()).is_ok() && refseq_tx.send(batch).is_ok()
         };
         let mut batch = Vec::new();
+        let mut hash_items: Vec<HashItem> = Vec::new();
+        let feeding = hash_feed.is_some();
         let mut batch_bases = 0usize;
         let mut replaced = 0u64;
         let mut polya_clipped = 0u64;
@@ -536,6 +641,8 @@ fn preprocess_fasta(
         let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         // Tracks whether a decoy has been seen, to enforce the "decoys last" rule.
         let mut saw_decoy = false;
+        // Names from the decoy list not yet found in the input.
+        let mut unmatched_decoys = decoy_names.clone();
         // Exact original (pure-ACGT) sequence -> name of the first transcript that
         // carried it. salmon collapses transcripts whose *processed* sequences match;
         // because it randomizes non-ACGT bases with a position-advancing RNG, two
@@ -550,6 +657,7 @@ fn preprocess_fasta(
         // transcriptome. salmon itself keys on a 64-bit digest; at 128 bits an
         // accidental collision among even 10^9 sequences has probability ~10^-21.
         let mut seen: ahash::AHashMap<u128, Vec<u8>> = ahash::AHashMap::new();
+        let mut names_seen: ahash::AHashSet<Vec<u8>> = ahash::AHashSet::new();
         'records: for path in inputs {
             let mut reader = open_fasta(path, threads)?;
             while let Some(rec) = reader.next() {
@@ -559,6 +667,15 @@ fn preprocess_fasta(
                 let id = rec.id();
                 let name = processed_name(id, gencode);
                 let orig = rec.seq();
+                // Everything downstream identifies a reference by name: two with one
+                // name become rows that gene maps and `quantmerge` cannot tell apart.
+                if !names_seen.insert(name.to_vec()) {
+                    anyhow::bail!(
+                        "reference name {:?} appears more than once in the FASTA input; \
+                         names must be unique",
+                        String::from_utf8_lossy(name)
+                    );
+                }
                 let is_decoy = decoy_names.contains(name);
                 // salmon requires every decoy record to appear, contiguously, at the
                 // end of the input — reject a real transcript after any decoy.
@@ -568,6 +685,7 @@ fn preprocess_fasta(
                 // when the only symptom is wrong abundances.
                 if is_decoy {
                     saw_decoy = true;
+                    unmatched_decoys.remove(name);
                 } else if saw_decoy {
                     anyhow::bail!(
                         "non-decoy reference {:?} appears after a decoy; decoy records must be \
@@ -591,6 +709,10 @@ fn preprocess_fasta(
                         if !keep_duplicates {
                             // `continue` skips the write below, so the duplicate never
                             // reaches the index.
+                            if feeding {
+                                let seq = orig.into_owned();
+                                hash_items.push(HashItem::Own(name.to_vec(), seq, is_decoy));
+                            }
                             continue;
                         }
                     } else {
@@ -599,6 +721,8 @@ fn preprocess_fasta(
                 }
 
                 let mut seq = orig.into_owned();
+                // The sequence as read, kept for the hasher once `seq` changes.
+                let mut as_read: Option<Vec<u8>> = None;
                 // Transcripts: replace non-ACGT bases with pseudo-random ACGT so the
                 // processed sequence is fully k-mer-able (salmon FixFasta behavior).
                 // DECOYS: leave non-ACGT bases (e.g. genome N-runs) in place — cf1-rs
@@ -611,6 +735,9 @@ fn preprocess_fasta(
                 //
                 // A pure-ACGT sequence (nearly every transcript) has nothing to replace.
                 if !is_decoy && !pure_acgt {
+                    if feeding {
+                        as_read = Some(seq.clone());
+                    }
                     for b in seq.iter_mut() {
                         if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
                             // A linear congruential generator: multiply, add, and take
@@ -638,6 +765,9 @@ fn preprocess_fasta(
                     // `rposition` finds the last non-`A`, i.e. where the tail begins.
                     match seq.iter().rposition(|&b| !matches!(b, b'A' | b'a')) {
                         Some(last) => {
+                            if feeding && as_read.is_none() {
+                                as_read = Some(seq.clone());
+                            }
                             seq.truncate(last + 1);
                             polya_clipped += 1;
                         }
@@ -646,6 +776,10 @@ fn preprocess_fasta(
                             // counted as retained), matching salmon.
                             polya_clipped += 1;
                             polya_dropped.push(name.to_vec());
+                            if feeding {
+                                let seq = as_read.unwrap_or(seq);
+                                hash_items.push(HashItem::Own(name.to_vec(), seq, is_decoy));
+                            }
                             continue;
                         }
                     }
@@ -662,21 +796,32 @@ fn preprocess_fasta(
                 // above transcripts have no N-runs, so only decoys are affected here.
                 if is_decoy && longest_acgt_run(&seq) < k {
                     short_decoys_dropped.push(name.to_vec());
+                    if feeding {
+                        let seq = as_read.unwrap_or(seq);
+                        hash_items.push(HashItem::Own(name.to_vec(), seq, is_decoy));
+                    }
                     continue;
                 }
 
+                if feeding {
+                    hash_items.push(match as_read {
+                        Some(read) => HashItem::Own(name.to_vec(), read, is_decoy),
+                        None => HashItem::Kept(batch.len() as u32, is_decoy),
+                    });
+                }
                 batch_bases += seq.len();
                 batch.push((name.to_vec(), seq));
                 if batch_bases >= BATCH_BASES {
                     batch_bases = 0;
-                    if !send(std::mem::take(&mut batch)) {
+                    let items = std::mem::take(&mut hash_items);
+                    if !send(std::mem::take(&mut batch), items) {
                         // A writer failed; its error is reported below.
                         break 'records;
                     }
                 }
             }
         }
-        send(batch);
+        send(batch, hash_items);
         drop((fasta_tx, refseq_tx));
         // A writer panic is re-raised here rather than reported as an error.
         fasta_writer
@@ -686,6 +831,21 @@ fn preprocess_fasta(
         let refseq = refseq_writer
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+        // Without this, a list that matches nothing builds "successfully" and
+        // quantifies the genome as if it were a transcript.
+        if !unmatched_decoys.is_empty() {
+            let mut names: Vec<_> = unmatched_decoys
+                .iter()
+                .map(|n| String::from_utf8_lossy(n))
+                .collect();
+            names.sort();
+            anyhow::bail!(
+                "{} name(s) in the decoy list match no reference in the FASTA, e.g. {:?}. \
+                 Names must be the header up to the first space, with no leading `>`.",
+                names.len(),
+                &names[..names.len().min(5)]
+            );
+        }
         Ok(PreprocessResult {
             replaced,
             duplicate_clusters,
@@ -722,14 +882,24 @@ const MAX_DECODE_THREADS: usize = 4;
 /// A gzipped regular file is decoded in parallel (up to `threads` workers, at
 /// most [`MAX_DECODE_THREADS`]); anything else goes through needletail's own
 /// (serial) decompression.
+///
+/// Anything but a regular file (a FIFO, or process substitution such as
+/// `-t <(curl ...)`) is opened exactly once and handed to needletail, which
+/// detects compression from the stream itself: sniffing the magic through a
+/// second open would consume the start of the stream.
 fn open_fasta(path: &Path, threads: usize) -> Result<Box<dyn needletail::FastxReader>> {
     use std::io::Read as _;
+    if !path.metadata().is_ok_and(|m| m.is_file()) {
+        let file =
+            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        return needletail::parse_fastx_reader(file)
+            .with_context(|| format!("opening {}", path.display()));
+    }
     let mut magic = [0u8; 2];
     let gzipped = std::fs::File::open(path)
         .and_then(|mut f| f.read_exact(&mut magic))
         .is_ok()
-        && magic == [0x1f, 0x8b]
-        && path.metadata().is_ok_and(|m| m.is_file());
+        && magic == [0x1f, 0x8b];
     let reader = if gzipped {
         let decoder = rapidgzip_core::Decoder::builder()
             .decoder_threads(threads.clamp(1, MAX_DECODE_THREADS))
@@ -850,8 +1020,11 @@ fn finish_refseq_store(
             "index reference order differs from the preprocessed order; \
              rebuilding {REFSEQ_FILE} from the cleaned FASTA"
         );
+        let _ = std::fs::remove_file(dir.join(REFSEQ_STAGED_FILE));
         return write_refseq_store(dir, std::slice::from_ref(&cleaned.to_path_buf()), idx);
     }
+    std::fs::rename(dir.join(REFSEQ_STAGED_FILE), dir.join(REFSEQ_FILE))
+        .with_context(|| format!("writing {REFSEQ_FILE}"))?;
     std::fs::write(
         dir.join(REFSEQ_OFFSETS_FILE),
         serde_json::to_vec(&staged.offsets)?,
@@ -930,15 +1103,22 @@ fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Resu
 ///
 /// The whole build in order: validate options, read the decoy list, preprocess
 /// the FASTA, build the cDBG (stage 1), build the SSHash index (stage 2), locate
-/// and verify the decoy block, write `info.json` and the reference-sequence
-/// store, and clean up intermediates.
+/// and verify the decoy block, write the reference-sequence store and `info.json`,
+/// and clean up intermediates.
 pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     anyhow::ensure!(!opts.transcripts.is_empty(), "no transcript files provided");
-    // 63 is the largest k that fits in a 2-bit-per-base 128-bit word; odd is
+    // tiny-dict panics above 31, after the build has written files; odd is
     // required so no k-mer equals its own reverse complement.
     anyhow::ensure!(
-        opts.k >= 1 && opts.k <= 63 && opts.k % 2 == 1,
-        "k must be odd in [1, 63]"
+        opts.k >= 1 && opts.k <= 31 && opts.k % 2 == 1,
+        "k must be odd in [1, 31], got {}",
+        opts.k
+    );
+    anyhow::ensure!(
+        opts.m < opts.k,
+        "the minimizer length must be less than k, got m={}, k={}",
+        opts.m,
+        opts.k
     );
 
     std::fs::create_dir_all(&opts.output_dir)
@@ -970,13 +1150,24 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     };
 
     // The reference digests cover the *input* FASTA and nothing reads them
-    // until `info.json` is written, so they are computed on their own thread,
-    // overlapping the whole build instead of adding a second full pass over the
-    // (typically gzipped) input plus SHA-256/SHA-512 passes at the end. The
-    // scope joins that thread even if the build fails.
+    // until `info.json` is written, so they are computed on a thread of their
+    // own that overlaps the whole build. Regular files are hashed in a pass of
+    // their own, as before; when any input is a stream, which can be read only
+    // once, preprocessing feeds the hashing instead. The scope joins the thread
+    // even if the build fails.
+    let streamed = opts
+        .transcripts
+        .iter()
+        .any(|p| !p.metadata().is_ok_and(|m| m.is_file()));
     std::thread::scope(|scope| {
-        let ref_hashes =
-            scope.spawn(|| compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode));
+        let (hash_feed, ref_hashes) = if streamed {
+            let (feed, handle) = HashFeed::spawn(scope);
+            (Some(feed), handle)
+        } else {
+            let handle =
+                scope.spawn(|| compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode));
+            (None, handle)
+        };
 
         // Preprocess the references into the cleaned FASTA that feeds both the cDBG
         // build and the refseq store (the hashes below use the original input):
@@ -984,7 +1175,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         // FixFasta behavior); decoys keep their non-ACGT bases (e.g. genome N-runs) so
         // Cuttlefish splits the graph on them instead of tiling random replacements.
         let cleaned = intermediate_dir.join("cleaned_refs.fa");
-        let refseq = RefseqWriter::create(&opts.output_dir.join(REFSEQ_FILE), opts.k)?;
+        let refseq_staged = opts.output_dir.join(REFSEQ_STAGED_FILE);
+        let refseq = RefseqWriter::create(&refseq_staged, opts.k)?;
         let pre = preprocess_fasta(
             &opts.transcripts,
             &cleaned,
@@ -995,8 +1187,21 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             opts.gencode,
             opts.clip_polya,
             opts.k,
+            hash_feed,
         )
-        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
+        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&refseq_staged);
+        })?;
+        // The input is good, so the rebuild is committed: from here the directory
+        // holds a mix of old and new files until the final `info.json` is written.
+        // An index with no `info.json` refuses to load, which is the safe failure.
+        match std::fs::remove_file(opts.output_dir.join(INFO_FILE)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).context("removing the previous info.json");
+            }
+            _ => {}
+        }
         // Everything below reports what the preprocessing did. Silent transformation
         // of a user's reference would be indefensible, so each rule that fired is
         // logged, with the destructive ones (dropped references) as warnings.
@@ -1209,12 +1414,13 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             decoy_seq_hash: h.decoy_seq_hash,
             decoy_name_hash: h.decoy_name_hash,
         };
-        write_info(&opts.output_dir, &info)?;
 
         // Persist the (cleaned) reference sequences (piscem does not retain them) so
         // the selective-alignment step fetches windows matching the indexed k-mers.
         finish_refseq_store(&opts.output_dir, pre.refseq, &cleaned, &idx)
             .context("writing reference sequence store")?;
+        // Last, because it is what marks the index complete.
+        write_info(&opts.output_dir, &info)?;
 
         if !opts.keep_intermediate {
             remove_cdbg_intermediates(&cdbg_prefix);
@@ -1355,10 +1561,91 @@ pub struct SalmonIndex {
     /// needed for selective-alignment extension and seq/GC bias, so skipping the
     /// read avoids holding a multi-GB decoy genome resident.
     refseq: Vec<u8>,
+    /// the same sequences at two bits per base, in place of `refseq` under
+    /// [`RefseqLoad::Packed`]
+    packed: PackedRefseq,
     /// offsets into `refseq` (`num_refs + 1` entries); empty iff `!refseq_loaded`
     ref_offsets: Vec<u64>,
     /// whether the reference sequence bytes were loaded
     refseq_loaded: bool,
+}
+
+/// How [`SalmonIndex::load_with_opts`] holds the reference sequences.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefseqLoad {
+    /// Not at all: nothing will read them.
+    None,
+    /// One byte per base, for callers of [`SalmonIndex::ref_seq`] (bias models).
+    Bytes,
+    /// Two bits per base, for mapping, which reads them through
+    /// [`RefProvider::ref_view`](salmon_core::RefProvider::ref_view).
+    Packed,
+}
+
+/// `refseq.bin` at two bits per base; see [`salmon_core::pack_bases`].
+#[derive(Default)]
+struct PackedRefseq {
+    bits: Vec<u8>,
+    other: Vec<salmon_core::OtherRun>,
+    /// For each reference, the range of `other` that overlaps it (a run that
+    /// crosses from one reference into the next is in both). Looking the runs
+    /// up by binary search on every `ref_view` cost 5% of a genome-decoy run,
+    /// which calls it once per seed.
+    runs_of: Vec<(u32, u32)>,
+}
+
+impl PackedRefseq {
+    /// Pack the file directly into its final buffer, so that one byte per base
+    /// is never in memory; block by block across threads, so loading takes no
+    /// longer than reading the file whole.
+    fn load(path: &Path) -> Result<Self> {
+        use std::io::{Read, Seek, SeekFrom};
+        /// bases per block; a multiple of 4 so that blocks start on a packed byte
+        const BLOCK: usize = 1 << 22;
+        let len = std::fs::metadata(path)
+            .with_context(|| format!("reading {REFSEQ_FILE}"))?
+            .len() as usize;
+        let mut bits = vec![0u8; len.div_ceil(4)];
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+        let per_thread = (bits.len().div_ceil(threads)).max(1);
+        let parts: Vec<Vec<salmon_core::OtherRun>> = std::thread::scope(|scope| {
+            let workers: Vec<_> = bits
+                .chunks_mut(per_thread)
+                .enumerate()
+                .map(|(t, out)| {
+                    scope.spawn(move || -> Result<Vec<salmon_core::OtherRun>> {
+                        let first = (t * per_thread * 4) as u64;
+                        let mut f = std::fs::File::open(path)?;
+                        f.seek(SeekFrom::Start(first))?;
+                        let total = (len - first as usize).min(out.len() * 4);
+                        let mut buf = vec![0u8; BLOCK.min(total)];
+                        let mut runs = Vec::new();
+                        let mut done = 0;
+                        for o in out.chunks_mut(BLOCK / 4) {
+                            let n = (total - done).min(BLOCK);
+                            f.read_exact(&mut buf[..n])?;
+                            salmon_core::pack_bases(&buf[..n], o, first + done as u64, &mut runs);
+                            done += n;
+                        }
+                        Ok(runs)
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|w| w.join().expect("refseq loader panicked"))
+                .collect::<Result<Vec<_>>>()
+        })
+        .with_context(|| format!("reading {REFSEQ_FILE}"))?;
+        // A run can cross from one block or thread into the next, which only
+        // leaves it in two pieces: lookups take the first that covers a position.
+        let other = parts.concat();
+        Ok(Self {
+            bits,
+            other,
+            runs_of: Vec::new(),
+        })
+    }
 }
 
 /// Load just the per-reference forward sequences from an index directory, in
@@ -1387,7 +1674,7 @@ impl SalmonIndex {
     /// Load a salmon index from a directory produced by [`build`], including the
     /// reference sequence bytes (needed for selective alignment and seq/GC bias).
     pub fn load(dir: impl AsRef<Path>) -> Result<Self> {
-        Self::load_with_opts(dir, true)
+        Self::load_with_opts(dir, RefseqLoad::Bytes)
     }
 
     /// Load a salmon index, optionally skipping the reference sequence bytes.
@@ -1397,7 +1684,7 @@ impl SalmonIndex {
     /// `--gcBias`): [`ref_seq`](Self::ref_seq) / [`refseq_concat`](Self::refseq_concat)
     /// then must not be called, but the index loads without the (potentially
     /// multi-GB, with a genome decoy) reference sequence resident.
-    pub fn load_with_opts(dir: impl AsRef<Path>, load_refseq: bool) -> Result<Self> {
+    pub fn load_with_opts(dir: impl AsRef<Path>, load_refseq: RefseqLoad) -> Result<Self> {
         let dir = dir.as_ref();
         // Guard: a C++ salmon (pufferfish) index is not readable by salmon 2.0 —
         // the index format changed. Detect it (no sshash `index.ssi`, but
@@ -1460,23 +1747,55 @@ impl SalmonIndex {
         // Load the EC table when the index has one (enables pseudoalignment-only mode).
         let inner = ReferenceIndex::load(&index_prefix, info.has_ec_table, false)
             .with_context(|| format!("loading piscem index at {}", index_prefix.display()))?;
-        let (refseq, ref_offsets) = if load_refseq {
-            let refseq = std::fs::read(dir.join(REFSEQ_FILE))
-                .with_context(|| format!("reading {REFSEQ_FILE}"))?;
-            let ref_offsets: Vec<u64> = serde_json::from_slice(
+        let refseq = match load_refseq {
+            RefseqLoad::Bytes => std::fs::read(dir.join(REFSEQ_FILE))
+                .with_context(|| format!("reading {REFSEQ_FILE}"))?,
+            _ => Vec::new(),
+        };
+        let packed = match load_refseq {
+            RefseqLoad::Packed => PackedRefseq::load(&dir.join(REFSEQ_FILE))?,
+            _ => PackedRefseq::default(),
+        };
+        let ref_offsets: Vec<u64> = if load_refseq == RefseqLoad::None {
+            Vec::new()
+        } else {
+            serde_json::from_slice(
                 &std::fs::read(dir.join(REFSEQ_OFFSETS_FILE))
                     .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
-            )?;
-            (refseq, ref_offsets)
-        } else {
-            (Vec::new(), Vec::new())
+            )?
         };
+        // A store that disagrees with the index would panic at the first slice or,
+        // worse, align reads against the wrong bases.
+        if load_refseq != RefseqLoad::None {
+            let store_len = std::fs::metadata(dir.join(REFSEQ_FILE))
+                .with_context(|| format!("reading {REFSEQ_FILE}"))?
+                .len();
+            anyhow::ensure!(
+                ref_offsets.len() == inner.num_refs() + 1 && ref_offsets.last() == Some(&store_len),
+                "{} is damaged: {REFSEQ_FILE} does not match the index. Rebuild it with \
+                 `salmon index`.",
+                dir.display()
+            );
+        }
+        let mut packed = packed;
+        if !packed.bits.is_empty() {
+            let other = &packed.other;
+            packed.runs_of = ref_offsets
+                .windows(2)
+                .map(|w| {
+                    let lo = other.partition_point(|r| r.start + u64::from(r.len) <= w[0]);
+                    let hi = other.partition_point(|r| r.start < w[1]);
+                    (lo as u32, hi.max(lo) as u32)
+                })
+                .collect();
+        }
         Ok(Self {
             inner,
             info,
             refseq,
+            packed,
             ref_offsets,
-            refseq_loaded: load_refseq,
+            refseq_loaded: load_refseq != RefseqLoad::None,
         })
     }
 
@@ -1487,9 +1806,9 @@ impl SalmonIndex {
 
     /// Forward-strand sequence of reference `tid`.
     ///
-    /// Panics if the index was loaded without the reference sequence
-    /// (`load_refseq == false`); callers in sketch-without-bias mode must not
-    /// reach the alignment/bias paths that call this.
+    /// Panics unless the index was loaded with [`RefseqLoad::Bytes`]; callers
+    /// in sketch-without-bias mode must not reach the alignment/bias paths that
+    /// call this, and mapping reads through `ref_view`.
     pub fn ref_seq(&self, tid: u32) -> &[u8] {
         debug_assert!(
             self.refseq_loaded,
@@ -1562,8 +1881,20 @@ impl salmon_core::RefProvider for SalmonIndex {
     fn num_refs(&self) -> usize {
         self.num_refs()
     }
-    fn ref_seq(&self, tid: u32) -> &[u8] {
-        self.ref_seq(tid)
+    #[inline]
+    fn ref_view(&self, tid: u32) -> salmon_core::RefView<'_> {
+        if self.packed.bits.is_empty() {
+            return salmon_core::RefView::Bytes(self.ref_seq(tid));
+        }
+        let start = self.ref_offsets[tid as usize];
+        let end = self.ref_offsets[tid as usize + 1];
+        let (lo, hi) = self.packed.runs_of[tid as usize];
+        salmon_core::RefView::Packed {
+            bits: &self.packed.bits,
+            start,
+            len: (end - start) as usize,
+            other: &self.packed.other[lo as usize..hi as usize],
+        }
     }
     fn is_decoy(&self, tid: u32) -> bool {
         // O(1) range test (matching C++ salmon's `tid >= firstDecoyIndex`). The
@@ -1623,6 +1954,35 @@ mod tests {
         path
     }
 
+    /// Two records named `t1` gave two `t1` rows in `quant.sf`, which gene maps
+    /// and `quantmerge` cannot tell apart. Refused whether or not the sequences
+    /// match, and however the build treats duplicate sequences.
+    #[test]
+    fn a_repeated_transcript_name_is_refused() {
+        let random = |mut x: u64| -> String {
+            (0..300)
+                .map(|_| {
+                    x = x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    ['A', 'C', 'G', 'T'][(x >> 33) as usize & 3]
+                })
+                .collect()
+        };
+        let (a, b) = (random(1), random(2));
+        for (keep_duplicates, second) in [(false, &b), (false, &a), (true, &a)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let fasta = tmp.path().join("t.fa");
+            std::fs::write(&fasta, format!(">t1\n{a}\n>t2\n{b}\n>t1 again\n{second}\n")).unwrap();
+            let mut opts = IndexBuildOptions::new(vec![fasta], tmp.path().join("idx"));
+            opts.threads = 1;
+            opts.keep_duplicates = keep_duplicates;
+            let err = build(&opts).map(|_| ()).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("\"t1\""), "{msg}");
+        }
+    }
+
     /// The end-to-end contract: a build produces a loadable index whose names,
     /// lengths and stored sequences all agree, and which leaves no intermediates
     /// behind.
@@ -1666,6 +2026,43 @@ mod tests {
             );
             assert!(seq.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')));
         }
+    }
+
+    /// A rebuild that fails on bad input must leave the existing index working.
+    #[test]
+    fn failed_rebuild_keeps_the_existing_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+        let before = std::fs::read(out.join(REFSEQ_FILE)).unwrap();
+
+        opts.transcripts = vec![tmp.path().join("typo.fa")];
+        assert!(build(&opts).is_err());
+
+        assert_eq!(std::fs::read(out.join(REFSEQ_FILE)).unwrap(), before);
+        assert!(!out.join(REFSEQ_STAGED_FILE).exists());
+        assert_eq!(SalmonIndex::load(&out).expect("index load").num_refs(), 3);
+    }
+
+    /// A store cut short (by anything) is refused at load rather than panicking
+    /// at the first read that lands in the missing bases.
+    #[test]
+    fn a_truncated_reference_store_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+        std::fs::write(out.join(REFSEQ_FILE), b"").unwrap();
+        let err = SalmonIndex::load(&out)
+            .err()
+            .expect("must refuse")
+            .to_string();
+        assert!(err.contains("damaged"), "{err}");
     }
 
     /// The sshash scratch dir honors an explicit override and the
@@ -1817,6 +2214,21 @@ mod tests {
             5,
             "all 5 decoy Ns preserved in the reference store"
         );
+    }
+
+    /// A decoy list that names something absent from the FASTA is a mismatch to
+    /// report, not a reason to index the genome as transcripts.
+    #[test]
+    fn unmatched_decoy_names_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let decoys = tmp.path().join("decoys.txt");
+        std::fs::write(&decoys, ">t3\n").unwrap();
+        let mut opts = IndexBuildOptions::new(vec![fasta], tmp.path().join("idx"));
+        opts.threads = 1;
+        opts.decoys = Some(decoys);
+        let err = format!("{:#}", build(&opts).unwrap_err());
+        assert!(err.contains(">t3"), "{err}");
     }
 
     /// An index too old to trust must be refused with a message that says what to

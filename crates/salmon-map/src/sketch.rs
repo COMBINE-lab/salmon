@@ -261,10 +261,16 @@ pub fn map_read_pair_sketch_into<'idx, R: RefProvider>(
         if r1.len() >= k {
             let mut q = PiscemStreamingQuery::<K>::new(index.dict());
             map_read::<K, SketchHitInfoSimple, _, _>(r1, left, hs, &mut q, index, &mut poison, strat);
+        } else {
+            // `map_read` is what clears a cache; a skipped mate must not leave the
+            // previous fragment's hits for `merge_se_mappings` to read.
+            left.clear();
         }
         if r2.len() >= k {
             let mut q = PiscemStreamingQuery::<K>::new(index.dict());
             map_read::<K, SketchHitInfoSimple, _, _>(r2, right, hs, &mut q, index, &mut poison, strat);
+        } else {
+            right.clear();
         }
         merge_se_mappings(left, right, r1.len() as i32, r2.len() as i32, out);
 
@@ -370,7 +376,11 @@ pub fn map_read_pair_sketch_into<'idx, R: RefProvider>(
                         r1_pos,
                         r2_pos,
                         r2_fw,
-                        r1_score: h.score as i32,
+                        r1_score: if status == MateStatus::PairedEndRight {
+                            0
+                        } else {
+                            h.score as i32
+                        },
                     }
                 }),
             ),

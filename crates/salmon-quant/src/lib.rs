@@ -49,7 +49,7 @@ use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 
 use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
-use salmon_index::SalmonIndex;
+use salmon_index::{RefseqLoad, SalmonIndex};
 use salmon_infer::optimize_packed_with_init;
 pub use salmon_infer::{EmAccel, EmOptions, EmStop};
 use salmon_map::MapConfig;
@@ -438,8 +438,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // (seq/GC; positional bias is sequence-free). In sketch mode without seq/GC
     // bias we can skip loading them entirely — with a genome decoy this is a
     // multi-GB resident-memory saving.
-    let need_refseq = !opts.sketch || opts.seq_bias || opts.gc_bias;
-    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, need_refseq)
+    // The bias models read whole transcripts as bytes; mapping only reads short
+    // windows, so it holds them at two bits per base.
+    let refseq_load = if opts.seq_bias || opts.gc_bias {
+        RefseqLoad::Bytes
+    } else if !opts.sketch {
+        RefseqLoad::Packed
+    } else {
+        RefseqLoad::None
+    };
+    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
         .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
     let num_refs = salmon.num_refs();
     timer.mark("index_load");
@@ -580,7 +588,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // `library_type_mismatch` diagnostic. It never overrides an explicit `-l` —
     // the resolution below gates its format on `auto_detect`. The cost is bounded
     // (sampling stops after the detector locks in) → effectively free.
-    let detector = Some(LibraryTypeDetector::new(read_type));
+    //
+    // `--deterministic` single-end: the prefix would depend on the thread order,
+    // and the paired accumulator below has no single-end form, so tally everything.
+    let whole_input_detector = opts.deterministic_fld && !opts.is_paired();
+    let detector = Some(if whole_input_detector {
+        LibraryTypeDetector::over_whole_input(read_type)
+    } else {
+        LibraryTypeDetector::new(read_type)
+    });
 
     // `--deterministic`: an order-independent FLD / library-format accumulator,
     // populated during the mapping pass instead of the online FLD + prefix
@@ -723,14 +739,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             expected_format,
             incompat_prior: opts.incompat_prior,
             ignore_incompat,
-            collect_seqbias: opts.seq_bias,
+            collect_seqbias: seqbias_obs.is_some(),
             seqbias_obs: seqbias_obs.as_ref(),
-            collect_gcbias: opts.gc_bias,
+            collect_gcbias: gcbias_obs.is_some(),
             cond_gc_bins: opts.cond_gc_bins,
             gc_bins: opts.gc_bins,
             gc_store,
             gcbias_obs: gcbias_obs.as_ref(),
-            collect_posbias: opts.pos_bias,
+            collect_posbias: posbias_obs.is_some(),
             length_class: length_class.as_deref(),
             posbias_obs: posbias_obs.as_ref(),
             online: online.as_ref(),
@@ -892,6 +908,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let (df, fmt) = acc.finish(opts.fld_mean, opts.fld_sd);
         fld = df;
         fmt
+    } else if whole_input_detector {
+        detector.as_ref().map(|d| d.final_format())
     } else {
         None
     };
@@ -1013,8 +1031,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     }
     // The packed CSR layout is built ONCE and reused by every consumer below: the
     // burn-in EM, the warm-started EM after bias correction, and bootstrap /
-    // Gibbs. `optimize`/`optimize_with_init` each build their own internally, so
-    // going through them meant re-copying labels, counts and weights (hundreds of
+    // Gibbs. `optimize` builds its own internally, so
+    // going through it meant re-copying labels, counts and weights (hundreds of
     // MB on a human-scale run) two to three times over data that is bit-identical
     // apart from `combined`, which `refresh_combined` rewrites in place.
     //
@@ -1238,8 +1256,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 if tid >= num_targets || em.alphas[tid] < 1e-8 {
                     return eff_lengths[tid];
                 }
-                let s = salmon.ref_seq(tid as u32);
-                let ref_len = s.len();
+                // Only sequence bias reads the bases; the other terms need the
+                // length alone, so `--posBias` needs no sequence held as bytes.
+                let ref_len = salmon.ref_len(tid) as usize;
                 // Per-position 5'/3' positional-bias factors (obs/exp projected).
                 // `project_weights` derives its output length from the slice it is
                 // given, so each buffer is resized to this transcript before use.
@@ -1264,7 +1283,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     salmon_model::positional_factor_into(&scratch.o3, &scratch.e3, &mut scratch.pr);
                 }
                 let bias = salmon_model::BiasInputs {
-                    seq: seq_tab.as_ref().map(|(f, r)| (f, r)),
+                    seq: seq_tab
+                        .as_ref()
+                        .map(|(f, r)| (f, r, salmon.ref_seq(tid as u32))),
                     gc: gc_ratio_model
                         .as_ref()
                         .map(|g| (g, store.unwrap().view(tid))),
@@ -1273,7 +1294,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                         .map(|_| (scratch.pf.as_slice(), scratch.pr.as_slice())),
                 };
                 salmon_model::corrected_effective_length_full(
-                    s,
+                    ref_len,
                     &fld_cdf,
                     fld_low,
                     fld_high,
@@ -1307,7 +1328,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
     let em_components = em.components.clone();
-    if let Some(c) = &em_components {
+    if opts.skip_quant && want_rough_abund {
+        // Cut short on purpose (see above): its stopping is not a convergence claim.
+        tracing::info!("EM: {em_iters} iterations to seed the bias models");
+    } else if let Some(c) = &em_components {
         let (line, warn) = c.describe(em_iters);
         if warn {
             tracing::warn!("{line}");

@@ -21,8 +21,8 @@ impl RefProvider for IdxRefs<'_> {
     fn num_refs(&self) -> usize {
         self.0.num_refs()
     }
-    fn ref_seq(&self, tid: u32) -> &[u8] {
-        self.0.ref_seq(tid)
+    fn ref_view(&self, tid: u32) -> salmon_core::RefView<'_> {
+        salmon_core::RefView::Bytes(self.0.ref_seq(tid))
     }
 }
 
@@ -283,6 +283,86 @@ fn orphan_recovery_promotes_to_pair() {
 }
 
 #[test]
+/// A rescue may not pair mates that normal pairing rejects as dovetailed: here
+/// the rescued mate lies inside the anchor, so the anchor's overhang stays an
+/// orphan, whichever mate anchored.
+fn orphan_recovery_refuses_a_dovetailed_mate() {
+    let transcript = gen_seq(600, 0xFACE);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let refs = IdxRefs(&idx);
+    let recover = MapConfig {
+        recover_orphans: true,
+        ..Default::default()
+    };
+
+    // A forward anchor whose rescued reverse mate ends before the anchor does.
+    let r1 = transcript[200..300].to_vec();
+    let r2 = break_kmers(&revcomp(&transcript[220..280]), 25);
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &recover);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].status, MateStatus::PairedEndLeft, "{m:?}");
+
+    // A reverse anchor whose rescued forward mate starts after the anchor does.
+    let r1 = break_kmers(&transcript[220..280], 25);
+    let r2 = revcomp(&transcript[200..300]);
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &recover);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].status, MateStatus::PairedEndRight, "{m:?}");
+
+    // Allowing dovetails allows the rescue too.
+    let allow = MapConfig {
+        recover_orphans: true,
+        pair: salmon_map::PairingConfig {
+            allow_dovetail: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
+    assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
+}
+
+#[test]
+/// `AS` on read 2 is `score - r1_score`, so a right orphan must keep its score out
+/// of `r1_score`, under sketch as under selective alignment.
+fn sketch_right_orphan_keeps_its_score_on_read2() {
+    let transcript = gen_seq(600, 0xBEEF);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
+    let elsewhere = gen_seq(80, 0xD00D);
+
+    let mut map = |r1: &[u8], r2: &[u8]| {
+        let m = map_read_pair_sketch(
+            idx.inner(),
+            &mut hs,
+            &mut scratch,
+            r1,
+            r2,
+            false,
+            false,
+            SkippingStrategy::Permissive,
+            256,
+            2500,
+            &idx,
+            false,
+        );
+        assert_eq!(m.len(), 1, "{m:?}");
+        m[0]
+    };
+    let left = map(&transcript[100..180], &elsewhere);
+    assert_eq!(left.status, MateStatus::PairedEndLeft);
+    assert!(left.score > 0, "{left:?}");
+    assert_eq!(left.r1_score, left.score);
+
+    let right = map(&elsewhere, &transcript[100..180]);
+    assert_eq!(right.status, MateStatus::PairedEndRight);
+    assert_eq!(right.score - right.r1_score, left.score, "{right:?}");
+    assert_eq!(right.r1_score, 0, "{right:?}");
+}
+
+#[test]
 /// The alignment-free path must map the same easy read the full path does.
 fn pseudoalignment_only_mode() {
     let transcript = gen_seq(600, 0x5EED);
@@ -438,4 +518,35 @@ fn unmappable_read_yields_no_candidates() {
         cands.is_empty(),
         "foreign read unexpectedly mapped: {cands:?}"
     );
+}
+
+/// A mate shorter than k skips `map_read`, which is what clears its cache, so the
+/// next fragment must not inherit the previous fragment's hits.
+#[test]
+fn sketch_short_mate_does_not_reuse_previous_hits() {
+    let transcript = gen_seq(600, 0x5EED);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
+    let mut map = |r1: &[u8], r2: &[u8]| {
+        map_read_pair_sketch(
+            idx.inner(),
+            &mut hs,
+            &mut scratch,
+            r1,
+            r2,
+            false,
+            false,
+            SkippingStrategy::Permissive,
+            256,
+            2500,
+            &idx,
+            false,
+        )
+    };
+    let first = map(&transcript[50..130], &revcomp(&transcript[350..430]));
+    assert!(!first.is_empty(), "the full pair should map");
+    // A 25 nt R1 and an R2 from nowhere: nothing here can map.
+    let second = map(&transcript[50..75], &gen_seq(80, 0xBAD));
+    assert!(second.is_empty(), "stale hits reused: {second:?}");
 }

@@ -29,10 +29,10 @@ Build a reusable index from one or more transcriptome FASTA files.
 | --- | --- |
 | `-t, --transcripts <FASTA>…` | Transcript FASTA file(s). **Required.** |
 | `-i, --index <DIR>` | Output index directory. **Required.** |
-| `-k, --kmerLen <N>` | K-mer length (odd, ≤ 31 recommended). Default `31`. |
+| `-k, --kmerLen <N>` | K-mer length (odd, at most 31). Default `31`. |
 | `-m, --minimizerLen <N>` | Minimizer length (`0` = auto → 19 for the default k=31). Default `0`. |
 | `-p, --threads <N>` | Worker threads (`0` = all cores). Default `0`. |
-| `-d, --decoys <FILE>` | File of decoy sequence names (one per line; decoy records must come last in the FASTA). |
+| `-d, --decoys <FILE>` | File of decoy sequence names, one per line: each FASTA header up to its first space, without the `>`. Every name must be in the FASTA, and decoy records must come last. |
 | `--keepDuplicates` | Retain exact-duplicate transcript sequences instead of collapsing them. |
 | `-n, --no-clip` | Don't clip poly-A tails. By default a reference ending in ≥10 `A`s has its trailing `A`s trimmed (all-`A` references are dropped), matching pufferfish. |
 | `--gencode` | GENCODE references: truncate each name at the first `\|`. |
@@ -57,7 +57,7 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | Option | Description |
 | --- | --- |
 | `-i, --index <DIR>` | Salmon index (reads mode). |
-| `-a, --alignments <BAM>` | Alignment mode: a name-grouped BAM of reads aligned to the transcriptome. With `--annotation`, a genome-aligned BAM instead (see below). |
+| `-a, --alignments <BAM>` | Alignment mode: a name-grouped BAM of reads aligned to the transcriptome. The records of one read must be adjacent (`samtools collate`); a BAM where they mostly are not is refused. Unmapped records may stay in: they count toward `percent_mapped`. With `--annotation`, a genome-aligned BAM instead (see below). |
 | `--annotation <GTF\|GFF>` | Genome-alignment mode: project a genome-aligned BAM into transcriptome coordinates via this annotation. See [genome-alignment quantification](../../guides/genome-projection/). |
 | `--genome <FASTA>` | Genome FASTA (genome mode); enables bias correction by reconstructing transcript sequences from exon slices. |
 | `--juncMissDiscount <f>` | Penalty for an unannotated splice junction in genome projection (default `1.0` = none). |
@@ -107,6 +107,30 @@ Input compression is detected from **content**, never file names, on every
 input path: gzip (including BGZF and multi-member), bzip2, xz and zstd all
 work for reads, targets, alignments and `--geneMap` — including a gzip file
 under a misleading name.
+
+### Reading from streams
+
+Reads (`-1/-2`, `-r`) can come from a FIFO or process substitution as well as a
+file, so a run can be quantified as it downloads, without storing the FASTQ:
+
+```sh
+salmon quant -i salmon_index -l A -o SRR000001 \
+  -1 <(curl -sSf https://ftp.sra.ebi.ac.uk/vol1/fastq/.../SRR000001_1.fastq.gz) \
+  -2 <(curl -sSf https://ftp.sra.ebi.ac.uk/vol1/fastq/.../SRR000001_2.fastq.gz)
+```
+
+`salmon index -t` and `-d` accept streams too. Each input is read once.
+
+- A stream is decoded serially: the parallel gzip decoder needs a file it can
+  seek in.
+- A stream cut short inside a record, or a gzip stream that ends early, fails
+  the run, and the error names the input.
+- A plain stream cut exactly between two records cannot be told from a
+  complete one. Where the source states the read count (ENA's `read_count`,
+  for example), compare it with `num_processed` in `aux_info/meta_info.json`.
+- Don't let the downloader retry into the same pipe (`curl --retry`): what it
+  has already written cannot be taken back, so a retry would feed some reads
+  twice. Let the run fail and start it again.
 
 ### Mapping
 
@@ -229,6 +253,10 @@ next mismatch as effectively as this one was hidden.
 
 Merge a chosen column (e.g. `NumReads` or `TPM`) across multiple samples'
 `quant.sf` files into a single matrix.
+
+Each sample is named after its directory unless `--names` is given, and the
+names must be distinct. A damaged `quant.sf`, with a short row or a target
+listed twice, is refused rather than filled with `NA`.
 
 :::note
 Coming from C++ salmon? See [what changed in 2.0](../../migrating/from-cpp/) for

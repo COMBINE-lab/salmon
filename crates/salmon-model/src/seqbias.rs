@@ -439,96 +439,6 @@ where
     (exp_fw, exp_rc)
 }
 
-/// Bias-corrected effective length of one transcript, matching salmon's
-/// `updateEffectiveLengths` (`src/util/SalmonUtils.cpp`).
-///
-/// `cdf` is the linear cumulative FLD; `fld_low`/`fld_high` the 0.5%/99.5%
-/// fragment-length quantiles (from [`fld_cdf_and_bounds`]). `elen` is the
-/// transcript's *unbiased* effective length (used for the lower barrier and the
-/// `unprocessedLen` guard). `stride` subsamples fragment lengths
-/// ([`FLD_SAMP_STRIDE`] matches salmon).
-///
-/// Per-position 5'/3' bias factors `exp(obsLog − expLog)` are placed at the
-/// fragment *read-start* (`fragStart + contextBefore`), the 3' factors reversed
-/// to forward fragment-end coordinates, then convolved with the conditional FLD:
-/// `effLen = Σ_l flWeight(l) · Σ_s fw[s]·rc[s+l−1]`. The result is floored at
-/// `min(elen, max(1, unprocessedLen))` (salmon's lower "barrier"; there is no
-/// upper cap, so a strongly-biased transcript's effLen can exceed its length).
-#[allow(clippy::too_many_arguments)]
-pub fn corrected_effective_length(
-    seq: &[u8],
-    cdf: &[f64],
-    fld_low: usize,
-    fld_high: usize,
-    obs_fw: &SBModel,
-    exp_fw: &SBModel,
-    obs_rc: &SBModel,
-    exp_rc: &SBModel,
-    elen: f64,
-    stride: usize,
-) -> f64 {
-    let k = CONTEXT_LENGTH;
-    let cu = CONTEXT_LEFT; // contextBefore(false)
-    let ref_len = seq.len();
-    let unprocessed = (ref_len as i32 - elen as i32).max(0);
-    let cdf_max_arg = (cdf.len() - 1).min(ref_len);
-    let cdf_max_val = cdf[cdf_max_arg];
-    if ref_len < k || unprocessed <= 0 || cdf_max_val < MIN_CDF_MASS {
-        return elen;
-    }
-    let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
-
-    // Per-position 5' and 3' sequence-bias factors, placed at the read-start.
-    let rc_seq = revcomp_bytes(seq);
-    let mut fw = vec![1.0f64; ref_len];
-    let mut rc = vec![1.0f64; ref_len];
-    for frag_start in 0..(ref_len - k) {
-        let read_start = frag_start + cu;
-        if read_start < ref_len {
-            fw[read_start] =
-                log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + k], false).exp();
-            rc[read_start] =
-                log_bias(obs_rc, exp_rc, &rc_seq[frag_start..frag_start + k], false).exp();
-        }
-    }
-    rc.reverse(); // align RC factors with forward fragment-end coordinates
-
-    // Convolve the bias factors with the conditional FLD over [fld_low, fld_high].
-    let stride = stride.max(1) as i32;
-    let max_len = (ref_len as i32).min(fld_high as i32 + 1);
-    let mut fl = fld_low.max(1) as i32; // a zero-length fragment has no end base
-    let mut done = fl >= max_len;
-    let sp = if fl > 0 { fl - 1 } else { 0 };
-    let mut prev_mass = cond(sp);
-    let mut eff = 0.0f64;
-    while !done {
-        if fl >= max_len {
-            done = true;
-            fl = max_len - 1;
-        }
-        let fl_weight = cond(fl) - prev_mass;
-        prev_mass = cond(fl);
-        let mut mass = 0.0f64;
-        let mut kstart = 0i32;
-        while kstart < ref_len as i32 - fl {
-            let frag_start = kstart as usize;
-            let frag_end = (kstart + fl - 1) as usize;
-            if frag_end < ref_len {
-                mass += fw[frag_start] * rc[frag_end];
-            } else {
-                break;
-            }
-            kstart += 1;
-        }
-        eff += fl_weight * mass;
-        fl += stride;
-    }
-
-    // Lower barrier (salmon default; no upper cap).
-    let offset = (unprocessed as f64).max(1.0);
-    eff.max(elen.min(offset))
-}
-
 /// Bias-corrected effective length when the per-fragment factor is **separable**
 /// as `a[start]·b[end]`. This holds for any combination of sequence and
 /// positional bias (each contributes an independent 5′ start factor and 3′ end
@@ -560,10 +470,6 @@ pub fn eff_len_from_xcorr(
     let ref_len = a.len();
     debug_assert_eq!(ref_len, b.len());
     let max_len = (ref_len as i32).min(fld_high as i32 + 1);
-    if (fld_low as i32) >= max_len {
-        let offset = (unprocessed as f64).max(1.0);
-        return elen.max(elen.min(offset));
-    }
     // Lags needed: Δ = fl-1 for fl in [fld_low, max_len). The scalar inner loop
     // stops at kstart < ref_len-fl (so frag_end ≤ ref_len-2), i.e. it excludes
     // the single fragment ending at ref_len-1; the zero-padded xcorr includes it
@@ -607,65 +513,6 @@ pub fn eff_len_from_xcorr(
         let offset = (unprocessed as f64).max(1.0);
         eff.max(elen.min(offset))
     }
-}
-
-/// FFT form of [`corrected_effective_length`] (sequence-only): builds the 5′/3′
-/// sequence factor arrays, then evaluates the length sweep as their
-/// cross-correlation via [`eff_len_from_xcorr`]. Kept as the validated
-/// seq-only reference (the combined no-GC path in [`crate::bias`] builds the
-/// same factors, optionally fused with positional bias, and calls the same
-/// core). Numerically identical to [`corrected_effective_length`] up to FFT
-/// round-off.
-#[allow(clippy::too_many_arguments)]
-pub fn corrected_effective_length_fft(
-    seq: &[u8],
-    cdf: &[f64],
-    fld_low: usize,
-    fld_high: usize,
-    obs_fw: &SBModel,
-    exp_fw: &SBModel,
-    obs_rc: &SBModel,
-    exp_rc: &SBModel,
-    elen: f64,
-    stride: usize,
-    no_length_threshold: bool,
-) -> f64 {
-    let k = CONTEXT_LENGTH;
-    let cu = CONTEXT_LEFT;
-    let ref_len = seq.len();
-    let unprocessed = (ref_len as i32 - elen as i32).max(0);
-    let cdf_max_arg = (cdf.len() - 1).min(ref_len);
-    let cdf_max_val = cdf[cdf_max_arg];
-    if ref_len < k || unprocessed <= 0 || cdf_max_val < MIN_CDF_MASS {
-        return elen;
-    }
-    let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
-
-    let rc_seq = revcomp_bytes(seq);
-    let mut fw = vec![1.0f64; ref_len];
-    let mut rc = vec![1.0f64; ref_len];
-    for frag_start in 0..(ref_len - k) {
-        let read_start = frag_start + cu;
-        if read_start < ref_len {
-            fw[read_start] =
-                log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + k], false).exp();
-            rc[read_start] =
-                log_bias(obs_rc, exp_rc, &rc_seq[frag_start..frag_start + k], false).exp();
-        }
-    }
-    rc.reverse();
-
-    eff_len_from_xcorr(
-        &fw,
-        &rc,
-        cond,
-        fld_low,
-        fld_high,
-        elen,
-        unprocessed,
-        stride,
-        no_length_threshold,
-    )
 }
 
 /// Log bias of `observed` relative to `expected` for a context:
@@ -961,13 +808,21 @@ mod tests {
         pmf[100] = 1.0;
         let (cdf, lo, hi) = fld_cdf_and_bounds(&pmf);
         // unbiased effLen at point-mass 100 on a 400nt transcript = 400 - 100 = 300
-        let eff = corrected_effective_length(&seq, &cdf, lo, hi, &obs, &exp, &obs, &exp, 300.0, 1);
+        let table = LogBiasTable::new(&obs, &exp);
+        let bias = crate::BiasInputs {
+            seq: Some((&table, &table, &seq)),
+            ..Default::default()
+        };
+        let eff =
+            crate::corrected_effective_length_full(seq.len(), &cdf, lo, hi, &bias, 300.0, 1, false);
         assert!((eff - 300.0).abs() < 1e-6, "got {eff}");
     }
 
     /// The FFT path exists purely to be faster, so it has to agree with the
     /// direct scalar convolution to within floating-point round-off — including
     /// the fiddly boundary term the scalar loop excludes and the FFT includes.
+    /// GC bias is what selects the scalar path, so a GC model whose every ratio is
+    /// 1 reaches it without changing the answer.
     #[test]
     fn fft_matches_exact_scalar_corrected_eff_len() {
         // Build a genuinely biased obs/exp pair (so per-position factors != 1),
@@ -1002,15 +857,50 @@ mod tests {
         }
         let (cdf, lo, hi) = fld_cdf_and_bounds(&pmf);
 
+        let table = LogBiasTable::new(&obs, &exp);
+        let (mut gc_obs, mut gc_exp) = (
+            crate::GcFragModel::new(
+                crate::gcbias::DEFAULT_COND_BINS,
+                crate::gcbias::DEFAULT_GC_BINS,
+            ),
+            crate::GcFragModel::new(
+                crate::gcbias::DEFAULT_COND_BINS,
+                crate::gcbias::DEFAULT_GC_BINS,
+            ),
+        );
+        for ctx in 0..=100 {
+            for gc in 0..=100 {
+                gc_obs.inc(gc, ctx, 1.0);
+                gc_exp.inc(gc, ctx, 1.0);
+            }
+        }
+        let neutral_gc = crate::gc_ratio(&mut gc_obs, &mut gc_exp, 1000.0);
+        let prefix = crate::gc_prefix(&seq);
+        let seq_only = crate::BiasInputs {
+            seq: Some((&table, &table, &seq)),
+            ..Default::default()
+        };
+        let with_gc = crate::BiasInputs {
+            gc: Some((&neutral_gc, crate::GcView::Dense(&prefix))),
+            ..seq_only
+        };
+
         // FFT must match the scalar at the SAME stride (drop-in, not an accuracy
         // change) — check both the exact (stride=1) and strided (stride=5) cases.
         for stride in [1usize, 5] {
-            let scalar = corrected_effective_length(
-                &seq, &cdf, lo, hi, &obs, &exp, &obs, &exp, 1200.0, stride,
-            );
-            let fft = corrected_effective_length_fft(
-                &seq, &cdf, lo, hi, &obs, &exp, &obs, &exp, 1200.0, stride, false,
-            );
+            let run = |bias: &crate::BiasInputs| {
+                crate::corrected_effective_length_full(
+                    seq.len(),
+                    &cdf,
+                    lo,
+                    hi,
+                    bias,
+                    1200.0,
+                    stride,
+                    false,
+                )
+            };
+            let (scalar, fft) = (run(&with_gc), run(&seq_only));
             let rel = (scalar - fft).abs() / scalar.abs();
             assert!(
                 rel < 1e-9,
