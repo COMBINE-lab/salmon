@@ -1131,3 +1131,77 @@ fn the_documented_decoder_forms_are_accepted() {
         assert_eq!(quant(d, "bad").status.code(), Some(2), "{d}");
     }
 }
+
+/// The default mode promises one answer for one input, so a single-end `-l A`
+/// run decides on every fragment. A forward prefix longer than the detector's
+/// budget, then as many reverse reads, is an unstranded library: deciding on
+/// the prefix calls it `SF` and throws the reverse half away.
+#[test]
+fn single_end_auto_detection_reads_the_whole_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let tx = sequence(23, 3000);
+    let rc: String = tx
+        .chars()
+        .rev()
+        .map(|c| match c {
+            'A' => 'T',
+            'C' => 'G',
+            'G' => 'C',
+            _ => 'A',
+        })
+        .collect();
+    let fasta = dir.path().join("txome.fa");
+    std::fs::write(&fasta, format!(">txA\n{tx}\n")).unwrap();
+    let index = dir.path().join("idx");
+    assert!(Command::new(SALMON)
+        .args(["index", "-t"])
+        .arg(&fasta)
+        .arg("-i")
+        .arg(&index)
+        .args(["-p", "2"])
+        .status()
+        .unwrap()
+        .success());
+
+    let q = "I".repeat(60);
+    let mut reads = String::new();
+    for (strand, s) in [&tx, &rc].into_iter().enumerate() {
+        for i in 0..60_000 {
+            let st = i % (s.len() - 60);
+            reads.push_str(&format!("@s{strand}_{i}\n{}\n+\n{q}\n", &s[st..st + 60]));
+        }
+    }
+    let se = dir.path().join("se.fq");
+    std::fs::write(&se, reads).unwrap();
+
+    let out = dir.path().join("out");
+    let o = run(&[
+        os("quant"),
+        os("-i"),
+        index.as_os_str(),
+        os("-l"),
+        os("A"),
+        os("-r"),
+        se.as_os_str(),
+        os("-p"),
+        os("2"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("aux_info/meta_info.json")).unwrap())
+            .unwrap();
+    assert_eq!(meta["library_types"][0], "U", "{meta}");
+    let quant = std::fs::read_to_string(out.join("quant.sf")).unwrap();
+    let reads: f64 = quant
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split('\t')
+        .nth(4)
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(reads > 119_000.0, "reverse reads were filtered: {quant}");
+}
