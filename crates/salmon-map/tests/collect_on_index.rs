@@ -308,7 +308,7 @@ fn sketch_right_orphan_keeps_its_score_on_read2() {
             false,
         );
         assert_eq!(m.len(), 1, "{m:?}");
-        m[0].clone()
+        m[0]
     };
     let left = map(&transcript[100..180], &elsewhere);
     assert_eq!(left.status, MateStatus::PairedEndLeft);
