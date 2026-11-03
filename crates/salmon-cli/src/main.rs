@@ -1181,6 +1181,15 @@ fn write_gene_level(
     )
     .context("writing quant.genes.sf")?;
 
+    if summary.version_collisions > 0 {
+        eprintln!(
+            "warning: with --ignoreTxVersion, {} entries of the gene map {} name a different \
+             gene from another version of the same transcript. A transcript with no exact \
+             match joins to the lowest identifier's gene.",
+            summary.version_collisions,
+            gene_map.path.display(),
+        );
+    }
     if summary.unmatched > 0 {
         eprintln!(
             "warning: {} of {} transcript(s) had no entry in the gene map {}. Each was \
