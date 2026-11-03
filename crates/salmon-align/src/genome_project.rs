@@ -633,40 +633,27 @@ where
     let codec = writer.codec();
 
     std::thread::scope(|scope| -> Result<(u64, u64)> {
-        let reader = scope.spawn(move || -> Result<()> {
-            let mut cur_name: Vec<u8> = Vec::new();
-            let mut have = false;
-            let mut group: Vec<R> = Vec::new();
+        let reader = scope.spawn(move || -> Result<u64> {
+            let mut reads = crate::ReadGrouper::new();
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(MINIBATCH);
             for result in records {
                 let rec = result.context("reading alignment record")?;
-                if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
+                let Some(group) = reads.push(rec) else {
                     continue;
-                }
-                let Some(name) = rec.name() else { continue };
-                let cname = crate::canonical_name(name.as_ref()).to_vec();
-                if !have {
-                    cur_name = cname;
-                    have = true;
-                } else if cname != cur_name {
-                    batch.push(std::mem::take(&mut group));
-                    cur_name = cname;
-                    if batch.len() >= MINIBATCH {
-                        if tx.send(std::mem::take(&mut batch)).is_err() {
-                            return Ok(());
-                        }
-                        batch = Vec::with_capacity(MINIBATCH);
-                    }
-                }
-                group.push(rec);
-            }
-            if have && !group.is_empty() {
+                };
                 batch.push(group);
+                if batch.len() >= MINIBATCH {
+                    if tx.send(std::mem::take(&mut batch)).is_err() {
+                        return Ok(reads.unmapped_reads);
+                    }
+                    batch = Vec::with_capacity(MINIBATCH);
+                }
             }
+            batch.extend(reads.finish());
             if !batch.is_empty() {
                 let _ = tx.send(batch);
             }
-            Ok(())
+            Ok(reads.unmapped_reads)
         });
 
         let mut workers = Vec::with_capacity(nthreads);
@@ -733,11 +720,11 @@ where
         }
         drop(rx);
 
-        reader
+        let unmapped_reads = reader
             .join()
             .map_err(|_| anyhow::anyhow!("genome-BAM reader thread panicked"))??;
 
-        let mut num_processed = 0u64;
+        let mut num_processed = unmapped_reads;
         let mut num_mapped = 0u64;
         for w in workers {
             let (p, m) = w
