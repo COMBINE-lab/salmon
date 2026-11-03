@@ -1392,10 +1392,6 @@ fn preflight_rad_space(rad_path: &std::path::Path, input_bytes: u64) {
     }
 }
 
-// `--deterministic` (reads mode): a two-pass run. The first pass maps to a RAD
-// with order-independent models baked into the header; the second quantifies
-// from it. Splitting the run this way is what makes the result independent of
-// the thread count.
 /// Remove the previous run's abundance tables before this one starts. Results
 /// are written as the run goes, so one killed partway would otherwise leave them
 /// beside new metadata, where a later step reads the two as one result.
@@ -1412,6 +1408,10 @@ fn remove_previous_quant_files(out_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+// `--deterministic` (reads mode): a two-pass run. The first pass maps to a RAD
+// with order-independent models baked into the header; the second quantifies
+// from it. Splitting the run this way is what makes the result independent of
+// the thread count.
 fn run_deterministic(
     mut map_opts: QuantOptions,
     rad_out: Option<PathBuf>,
