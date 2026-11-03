@@ -388,24 +388,6 @@ pub fn optimize(
     optimize_packed_with_init(&packed, opts, true, InitAlphas::NONE, eff_lens)
 }
 
-/// As [`optimize`], but warm-starts the abundances from `init_alphas` (per
-/// transcript id) when its length matches `num_txps` — used to seed the EM with
-/// salmon's count-blended initialization (online estimates blended with uniform),
-/// which reduces the iteration count to convergence.
-///
-/// A warm start does not change where the EM lands, only how quickly it gets
-/// there: starting near the answer skips the iterations spent travelling.
-pub fn optimize_with_init(
-    eq: &CollapsedEqClasses,
-    num_txps: usize,
-    opts: &EmOptions,
-    init_alphas: InitAlphas<'_>,
-    eff_lens: EffLens<'_>,
-) -> EmResult {
-    let packed = PackedEqClasses::from_collapsed(eq, num_txps);
-    optimize_packed_with_init(&packed, opts, true, init_alphas, eff_lens)
-}
-
 /// Core convergence loop over a [`PackedEqClasses`]. `parallel` selects the
 /// rayon M-step (for the single main run) vs. the sequential one (used by
 /// bootstrap, which parallelizes across replicates instead). The per-class
@@ -593,97 +575,65 @@ pub(crate) fn run_em_counts(
     // `with_ll` additionally returns the data term of the objective at `src`
     // (only DAAREM asks for it); the kernels are monomorphized on it, so the
     // plain and SQUAREM paths run exactly the code they always did.
-    //
-    // `rel_diff_cutoff` asks for the convergence criterion between `src` and
-    // `dst` as well, returned second (`-inf` when not asked for). The parallel
-    // kernels evaluate it on each output as they write it; the sequential ones
-    // in a pass afterwards.
-    let mut step =
-        |src: &[f64], dst: &mut [f64], with_ll: bool, rel_diff_cutoff: Option<f64>| -> (f64, f64) {
-            let check = rel_diff_cutoff.map(|cutoff| packed::RelDiffCheck {
-                alpha_in: src,
-                cutoff,
-            });
-            let seq_check = |dst: &[f64]| {
-                rel_diff_cutoff.map_or(f64::NEG_INFINITY, |c| max_rel_diff(src, dst, c))
+    let mut step = |src: &[f64], dst: &mut [f64], with_ll: bool| -> f64 {
+        macro_rules! dispatch {
+            ($ll:literal) => {
+                match (opts.use_vbem, parallel) {
+                    (false, true) => packed::em_step_par::<$ll>(
+                        p,
+                        counts,
+                        src,
+                        dst,
+                        &mut shards,
+                        plan.as_ref().expect("parallel implies a shard plan"),
+                    ),
+                    (false, false) => packed::em_step_seq::<$ll>(p, counts, src, dst, &mut scratch),
+                    (true, true) => packed::vbem_step_par::<$ll>(
+                        p,
+                        counts,
+                        &prior_alphas,
+                        src,
+                        dst,
+                        expectations
+                            .as_mut()
+                            .expect("parallel VBEM has expectations"),
+                        &mut shards,
+                        plan.as_ref().expect("parallel implies a shard plan"),
+                    ),
+                    (true, false) => packed::vbem_step_seq::<$ll>(
+                        p,
+                        counts,
+                        &prior_alphas,
+                        src,
+                        dst,
+                        &mut exp_theta,
+                        &mut scratch,
+                    ),
+                }
             };
-            macro_rules! dispatch {
-                ($ll:literal) => {
-                    match (opts.use_vbem, parallel) {
-                        (false, true) => packed::em_step_par::<$ll>(
-                            p,
-                            counts,
-                            src,
-                            dst,
-                            &mut shards,
-                            plan.as_ref().expect("parallel implies a shard plan"),
-                            check,
-                        ),
-                        (false, false) => {
-                            let ll = packed::em_step_seq::<$ll>(p, counts, src, dst, &mut scratch);
-                            (ll, seq_check(dst))
-                        }
-                        (true, true) => packed::vbem_step_par::<$ll>(
-                            p,
-                            counts,
-                            &prior_alphas,
-                            src,
-                            dst,
-                            expectations
-                                .as_mut()
-                                .expect("parallel VBEM has expectations"),
-                            &mut shards,
-                            plan.as_ref().expect("parallel implies a shard plan"),
-                            check,
-                        ),
-                        (true, false) => {
-                            let ll = packed::vbem_step_seq::<$ll>(
-                                p,
-                                counts,
-                                &prior_alphas,
-                                src,
-                                dst,
-                                &mut exp_theta,
-                                &mut scratch,
-                            );
-                            (ll, seq_check(dst))
-                        }
-                    }
-                };
-            }
-            if with_ll {
-                dispatch!(true)
-            } else {
-                dispatch!(false)
-            }
-        };
+        }
+        if with_ll {
+            dispatch!(true)
+        } else {
+            dispatch!(false)
+        }
+    };
 
     let mut converged = false;
     let mut it = 0u32;
     match opts.accel {
         EmAccel::None => {
-            // The textbook loop: one M-step, check whether anything moved, repeat.
-            // Once the check is due it rides along with the M-step.
-            while it < opts.max_iter {
-                let check = (it + 1 >= min_iter).then_some(opts.alpha_check_cutoff);
-                let (_, d) = step(&alphas, &mut alphas_prime, false, check);
-                it += 1;
-                if it >= min_iter {
-                    // Swap rather than copy: the buffers just exchange roles, so
-                    // no data movement is needed.
-                    std::mem::swap(&mut alphas, &mut alphas_prime);
-                    if d < opts.rel_diff_tol {
-                        converged = true;
-                        break;
-                    }
-                } else {
-                    std::mem::swap(&mut alphas, &mut alphas_prime);
-                }
+            // Reached only with nothing for the component engine above to do: no
+            // iterations allowed, which leaves the start as it is, or no classes,
+            // where an M-step has no mass to give anyone.
+            if opts.max_iter > 0 {
+                alphas.fill(0.0);
+                converged = true;
             }
         }
         EmAccel::Squarem => {
             let mut f = |src: &[f64], dst: &mut [f64]| {
-                step(src, dst, false, None);
+                step(src, dst, false);
             };
             converged = squarem_loop(
                 &mut f,
@@ -703,7 +653,7 @@ pub(crate) fn run_em_counts(
             // data term comes out of the kernel, the rest is O(num_txps).
             let n_total = counts.iter().sum::<u64>() as f64;
             let mut f = |src: &[f64], dst: &mut [f64]| -> f64 {
-                let (data, _) = step(src, dst, true, None);
+                let data = step(src, dst, true);
                 if opts.use_vbem {
                     data + vbem_objective_prior_term(src, &prior_alphas, parallel)
                 } else {
@@ -1442,5 +1392,32 @@ mod tests {
         eq.update_eff_lengths(&[300.0, 100.0]);
         let res = optimize(&eq, 2, &EmOptions::default(), EffLens::NONE);
         assert!(res.alphas[1] > res.alphas[0], "{:?}", res.alphas);
+    }
+
+    /// The two cases with no components to iterate: no classes, and no iterations
+    /// allowed. The component engine is the only M-step loop an unaccelerated run
+    /// has, so these are answered without one.
+    #[test]
+    fn empty_input_and_zero_iterations_need_no_m_step() {
+        let empty = PackedEqClasses::from_collapsed(&CollapsedEqClasses::default(), 3);
+        let real =
+            PackedEqClasses::from_collapsed(&build(&[(vec![0, 1], 10), (vec![1, 2], 20)], 3), 3);
+        for use_vbem in [false, true] {
+            let opts = |max_iter| EmOptions {
+                use_vbem,
+                max_iter,
+                ..EmOptions::default()
+            };
+            let r = optimize_packed(&empty, &opts(1000), false);
+            assert_eq!(r.alphas, [0.0; 3]);
+            assert!(r.converged);
+            let r = optimize_packed(&empty, &opts(0), false);
+            assert_eq!((r.alphas, r.iters, r.converged), (vec![0.0; 3], 0, false));
+            let r = optimize_packed(&real, &opts(0), false);
+            assert_eq!(
+                (r.alphas, r.iters, r.converged),
+                (vec![5.0, 15.0, 10.0], 0, false)
+            );
+        }
     }
 }
