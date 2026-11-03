@@ -144,7 +144,7 @@ pub fn project_genome_bam_to_rad(
         None
     };
 
-    let is_paired = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
+    let is_paired = crate::rad_library_is_paired(&opts.bam, &opts.lib_type)?;
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut writer = RadOutputWriter::create(
         rad_path,
@@ -417,7 +417,11 @@ fn build_projected_record(
     proj: &[ProjectedAlignment],
     tx_is_minus: &[bool],
     is_short: bool,
-) -> Option<(SalmonBulkRecord, (bool, Vec<PairObs>), Vec<NaivePlacement>)> {
+) -> Option<(
+    SalmonBulkRecord,
+    (bool, Vec<PairObs>, Option<bool>),
+    Vec<NaivePlacement>,
+)> {
     if proj.is_empty() {
         return None;
     }
@@ -443,6 +447,8 @@ fn build_projected_record(
     let mut statuses = Vec::with_capacity(by_tid.len());
     let mut naive_sig = Vec::with_capacity(by_tid.len());
     let mut fld_pairs = Vec::new();
+    // Strand of a read that is single-end and maps to one place, for `-l A`.
+    let mut single_end_fw = None;
 
     let is_read1 =
         |e: &ProjectedAlignment| gas.get(e.input_index).is_none_or(|g| g.is_first_in_pair);
@@ -540,6 +546,9 @@ fn build_projected_record(
                     MateStatus::PairedEndRight
                 };
                 let is_fw = genomic_fw(e);
+                if single_tid && entries.len() == 1 && status == MateStatus::SingleEnd {
+                    single_end_fw = Some(is_fw);
+                }
                 let pos = e.transcript_start.saturating_sub(1) as i32;
                 let read_len = e.query_aligned_len as i32;
                 let score = placement_score(e);
@@ -558,7 +567,7 @@ fn build_projected_record(
     }
     Some((
         SalmonBulkRecord::from_placements(statuses.iter().copied(), hits),
-        (single_tid, fld_pairs),
+        (single_tid, fld_pairs, single_end_fw),
         naive_sig,
     ))
 }
@@ -714,8 +723,11 @@ where
                             let bytes = buf.take_bytes()?;
                             writer.append_chunk_bytes(&bytes)?;
                         }
-                        let (unique, pairs) = fld_sample;
+                        let (unique, pairs, single_end_fw) = fld_sample;
                         fld.add_fragment(unique, pairs);
+                        if let Some(is_fw) = single_end_fw {
+                            fld.add_single_end(is_fw);
+                        }
                         if let Some(nb) = naive {
                             nb.add(naive_sig);
                         }

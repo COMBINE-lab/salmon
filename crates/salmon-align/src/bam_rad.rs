@@ -113,9 +113,8 @@ pub fn write_alignment_rad(
     // ever consume (#1140).
     let bias_on =
         (opts.seq_bias || opts.gc_bias || opts.pos_bias) && opts.length_correction().is_effective();
-    // Paired unless the library type is explicitly single-end (matches the
-    // alignment-mode `paired_lib` derivation in `quantify_alignments`).
-    let is_paired = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
+    // Matches the alignment-mode `paired_lib` derivation in `quantify_alignments`.
+    let is_paired = crate::rad_library_is_paired(&opts.bam, &opts.lib_type)?;
     // Only meaningful for a paired library: with single-end reads every
     // placement is an "orphan" and the flag would discard the entire run. Same
     // guard the online path applies (`discard_orphans && paired_lib`).
@@ -483,6 +482,11 @@ fn analyze_group<R: sam::alignment::Record>(
 
 /// Feed a group's placements to the shared FLD + naive-eq accumulators.
 fn tally_fld_naive(data: &GroupData, fld: &DiscreteFld, naive: Option<&NaiveEqBuilder>) {
+    if let [only] = data.infos.as_slice() {
+        if only.status == MateStatus::SingleEnd {
+            fld.add_single_end(only.is_fw);
+        }
+    }
     fld.add_fragment(
         data.infos.len() == 1,
         data.infos
