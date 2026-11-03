@@ -402,7 +402,9 @@ pub fn emit_fragment_records(
                         name2,
                         r2_seq,
                         mapping.r2_pos,
-                        mapping.r2_fw,
+                        // An orphan's strand is `is_fw`, whichever mate it is;
+                        // `r2_fw` is only set for a proper pair.
+                        mapping.is_fw,
                         mapping.score - mapping.r1_score,
                         READ2,
                     )

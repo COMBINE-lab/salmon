@@ -579,3 +579,307 @@ fn no_single_frag_prob_changes_orphan_weighting_on_the_rad_path() {
         "flat: equal orphan weights leave effective length to decide: {flat:?}"
     );
 }
+
+/// `--hardFilter` keeps a fragment's best placements. A wrong-strand placement
+/// that `-l` drops anyway must not set that bar, or the fragment is lost whole.
+#[test]
+fn hard_filter_ignores_the_score_of_a_wrong_strand_placement() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = dir.path().join("hf.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:5000").unwrap();
+    for i in 0..1000 {
+        let l = 1 + (i * 3) % 3000;
+        let r = l + 200;
+        // ISF on txA, worse score; ISR on txB, better score.
+        writeln!(
+            f,
+            "r{i}\t99\ttxA\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\tAS:i:-10"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "r{i}\t147\ttxA\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\tAS:i:-10"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "r{i}\t339\ttxB\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\tAS:i:0"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "r{i}\t419\ttxB\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\tAS:i:0"
+        )
+        .unwrap();
+    }
+    drop(f);
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "ISF".to_string();
+    opts.hard_filter = true;
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    let res = quantify_rad(&opts, &rad).unwrap();
+    let counts = quant_counts(&out);
+    let get = |n: &str| counts.iter().find(|(x, _)| x == n).unwrap().1;
+    assert_eq!(res.num_mapped, 1000);
+    assert!(
+        (get("txA") - 1000.0).abs() < 1e-6 && get("txB") < 1e-6,
+        "{counts:?}"
+    );
+}
+
+/// Quantify `body` (SAM records over txA and txB) under `lib`, returning the
+/// counts of txA and txB and `num_mapped`.
+fn quant_records(dir: &Path, lib: &str, body: &str) -> (f64, f64, u64) {
+    let sam = dir.join("mix.sam");
+    std::fs::write(
+        &sam,
+        format!("@HD\tVN:1.6\tSO:queryname\n@SQ\tSN:txA\tLN:5000\n@SQ\tSN:txB\tLN:5000\n{body}"),
+    )
+    .unwrap();
+    let out = dir.join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = lib.to_string();
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    let res = quantify_rad(&opts, &rad).unwrap();
+    let counts = quant_counts(&out);
+    let get = |n: &str| counts.iter().find(|(x, _)| x == n).unwrap().1;
+    (get("txA"), get("txB"), res.num_mapped)
+}
+
+/// R1 alone on txA and R2 alone on txB: each placement must be judged on its
+/// own mate's strand, whatever the other one is. Both agree with ISR here, so
+/// neither may be filtered and the two transcripts are symmetric.
+#[test]
+fn left_and_right_orphans_of_one_fragment_keep_their_own_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = String::new();
+    for i in 0..1000 {
+        // Mid-transcript, so neither side's weight is cut by a transcript end.
+        let p = 2000 + (i * 3) % 1000;
+        body += &format!("r{i}\t89\ttxA\t{p}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0\n");
+        body += &format!("r{i}\t137\ttxB\t{p}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0\n");
+    }
+    let (a, b, mapped) = quant_records(dir.path(), "ISR", &body);
+    assert_eq!(mapped, 1000);
+    assert!((a - 500.0).abs() < 1.0, "txA={a} txB={b}");
+    assert!((b - 500.0).abs() < 1.0, "txA={a} txB={b}");
+}
+
+/// A proper pair on txA beats an orphan on txB: the orphan's read length must
+/// not be read back as a fragment length. It is the pairs' 300 here, so that
+/// misreading would give txB as much weight as txA.
+#[test]
+fn an_orphan_beside_a_proper_pair_takes_no_mass() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = String::new();
+    for i in 0..500 {
+        let l = 1 + (i * 3) % 3000;
+        let r = l + 200;
+        body += &format!("r{i}\t99\ttxA\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\tAS:i:0\n");
+        body += &format!("r{i}\t147\ttxA\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\tAS:i:0\n");
+        body += &format!("r{i}\t73\ttxB\t{l}\t60\t300M\t*\t0\t0\t*\t*\tAS:i:0\n");
+    }
+    let (a, b, mapped) = quant_records(dir.path(), "IU", &body);
+    assert_eq!(mapped, 500);
+    assert!((a - 500.0).abs() < 1.0 && b < 1.0, "txA={a} txB={b}");
+}
+
+/// Single-end SAM: `n_a` forward reads on txA, `n_b` reverse reads on txB, so
+/// the library is stranded (SF) and txB's reads are all antisense.
+fn write_single_end_sam(dir: &Path, n_a: usize, n_b: usize) -> PathBuf {
+    let path = dir.join("se.sam");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:5000").unwrap();
+    for i in 0..n_a + n_b {
+        let (tx, flag) = if i < n_a { ("txA", 0) } else { ("txB", 16) };
+        let p = 1 + (i * 7) % 4000;
+        writeln!(
+            f,
+            "r{i}\t{flag}\t{tx}\t{p}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0"
+        )
+        .unwrap();
+    }
+    path
+}
+
+fn meta_info(out: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(out.join("aux_info/meta_info.json")).unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+
+/// `-l A` on a stranded single-end BAM must find the strand from the reads, as
+/// `-l SF` is told it, and filter antisense reads the same way.
+#[test]
+fn auto_detects_strand_of_a_single_end_bam() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_single_end_sam(dir.path(), 1500, 500);
+    let quant = |lib: &str| {
+        let out = dir.path().join(lib);
+        std::fs::create_dir_all(&out).unwrap();
+        let rad = out.join("aln.rad");
+        let mut opts = opts_for(&sam, &out);
+        opts.lib_type = lib.to_string();
+        write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+        let res = quantify_rad(&opts, &rad).unwrap();
+        (res.num_mapped, quant_counts(&out), meta_info(&out))
+    };
+
+    let (auto_mapped, auto_counts, auto_meta) = quant("A");
+    let (sf_mapped, sf_counts, sf_meta) = quant("SF");
+
+    assert_eq!(auto_meta["detected_library_type"], "SF");
+    assert_eq!(auto_mapped, sf_mapped);
+    assert_eq!(auto_counts, sf_counts);
+    assert_eq!(
+        auto_meta["frag_length_source"],
+        sf_meta["frag_length_source"]
+    );
+}
+
+/// A single-end read is not an orphan, so `--discardOrphans` under `-l A` must
+/// not empty the run.
+#[test]
+fn discard_orphans_keeps_a_single_end_bam_under_auto() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_single_end_sam(dir.path(), 300, 0);
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "A".to_string();
+    opts.discard_orphans = true;
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    let res = quantify_rad(&opts, &rad).unwrap();
+    assert_eq!(res.num_mapped, 300);
+}
+
+/// The genome path takes the same answer from the projection: reads running
+/// with the transcript are sense, on either genomic strand.
+#[test]
+fn auto_detects_strand_of_a_single_end_genome_bam() {
+    let dir = tempfile::tempdir().unwrap();
+    let gtf = dir.path().join("a.gtf");
+    let mut f = std::fs::File::create(&gtf).unwrap();
+    for (tx, start, end, strand) in [("txA", 1001, 3000, '+'), ("txB", 5001, 7000, '-')] {
+        let attrs = format!("gene_id \"g{tx}\"; transcript_id \"{tx}\";");
+        for kind in ["transcript", "exon"] {
+            writeln!(
+                f,
+                "chr1\tt\t{kind}\t{start}\t{end}\t.\t{strand}\t.\t{attrs}"
+            )
+            .unwrap();
+        }
+    }
+    let sam = dir.path().join("g.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:chr1\tLN:10000").unwrap();
+    for i in 0..200 {
+        let (flag, p) = if i % 2 == 0 { (0, 1001) } else { (16, 5001) };
+        writeln!(
+            f,
+            "r{i}\t{flag}\tchr1\t{}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0",
+            p + i
+        )
+        .unwrap();
+    }
+
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let gp = salmon_align::GenomeProjectOptions {
+        bam: sam.clone(),
+        annotation: gtf,
+        genome_fasta: None,
+        lib_type: "A".to_string(),
+        junc_miss_discount: None,
+        bias: false,
+        fld_mean: 250.0,
+        fld_sd: 25.0,
+        fld_max: 1000,
+        bias_seed_em_iters: 0,
+        em: Default::default(),
+        rad_codec: ChunkCodec::None,
+    };
+    salmon_align::project_genome_bam_to_rad(&gp, &rad).unwrap();
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "A".to_string();
+    let res = quantify_rad(&opts, &rad).unwrap();
+    assert_eq!(res.num_mapped, 200);
+    assert_eq!(meta_info(&out)["detected_library_type"], "SF");
+}
+
+/// A secondary record often has no bases (SEQ `*`). Scored as nothing, it got
+/// log-likelihood 0, which beats any real alignment with a mismatch, so reads moved
+/// to whichever transcript was reported second. The bases of the primary record
+/// are the same read, so they score it: here txA really is the better placement.
+#[test]
+fn a_secondary_without_bases_is_scored_from_its_primary() {
+    let dir = tempfile::tempdir().unwrap();
+    let random = |mut x: u64, n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                b"ACGT"[(x >> 33) as usize & 3]
+            })
+            .collect()
+    };
+    // Unrelated transcripts: a read from txA does not fit txB at all.
+    let tx_a = random(5, 3000);
+    let tx_b = random(19, 3000);
+    let flip = |b: u8| if b == b'A' { b'C' } else { b'A' };
+    let fasta = dir.path().join("t.fa");
+    std::fs::write(
+        &fasta,
+        format!(
+            ">txA\n{}\n>txB\n{}\n",
+            String::from_utf8_lossy(&tx_a),
+            String::from_utf8_lossy(&tx_b)
+        ),
+    )
+    .unwrap();
+
+    let sam = dir.path().join("a.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:unsorted").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:3000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:3000").unwrap();
+    for i in 0..1000 {
+        let p = (i * 3) % 2800;
+        // Two sequencing errors, so the read does not fit even txA perfectly.
+        let mut read = tx_a[p..p + 100].to_vec();
+        read[30] = flip(read[30]);
+        read[70] = flip(read[70]);
+        let read = String::from_utf8_lossy(&read);
+        let (q, one) = ("I".repeat(100), p + 1);
+        writeln!(f, "r{i}\t0\ttxA\t{one}\t60\t100M\t*\t0\t0\t{read}\t{q}").unwrap();
+        writeln!(f, "r{i}\t256\ttxB\t{one}\t0\t100M\t*\t0\t0\t*\t*").unwrap();
+    }
+    drop(f);
+
+    let out = dir.path().join("q");
+    let mut opts = AlignQuantOptions::new(sam, out.clone());
+    opts.lib_type = "U".to_string();
+    opts.deterministic_error_model = true;
+    opts.transcripts = Some(fasta);
+    let rad = dir.path().join("a.rad");
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    quantify_rad(&opts, &rad).unwrap();
+    let counts = quant_counts(&out);
+    assert!(
+        counts[0].1 > counts[1].1,
+        "txA fits the reads better, so it must get more of them: {counts:?}"
+    );
+}

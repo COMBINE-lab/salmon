@@ -171,7 +171,12 @@ impl RadFragment for SalmonBulkRecord {
             score: h.score,
             is_fw: h.is_fw,
             mate_fw: h.mate_fw,
-            status,
+            // See `SalmonBulkRecord::from_placements`.
+            status: match status {
+                MateStatus::PairedEndLeft if h.mate_fw => MateStatus::PairedEndRight,
+                MateStatus::PairedEndRight if h.mate_fw => MateStatus::PairedEndLeft,
+                s => s,
+            },
             pos: h.pos,
             frag_len: h.frag_len,
         }));
@@ -590,6 +595,30 @@ fn score_weight_basis(scored: bool, score_kind: u8, score_exp: f64, best: i32, s
     }
 }
 
+/// The best score among the placements the filters below keep. A placement they
+/// drop anyway must not set the bar for `--hardFilter`, or a fragment whose top
+/// score is on the wrong strand is lost whole.
+fn best_kept_score(
+    placements: &[RadPlacement],
+    discard_orphans: bool,
+    expected_format: Option<LibraryFormat>,
+    ignore_incompat: bool,
+) -> i32 {
+    placements
+        .iter()
+        .filter(|p| !(discard_orphans && is_orphan(p.status)))
+        .filter(|p| match expected_format {
+            Some(exp) if ignore_incompat => {
+                let (obs, is_fw, status) = rad_frag_format(p);
+                is_compatible(exp, obs, is_fw, status)
+            }
+            _ => true,
+        })
+        .map(|p| p.score)
+        .max()
+        .unwrap_or(0)
+}
+
 /// Weight one fragment's placements and add the equivalence class. Returns
 /// `true` if the fragment was assigned (had a surviving placement). A trimmed
 /// analog of [`crate::process_fragment`] with no error model, bias, or online
@@ -622,7 +651,12 @@ fn process_rad_fragment(
     // any filtering, since it reports what was observed rather than what was
     // kept.
     let mut fmt_mask: u16 = 0;
-    let best = placements.iter().map(|p| p.score).max().unwrap_or(0);
+    let best = best_kept_score(
+        placements,
+        cfg.discard_orphans,
+        cfg.expected_format,
+        cfg.ignore_incompat,
+    );
     let at = |snap: &[f64], i: usize| -> f64 {
         if snap.is_empty() {
             0.0
@@ -1518,7 +1552,12 @@ fn collect_bias_fragment(
     if placements.is_empty() {
         return;
     }
-    let best = placements.iter().map(|p| p.score).max().unwrap_or(0);
+    let best = best_kept_score(
+        placements,
+        cfg.discard_orphans,
+        cfg.expected_format,
+        cfg.ignore_incompat,
+    );
     let at = |snap: &[f64], i: usize| -> f64 {
         if snap.is_empty() {
             0.0

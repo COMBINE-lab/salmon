@@ -71,7 +71,7 @@ pub enum AlnOp {
 
 impl AlnOp {
     #[inline]
-    fn consume_seq(self) -> bool {
+    pub(crate) fn consume_seq(self) -> bool {
         matches!(
             self,
             AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Ins | AlnOp::SoftClip

@@ -142,7 +142,7 @@ fn an_invalid_library_type_is_refused_in_every_mode() {
     }
 
     // Control: a valid type still runs, and `A` (auto) is not mistaken for one.
-    for lib in ["IU", "A", "ISR"] {
+    for lib in ["IU", "A", "ISF"] {
         let o = run(&[
             os("quant"),
             os("-i"),
@@ -921,4 +921,138 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
         !String::from_utf8_lossy(&online.stderr).contains("configures the online inference path"),
         "under --online the knob is honoured, not warned about"
     );
+}
+
+/// `-p` above the machine's threads is capped with a warning. The cap must reach
+/// mapping too, not only the EM's pool, or the bad scheduler variable it warns
+/// about still oversubscribes the node.
+#[test]
+fn an_oversized_thread_count_is_capped_for_mapping_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("q");
+    let o = run(&[
+        os("quant"),
+        os("-l"),
+        os("A"),
+        os("-p"),
+        os("100000"),
+        os("-i"),
+        fx.index.as_os_str(),
+        os("-1"),
+        fx.r1.as_os_str(),
+        os("-2"),
+        fx.r2.as_os_str(),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let info = std::fs::read_to_string(out.join("cmd_info.json")).unwrap();
+    let info: serde_json::Value = serde_json::from_str(&info).unwrap();
+    let available = std::thread::available_parallelism().unwrap().get() as u64;
+    assert_eq!(info["threads"], available);
+}
+
+/// A number out of range used to run anyway: `--vbPrior NaN` kept 6931 of 10000
+/// reads with exit 0, and `--fldMax 0` moved TPMs with no warning.
+#[test]
+fn numeric_flags_out_of_range_are_refused() {
+    for (flag, value) in [
+        ("--vbPrior", "NaN"),
+        ("--vbPrior", "0"),
+        ("--vbPrior", "-1"),
+        ("--fldMax", "0"),
+        ("--incompatPrior", "NaN"),
+        ("--incompatPrior", "2"),
+        ("--scoreExp", "inf"),
+        ("--scoreExp", "-1"),
+        ("--minScoreFraction", "1.5"),
+        ("--orphanChainSubThresh", "NaN"),
+        ("--consensusSlack", "-0.1"),
+        ("--preMergeChainSubThresh", "2"),
+        ("--postMergeChainSubThresh", "2"),
+        ("--minAlnProb", "NaN"),
+        ("--decoyThreshold", "NaN"),
+        ("--forgettingFactor", "0.5"),
+        ("--forgettingFactor", "1.5"),
+    ] {
+        // `=`, so clap hands a negative value to the parser rather than reading
+        // it as another flag.
+        let arg = format!("{flag}={value}");
+        let o = run(&[
+            os("quant"),
+            os("-i"),
+            os("no-index"),
+            os("-l"),
+            os("A"),
+            os("-r"),
+            os("no-reads"),
+            os("-o"),
+            os("no-output"),
+            os(&arg),
+        ]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "{flag} {value}: {err}");
+        assert!(err.contains(flag), "{flag} {value}: {err}");
+    }
+}
+
+/// Above k = 31 the build panicked after writing files; `m >= k` failed after
+/// writing them too. Both are known before any work starts.
+#[test]
+fn an_impossible_k_or_m_is_refused_before_writing_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let fasta = dir.path().join("t.fa");
+    std::fs::write(&fasta, format!(">t1\n{}\n", sequence(1, 2000))).unwrap();
+    for args in [["-k", "33", "-m", "0"], ["-k", "21", "-m", "21"]] {
+        let index = dir.path().join("i");
+        let o = run(&[
+            os("index"),
+            os("-t"),
+            fasta.as_os_str(),
+            os("-i"),
+            index.as_os_str(),
+            os(args[0]),
+            os(args[1]),
+            os(args[2]),
+            os(args[3]),
+        ]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {err}");
+        assert!(!index.exists(), "{args:?} wrote {}", index.display());
+    }
+}
+
+/// A run where nothing maps must not exit 0: pipelines read the exit code, and
+/// an all-zero `quant.sf` would otherwise reach their next step as a result. The
+/// output files stay, because they say what happened.
+#[test]
+fn a_run_that_maps_nothing_fails_but_keeps_its_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let q = "I".repeat(100);
+    let junk: String = (0..50)
+        .map(|i| format!("@j{i}\n{}\n+\n{q}\n", sequence(1000 + i, 100)))
+        .collect();
+    let reads = dir.path().join("junk.fq");
+    std::fs::write(&reads, junk).unwrap();
+
+    let out = dir.path().join("q");
+    let run = Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&fx.index)
+        .args(["-l", "U", "-r"])
+        .arg(&reads)
+        .args(["-p", "2", "-o"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(!run.status.success(), "must fail when nothing maps");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("0 fragments mapped"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(out.join("quant.sf").exists());
+    assert!(out.join("aux_info/meta_info.json").exists());
 }

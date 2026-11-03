@@ -63,6 +63,9 @@ const INDEX_PREFIX: &str = "index";
 const INFO_FILE: &str = "info.json";
 /// Concatenated reference sequences (forward strand), in transcript-id order.
 const REFSEQ_FILE: &str = "refseq.bin";
+/// Where `REFSEQ_FILE` is staged, so a rebuild that fails on bad input leaves
+/// the existing store untouched.
+const REFSEQ_STAGED_FILE: &str = "refseq.bin.partial";
 /// Per-reference offsets into `REFSEQ_FILE` (`num_refs + 1` entries).
 const REFSEQ_OFFSETS_FILE: &str = "refseq_offsets.json";
 
@@ -638,6 +641,8 @@ fn preprocess_fasta(
         let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         // Tracks whether a decoy has been seen, to enforce the "decoys last" rule.
         let mut saw_decoy = false;
+        // Names from the decoy list not yet found in the input.
+        let mut unmatched_decoys = decoy_names.clone();
         // Exact original (pure-ACGT) sequence -> name of the first transcript that
         // carried it. salmon collapses transcripts whose *processed* sequences match;
         // because it randomizes non-ACGT bases with a position-advancing RNG, two
@@ -652,6 +657,7 @@ fn preprocess_fasta(
         // transcriptome. salmon itself keys on a 64-bit digest; at 128 bits an
         // accidental collision among even 10^9 sequences has probability ~10^-21.
         let mut seen: ahash::AHashMap<u128, Vec<u8>> = ahash::AHashMap::new();
+        let mut names_seen: ahash::AHashSet<Vec<u8>> = ahash::AHashSet::new();
         'records: for path in inputs {
             let mut reader = open_fasta(path, threads)?;
             while let Some(rec) = reader.next() {
@@ -661,6 +667,15 @@ fn preprocess_fasta(
                 let id = rec.id();
                 let name = processed_name(id, gencode);
                 let orig = rec.seq();
+                // Everything downstream identifies a reference by name: two with one
+                // name become rows that gene maps and `quantmerge` cannot tell apart.
+                if !names_seen.insert(name.to_vec()) {
+                    anyhow::bail!(
+                        "reference name {:?} appears more than once in the FASTA input; \
+                         names must be unique",
+                        String::from_utf8_lossy(name)
+                    );
+                }
                 let is_decoy = decoy_names.contains(name);
                 // salmon requires every decoy record to appear, contiguously, at the
                 // end of the input — reject a real transcript after any decoy.
@@ -670,6 +685,7 @@ fn preprocess_fasta(
                 // when the only symptom is wrong abundances.
                 if is_decoy {
                     saw_decoy = true;
+                    unmatched_decoys.remove(name);
                 } else if saw_decoy {
                     anyhow::bail!(
                         "non-decoy reference {:?} appears after a decoy; decoy records must be \
@@ -815,6 +831,21 @@ fn preprocess_fasta(
         let refseq = refseq_writer
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+        // Without this, a list that matches nothing builds "successfully" and
+        // quantifies the genome as if it were a transcript.
+        if !unmatched_decoys.is_empty() {
+            let mut names: Vec<_> = unmatched_decoys
+                .iter()
+                .map(|n| String::from_utf8_lossy(n))
+                .collect();
+            names.sort();
+            anyhow::bail!(
+                "{} name(s) in the decoy list match no reference in the FASTA, e.g. {:?}. \
+                 Names must be the header up to the first space, with no leading `>`.",
+                names.len(),
+                &names[..names.len().min(5)]
+            );
+        }
         Ok(PreprocessResult {
             replaced,
             duplicate_clusters,
@@ -989,8 +1020,11 @@ fn finish_refseq_store(
             "index reference order differs from the preprocessed order; \
              rebuilding {REFSEQ_FILE} from the cleaned FASTA"
         );
+        let _ = std::fs::remove_file(dir.join(REFSEQ_STAGED_FILE));
         return write_refseq_store(dir, std::slice::from_ref(&cleaned.to_path_buf()), idx);
     }
+    std::fs::rename(dir.join(REFSEQ_STAGED_FILE), dir.join(REFSEQ_FILE))
+        .with_context(|| format!("writing {REFSEQ_FILE}"))?;
     std::fs::write(
         dir.join(REFSEQ_OFFSETS_FILE),
         serde_json::to_vec(&staged.offsets)?,
@@ -1069,15 +1103,22 @@ fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Resu
 ///
 /// The whole build in order: validate options, read the decoy list, preprocess
 /// the FASTA, build the cDBG (stage 1), build the SSHash index (stage 2), locate
-/// and verify the decoy block, write `info.json` and the reference-sequence
-/// store, and clean up intermediates.
+/// and verify the decoy block, write the reference-sequence store and `info.json`,
+/// and clean up intermediates.
 pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     anyhow::ensure!(!opts.transcripts.is_empty(), "no transcript files provided");
-    // 63 is the largest k that fits in a 2-bit-per-base 128-bit word; odd is
+    // tiny-dict panics above 31, after the build has written files; odd is
     // required so no k-mer equals its own reverse complement.
     anyhow::ensure!(
-        opts.k >= 1 && opts.k <= 63 && opts.k % 2 == 1,
-        "k must be odd in [1, 63]"
+        opts.k >= 1 && opts.k <= 31 && opts.k % 2 == 1,
+        "k must be odd in [1, 31], got {}",
+        opts.k
+    );
+    anyhow::ensure!(
+        opts.m < opts.k,
+        "the minimizer length must be less than k, got m={}, k={}",
+        opts.m,
+        opts.k
     );
 
     std::fs::create_dir_all(&opts.output_dir)
@@ -1134,7 +1175,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         // FixFasta behavior); decoys keep their non-ACGT bases (e.g. genome N-runs) so
         // Cuttlefish splits the graph on them instead of tiling random replacements.
         let cleaned = intermediate_dir.join("cleaned_refs.fa");
-        let refseq = RefseqWriter::create(&opts.output_dir.join(REFSEQ_FILE), opts.k)?;
+        let refseq_staged = opts.output_dir.join(REFSEQ_STAGED_FILE);
+        let refseq = RefseqWriter::create(&refseq_staged, opts.k)?;
         let pre = preprocess_fasta(
             &opts.transcripts,
             &cleaned,
@@ -1147,7 +1189,19 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             opts.k,
             hash_feed,
         )
-        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
+        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&refseq_staged);
+        })?;
+        // The input is good, so the rebuild is committed: from here the directory
+        // holds a mix of old and new files until the final `info.json` is written.
+        // An index with no `info.json` refuses to load, which is the safe failure.
+        match std::fs::remove_file(opts.output_dir.join(INFO_FILE)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).context("removing the previous info.json");
+            }
+            _ => {}
+        }
         // Everything below reports what the preprocessing did. Silent transformation
         // of a user's reference would be indefensible, so each rule that fired is
         // logged, with the destructive ones (dropped references) as warnings.
@@ -1360,12 +1414,13 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             decoy_seq_hash: h.decoy_seq_hash,
             decoy_name_hash: h.decoy_name_hash,
         };
-        write_info(&opts.output_dir, &info)?;
 
         // Persist the (cleaned) reference sequences (piscem does not retain them) so
         // the selective-alignment step fetches windows matching the indexed k-mers.
         finish_refseq_store(&opts.output_dir, pre.refseq, &cleaned, &idx)
             .context("writing reference sequence store")?;
+        // Last, because it is what marks the index complete.
+        write_info(&opts.output_dir, &info)?;
 
         if !opts.keep_intermediate {
             remove_cdbg_intermediates(&cdbg_prefix);
@@ -1709,6 +1764,19 @@ impl SalmonIndex {
                     .with_context(|| format!("reading {REFSEQ_OFFSETS_FILE}"))?,
             )?
         };
+        // A store that disagrees with the index would panic at the first slice or,
+        // worse, align reads against the wrong bases.
+        if load_refseq != RefseqLoad::None {
+            let store_len = std::fs::metadata(dir.join(REFSEQ_FILE))
+                .with_context(|| format!("reading {REFSEQ_FILE}"))?
+                .len();
+            anyhow::ensure!(
+                ref_offsets.len() == inner.num_refs() + 1 && ref_offsets.last() == Some(&store_len),
+                "{} is damaged: {REFSEQ_FILE} does not match the index. Rebuild it with \
+                 `salmon index`.",
+                dir.display()
+            );
+        }
         let mut packed = packed;
         if !packed.bits.is_empty() {
             let other = &packed.other;
@@ -1886,6 +1954,35 @@ mod tests {
         path
     }
 
+    /// Two records named `t1` gave two `t1` rows in `quant.sf`, which gene maps
+    /// and `quantmerge` cannot tell apart. Refused whether or not the sequences
+    /// match, and however the build treats duplicate sequences.
+    #[test]
+    fn a_repeated_transcript_name_is_refused() {
+        let random = |mut x: u64| -> String {
+            (0..300)
+                .map(|_| {
+                    x = x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    ['A', 'C', 'G', 'T'][(x >> 33) as usize & 3]
+                })
+                .collect()
+        };
+        let (a, b) = (random(1), random(2));
+        for (keep_duplicates, second) in [(false, &b), (false, &a), (true, &a)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let fasta = tmp.path().join("t.fa");
+            std::fs::write(&fasta, format!(">t1\n{a}\n>t2\n{b}\n>t1 again\n{second}\n")).unwrap();
+            let mut opts = IndexBuildOptions::new(vec![fasta], tmp.path().join("idx"));
+            opts.threads = 1;
+            opts.keep_duplicates = keep_duplicates;
+            let err = build(&opts).map(|_| ()).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("\"t1\""), "{msg}");
+        }
+    }
+
     /// The end-to-end contract: a build produces a loadable index whose names,
     /// lengths and stored sequences all agree, and which leaves no intermediates
     /// behind.
@@ -1929,6 +2026,43 @@ mod tests {
             );
             assert!(seq.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')));
         }
+    }
+
+    /// A rebuild that fails on bad input must leave the existing index working.
+    #[test]
+    fn failed_rebuild_keeps_the_existing_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+        let before = std::fs::read(out.join(REFSEQ_FILE)).unwrap();
+
+        opts.transcripts = vec![tmp.path().join("typo.fa")];
+        assert!(build(&opts).is_err());
+
+        assert_eq!(std::fs::read(out.join(REFSEQ_FILE)).unwrap(), before);
+        assert!(!out.join(REFSEQ_STAGED_FILE).exists());
+        assert_eq!(SalmonIndex::load(&out).expect("index load").num_refs(), 3);
+    }
+
+    /// A store cut short (by anything) is refused at load rather than panicking
+    /// at the first read that lands in the missing bases.
+    #[test]
+    fn a_truncated_reference_store_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let out = tmp.path().join("idx");
+        let mut opts = IndexBuildOptions::new(vec![fasta], out.clone());
+        opts.threads = 1;
+        build(&opts).expect("index build");
+        std::fs::write(out.join(REFSEQ_FILE), b"").unwrap();
+        let err = SalmonIndex::load(&out)
+            .err()
+            .expect("must refuse")
+            .to_string();
+        assert!(err.contains("damaged"), "{err}");
     }
 
     /// The sshash scratch dir honors an explicit override and the
@@ -2080,6 +2214,21 @@ mod tests {
             5,
             "all 5 decoy Ns preserved in the reference store"
         );
+    }
+
+    /// A decoy list that names something absent from the FASTA is a mismatch to
+    /// report, not a reason to index the genome as transcripts.
+    #[test]
+    fn unmatched_decoy_names_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fasta = write_fasta(tmp.path());
+        let decoys = tmp.path().join("decoys.txt");
+        std::fs::write(&decoys, ">t3\n").unwrap();
+        let mut opts = IndexBuildOptions::new(vec![fasta], tmp.path().join("idx"));
+        opts.threads = 1;
+        opts.decoys = Some(decoys);
+        let err = format!("{:#}", build(&opts).unwrap_err());
+        assert!(err.contains(">t3"), "{err}");
     }
 
     /// An index too old to trust must be refused with a message that says what to

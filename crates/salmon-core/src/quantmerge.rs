@@ -11,9 +11,12 @@
 //! Values are copied through as text rather than parsed and reformatted, so the
 //! merged matrix contains the same digits the individual files did.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+
+/// Columns in a `quant.sf` row; see [`MergeColumn::index`].
+const QUANT_COLUMNS: usize = 5;
 
 /// Which `quant.sf` column to merge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +71,10 @@ impl MergeColumn {
 /// the same target set. Rather than failing or silently dropping rows, the union
 /// of targets is emitted and the gaps are filled with the caller's `missing`
 /// placeholder (typically `NA`), which is both visible and easy to filter.
+///
+/// Damage is different from absence, so these are errors, reported before the
+/// output is created: an empty or repeated sample name, a row with too few
+/// columns, and a target appearing twice in one file.
 pub fn merge_quants(
     quant_files: &[PathBuf],
     names: &[String],
@@ -77,6 +84,20 @@ pub fn merge_quants(
 ) -> io::Result<usize> {
     // Caller-side invariant: one display name per input file.
     assert_eq!(quant_files.len(), names.len());
+    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
+    let mut seen_names = HashSet::new();
+    for n in names {
+        if n.is_empty() {
+            return Err(invalid(
+                "a sample has an empty name; pass --names to name the samples".to_string(),
+            ));
+        }
+        if !seen_names.insert(n) {
+            return Err(invalid(format!(
+                "two samples are both named \"{n}\"; pass --names to tell them apart"
+            )));
+        }
+    }
     let nsamp = quant_files.len();
     let col = column.index();
 
@@ -102,9 +123,14 @@ pub fn merge_quants(
                 continue;
             }
             let toks: Vec<&str> = line.split('\t').collect();
-            // Truncated row: skip rather than index out of bounds.
-            if toks.len() <= col {
-                continue;
+            // `NA` means "not in this sample", so a damaged row must not become one.
+            if toks.len() < QUANT_COLUMNS {
+                return Err(invalid(format!(
+                    "{} line {}: expected {QUANT_COLUMNS} columns, found {}",
+                    qf.display(),
+                    lineno + 1,
+                    toks.len()
+                )));
             }
             let name = toks[0];
             // First time this target is seen anywhere: record its position in
@@ -113,6 +139,13 @@ pub fn merge_quants(
                 order.push(name.to_string());
                 vec![None; nsamp]
             });
+            if entry[s].is_some() {
+                return Err(invalid(format!(
+                    "{} line {}: target {name} appears twice",
+                    qf.display(),
+                    lineno + 1
+                )));
+            }
             entry[s] = Some(toks[col].to_string());
         }
     }
@@ -203,5 +236,64 @@ mod tests {
         assert_eq!(lines[2], "t2\t20.0\t30.0");
         assert_eq!(lines[3], "t3\tNA\t1.0");
         assert_eq!(n, 2);
+    }
+
+    const HEADER: &str = "Name\tLength\tEffectiveLength\tTPM\tNumReads\n";
+
+    /// Merge one file per `bodies` entry under `names`, in a directory of its own.
+    fn merge_in(tag: &str, bodies: &[&str], names: &[&str]) -> (io::Result<usize>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("qm_{}_{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let files: Vec<PathBuf> = bodies
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let f = dir.join(format!("{i}.sf"));
+                std::fs::write(&f, format!("{HEADER}{b}")).unwrap();
+                f
+            })
+            .collect();
+        let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+        let out = dir.join("merged.tsv");
+        (
+            merge_quants(&files, &names, MergeColumn::Tpm, "NA", &out),
+            out,
+        )
+    }
+
+    /// Two columns with one name cannot be told apart downstream, and an empty
+    /// one (`--quants .`) has no name at all.
+    #[test]
+    fn duplicate_or_empty_sample_names_are_refused() {
+        let row = "t1\t100\t80.0\t10.5\t5\n";
+        let (r, out) = merge_in("dup", &[row, row], &["quant", "quant"]);
+        let e = r.unwrap_err().to_string();
+        assert!(e.contains("quant"), "{e}");
+        assert!(!out.exists());
+        let (r, out) = merge_in("empty", &[row], &[""]);
+        assert!(r.is_err());
+        assert!(!out.exists());
+    }
+
+    /// A damaged row used to become `NA`, which reads as "target not in sample".
+    #[test]
+    fn a_short_row_is_refused_and_named() {
+        let (r, out) = merge_in("short", &["t1\t100\t80.0\n"], &["A"]);
+        let e = r.unwrap_err().to_string();
+        assert!(e.contains("0.sf") && e.contains("line 2"), "{e}");
+        assert!(!out.exists());
+        // Short only in a column not being merged is still a damaged file.
+        let (r, _) = merge_in("short2", &["t1\t100\t80.0\t10.5\n"], &["A"]);
+        assert!(r.is_err());
+    }
+
+    /// The later row used to overwrite the earlier one silently.
+    #[test]
+    fn a_target_repeated_in_one_sample_is_refused() {
+        let body = "t1\t100\t80.0\t10.5\t5\nt1\t100\t80.0\t99.0\t7\n";
+        let (r, out) = merge_in("rep", &[body], &["A"]);
+        let e = r.unwrap_err().to_string();
+        assert!(e.contains("t1") && e.contains("line 3"), "{e}");
+        assert!(!out.exists());
     }
 }
