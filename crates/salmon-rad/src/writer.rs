@@ -65,6 +65,8 @@ pub struct RadOutputWriter {
     pending_score_kind: Option<u8>,
     /// Mapping-pass counters, known only once the pass ends.
     pending_counters: Option<crate::MapCounters>,
+    /// See [`crate::BAKED_FLD_IS_PRIOR`].
+    fld_is_prior: bool,
     /// Whether index identity was written at create time. The tags are written
     /// up front but `baked_flags` is only patched at finalize, so this carries
     /// the fact across; without it a reader would ignore the tags it can see.
@@ -154,6 +156,7 @@ impl RadOutputWriter {
             pending_libfmt: None,
             pending_score_kind: None,
             pending_counters: None,
+            fld_is_prior: false,
             has_index_prov: provenance.index.is_some(),
             codec,
             bytes_since_space_check: std::sync::atomic::AtomicU64::new(0),
@@ -191,6 +194,12 @@ impl RadOutputWriter {
     /// apply concordance filtering under `-l A` without re-inferring the type.
     pub fn set_library_format(&mut self, format_id: u8) {
         self.pending_libfmt = Some(format_id);
+    }
+
+    /// Mark the baked distribution as only the prior (see
+    /// [`crate::BAKED_FLD_IS_PRIOR`]).
+    pub fn set_fld_is_prior(&mut self, is_prior: bool) {
+        self.fld_is_prior = is_prior;
     }
 
     /// Record what the mapping pass observed, to be baked at finalize.
@@ -262,6 +271,7 @@ impl RadOutputWriter {
         let pending_libfmt = self.pending_libfmt;
         let pending_score_kind = self.pending_score_kind;
         let pending_counters = self.pending_counters;
+        let fld_is_prior = self.fld_is_prior;
         let has_index_prov = self.has_index_prov;
         // Unwrap the concurrent wrapper back into a plain writer; this succeeds
         // only once every worker handle is gone, which is what makes the
@@ -277,6 +287,9 @@ impl RadOutputWriter {
             pmf.resize(fld_len, f64::NEG_INFINITY);
             w.backpatch_file_tag_value(crate::FRAG_LENGTH_DIST_TAG, &TagValue::ArrayF64(pmf))?;
             flags |= BAKED_FLD;
+            if fld_is_prior {
+                flags |= crate::BAKED_FLD_IS_PRIOR;
+            }
         }
         if let Some(mut abund) = pending_abund {
             abund.resize(num_refs, 0.0);

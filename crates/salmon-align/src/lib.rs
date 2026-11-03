@@ -2711,7 +2711,11 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         num_eq_classes,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
-        frag_len_source: salmon_model::FragLengthSource::Alignments,
+        frag_len_source: if fld.has_observations() {
+            salmon_model::FragLengthSource::Alignments
+        } else {
+            salmon_model::FragLengthSource::Prior
+        },
         length_classes,
         frag_len_dist: fld.log_pmf().iter().map(|lp| lp.exp()).collect(),
         start_time,

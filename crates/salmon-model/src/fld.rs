@@ -46,6 +46,8 @@ pub struct FragmentLengthDistribution {
     hist: Vec<AtomicF64>,
     /// logged total observed mass (including pseudo-counts)
     tot_mass: AtomicF64,
+    /// `tot_mass` as the prior left it, so a change means something was observed
+    prior_tot_mass: f64,
     /// logged sum of length*mass, for fast mean computation
     ///
     /// Maintained incrementally so the mean is a subtraction rather than a sweep
@@ -171,6 +173,7 @@ impl FragmentLengthDistribution {
             kernel,
             hist,
             tot_mass: AtomicF64::new(tot_mass),
+            prior_tot_mass: tot_mass,
             sum: AtomicF64::new(sum),
             bin_size,
             cached_pmf: Vec::new(),
@@ -179,6 +182,11 @@ impl FragmentLengthDistribution {
             online_pmf: RwLock::new(Arc::new(Vec::new())),
             online_cmf: RwLock::new(Arc::new(Vec::new())),
         }
+    }
+
+    /// Whether any fragment length was added: without one, this is only the prior.
+    pub fn has_observations(&self) -> bool {
+        self.tot_mass.load() != self.prior_tot_mass
     }
 
     /// Largest representable raw length.
@@ -873,7 +881,8 @@ pub enum FragLengthSource {
     /// Read from the RAD header, where it was observed by the paired-end run
     /// that wrote the file.
     RadBaked,
-    /// Read from the RAD header, but written by a *single-end* run. No fragment
+    /// Read from the RAD header, but written by a *single-end* run, or by a
+    /// paired one that saw no proper pair. No fragment
     /// lengths existed to observe, so the baked distribution is that run's
     /// `--fldMean`/`--fldSD` prior rather than an empirical distribution.
     RadBakedPrior,

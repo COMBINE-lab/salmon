@@ -1340,6 +1340,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         // run quantified, the abundance estimates (a prior for future bias-aware
         // requant). `--skipQuant` leaves `counts` at zero, so only the FLD is baked.
         rw.set_frag_length_dist(fld.log_pmf());
+        rw.set_fld_is_prior(!fld.has_observations());
         // Bake abundances from a full quant, or the rough EM run for `--deterministic`
         // + bias (its `--skipQuant` map pass) — both seed a requant's bias model.
         if !opts.skip_quant || want_rough_abund {
@@ -1489,10 +1490,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_fragments_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),
         num_alignments_below_threshold_for_mapped_fragments_vm: num_below_threshold_vm
             .load(Ordering::Relaxed),
-        // A single-end library has no fragment lengths to observe: the FLD is
-        // the --fldMean/--fldSD prior, and saying "reads" would be a
-        // provenance lie in the field that exists for provenance (#1140).
-        frag_len_source: if opts.is_paired() {
+        // A single-end library has no fragment lengths to observe, nor has a
+        // paired one with no proper pair: the FLD is the --fldMean/--fldSD
+        // prior, and saying "reads" would be a provenance lie in the field that
+        // exists for provenance (#1140).
+        frag_len_source: if fld.has_observations() {
             salmon_model::FragLengthSource::Reads
         } else {
             salmon_model::FragLengthSource::Prior

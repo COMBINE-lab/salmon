@@ -197,6 +197,7 @@ pub fn project_genome_bam_to_rad(
     // ---- single-pass bake -------------------------------------------------
     let (frag_dist, det_fmt) = fld.finish(opts.fld_mean, opts.fld_sd);
     writer.set_frag_length_dist(frag_dist.log_pmf());
+    writer.set_fld_is_prior(!frag_dist.has_observations());
     let expected_format = match opts.lib_type.as_str() {
         "A" | "IU" | "U" => None,
         s => LibraryFormat::parse(s).ok(),

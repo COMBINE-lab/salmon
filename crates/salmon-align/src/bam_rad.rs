@@ -229,6 +229,7 @@ pub fn write_alignment_rad(
     // ---- end-of-pass bake (single quant pass) ----------------------------
     let (frag_dist, det_fmt) = fld.finish(opts.fld_mean, opts.fld_sd);
     writer.set_frag_length_dist(frag_dist.log_pmf());
+    writer.set_fld_is_prior(!frag_dist.has_observations());
     // Two different questions, two different precedences (#1140). The baked
     // library-format tag answers "what did the pass observe?" — detected wins,
     // matching the reads-mode writer — so `quantify_rad` can compare it against

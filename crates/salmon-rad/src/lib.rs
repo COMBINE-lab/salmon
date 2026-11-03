@@ -407,6 +407,9 @@ pub const WRITE_COMPLETE: u8 = 0x10;
 pub const BAKED_MAP_COUNTERS: u8 = 0x20;
 /// [`BAKED_FLAGS_TAG`] bit: the index-identity tags are present.
 pub const BAKED_INDEX_PROV: u8 = 0x40;
+/// [`BAKED_FLAGS_TAG`] bit: the baked fragment-length distribution is only the
+/// writer's prior, because the pass saw no fragment length to observe.
+pub const BAKED_FLD_IS_PRIOR: u8 = 0x80;
 
 /// File-tag name: how a reader should interpret the per-hit `alignment_score`
 /// (present only in the selective-alignment profile). A `u8`:

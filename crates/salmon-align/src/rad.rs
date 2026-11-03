@@ -908,8 +908,8 @@ fn warn_baked_fld_overrides(
     // the user straight back to the prior branch by a longer route.
     let (provenance, remedy) = if source == FragLengthSource::RadBakedPrior {
         (
-            "That distribution was baked by a single-end run, so it is itself an \
-             --fldMean/--fldSD prior rather than observed fragment lengths.",
+            "The run that baked that distribution observed no fragment lengths, so it \
+             is itself an --fldMean/--fldSD prior.",
             "Pass `--fldPolicy prior` to use your values instead.",
         )
     } else {
@@ -1970,6 +1970,9 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
     let prepare_eqb = (bias_on && !opts.skip_quant && derive_fld_pass).then(NaiveEqBuilder::new);
 
     let mut detected_fmt: Option<LibraryFormat> = None;
+    // A paired run that saw no proper pair: the distribution is only a prior, which
+    // `frag_len_source` reports, while inference treats it as the paired one it is.
+    let mut unobserved_fld = false;
     let (fld, fld_source) = if let Some(baked) = fld_baked {
         // A baked FLD written by a single-end run is not observed data: that run
         // had no fragment lengths to measure, so what it baked is its *own*
@@ -1984,7 +1987,20 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             FragLengthSource::RadBaked
         };
         tracing::info!("using fragment-length distribution baked in the RAD header");
-        warn_baked_fld_overrides(&opts.explicit_fld_args, &baked, source);
+        let baked_prior = matches!(
+            file_tag_map.get(salmon_rad::BAKED_FLAGS_TAG),
+            Some(libradicl::rad_types::TagValue::U8(f)) if f & salmon_rad::BAKED_FLD_IS_PRIOR != 0
+        );
+        unobserved_fld |= baked_prior;
+        warn_baked_fld_overrides(
+            &opts.explicit_fld_args,
+            &baked,
+            if baked_prior {
+                FragLengthSource::RadBakedPrior
+            } else {
+                source
+            },
+        );
         (baked, source)
     } else if derive_fld_pass {
         let (f, detected) = match profile {
@@ -2006,6 +2022,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             )?,
         };
         detected_fmt = detected;
+        unobserved_fld = !f.has_observations();
         (f, FragLengthSource::RadDerived)
     } else {
         if opts.fld_policy == FldPolicy::Prior && paired_lib {
@@ -2574,7 +2591,11 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         num_eq_classes,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
-        frag_len_source: fld_source,
+        frag_len_source: match (unobserved_fld, fld_source) {
+            (true, FragLengthSource::RadBaked) => FragLengthSource::RadBakedPrior,
+            (true, FragLengthSource::RadDerived) => FragLengthSource::Prior,
+            (_, s) => s,
+        },
         length_classes,
         frag_len_dist: fld.log_pmf().iter().map(|lp| lp.exp()).collect(),
         start_time,

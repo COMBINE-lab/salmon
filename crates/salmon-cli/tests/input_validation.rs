@@ -922,3 +922,74 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
         "under --online the knob is honoured, not warned about"
     );
 }
+
+/// With mates that never share a transcript, a paired run observes no fragment
+/// length: its distribution is the prior, whichever path asks.
+#[test]
+fn a_paired_run_with_no_proper_pair_reports_the_prior_as_its_fld_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let txs = [sequence(5, 3000), sequence(19, 3000)];
+    let fasta = dir.path().join("txome.fa");
+    std::fs::write(&fasta, format!(">txA\n{}\n>txB\n{}\n", txs[0], txs[1])).unwrap();
+    let index = dir.path().join("idx");
+    assert!(Command::new(SALMON)
+        .args(["index", "-t"])
+        .arg(&fasta)
+        .arg("-i")
+        .arg(&index)
+        .args(["-p", "2"])
+        .status()
+        .unwrap()
+        .success());
+    let q = "I".repeat(100);
+    let (mut r1, mut r2) = (String::new(), String::new());
+    for i in 0..200 {
+        let st = (i * 11) % 2800;
+        r1.push_str(&format!("@f{i}\n{}\n+\n{q}\n", &txs[0][st..st + 100]));
+        r2.push_str(&format!("@f{i}\n{}\n+\n{q}\n", &txs[1][st..st + 100]));
+    }
+    let (p1, p2) = (dir.path().join("1.fq"), dir.path().join("2.fq"));
+    std::fs::write(&p1, r1).unwrap();
+    std::fs::write(&p2, r2).unwrap();
+
+    let source = |out: &Path| -> String {
+        let meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(out.join("aux_info/meta_info.json")).unwrap())
+                .unwrap();
+        meta["frag_length_source"].as_str().unwrap().to_string()
+    };
+    let out = dir.path().join("reads");
+    let rad = dir.path().join("m.rad");
+    let o = run(&[
+        os("quant"),
+        os("-i"),
+        index.as_os_str(),
+        os("-l"),
+        os("IU"),
+        os("-1"),
+        p1.as_os_str(),
+        os("-2"),
+        p2.as_os_str(),
+        os("--writeRad"),
+        rad.as_os_str(),
+        os("-p"),
+        os("2"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(source(&out), "prior");
+
+    let out = dir.path().join("rad");
+    let o = run(&[
+        os("quant"),
+        os("--rad"),
+        rad.as_os_str(),
+        os("-l"),
+        os("IU"),
+        os("-o"),
+        out.as_os_str(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(source(&out), "rad_baked_prior");
+}
