@@ -580,6 +580,43 @@ fn no_single_frag_prob_changes_orphan_weighting_on_the_rad_path() {
     );
 }
 
+/// Outward pairs (read 1 forward downstream of read 2) under `-l OU`. A RAD hit
+/// keeps only the fragment's leftmost position, so the reader cannot see they
+/// point outward and used to call them inward, which `-l OU` then dropped whole.
+#[test]
+fn an_outward_library_maps_on_the_rad_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = dir.path().join("ou.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    for i in 0..200 {
+        let l = 1 + (i * 7) % 3000;
+        let r = l + 200;
+        writeln!(
+            f,
+            "r{i}\t97\ttxA\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\tAS:i:-10"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "r{i}\t145\ttxA\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\tAS:i:-10"
+        )
+        .unwrap();
+    }
+    drop(f);
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "OU".to_string();
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    assert_eq!(quantify_rad(&opts, &rad).unwrap().num_mapped, 200);
+    // `--hardFilter` judges strand the same way, or no placement sets its bar.
+    opts.hard_filter = true;
+    assert_eq!(quantify_rad(&opts, &rad).unwrap().num_mapped, 200);
+}
+
 /// `--hardFilter` keeps a fragment's best placements. A wrong-strand placement
 /// that `-l` drops anyway must not set that bar, or the fragment is lost whole.
 #[test]
