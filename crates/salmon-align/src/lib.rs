@@ -2786,6 +2786,25 @@ fn warn_mass_on_unreported_refs(res: &AlignQuantResult, rows: &[usize]) {
     );
 }
 
+impl AlignQuantResult {
+    /// The references that get an output row: everything except the
+    /// RAD-recorded decoy block.
+    pub fn quant_rows(&self) -> Vec<usize> {
+        let (first_decoy, num_decoys) = self
+            .provenance
+            .index
+            .as_ref()
+            .map(|ix| {
+                (
+                    ix.first_decoy_index.map(|v| v as usize),
+                    ix.num_decoys.unwrap_or(0) as usize,
+                )
+            })
+            .unwrap_or((None, 0));
+        salmon_core::quant_row_indices(self.names.len(), first_decoy, num_decoys).collect()
+    }
+}
+
 fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()> {
     let dir = &opts.output_dir;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating output dirs")?;
@@ -2797,19 +2816,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     // the recorded boundary (piscem, BAM-derived, or written before the
     // boundary tags existed) has no decoys to exclude and emits every row, as
     // before.
-    let (first_decoy, num_decoys) = res
-        .provenance
-        .index
-        .as_ref()
-        .map(|ix| {
-            (
-                ix.first_decoy_index.map(|v| v as usize),
-                ix.num_decoys.unwrap_or(0) as usize,
-            )
-        })
-        .unwrap_or((None, 0));
-    let rows: Vec<usize> =
-        salmon_core::quant_row_indices(res.names.len(), first_decoy, num_decoys).collect();
+    let rows = res.quant_rows();
     warn_mass_on_unreported_refs(res, &rows);
 
     // quant.sf (EffectiveLength + NumReads at --sigDigits decimals; TPM at 6).

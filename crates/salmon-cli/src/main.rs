@@ -1109,12 +1109,23 @@ const UNMATCHED_TXP_FILE: &str = "genemap_unmatched_txps.json";
 fn write_gene_level(
     out_dir: &std::path::Path,
     gene_map: &GeneMapOpts,
+    rows: &[usize],
     names: &[String],
     lengths: &[u32],
     eff_lengths: &[f64],
     tpm: &[f64],
     counts: &[f64],
 ) -> Result<()> {
+    // The same rows as quant.sf: a decoy is neither a gene nor a transcript the
+    // annotation failed to cover.
+    fn pick<T: Clone>(rows: &[usize], v: &[T]) -> Vec<T> {
+        rows.iter().map(|&i| v[i].clone()).collect()
+    }
+    let names = &pick(rows, names)[..];
+    let lengths = &pick(rows, lengths)[..];
+    let eff_lengths = &pick(rows, eff_lengths)[..];
+    let tpm = &pick(rows, tpm)[..];
+    let counts = &pick(rows, counts)[..];
     // Parsed up front by `load_gene_map`, so nothing here can fail on a bad path.
     let map = &gene_map.map;
     // Listed by name rather than only counted, so the failure survives a lost
@@ -1587,6 +1598,7 @@ fn run_deterministic(
         write_gene_level(
             out_dir,
             gm,
+            &res.quant_rows(),
             &res.names,
             &res.lengths,
             &res.eff_lengths,
@@ -1729,6 +1741,7 @@ fn run_deterministic_align(
         write_gene_level(
             &out_dir,
             gm,
+            &res.quant_rows(),
             &res.names,
             &res.lengths,
             &res.eff_lengths,
@@ -1868,6 +1881,7 @@ fn run_genome_project(
         write_gene_level(
             &out_dir,
             gm,
+            &res.quant_rows(),
             &res.names,
             &res.lengths,
             &res.eff_lengths,
@@ -2507,6 +2521,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             write_gene_level(
                 &out_dir,
                 gm,
+                &res.quant_rows(),
                 &res.names,
                 &res.lengths,
                 &res.eff_lengths,
@@ -2658,6 +2673,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             write_gene_level(
                 &out_dir,
                 gm,
+                &res.quant_rows(),
                 &res.names,
                 &res.lengths,
                 &res.eff_lengths,
@@ -3066,6 +3082,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         write_gene_level(
             &out_dir,
             gm,
+            &salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
+                .collect::<Vec<_>>(),
             &res.names,
             &res.lengths,
             &res.eff_lengths,
