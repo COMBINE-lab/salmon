@@ -849,6 +849,8 @@ pub(crate) struct ReadGrouper<R> {
     started: bool,
     /// Reads seen with no mapped record: processed, never mapped.
     pub(crate) unmapped_reads: u64,
+    /// Whether the mates of each read are next to each other.
+    pub(crate) grouping: GroupingCheck,
 }
 
 impl<R: sam::alignment::Record> ReadGrouper<R> {
@@ -858,6 +860,7 @@ impl<R: sam::alignment::Record> ReadGrouper<R> {
             group: Vec::new(),
             started: false,
             unmapped_reads: 0,
+            grouping: GroupingCheck::default(),
         }
     }
 
@@ -875,8 +878,12 @@ impl<R: sam::alignment::Record> ReadGrouper<R> {
             self.name.extend_from_slice(name);
             self.started = true;
         }
-        if !rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
-            self.group.push(rec);
+        match rec.flags() {
+            Ok(flags) if !flags.is_unmapped() => {
+                self.grouping.record(flags);
+                self.group.push(rec);
+            }
+            _ => {}
         }
         done
     }
@@ -896,6 +903,7 @@ impl<R: sam::alignment::Record> ReadGrouper<R> {
             self.unmapped_reads += 1;
             None
         } else {
+            self.grouping.end_read();
             Some(std::mem::take(&mut self.group))
         }
     }
@@ -1184,6 +1192,7 @@ where
                 let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
                 let _ = tx.send((fm, batch));
             }
+            reads.grouping.finish()?;
             Ok(reads.unmapped_reads)
         });
 
@@ -2042,6 +2051,60 @@ pub fn parse_source_programs(lines: &[String]) -> Vec<SourceProgram> {
             prog
         })
         .collect()
+}
+
+/// Spots input whose mates are not next to each other, which the header check
+/// below cannot do when the header says nothing (`SO:unknown`, or no `@HD`). Each
+/// mate then forms a fragment of its own, so every count doubles while each record
+/// looks like an orphan. Tallied on the reader thread, from the flags
+/// [`ReadGrouper`] has already read.
+#[derive(Default)]
+pub(crate) struct GroupingCheck {
+    fragments: u64,
+    /// fragments with a record whose mate is marked mapped, but no such mate
+    split: u64,
+    first: bool,
+    last: bool,
+    expects_mate: bool,
+}
+
+impl GroupingCheck {
+    /// One mapped record of the current read.
+    fn record(&mut self, flags: sam::alignment::record::Flags) {
+        self.first |= flags.is_first_segment();
+        self.last |= flags.is_last_segment();
+        self.expects_mate |= flags.is_segmented() && !flags.is_mate_unmapped();
+    }
+
+    /// The current read, which had at least one mapped record, is complete.
+    fn end_read(&mut self) {
+        self.fragments += 1;
+        self.split += u64::from(self.expects_mate && !(self.first && self.last));
+        (self.first, self.last, self.expects_mate) = (false, false, false);
+    }
+
+    /// Refuses input where at least half the fragments are split: that is not a
+    /// filtered BAM but one in the wrong order, and its numbers would be wrong.
+    /// A smaller share can be real (a filter that kept one mate), so it only warns.
+    pub(crate) fn finish(&self) -> Result<()> {
+        let Self {
+            fragments, split, ..
+        } = *self;
+        let hint = "Records of one read must be consecutive: group them by name with \
+                    `samtools collate` or `samtools sort -n`";
+        anyhow::ensure!(
+            split * 2 < fragments || fragments == 0,
+            "{split} of {fragments} fragments have a mate marked as mapped that is not next \
+             to them, so the input is not grouped by read name. {hint}."
+        );
+        if split * 20 >= fragments && split > 0 {
+            tracing::warn!(
+                "{split} of {fragments} fragments have a mate marked as mapped that is not next \
+                 to them. They are quantified as orphans. If the mates are really there: {hint}."
+            );
+        }
+        Ok(())
+    }
 }
 
 fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {

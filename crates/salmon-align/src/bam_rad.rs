@@ -853,6 +853,7 @@ where
             if !batch.is_empty() {
                 let _ = tx.send(batch);
             }
+            reads.grouping.finish()?;
             Ok(reads.unmapped_reads)
         });
 
