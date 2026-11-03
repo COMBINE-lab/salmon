@@ -328,3 +328,43 @@ fn input_not_grouped_by_read_name_is_refused() {
         assert!(err.contains("not grouped by read name"), "{err}");
     }
 }
+
+/// Unmapped records (bowtie2's default, STAR's `--outSAMunmapped Within`) are
+/// fragments the aligner saw and could not place, so they count against the
+/// mapping rate. Dropped at the reader, a 25% library reported 100%, on both the
+/// default path and `--online`.
+#[test]
+fn unmapped_fragments_count_against_the_mapping_rate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("aln.sam");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:unsorted").unwrap();
+    writeln!(f, "@SQ\tSN:tx0\tLN:5000").unwrap();
+    for i in 0..2 {
+        let (l, r) = (1 + i * 400, 201 + i * 400);
+        writeln!(f, "m{i}\t99\ttx0\t{l}\t60\t100M\t=\t{r}\t300\t*\t*").unwrap();
+        writeln!(f, "m{i}\t147\ttx0\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*").unwrap();
+    }
+    for i in 0..6 {
+        writeln!(f, "u{i}\t77\t*\t0\t0\t*\t*\t0\t0\t*\t*").unwrap();
+        writeln!(f, "u{i}\t141\t*\t0\t0\t*\t*\t0\t0\t*\t*").unwrap();
+    }
+    drop(f);
+
+    let online = run(&path, &tmp.path().join("online"), "IU");
+    assert_eq!(
+        (online.num_processed, online.num_mapped),
+        (8, 2),
+        "--online"
+    );
+
+    let mut opts = AlignQuantOptions::new(path, tmp.path().join("rad_out"));
+    opts.lib_type = "IU".to_string();
+    opts.no_error_model = true;
+    let rad = tmp.path().join("a.rad");
+    let summary =
+        salmon_align::write_alignment_rad(&opts, &rad, salmon_rad::ChunkCodec::None).unwrap();
+    assert_eq!((summary.num_processed, summary.num_mapped), (8, 2), "RAD");
+    let res = salmon_align::quantify_rad(&opts, &rad).unwrap();
+    assert_eq!((res.num_processed, res.num_mapped), (8, 2), "requant");
+}

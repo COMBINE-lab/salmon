@@ -1677,7 +1677,7 @@ fn run_deterministic_align(
         0.0
     };
     tracing::info!(
-        "deterministic: wrote {} / {} aligned fragments ({:.2}%) to the intermediate RAD; quantifying",
+        "deterministic: wrote {} / {} fragments ({:.2}%) to the intermediate RAD; quantifying",
         summary.num_mapped,
         summary.num_processed,
         pct
@@ -2477,7 +2477,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         // stranded library reads as "strand-incompatible", not "lost alignments".
         if res.num_processed > res.num_mapped {
             tracing::info!(
-                "{} aligned fragments; {} strand-compatible and quantified ({:.2}%); \
+                "{} fragments; {} aligned, strand-compatible and quantified ({:.2}%); \
                  {} dropped as incompatible with library type {}; {} equivalence classes",
                 res.num_processed,
                 res.num_mapped,
@@ -2488,7 +2488,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             );
         } else {
             tracing::info!(
-                "{} aligned fragments, all strand-compatible and quantified; {} equivalence classes",
+                "{} fragments, all aligned, strand-compatible and quantified; {} equivalence classes",
                 res.num_processed,
                 res.num_eq_classes
             );
