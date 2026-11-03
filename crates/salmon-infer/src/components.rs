@@ -595,7 +595,7 @@ impl CompView<'_> {
         s: &mut CompState,
         cutoff: f64,
     ) -> (f64, f64) {
-        const CH: usize = 2048;
+        const CH: usize = L1_CHUNK;
         if VB {
             s.et.par_chunks_mut(CH)
                 .zip(s.alpha.par_chunks(CH))
@@ -625,13 +625,13 @@ impl CompView<'_> {
                 }
             });
         let scale = &s.scale;
-        let max_d = s
-            .next
+        s.next
             .par_chunks_mut(CH)
             .zip(s.alpha.par_chunks(CH))
             .enumerate()
             .map(|(chunk, (nx, al))| {
                 let mut max_d = f64::NEG_INFINITY;
+                let mut l1 = 0.0f64;
                 for (j, (o, &a_in)) in nx.iter_mut().zip(al).enumerate() {
                     let t = chunk * CH + j;
                     let b = basis[t];
@@ -650,19 +650,18 @@ impl CompView<'_> {
                     }
                     *o = acc;
                     max_d = fold_d(max_d, a_in, acc, cutoff);
+                    l1 += (acc - a_in).abs();
                 }
-                max_d
+                (max_d, l1)
             })
-            .reduce(|| f64::NEG_INFINITY, max_of);
-        // Summed in one serial pass, not per chunk: float addition is not
-        // associative, and the projected stopping test must see what
-        // `criterion` computes on a single thread.
-        let l1 = s
-            .alpha
-            .iter()
-            .zip(s.next.iter())
-            .fold(0.0f64, |l1, (&a_in, &a_out)| l1 + (a_out - a_in).abs());
-        (max_d, l1)
+            // Collected in chunk order and folded sequentially, so the L1 sum
+            // (unlike a rayon reduce tree) does not depend on the thread count,
+            // and groups its terms exactly as `criterion` does.
+            .collect::<Vec<_>>()
+            .into_iter()
+            .fold((f64::NEG_INFINITY, 0.0), |a, b| {
+                (if b.0 > a.0 { b.0 } else { a.0 }, a.1 + b.1)
+            })
     }
 
     #[inline]
@@ -752,15 +751,26 @@ impl CompView<'_> {
     }
 }
 
+/// Transcripts per chunk of [`CompView::step_pull`]. A step's L1 size is summed
+/// per chunk of this many transcripts and then over the chunks in order, by
+/// [`criterion`] too, so a pushed and a gathered step of one component give the
+/// same bits: float addition is not associative, and the projected stopping
+/// test reads this sum.
+const L1_CHUNK: usize = 2048;
+
 /// The convergence criterion over a component's transcripts and the L1 size
-/// of its step from `alpha` to `next`.
+/// of its step from `alpha` to `next`, summed as [`L1_CHUNK`] says.
 #[inline]
 fn criterion(alpha: &[f64], next: &[f64], cutoff: f64) -> (f64, f64) {
     let mut max_d = f64::NEG_INFINITY;
     let mut l1 = 0.0f64;
-    for (&a_in, &a_out) in alpha.iter().zip(next.iter()) {
-        max_d = fold_d(max_d, a_in, a_out, cutoff);
-        l1 += (a_out - a_in).abs();
+    for (al, nx) in alpha.chunks(L1_CHUNK).zip(next.chunks(L1_CHUNK)) {
+        let mut part = 0.0f64;
+        for (&a_in, &a_out) in al.iter().zip(nx) {
+            max_d = fold_d(max_d, a_in, a_out, cutoff);
+            part += (a_out - a_in).abs();
+        }
+        l1 += part;
     }
     (max_d, l1)
 }
