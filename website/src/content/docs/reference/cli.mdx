@@ -29,10 +29,10 @@ Build a reusable index from one or more transcriptome FASTA files.
 | --- | --- |
 | `-t, --transcripts <FASTA>…` | Transcript FASTA file(s). **Required.** |
 | `-i, --index <DIR>` | Output index directory. **Required.** |
-| `-k, --kmerLen <N>` | K-mer length (odd, ≤ 31 recommended). Default `31`. |
+| `-k, --kmerLen <N>` | K-mer length (odd, at most 31). Default `31`. |
 | `-m, --minimizerLen <N>` | Minimizer length (`0` = auto → 19 for the default k=31). Default `0`. |
 | `-p, --threads <N>` | Worker threads (`0` = all cores). Default `0`. |
-| `-d, --decoys <FILE>` | File of decoy sequence names (one per line; decoy records must come last in the FASTA). |
+| `-d, --decoys <FILE>` | File of decoy sequence names, one per line: each FASTA header up to its first space, without the `>`. Every name must be in the FASTA, and decoy records must come last. |
 | `--keepDuplicates` | Retain exact-duplicate transcript sequences instead of collapsing them. |
 | `-n, --no-clip` | Don't clip poly-A tails. By default a reference ending in ≥10 `A`s has its trailing `A`s trimmed (all-`A` references are dropped), matching pufferfish. |
 | `--gencode` | GENCODE references: truncate each name at the first `\|`. |
@@ -57,7 +57,7 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | Option | Description |
 | --- | --- |
 | `-i, --index <DIR>` | Salmon index (reads mode). |
-| `-a, --alignments <BAM>` | Alignment mode: a name-grouped BAM of reads aligned to the transcriptome. With `--annotation`, a genome-aligned BAM instead (see below). |
+| `-a, --alignments <BAM>` | Alignment mode: a name-grouped BAM of reads aligned to the transcriptome. The records of one read must be adjacent (`samtools collate`); a BAM where they mostly are not is refused. Unmapped records may stay in: they count toward `percent_mapped`. With `--annotation`, a genome-aligned BAM instead (see below). |
 | `--annotation <GTF\|GFF>` | Genome-alignment mode: project a genome-aligned BAM into transcriptome coordinates via this annotation. See [genome-alignment quantification](../../guides/genome-projection/). |
 | `--genome <FASTA>` | Genome FASTA (genome mode); enables bias correction by reconstructing transcript sequences from exon slices. |
 | `--juncMissDiscount <f>` | Penalty for an unannotated splice junction in genome projection (default `1.0` = none). |
@@ -253,6 +253,10 @@ next mismatch as effectively as this one was hidden.
 
 Merge a chosen column (e.g. `NumReads` or `TPM`) across multiple samples'
 `quant.sf` files into a single matrix.
+
+Each sample is named after its directory unless `--names` is given, and the
+names must be distinct. A damaged `quant.sf`, with a short row or a target
+listed twice, is refused rather than filled with `NA`.
 
 :::note
 Coming from C++ salmon? See [what changed in 2.0](../../migrating/from-cpp/) for

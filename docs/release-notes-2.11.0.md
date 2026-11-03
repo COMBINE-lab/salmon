@@ -168,7 +168,7 @@ In alignment mode, unmapped records are now counted, but on the reader thread: t
 ## For library users
 
 The published `salmon-*` crates change in these places:
-- `salmon_core::RefProvider::ref_seq` is now `ref_view`, which returns a `RefView` over bytes or packed bases.
+- `salmon_core::RefProvider::ref_seq` is now `ref_view`, which returns a `RefView` over bytes or packed bases. `salmon_map::extend_mem` takes a `RefView`, and `salmon_map::align_chain_view` aligns a chain against one.
 - `SalmonIndex::load_with_opts` takes `RefseqLoad::{None, Bytes, Packed}` instead of a `bool`.
 - `salmon_model::corrected_effective_length_full` takes the transcript length. The sequence now travels in `BiasInputs::seq`, with the sequence-bias tables.
 - `salmon_rad::SalmonBulkRecord::from_placements` builds a record from its placements' statuses. A hit on the orphan side the record's type does not name sets its `mate_fw` bit, which orphan hits otherwise leave unset. Records with one orphan side are byte-identical to before.
