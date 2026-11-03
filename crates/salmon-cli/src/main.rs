@@ -2814,7 +2814,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.mates2 = args.mates2;
     opts.unmated = args.unmated;
     opts.lib_type = args.lib_type;
-    opts.num_threads = args.threads;
+    // 0 means "all cores" further down, so it stays 0; anything else takes the cap.
+    opts.num_threads = if args.threads == 0 { 0 } else { nthreads };
     opts.decoder = piscem_rs::io::calibrate::DecoderPreference::parse(
         args.decoder.as_deref().unwrap_or("auto"),
     )
