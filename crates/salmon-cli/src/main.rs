@@ -340,7 +340,7 @@ struct IndexArgs {
     /// Output index directory.
     #[arg(short = 'i', long = "index", required = true)]
     index: PathBuf,
-    /// K-mer length (odd, ≤ 31 recommended).
+    /// K-mer length (odd, at most 31).
     #[arg(short = 'k', long = "kmerLen", default_value_t = 31)]
     kmer_len: usize,
     /// Minimizer length (0 = auto; 19 for the default k=31).
@@ -466,7 +466,7 @@ struct QuantArgs {
     genome: Option<PathBuf>,
     /// Genome-alignment projection: penalty multiplier per junction mismatch
     /// (bramble `junc_miss_discount`; default 1.0 = no penalty).
-    #[arg(long = "juncMissDiscount", value_name = "F", requires = "annotation")]
+    #[arg(long = "juncMissDiscount", value_name = "F", requires = "annotation", value_parser = parse_non_negative_f64)]
     junc_miss_discount: Option<f64>,
     /// Library type (e.g. IU, ISR, A for auto).
     #[arg(short = 'l', long = "libType", default_value = "A")]
@@ -548,7 +548,7 @@ struct QuantArgs {
     #[arg(long = "rangeFactorizationBins", default_value_t = 4)]
     range_factorization_bins: u32,
     /// Prior weight for strand-incompatible mappings (0 drops them).
-    #[arg(long = "incompatPrior", default_value_t = 0.0)]
+    #[arg(long = "incompatPrior", default_value_t = 0.0, value_parser = parse_unit_f64)]
     incompat_prior: f64,
     /// Dump equivalence classes to aux_info/eq_classes.txt.gz (salmon format).
     #[arg(long = "dumpEq")]
@@ -696,12 +696,12 @@ struct QuantArgs {
     /// Minimum alignment score as a fraction of the perfect score (default 0.65).
     /// Option-typed so passing it under `--sketch` — which computes no alignment
     /// scores — can warn instead of being silently inert (#1140).
-    #[arg(long = "minScoreFraction")]
+    #[arg(long = "minScoreFraction", value_parser = parse_unit_f32)]
     min_score_fraction: Option<f32>,
     /// Orphan chain sub-optimality threshold (salmon's `orphanChainSubThresh`).
     /// `0.0` (default) aligns every orphan candidate (more sensitive than salmon's
     /// 0.95, which prunes low-chain-coverage orphans before alignment).
-    #[arg(long = "orphanChainSubThresh")]
+    #[arg(long = "orphanChainSubThresh", value_parser = parse_unit_f32)]
     orphan_chain_sub_thresh: Option<f32>,
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
@@ -738,14 +738,14 @@ struct QuantArgs {
     /// Consensus slack: a target is kept only if its best chain score is at least
     /// `(1 - slack)` of the max chain score for that mate (salmon default 0.35;
     /// `1.0` keeps every target).
-    #[arg(long = "consensusSlack")]
+    #[arg(long = "consensusSlack", value_parser = parse_unit_f32)]
     consensus_slack: Option<f32>,
     /// Skip k-mers whose unitig occurs in more than this many references
     /// (repetitive-hit guard; salmon's `maxOccsPerHit`).
     #[arg(long = "maxOccsPerHit")]
     max_occs_per_hit: Option<usize>,
     /// VBEM per-feature Dirichlet prior weight.
-    #[arg(long = "vbPrior", default_value_t = 1e-2)]
+    #[arg(long = "vbPrior", default_value_t = 1e-2, value_parser = parse_positive_f64)]
     vb_prior: f64,
     /// EM/VBEM convergence acceleration. `squarem` needs fewer M-steps for a given
     /// accuracy (with VBEM it pays off at tighter tolerances); `daarem` requires
@@ -776,7 +776,7 @@ struct QuantArgs {
     fld_sd: Option<f64>,
     /// Maximum fragment length tracked by the fragment-length distribution
     /// [default: 1000].
-    #[arg(long = "fldMax")]
+    #[arg(long = "fldMax", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     fld_max: Option<usize>,
     /// Where the fragment-length distribution comes from when quantifying a RAD
     /// (`--rad` only) [default: baked].
@@ -792,7 +792,7 @@ struct QuantArgs {
     /// Online-phase forgetting factor in (0.5, 1.0]; default 0.65. Online-path
     /// only (--online, deprecated): ignored with a warning under the default
     /// deterministic mode.
-    #[arg(short = 'f', long = "forgettingFactor")]
+    #[arg(short = 'f', long = "forgettingFactor", value_parser = parse_forgetting_factor)]
     forgetting_factor: Option<f64>,
     /// Initialize the optimizer uniformly. In reads mode (one-pass and
     /// --deterministic) the optimizer already starts uniform, so this is the
@@ -835,16 +835,16 @@ struct QuantArgs {
     discard_orphans_quasi: bool,
     /// An alignment to an annotated transcript is invalid if its score is
     /// `< decoyThreshold * bestDecoyScore` (selective-alignment mode).
-    #[arg(long = "decoyThreshold")]
+    #[arg(long = "decoyThreshold", value_parser = parse_non_negative_f64)]
     decoy_threshold: Option<f64>,
     /// Drop any mapping whose alignment probability
     /// `exp(-scoreExp * (best - score))` is below this (selective-alignment mode).
-    #[arg(long = "minAlnProb")]
+    #[arg(long = "minAlnProb", value_parser = parse_unit_f64)]
     min_aln_prob: Option<f64>,
     /// Soft-weight decay: a mapping's probability is proportional to
     /// `exp(-scoreExp * (bestScore - score))`. Larger downweights sub-optimal
     /// mappings more steeply. (salmon's --scoreExp; default 1.0)
-    #[arg(long = "scoreExp")]
+    #[arg(long = "scoreExp", value_parser = parse_non_negative_f64)]
     score_exp: Option<f64>,
     /// Instead of soft-weighting multimapping locations by alignment score, keep
     /// only the best-scoring mapping(s), each with equal weight.
@@ -869,13 +869,13 @@ struct QuantArgs {
     /// Per-target pre-merge chain sub-optimality threshold: keep chains scoring
     /// `>= best_chain_score * thresh` (selective-alignment mode). Range [0,1].
     /// Rust default 0.8 (salmon's default is 0.75).
-    #[arg(long = "preMergeChainSubThresh")]
+    #[arg(long = "preMergeChainSubThresh", value_parser = parse_unit_f32)]
     pre_merge_chain_sub_thresh: Option<f32>,
     /// Post-merge concordant chain-pair sub-optimality threshold: after pairing,
     /// keep pairs whose read-coverage is `>= best_pair_coverage * thresh`
     /// (paired-end, selective-alignment mode). Range [0,1]. Default 0.0 (off);
     /// salmon's default is 0.9, thresholded on chain score rather than coverage.
-    #[arg(long = "postMergeChainSubThresh")]
+    #[arg(long = "postMergeChainSubThresh", value_parser = parse_unit_f32)]
     post_merge_chain_sub_thresh: Option<f32>,
     /// Fragment-length sampling stride for the GC bias eff-length convolution.
     /// Larger = faster bias correction, coarser. (salmon's --biasSpeedSamp)
@@ -988,6 +988,37 @@ fn parse_positive_f64(s: &str) -> Result<f64, String> {
         Ok(v)
     } else {
         Err(format!("must be a positive number (got {s})"))
+    }
+}
+
+fn parse_non_negative_f64(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if v.is_finite() && v >= 0.0 {
+        Ok(v)
+    } else {
+        Err(format!("must be a number of at least 0 (got {s})"))
+    }
+}
+
+fn parse_unit_f64(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if (0.0..=1.0).contains(&v) {
+        Ok(v)
+    } else {
+        Err(format!("must be between 0 and 1 (got {s})"))
+    }
+}
+
+fn parse_unit_f32(s: &str) -> Result<f32, String> {
+    parse_unit_f64(s).map(|v| v as f32)
+}
+
+fn parse_forgetting_factor(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if v > 0.5 && v <= 1.0 {
+        Ok(v)
+    } else {
+        Err(format!("must be in (0.5, 1.0] (got {s})"))
     }
 }
 
