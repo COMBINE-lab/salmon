@@ -507,4 +507,32 @@ mod tests {
             "zero-alpha target must not contribute (diff={diff2})"
         );
     }
+
+    /// A transcript shorter than every fragment length has nothing to convolve,
+    /// so only the lower barrier decides. It must not depend on which bias flag
+    /// is on: the positional path used to skip it, leaving 75 against 45 here, a
+    /// 1.67x difference in TPM.
+    #[test]
+    fn short_transcript_floor_is_the_same_on_every_bias_path() {
+        let ref_len = 120;
+        let (fld_low, fld_high, elen) = (150, 250, 75.0);
+        // The FLD has mass below `ref_len`, or the correction bails out early.
+        let cdf: Vec<f64> = (0..=300).map(|i| (i as f64 / 300.0).min(1.0)).collect();
+        let ones = vec![1.0; ref_len];
+        let prefix = vec![0u32; ref_len + 1];
+        let gc_model = GcFragModel::new(1, 25);
+        let run = |bias: BiasInputs| {
+            corrected_effective_length_full(ref_len, &cdf, fld_low, fld_high, &bias, elen, 1, false)
+        };
+        let pos = run(BiasInputs {
+            pos: Some((&ones, &ones)),
+            ..Default::default()
+        });
+        let gc = run(BiasInputs {
+            gc: Some((&gc_model, GcView::Dense(&prefix))),
+            ..Default::default()
+        });
+        assert_eq!(gc, 45.0);
+        assert_eq!(pos, gc);
+    }
 }
