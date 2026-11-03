@@ -79,8 +79,8 @@ fn meta(out: &Path) -> serde_json::Value {
 fn library_types_reports_the_applied_format_and_detected_the_observed_one() {
     let dir = tempfile::tempdir().unwrap();
     let (index, r1, r2) = fixture(dir.path());
-    let run = |lib: &str, out: &Path| {
-        assert!(Command::new(SALMON)
+    let run = |lib: &str, out: &Path, expect_success: bool| {
+        let status = Command::new(SALMON)
             .args(["quant", "-i"])
             .arg(&index)
             .args(["-l", lib, "-1"])
@@ -90,14 +90,15 @@ fn library_types_reports_the_applied_format_and_detected_the_observed_one() {
             .args(["-p", "2", "-o"])
             .arg(out)
             .status()
-            .unwrap()
-            .success());
+            .unwrap();
+        assert_eq!(status.success(), expect_success, "-l {lib}");
     };
 
     // The reads are ISF. Declaring ISR must be reported as ISR — the run really
-    // did filter that way (and mapped nothing as a result).
+    // did filter that way (and mapped nothing as a result, so it exits non-zero,
+    // with its output kept).
     let wrong = dir.path().join("isr");
-    run("ISR", &wrong);
+    run("ISR", &wrong, false);
     let m = meta(&wrong);
     assert_eq!(m["library_types"][0], "ISR", "applied format");
     assert_eq!(m["detected_library_type"], "ISF", "observed format");
@@ -105,7 +106,7 @@ fn library_types_reports_the_applied_format_and_detected_the_observed_one() {
 
     // Under `-l A` detection *is* the declaration, so both agree.
     let auto = dir.path().join("auto");
-    run("A", &auto);
+    run("A", &auto, true);
     let m = meta(&auto);
     assert_eq!(m["library_types"][0], "ISF");
     assert_eq!(m["detected_library_type"], "ISF");

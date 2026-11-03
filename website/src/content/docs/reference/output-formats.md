@@ -165,6 +165,8 @@ written to stderr as the run proceeds, but `logs/salmon_quant.log` carries only
 a fixed run summary (version, times, counts, fragment-length statistics) and
 not these diagnostics. `severity` is `"error"` or `"warning"`. Codes:
 
+An `error` also makes `salmon quant` exit non-zero, after writing its output files.
+
 | `code` | severity | fires when |
 | --- | --- | --- |
 | `no_input_fragments` | error | zero fragments were processed (empty/unreadable input) |
