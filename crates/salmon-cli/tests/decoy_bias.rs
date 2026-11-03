@@ -141,4 +141,46 @@ fn decoys_are_excluded_and_mass_is_conserved_with_bias() {
         !err.contains("excluded from quant.sf"),
         "the unreported-mass guard must not fire here: {err}"
     );
+
+    // Gene-level output reports the same rows as quant.sf, in both reads paths: a
+    // decoy is neither a gene nor a transcript the annotation failed to cover.
+    let gene_map = dir.path().join("t2g.tsv");
+    std::fs::write(&gene_map, "txA\tG1\ntxB\tG1\ntxC\tG2\n").unwrap();
+    for (name, extra) in [("genes", &[][..]), ("genes_online", &["--online"][..])] {
+        let out = dir.path().join(name);
+        let run = Command::new(SALMON)
+            .args(["quant", "-i"])
+            .arg(&index)
+            .args(["-l", "IU", "-1"])
+            .arg(&p1)
+            .arg("-2")
+            .arg(&p2)
+            .args(["-p", "2", "-g"])
+            .arg(&gene_map)
+            .args(extra)
+            .arg("-o")
+            .arg(&out)
+            .output()
+            .unwrap();
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let genes = std::fs::read_to_string(out.join("quant.genes.sf")).unwrap();
+        let names: Vec<&str> = genes
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').next().unwrap())
+            .collect();
+        assert_eq!(names, ["G1", "G2"], "{name}: {genes}");
+        assert!(
+            !out.join("aux_info/genemap_unmatched_txps.json").exists(),
+            "{name}: every transcript is in the map, and a decoy is not a transcript"
+        );
+        assert!(
+            !String::from_utf8_lossy(&run.stderr).contains("no entry in the gene map"),
+            "{name}: a decoy must not count against the gene map"
+        );
+    }
 }

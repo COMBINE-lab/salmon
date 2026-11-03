@@ -839,6 +839,76 @@ fn canonical_name(name: &[u8]) -> &[u8] {
     }
 }
 
+/// Groups an alignment stream's consecutive records by read, for the reader
+/// threads. Only mapped records are kept: a read with none is counted here and
+/// never reaches the workers, so it costs no more than its decode, and the
+/// minibatches hold the same reads they would without it.
+pub(crate) struct ReadGrouper<R> {
+    name: Vec<u8>,
+    group: Vec<R>,
+    started: bool,
+    /// Reads seen with no mapped record: processed, never mapped.
+    pub(crate) unmapped_reads: u64,
+    /// Whether the mates of each read are next to each other.
+    pub(crate) grouping: GroupingCheck,
+}
+
+impl<R: sam::alignment::Record> ReadGrouper<R> {
+    pub(crate) fn new() -> Self {
+        Self {
+            name: Vec::new(),
+            group: Vec::new(),
+            started: false,
+            unmapped_reads: 0,
+            grouping: GroupingCheck::default(),
+        }
+    }
+
+    /// Add the next record. Returns the previous read's mapped records when this
+    /// record starts a new read.
+    pub(crate) fn push(&mut self, rec: R) -> Option<Vec<R>> {
+        let name = rec.name()?;
+        let name = canonical_name(name.as_ref());
+        let mut done = None;
+        if !self.started || name != self.name.as_slice() {
+            if self.started {
+                done = self.close();
+            }
+            self.name.clear();
+            self.name.extend_from_slice(name);
+            self.started = true;
+        }
+        match rec.flags() {
+            Ok(flags) if !flags.is_unmapped() => {
+                self.grouping.record(flags);
+                self.group.push(rec);
+            }
+            _ => {}
+        }
+        done
+    }
+
+    /// The last read's mapped records, at the end of the stream.
+    pub(crate) fn finish(&mut self) -> Option<Vec<R>> {
+        if self.started {
+            self.started = false;
+            self.close()
+        } else {
+            None
+        }
+    }
+
+    fn close(&mut self) -> Option<Vec<R>> {
+        if self.group.is_empty() {
+            self.unmapped_reads += 1;
+            None
+        } else {
+            self.grouping.end_read();
+            Some(std::mem::take(&mut self.group))
+        }
+    }
+}
+
 /// Map a noodles CIGAR op kind to our `AlnOp`.
 fn kind_to_op(k: Kind) -> AlnOp {
     match k {
@@ -1100,42 +1170,30 @@ where
 
     std::thread::scope(|scope| -> Result<()> {
         // Reader/parser thread.
-        let reader = scope.spawn(move || -> Result<()> {
-            let mut cur_name: Vec<u8> = Vec::new();
-            let mut have = false;
-            let mut group: Vec<R> = Vec::new();
+        let reader = scope.spawn(move || -> Result<u64> {
+            let mut reads = ReadGrouper::new();
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(minibatch);
             for result in records {
                 let rec = result.context("reading alignment record")?;
-                if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
+                let Some(group) = reads.push(rec) else {
                     continue;
-                }
-                let Some(name) = rec.name() else { continue };
-                let cname = canonical_name(name.as_ref()).to_vec();
-                if !have {
-                    cur_name = cname;
-                    have = true;
-                } else if cname != cur_name {
-                    batch.push(std::mem::take(&mut group));
-                    cur_name = cname;
-                    if batch.len() >= minibatch {
-                        let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
-                        if tx.send((fm, std::mem::take(&mut batch))).is_err() {
-                            return Ok(()); // all workers gone
-                        }
-                        batch = Vec::with_capacity(minibatch);
-                    }
-                }
-                group.push(rec);
-            }
-            if have && !group.is_empty() {
+                };
                 batch.push(group);
+                if batch.len() >= minibatch {
+                    let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
+                    if tx.send((fm, std::mem::take(&mut batch))).is_err() {
+                        return Ok(reads.unmapped_reads); // all workers gone
+                    }
+                    batch = Vec::with_capacity(minibatch);
+                }
             }
+            batch.extend(reads.finish());
             if !batch.is_empty() {
                 let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
                 let _ = tx.send((fm, batch));
             }
-            Ok(())
+            reads.grouping.finish()?;
+            Ok(reads.unmapped_reads)
         });
 
         // Persistent worker pool: each pulls minibatches until the queue closes.
@@ -1270,7 +1328,7 @@ where
         }
         drop(rx); // workers hold their own clones; lets the queue disconnect
 
-        reader
+        let unmapped_reads = reader
             .join()
             .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))??;
 
@@ -1284,7 +1342,7 @@ where
             cfg.gc_bins,
             cfg.pos_bias,
         );
-        let mut total = 0u64;
+        let mut total = unmapped_reads;
         let mut total_mapped = 0u64;
         let mut total_orphan = 0u64;
         let mut total_compat = 0u64;
@@ -1308,9 +1366,9 @@ where
         acc.seq_obs = merged.seq_obs;
         acc.gc_obs = merged.gc_obs;
         acc.pos_obs = merged.pos_obs;
-        // num_processed = every aligned fragment in the BAM; num_mapped = those
-        // with a surviving strand-compatible placement (assigned to an eq-class).
-        // They differ only for stranded libraries; matches reads-mode (#1025).
+        // num_processed = every fragment in the BAM, aligned or not; num_mapped =
+        // those with a surviving strand-compatible placement (assigned to an
+        // eq-class). Matches reads-mode (#1025).
         acc.num_processed = total;
         acc.num_mapped = total_mapped;
         acc.num_orphan = total_orphan;
@@ -1993,6 +2051,60 @@ pub fn parse_source_programs(lines: &[String]) -> Vec<SourceProgram> {
             prog
         })
         .collect()
+}
+
+/// Spots input whose mates are not next to each other, which the header check
+/// below cannot do when the header says nothing (`SO:unknown`, or no `@HD`). Each
+/// mate then forms a fragment of its own, so every count doubles while each record
+/// looks like an orphan. Tallied on the reader thread, from the flags
+/// [`ReadGrouper`] has already read.
+#[derive(Default)]
+pub(crate) struct GroupingCheck {
+    fragments: u64,
+    /// fragments with a record whose mate is marked mapped, but no such mate
+    split: u64,
+    first: bool,
+    last: bool,
+    expects_mate: bool,
+}
+
+impl GroupingCheck {
+    /// One mapped record of the current read.
+    fn record(&mut self, flags: sam::alignment::record::Flags) {
+        self.first |= flags.is_first_segment();
+        self.last |= flags.is_last_segment();
+        self.expects_mate |= flags.is_segmented() && !flags.is_mate_unmapped();
+    }
+
+    /// The current read, which had at least one mapped record, is complete.
+    fn end_read(&mut self) {
+        self.fragments += 1;
+        self.split += u64::from(self.expects_mate && !(self.first && self.last));
+        (self.first, self.last, self.expects_mate) = (false, false, false);
+    }
+
+    /// Refuses input where at least half the fragments are split: that is not a
+    /// filtered BAM but one in the wrong order, and its numbers would be wrong.
+    /// A smaller share can be real (a filter that kept one mate), so it only warns.
+    pub(crate) fn finish(&self) -> Result<()> {
+        let Self {
+            fragments, split, ..
+        } = *self;
+        let hint = "Records of one read must be consecutive: group them by name with \
+                    `samtools collate` or `samtools sort -n`";
+        anyhow::ensure!(
+            split * 2 < fragments || fragments == 0,
+            "{split} of {fragments} fragments have a mate marked as mapped that is not next \
+             to them, so the input is not grouped by read name. {hint}."
+        );
+        if split * 20 >= fragments && split > 0 {
+            tracing::warn!(
+                "{split} of {fragments} fragments have a mate marked as mapped that is not next \
+                 to them. They are quantified as orphans. If the mates are really there: {hint}."
+            );
+        }
+        Ok(())
+    }
 }
 
 fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
@@ -2786,6 +2898,25 @@ fn warn_mass_on_unreported_refs(res: &AlignQuantResult, rows: &[usize]) {
     );
 }
 
+impl AlignQuantResult {
+    /// The references that get an output row: everything except the
+    /// RAD-recorded decoy block.
+    pub fn quant_rows(&self) -> Vec<usize> {
+        let (first_decoy, num_decoys) = self
+            .provenance
+            .index
+            .as_ref()
+            .map(|ix| {
+                (
+                    ix.first_decoy_index.map(|v| v as usize),
+                    ix.num_decoys.unwrap_or(0) as usize,
+                )
+            })
+            .unwrap_or((None, 0));
+        salmon_core::quant_row_indices(self.names.len(), first_decoy, num_decoys).collect()
+    }
+}
+
 fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()> {
     let dir = &opts.output_dir;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating output dirs")?;
@@ -2797,19 +2928,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     // the recorded boundary (piscem, BAM-derived, or written before the
     // boundary tags existed) has no decoys to exclude and emits every row, as
     // before.
-    let (first_decoy, num_decoys) = res
-        .provenance
-        .index
-        .as_ref()
-        .map(|ix| {
-            (
-                ix.first_decoy_index.map(|v| v as usize),
-                ix.num_decoys.unwrap_or(0) as usize,
-            )
-        })
-        .unwrap_or((None, 0));
-    let rows: Vec<usize> =
-        salmon_core::quant_row_indices(res.names.len(), first_decoy, num_decoys).collect();
+    let rows = res.quant_rows();
     warn_mass_on_unreported_refs(res, &rows);
 
     // quant.sf (EffectiveLength + NumReads at --sigDigits decimals; TPM at 6).
@@ -3266,10 +3385,9 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
             .context("writing bias_models.txt")?;
     }
     std::fs::create_dir_all(dir.join("logs")).context("creating logs")?;
-    // In alignment mode the input records are already aligned, so `num_processed`
-    // is the count of aligned fragments and `num_mapped` is those with a strand-
-    // compatible placement that were quantified; label them accordingly so a
-    // <100% rate on a stranded library is not read as lost alignments.
+    // In alignment mode `num_processed` is every fragment in the input, aligned or
+    // not, and `num_mapped` is those with a strand-compatible placement that were
+    // quantified; label them accordingly.
     // This writer serves every RAD-based driver, so the log must describe the run
     // the *user* asked for. It used to hard-code "alignment mode" and alignment
     // wording, so a default reads run — the 2.6.0 default — was labelled as
@@ -3293,8 +3411,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         ("observed fragments", "mapped fragments", "mapping rate")
     } else {
         (
-            "aligned fragments",
-            "strand-compatible (quantified)",
+            "observed fragments",
+            "aligned and strand-compatible (quantified)",
             "compatible rate",
         )
     };

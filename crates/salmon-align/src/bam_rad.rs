@@ -51,8 +51,7 @@ use salmon_core::{LibraryFormat, MateStatus};
 use salmon_eqclass::{NaiveEqBuilder, NaivePlacement, NAIVE_NO_FMT};
 use salmon_model::{smoothed_effective_length, DiscreteFld, PairObs};
 use salmon_rad::{
-    frag_map_type, ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile,
-    SalmonBulkRecord,
+    ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile, SalmonBulkRecord,
 };
 
 use crate::error_model::{AlignmentModel, CountingAlignmentModel};
@@ -189,7 +188,7 @@ pub fn write_alignment_rad(
         // Pass A — train the counting error model + FLD + naive-eq (records not
         // written yet; scores aren't final). Per-worker counting models are
         // merged by integer add, so the total is partition-independent.
-        let models = stream_grouped(&opts.bam, nthreads, || {
+        let (models, _) = stream_grouped(&opts.bam, nthreads, || {
             TrainWorker::new(error_bins, &fld, naive.as_ref(), ref_bytes, discard_orphans)
         })?;
         let mut counting = CountingAlignmentModel::new(error_bins);
@@ -198,14 +197,14 @@ pub fn write_alignment_rad(
         }
         let fixed = counting.finalize(ERROR_MODEL_ALPHA);
         // Pass B — score each placement against the fixed model and write records.
-        let sums = stream_grouped(&opts.bam, nthreads, || {
+        let (sums, unmapped_reads) = stream_grouped(&opts.bam, nthreads, || {
             ScoreWriteWorker::new(&writer, ref_bytes, &fixed, discard_orphans)
         })?;
         writer.set_score_kind(salmon_rad::SCORE_KIND_LOGWEIGHT);
-        reduce_summary(sums)
+        reduce_summary(sums, unmapped_reads)
     } else {
         // One pass — write records carrying the BAM `AS` score + FLD + naive-eq.
-        let sums = stream_grouped(&opts.bam, nthreads, || {
+        let (sums, unmapped_reads) = stream_grouped(&opts.bam, nthreads, || {
             WriteWorker::new(&writer, &fld, naive.as_ref(), discard_orphans)
         })?;
         // The scores these records carry are only as good as the tags they came
@@ -221,7 +220,7 @@ pub fn write_alignment_rad(
         if let Some(text) = &complaint {
             tracing::warn!("{text}");
         }
-        let mut summary = reduce_summary(plain);
+        let mut summary = reduce_summary(plain, unmapped_reads);
         summary.score_tag_warning = complaint;
         summary
     };
@@ -361,8 +360,10 @@ impl ScoreTagTally {
     }
 }
 
-fn reduce_summary(parts: Vec<(u64, u64)>) -> AlignRadSummary {
-    let (mut num_processed, mut num_mapped) = (0u64, 0u64);
+/// Sum the workers' (processed, mapped) counts, plus the reads the reader saw
+/// with no mapped record.
+fn reduce_summary(parts: Vec<(u64, u64)>, unmapped_reads: u64) -> AlignRadSummary {
+    let (mut num_processed, mut num_mapped) = (unmapped_reads, 0u64);
     for (p, m) in parts {
         num_processed += p;
         num_mapped += m;
@@ -472,6 +473,11 @@ fn analyze_group<R: sam::alignment::Record>(
             fmt_id: fmt.map(|f| f.format_id()).unwrap_or(NAIVE_NO_FMT),
         });
     }
+    // A proper pair discards the fragment's orphans, as in the mapper: a record
+    // has one type, so an orphan beside a pair would be read back as a pair.
+    if infos.iter().any(|i| i.paired) {
+        infos.retain(|i| i.paired);
+    }
     Some(GroupData { frags, infos })
 }
 
@@ -522,8 +528,7 @@ fn write_record(
             )
         })
         .collect();
-    let frag_type = frag_map_type::fragment_level(data.infos.iter().map(|i| i.status));
-    let rec = SalmonBulkRecord::new(frag_type, hits);
+    let rec = SalmonBulkRecord::from_placements(data.infos.iter().map(|i| i.status), hits);
     buf.write(&rec, writer.context())?;
     if buf.byte_len() >= CHUNK_FLUSH_BYTES {
         let bytes = buf.take_bytes()?;
@@ -780,12 +785,12 @@ impl GroupWorker for ScoreWriteWorker<'_> {
 
 /// Dispatch the grouped pass over SAM or BAM (chosen by extension), mirroring
 /// [`crate::stream_online_pass`]'s decoder setup, driving one `make_worker()`
-/// per thread.
+/// per thread. See [`run_grouped`] for what it returns.
 fn stream_grouped<MK, W>(
     bam_path: &Path,
     nthreads: usize,
     make_worker: MK,
-) -> Result<Vec<W::Output>>
+) -> Result<(Vec<W::Output>, u64)>
 where
     MK: Fn() -> W + Sync + Send,
     W: GroupWorker,
@@ -813,13 +818,14 @@ where
 }
 
 /// One reader thread groups consecutive same-canonical-name records into
-/// minibatches; a worker pool consumes them. Returns each worker's `finish()`.
+/// minibatches; a worker pool consumes them. Returns each worker's `finish()`,
+/// and the number of reads with no mapped record, which no worker sees.
 fn run_grouped<R, I, MK, W>(
     records: I,
     header: &Header,
     nthreads: usize,
     make_worker: MK,
-) -> Result<Vec<W::Output>>
+) -> Result<(Vec<W::Output>, u64)>
 where
     R: sam::alignment::Record + Send + Sync,
     I: Iterator<Item = std::io::Result<R>> + Send,
@@ -828,42 +834,30 @@ where
 {
     let (tx, rx) = bounded::<Vec<Vec<R>>>(2 * nthreads + 1);
 
-    std::thread::scope(|scope| -> Result<Vec<W::Output>> {
+    std::thread::scope(|scope| -> Result<(Vec<W::Output>, u64)> {
         // Reader/parser thread: group consecutive same-canonical-name records.
-        let reader = scope.spawn(move || -> Result<()> {
-            let mut cur_name: Vec<u8> = Vec::new();
-            let mut have = false;
-            let mut group: Vec<R> = Vec::new();
+        let reader = scope.spawn(move || -> Result<u64> {
+            let mut reads = crate::ReadGrouper::new();
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(MINIBATCH);
             for result in records {
                 let rec = result.context("reading alignment record")?;
-                if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
+                let Some(group) = reads.push(rec) else {
                     continue;
-                }
-                let Some(name) = rec.name() else { continue };
-                let cname = crate::canonical_name(name.as_ref()).to_vec();
-                if !have {
-                    cur_name = cname;
-                    have = true;
-                } else if cname != cur_name {
-                    batch.push(std::mem::take(&mut group));
-                    cur_name = cname;
-                    if batch.len() >= MINIBATCH {
-                        if tx.send(std::mem::take(&mut batch)).is_err() {
-                            return Ok(()); // all workers gone
-                        }
-                        batch = Vec::with_capacity(MINIBATCH);
-                    }
-                }
-                group.push(rec);
-            }
-            if have && !group.is_empty() {
+                };
                 batch.push(group);
+                if batch.len() >= MINIBATCH {
+                    if tx.send(std::mem::take(&mut batch)).is_err() {
+                        return Ok(reads.unmapped_reads); // all workers gone
+                    }
+                    batch = Vec::with_capacity(MINIBATCH);
+                }
             }
+            batch.extend(reads.finish());
             if !batch.is_empty() {
                 let _ = tx.send(batch);
             }
-            Ok(())
+            reads.grouping.finish()?;
+            Ok(reads.unmapped_reads)
         });
 
         // Worker pool.
@@ -883,7 +877,7 @@ where
         }
         drop(rx);
 
-        reader
+        let unmapped_reads = reader
             .join()
             .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))??;
 
@@ -894,6 +888,6 @@ where
                     .map_err(|_| anyhow::anyhow!("alignment worker thread panicked"))??,
             );
         }
-        Ok(outs)
+        Ok((outs, unmapped_reads))
     })
 }

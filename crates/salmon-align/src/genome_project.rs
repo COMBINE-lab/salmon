@@ -54,8 +54,7 @@ use salmon_core::{observed_paired_format, LibraryFormat, MateStatus};
 use salmon_eqclass::{NaiveEqBuilder, NaivePlacement, NAIVE_NO_FMT};
 use salmon_model::{smoothed_effective_length, DiscreteFld, PairObs};
 use salmon_rad::{
-    frag_map_type, ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile,
-    SalmonBulkRecord,
+    ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile, SalmonBulkRecord,
 };
 
 use crate::{coordinate_sorted_unusable, is_sam_path, open_sam_reader, read_alignment_header};
@@ -426,7 +425,20 @@ fn build_projected_record(
     for p in proj {
         by_tid.entry(p.transcript_id).or_default().push(p);
     }
-    let single_tid = by_tid.len() == 1;
+    let is_proper = |entries: &[&ProjectedAlignment]| {
+        entries.len() >= 2
+            && entries
+                .iter()
+                .any(|e| e.same_transcript_as_mate && e.insert_size != 0)
+    };
+    // A proper pair discards the fragment's orphans, as in the mapper: a record
+    // has one type, so an orphan beside a pair would be read back as a pair.
+    let n_proper = by_tid.values().filter(|e| is_proper(e)).count();
+    let single_tid = if n_proper > 0 {
+        n_proper == 1
+    } else {
+        by_tid.len() == 1
+    };
     let mut hits = Vec::with_capacity(by_tid.len());
     let mut statuses = Vec::with_capacity(by_tid.len());
     let mut naive_sig = Vec::with_capacity(by_tid.len());
@@ -471,11 +483,7 @@ fn build_projected_record(
     };
 
     for (&tid, entries) in &by_tid {
-        let proper = entries.len() >= 2
-            && entries
-                .iter()
-                .any(|e| e.same_transcript_as_mate && e.insert_size != 0);
-        if proper {
+        if is_proper(entries) {
             let r1 = entries
                 .iter()
                 .copied()
@@ -517,6 +525,9 @@ fn build_projected_record(
                 });
             }
         } else {
+            if n_proper > 0 {
+                continue;
+            }
             // Orphan(s) / single-end on this transcript: one hit per projected
             // alignment, with the read length in the frag_len slot.
             for e in entries {
@@ -545,9 +556,8 @@ fn build_projected_record(
             }
         }
     }
-    let frag_type = frag_map_type::fragment_level(statuses.iter().copied());
     Some((
-        SalmonBulkRecord::new(frag_type, hits),
+        SalmonBulkRecord::from_placements(statuses.iter().copied(), hits),
         (single_tid, fld_pairs),
         naive_sig,
     ))
@@ -633,40 +643,28 @@ where
     let codec = writer.codec();
 
     std::thread::scope(|scope| -> Result<(u64, u64)> {
-        let reader = scope.spawn(move || -> Result<()> {
-            let mut cur_name: Vec<u8> = Vec::new();
-            let mut have = false;
-            let mut group: Vec<R> = Vec::new();
+        let reader = scope.spawn(move || -> Result<u64> {
+            let mut reads = crate::ReadGrouper::new();
             let mut batch: Vec<Vec<R>> = Vec::with_capacity(MINIBATCH);
             for result in records {
                 let rec = result.context("reading alignment record")?;
-                if rec.flags().map(|f| f.is_unmapped()).unwrap_or(true) {
+                let Some(group) = reads.push(rec) else {
                     continue;
-                }
-                let Some(name) = rec.name() else { continue };
-                let cname = crate::canonical_name(name.as_ref()).to_vec();
-                if !have {
-                    cur_name = cname;
-                    have = true;
-                } else if cname != cur_name {
-                    batch.push(std::mem::take(&mut group));
-                    cur_name = cname;
-                    if batch.len() >= MINIBATCH {
-                        if tx.send(std::mem::take(&mut batch)).is_err() {
-                            return Ok(());
-                        }
-                        batch = Vec::with_capacity(MINIBATCH);
-                    }
-                }
-                group.push(rec);
-            }
-            if have && !group.is_empty() {
+                };
                 batch.push(group);
+                if batch.len() >= MINIBATCH {
+                    if tx.send(std::mem::take(&mut batch)).is_err() {
+                        return Ok(reads.unmapped_reads);
+                    }
+                    batch = Vec::with_capacity(MINIBATCH);
+                }
             }
+            batch.extend(reads.finish());
             if !batch.is_empty() {
                 let _ = tx.send(batch);
             }
-            Ok(())
+            reads.grouping.finish()?;
+            Ok(reads.unmapped_reads)
         });
 
         let mut workers = Vec::with_capacity(nthreads);
@@ -733,11 +731,11 @@ where
         }
         drop(rx);
 
-        reader
+        let unmapped_reads = reader
             .join()
             .map_err(|_| anyhow::anyhow!("genome-BAM reader thread panicked"))??;
 
-        let mut num_processed = 0u64;
+        let mut num_processed = unmapped_reads;
         let mut num_mapped = 0u64;
         for w in workers {
             let (p, m) = w
