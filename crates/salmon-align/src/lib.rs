@@ -832,7 +832,7 @@ impl FragRecord {
 #[inline]
 fn canonical_name(name: &[u8]) -> &[u8] {
     let l = name.len();
-    if l > 2 && name[l - 2] == b'/' {
+    if l > 2 && name[l - 2] == b'/' && matches!(name[l - 1], b'1' | b'2') {
         &name[..l - 2]
     } else {
         name
