@@ -579,3 +579,56 @@ fn no_single_frag_prob_changes_orphan_weighting_on_the_rad_path() {
         "flat: equal orphan weights leave effective length to decide: {flat:?}"
     );
 }
+
+/// `--hardFilter` keeps a fragment's best placements. A wrong-strand placement
+/// that `-l` drops anyway must not set that bar, or the fragment is lost whole.
+#[test]
+fn hard_filter_ignores_the_score_of_a_wrong_strand_placement() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = dir.path().join("hf.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:5000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:5000").unwrap();
+    for i in 0..1000 {
+        let l = 1 + (i * 3) % 3000;
+        let r = l + 200;
+        // ISF on txA, worse score; ISR on txB, better score.
+        writeln!(
+            f,
+            "r{i}\t99\ttxA\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\tAS:i:-10"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "r{i}\t147\ttxA\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\tAS:i:-10"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "r{i}\t339\ttxB\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\tAS:i:0"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "r{i}\t419\ttxB\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\tAS:i:0"
+        )
+        .unwrap();
+    }
+    drop(f);
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let rad = out.join("aln.rad");
+    let mut opts = opts_for(&sam, &out);
+    opts.lib_type = "ISF".to_string();
+    opts.hard_filter = true;
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    let res = quantify_rad(&opts, &rad).unwrap();
+    let counts = quant_counts(&out);
+    let get = |n: &str| counts.iter().find(|(x, _)| x == n).unwrap().1;
+    assert_eq!(res.num_mapped, 1000);
+    assert!(
+        (get("txA") - 1000.0).abs() < 1e-6 && get("txB") < 1e-6,
+        "{counts:?}"
+    );
+}
