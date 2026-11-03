@@ -126,31 +126,18 @@ fn annotate_read_error(path: &Path, err: io::Error) -> io::Error {
     )
 }
 
-/// Compression suffixes stripped before deciding GTF-vs-TSV, one per format
-/// `niffler` decodes. Content detection is the reader's job; this is only about
-/// the *name*, and a name that ends in a codec suffix says nothing about the
-/// format underneath it.
-const COMPRESSION_SUFFIXES: [&str; 6] = ["gz", "bgz", "bgzf", "bz2", "xz", "zst"];
-
 /// Whether the path names a GTF/GFF, ignoring a trailing compression suffix:
 /// the last extension of `annotation.gtf.gz` is `gz`, but the content is GTF.
 /// Getting this wrong is not a cosmetic error — a GTF handed to the TSV branch
 /// parses into `{sequence name: source}` pairs, which is a non-empty map that
 /// matches no transcript, so it fails silently rather than loudly.
 fn has_gtf_extension(path: &Path) -> bool {
-    let ext = |p: &Path| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-    };
-    let outer = ext(path);
-    let effective = match outer.as_deref() {
-        Some(e) if COMPRESSION_SUFFIXES.contains(&e) => {
-            ext(Path::new(path.file_stem().unwrap_or_default()))
-        }
-        _ => outer,
-    };
-    matches!(effective.as_deref(), Some("gtf" | "gff" | "gff3"))
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let underneath = crate::compress::strip_compression_extension(&name);
+    Path::new(underneath)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "gtf" | "gff" | "gff3"))
 }
 
 /// Open `path`, transparently decompressing it when it is compressed.
@@ -438,6 +425,25 @@ fn write_unmatched_list(path: &Path, unmatched: &[&str]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_gtf_is_recognised_under_every_suffix_the_reader_can_decode() {
+        for name in [
+            "a.gtf",
+            "a.gff3",
+            "a.gtf.gz",
+            "a.gtf.bgz",
+            "a.gtf.bgzf",
+            "a.gtf.zst",
+            "a.gtf.zstd",
+            "a.gtf.bz2",
+            "a.gtf.xz",
+            "a.gtf.lzma",
+        ] {
+            assert!(super::has_gtf_extension(Path::new(name)), "{name}");
+        }
+        assert!(!super::has_gtf_extension(Path::new("a.tsv.zstd")));
+    }
+
     use super::*;
 
     fn scratch(case: &str) -> std::path::PathBuf {
