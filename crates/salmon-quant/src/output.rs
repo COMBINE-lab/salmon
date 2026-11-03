@@ -190,34 +190,34 @@ fn select_sample_bytes(sample: &[f64], row_indices: &[usize]) -> Vec<u8> {
 /// count — fractional, because ambiguous fragments are split between
 /// transcripts.
 fn write_quant_sf(path: &Path, res: &QuantResult, sig_digits: usize) -> Result<()> {
-    let mut w = std::io::BufWriter::new(
-        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
-    );
-    writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-    // The reference numbering is `[transcripts][decoys][short transcripts]`:
-    // decoys occupy `[first_decoy_index, first_decoy_index + num_decoys)` and are
-    // never quantified (excluded here, matching salmon), while sub-`k` "short"
-    // transcripts (no k-mers, never seeded) are appended after the decoy block by
-    // the index builder. We still report the shorts — always 0 reads / 0 TPM — so
-    // `quant.sf` lists every input transcript.
-    // salmon writes EffectiveLength and NumReads with `--sigDigits` decimals
-    // (default 3) and TPM with the fixed `{:f}` (6-decimal) format.
-    for i in salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
-    {
-        writeln!(
-            w,
-            "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
-            res.names[i],
-            res.lengths[i],
-            sig_digits,
-            res.eff_lengths[i],
-            res.tpm[i],
-            sig_digits,
-            res.counts[i]
-        )?;
-    }
-    w.flush()?;
-    Ok(())
+    salmon_core::write_via_rename(path, |w| {
+        writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
+        // The reference numbering is `[transcripts][decoys][short transcripts]`:
+        // decoys occupy `[first_decoy_index, first_decoy_index + num_decoys)` and are
+        // never quantified (excluded here, matching salmon), while sub-`k` "short"
+        // transcripts (no k-mers, never seeded) are appended after the decoy block by
+        // the index builder. We still report the shorts — always 0 reads / 0 TPM — so
+        // `quant.sf` lists every input transcript.
+        // salmon writes EffectiveLength and NumReads with `--sigDigits` decimals
+        // (default 3) and TPM with the fixed `{:f}` (6-decimal) format.
+        for i in
+            salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
+        {
+            writeln!(
+                w,
+                "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
+                res.names[i],
+                res.lengths[i],
+                sig_digits,
+                res.eff_lengths[i],
+                res.tpm[i],
+                sig_digits,
+                res.counts[i]
+            )?;
+        }
+        Ok(())
+    })
+    .with_context(|| format!("writing {}", path.display()))
 }
 
 /// `cmd_info.json`: the run's inputs and key settings.

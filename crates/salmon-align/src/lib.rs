@@ -2979,16 +2979,24 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     // Skipped under --skipQuant (no abundances), like salmon.
     if !opts.skip_quant {
         let sd = opts.sig_digits as usize;
-        let mut w = std::io::BufWriter::new(std::fs::File::create(dir.join("quant.sf"))?);
-        writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-        for &i in &rows {
-            writeln!(
-                w,
-                "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
-                res.names[i], res.lengths[i], sd, res.eff_lengths[i], res.tpm[i], sd, res.counts[i]
-            )?;
-        }
-        w.flush()?;
+        salmon_core::write_via_rename(&dir.join("quant.sf"), |w| {
+            writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
+            for &i in &rows {
+                writeln!(
+                    w,
+                    "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
+                    res.names[i],
+                    res.lengths[i],
+                    sd,
+                    res.eff_lengths[i],
+                    res.tpm[i],
+                    sd,
+                    res.counts[i]
+                )?;
+            }
+            Ok(())
+        })
+        .context("writing quant.sf")?;
     }
 
     /// Shape of the positional-bias model: one model per transcript length

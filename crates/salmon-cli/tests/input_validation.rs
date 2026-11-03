@@ -1056,3 +1056,39 @@ fn a_run_that_maps_nothing_fails_but_keeps_its_output() {
     assert!(out.join("quant.sf").exists());
     assert!(out.join("aux_info/meta_info.json").exists());
 }
+
+/// A rerun that dies partway must not leave the old `quant.sf` beside the new
+/// metadata, where a later step would read them as one result.
+#[test]
+fn a_failed_rerun_does_not_leave_the_previous_quant_sf() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let out = dir.path().join("q");
+    let quant = |reads: &Path| {
+        run(&[
+            os("quant"),
+            os("-i"),
+            fx.index.as_os_str(),
+            os("-l"),
+            os("U"),
+            os("-r"),
+            reads.as_os_str(),
+            os("-p"),
+            os("2"),
+            os("-o"),
+            out.as_os_str(),
+        ])
+    };
+
+    let o = quant(&fx.se);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(out.join("quant.sf").exists());
+    // The write goes through a temporary name, which must not outlive it.
+    assert!(!out.join("quant.sf.tmp").exists());
+
+    let full = std::fs::read_to_string(&fx.se).unwrap();
+    let cut = dir.path().join("cut.fq");
+    std::fs::write(&cut, &full[..full.len() / 3]).unwrap();
+    assert!(!quant(&cut).status.success());
+    assert!(!out.join("quant.sf").exists());
+}
