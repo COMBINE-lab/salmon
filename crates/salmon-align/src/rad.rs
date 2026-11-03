@@ -2182,6 +2182,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         salmon_core::RefSeqs::from_sequences(crate::load_ref_bytes(
             opts.transcripts.as_ref().unwrap(),
             &names,
+            &lengths,
         )?)
     };
     let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if opts.gc_bias {
