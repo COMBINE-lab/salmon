@@ -1328,7 +1328,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let inference_truncated_mass = em.dropped_mass;
     let (em_iters, em_converged) = (em.iters, em.converged);
     let em_components = em.components.clone();
-    if let Some(c) = &em_components {
+    if opts.skip_quant && want_rough_abund {
+        // Cut short on purpose (see above): its stopping is not a convergence claim.
+        tracing::info!("EM: {em_iters} iterations to seed the bias models");
+    } else if let Some(c) = &em_components {
         let (line, warn) = c.describe(em_iters);
         if warn {
             tracing::warn!("{line}");
