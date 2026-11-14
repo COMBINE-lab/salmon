@@ -702,27 +702,12 @@ fn record_discrete(
     if placements.is_empty() {
         return;
     }
-    // Stays shared, unlike the other tallies: `record` reads this running total
-    // to gate the auxiliary models (see `use_aux`), so a per-worker count merged
-    // at thread end would leave it at zero for the whole run.
-    sh.num_mapped.fetch_add(1, Ordering::Relaxed);
-    // Same orphan definition `record` uses: a fragment's surviving mappings share
-    // one status, so the first is representative. Counting it here is what lets
-    // `--deterministic` report the concordant/orphan split in
-    // `lib_format_counts.json` instead of calling every mapped fragment
-    // concordant.
-    if matches!(
-        placements[0].status,
-        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-    ) {
-        counters.orphan += 1;
-    }
-    tally_observed_formats(placements, &mut counters.lib_fmt);
     // Library-format accounting (see `record`). The deterministic pass does no
     // strand filtering (incompatible placements are dropped later, when the RAD
     // is quantified), but with an explicit `-l` the expected format is already
     // known here, so the same wrong-strand tally is free. Under `-l A` the format
     // is only resolved at end of pass, so nothing is counted.
+    let mut wrong_strand_dropped = false;
     if let Some(exp) = sh.expected_format {
         if placements
             .iter()
@@ -731,6 +716,28 @@ fn record_discrete(
             counters.frags_compat += 1;
         } else {
             counters.frags_incompat += 1;
+            wrong_strand_dropped = sh.ignore_incompat;
+        }
+    }
+    tally_observed_formats(placements, &mut counters.lib_fmt);
+    // A fragment whose every placement is wrong-strand is dropped when the RAD
+    // is quantified, so it is not mapped: counting it here made `--skipQuant`
+    // (which reports these phase-1 totals) disagree with the full run.
+    if !wrong_strand_dropped {
+        // Stays shared, unlike the other tallies: `record` reads this running
+        // total to gate the auxiliary models (see `use_aux`), so a per-worker
+        // count merged at thread end would leave it at zero for the whole run.
+        sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+        // Same orphan definition `record` uses: a fragment's surviving mappings
+        // share one status, so the first is representative. Counting it here is
+        // what lets `--deterministic` report the concordant/orphan split in
+        // `lib_format_counts.json` instead of calling every mapped fragment
+        // concordant.
+        if matches!(
+            placements[0].status,
+            MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+        ) {
+            counters.orphan += 1;
         }
     }
     // Each concordant fragment adds its shortest implied length to the FLD (see
