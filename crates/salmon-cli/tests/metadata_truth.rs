@@ -407,3 +407,26 @@ fn bias_model_shapes_are_recorded() {
     );
     assert_eq!(meta(&tuned)["gc_bias_bins"], 120, "30 GC x 4 conditional");
 }
+
+/// `--online --writeRad` writes the RAD, so the run must not call the flag inert.
+#[test]
+fn online_write_rad_is_not_reported_inert() {
+    let dir = tempfile::tempdir().unwrap();
+    let (index, r1, _) = fixture(dir.path());
+    let rad = dir.path().join("m.rad");
+    let o = Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&index)
+        .args(["-l", "U", "-r"])
+        .arg(&r1)
+        .args(["--online", "--radCompress", "zstd", "--writeRad"])
+        .arg(&rad)
+        .arg("-o")
+        .arg(dir.path().join("q"))
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{log}");
+    assert!(rad.exists());
+    assert!(!log.contains("writes no intermediate RAD"), "{log}");
+}
