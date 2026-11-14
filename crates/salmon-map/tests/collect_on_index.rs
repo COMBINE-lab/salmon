@@ -321,6 +321,24 @@ fn orphan_recovery_refuses_a_dovetailed_mate() {
     };
     let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
     assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
+    // Measured as normal pairing does, from the outermost ends: [200, 300), not
+    // the 80 that `anchor_end - partner_start` gave.
+    assert_eq!(
+        (m[0].ref_pos, m[0].fragment_len, m[0].rc_pos),
+        (200, 100, 299),
+        "{m:?}"
+    );
+
+    // Same with the forward mate anchoring (`partner_end - anchor_start` gave 80).
+    let r1 = transcript[200..300].to_vec();
+    let r2 = break_kmers(&revcomp(&transcript[220..280]), 25);
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
+    assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
+    assert_eq!(
+        (m[0].ref_pos, m[0].fragment_len, m[0].rc_pos),
+        (200, 100, 299),
+        "{m:?}"
+    );
 }
 
 #[test]
