@@ -27,8 +27,7 @@
 use crate::gcbias::{GcContext, GcFragModel, GcView};
 use crate::posbias::{length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS};
 use crate::seqbias::{
-    conditional_cdf, revcomp_bytes, LogBiasTable, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
-    MIN_CDF_MASS,
+    conditional_cdf, revcomp_bytes, LogBiasTable, CONTEXT_LENGTH, MIN_ALPHA, MIN_CDF_MASS,
 };
 
 /// salmon's `EPSILON` (mass cutoff for adding positional expected mass).
@@ -157,23 +156,12 @@ pub fn corrected_effective_length_full(
         debug_assert_eq!(seq.len(), ref_len);
         fw = vec![1.0f64; ref_len];
         rc = vec![1.0f64; ref_len];
-        let cu = CONTEXT_LEFT;
         // The 3' factor reads the reverse complement, because the second read of
-        // a pair is sequenced from the opposite strand.
+        // a pair is sequenced from the opposite strand. Each factor is indexed by
+        // the *read* start, which sits `CONTEXT_LEFT` bases into the window.
         let rc_seq = revcomp_bytes(seq);
-        for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
-            // The factor is indexed by the *read* start, which sits `CONTEXT_LEFT`
-            // bases into the context window.
-            let read_start = frag_start + cu;
-            if read_start < ref_len {
-                fw[read_start] = tab_fw
-                    .eval(&seq[frag_start..frag_start + CONTEXT_LENGTH], false)
-                    .exp();
-                rc[read_start] = tab_rc
-                    .eval(&rc_seq[frag_start..frag_start + CONTEXT_LENGTH], false)
-                    .exp();
-            }
-        }
+        tab_fw.fill_exp_factors(seq, &mut fw);
+        tab_rc.fill_exp_factors(&rc_seq, &mut rc);
         // `rc` was filled in reverse-complement coordinates; flipping it puts it
         // back in forward coordinates so both arrays index the same way.
         rc.reverse();
