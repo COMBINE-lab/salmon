@@ -758,10 +758,18 @@ fn load_ref_bytes(path: &Path, names: &[String], lengths: &[u32]) -> Result<Vec<
         path.display()
     );
 
-    let seqs: Vec<Vec<u8>> = names
+    let mut seqs: Vec<Vec<u8>> = names
         .iter()
         .map(|n| by_name.remove(n).unwrap_or_default())
         .collect();
+    // A poly-A tail past the input's length is one the salmon index clipped:
+    // drop it, or bias correction would count fragment positions on it (#1314).
+    for (seq, &len) in seqs.iter_mut().zip(lengths) {
+        let l = len as usize;
+        if seq.len() > l && seq[l..].iter().all(|b| b.eq_ignore_ascii_case(&b'A')) {
+            seq.truncate(l);
+        }
+    }
     // Not an error: a transcriptome legitimately need not cover every reference
     // in the alignment header. But *no* overlap means the wrong file, which
     // otherwise presents as models that do nothing rather than as a mistake.

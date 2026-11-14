@@ -78,3 +78,40 @@ fn all_bias_alignment_mode_smoke() {
     assert!(!result.bias_dump.obs5_pos.is_empty());
     assert!(!result.bias_dump.exp5_pos.is_empty());
 }
+
+#[test]
+/// A `-t` FASTA whose transcripts carry the poly-A tails the salmon index clips
+/// (so the alignment header's LN lacks them) must correct over the header
+/// length, giving the same effective lengths as the untailed FASTA.
+fn bias_ignores_fasta_polya_tail_beyond_header_length() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (sam, fasta) = write_fixture(tmp.path());
+    let tailed = tmp.path().join("tailed.fa");
+    let text = std::fs::read_to_string(&fasta).unwrap();
+    let mut out = String::new();
+    for line in text.lines() {
+        out.push_str(line);
+        if !line.starts_with('>') {
+            out.push_str(&"A".repeat(40));
+        }
+        out.push('\n');
+    }
+    std::fs::write(&tailed, out).unwrap();
+
+    let run = |fa: PathBuf, dir: &str| {
+        let mut opts = AlignQuantOptions::new(sam.clone(), tmp.path().join(dir));
+        opts.lib_type = "IU".to_string();
+        opts.no_error_model = true;
+        opts.transcripts = Some(fa);
+        opts.seq_bias = true;
+        opts.gc_bias = true;
+        opts.pos_bias = true;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| quantify_alignments(&opts).unwrap())
+            .eff_lengths
+    };
+    assert_eq!(run(fasta, "plain"), run(tailed, "tailed"));
+}
