@@ -239,56 +239,6 @@ impl Hash for TranscriptGroup {
     }
 }
 
-/// A passthrough `Hasher` for keys that already carry a precomputed, well-mixed
-/// hash.
-///
-/// **Why this exists.** Rust's default hash map runs every key through SipHash,
-/// a hash chosen to resist denial-of-service attacks from hostile input. Our
-/// keys are transcript ids from our own index, not hostile input, and
-/// [`TranscriptGroup::hash`] already writes a single well-mixed `u64` (its xxh3
-/// digest). Re-hashing that digest is pure overhead: profiling on human-scale
-/// data showed SipHash (`DefaultHasher::write`) eating ~9% of the quant
-/// runtime. This hasher simply returns the `u64` that was written.
-#[derive(Default, Clone, Copy)]
-pub struct IdentityHasher(u64);
-
-impl Hasher for IdentityHasher {
-    /// Return the digest we were handed.
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-    /// The only path we actually use: store the digest verbatim.
-    #[inline]
-    fn write_u64(&mut self, i: u64) {
-        self.0 = i;
-    }
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        // Fallback for any non-`u64` writes (none on the hot path): fold the
-        // bytes in so distinct inputs still differ. Rotating before XOR-ing
-        // keeps byte order significant, so "ab" and "ba" do not collide.
-        for &b in bytes {
-            self.0 = self.0.rotate_left(8) ^ u64::from(b);
-        }
-    }
-}
-
-/// `BuildHasher` producing [`IdentityHasher`]s.
-///
-/// A hash map needs a *factory* for hashers (one fresh hasher per key), not a
-/// hasher; this zero-sized type is that factory.
-#[derive(Default, Clone, Copy)]
-pub struct IdentityBuildHasher;
-
-impl std::hash::BuildHasher for IdentityBuildHasher {
-    type Hasher = IdentityHasher;
-    #[inline]
-    fn build_hasher(&self) -> IdentityHasher {
-        IdentityHasher(0)
-    }
-}
-
 /// Scale for fixed-point accumulation of per-class weights.
 ///
 /// **The problem.** Each fragment's per-transcript weight is a conditional

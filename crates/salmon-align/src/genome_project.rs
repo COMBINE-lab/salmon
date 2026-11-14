@@ -180,7 +180,6 @@ pub fn project_genome_bam_to_rad(
     let tx_is_minus: Vec<bool> = txs.iter().map(|t| t.strand == '-').collect();
 
     let nthreads = rayon::current_num_threads().max(1);
-    let is_short = true;
     let (num_processed, num_mapped) = stream_project_pass(
         &opts.bam,
         nthreads,
@@ -190,7 +189,6 @@ pub fn project_genome_bam_to_rad(
         &fld,
         naive.as_ref(),
         &tx_is_minus,
-        is_short,
     )?;
 
     // ---- single-pass bake -------------------------------------------------
@@ -416,7 +414,6 @@ fn build_projected_record(
     gn_as: &[i32],
     proj: &[ProjectedAlignment],
     tx_is_minus: &[bool],
-    is_short: bool,
 ) -> Option<(
     SalmonBulkRecord,
     (bool, Vec<PairObs>, Option<bool>),
@@ -473,20 +470,11 @@ fn build_projected_record(
         !(genomic_rev ^ tx_minus)
     };
 
-    // Per-placement score, matching C++ bramble. Short reads: pass the original
-    // aligner (STAR) AS through unchanged — C++ never rewrites short-read AS and
-    // leaves `similarity_score` unweighted, so junc_hits does NOT skew the split
-    // across a read's isoforms. Long reads: C++ rewrites AS = (genome_AS + clip) *
-    // similarity_score; clip rescue isn't exposed on ProjectedAlignment, so use
-    // genome_AS * similarity_score (clip ~ 0 without soft-clip rescue).
-    let placement_score = |e: &ProjectedAlignment| -> i32 {
-        let g = gn_as.get(e.input_index).copied().unwrap_or(0);
-        if is_short {
-            g
-        } else {
-            (g as f64 * e.similarity_score).round() as i32
-        }
-    };
+    // Per-placement score, matching C++ bramble for short reads: the aligner's
+    // (STAR) AS unchanged, so junc_hits does not skew the split across isoforms.
+    // (Long reads would weight it by `similarity_score`; no long-read mode yet.)
+    let placement_score =
+        |e: &ProjectedAlignment| -> i32 { gn_as.get(e.input_index).copied().unwrap_or(0) };
 
     for (&tid, entries) in &by_tid {
         if is_proper(entries) {
@@ -583,7 +571,6 @@ fn stream_project_pass(
     fld: &DiscreteFld,
     naive: Option<&NaiveEqBuilder>,
     tx_is_minus: &[bool],
-    is_short: bool,
 ) -> Result<(u64, u64)> {
     if is_sam_path(bam_path) {
         let mut reader = open_sam_reader(bam_path)?;
@@ -598,7 +585,6 @@ fn stream_project_pass(
             fld,
             naive,
             tx_is_minus,
-            is_short,
         )
     } else {
         let file = std::fs::File::open(bam_path)
@@ -623,7 +609,6 @@ fn stream_project_pass(
                 fld,
                 naive,
                 tx_is_minus,
-                is_short,
             )
         }
     }
@@ -642,7 +627,6 @@ fn run_project_pass<R, I>(
     fld: &DiscreteFld,
     naive: Option<&NaiveEqBuilder>,
     tx_is_minus: &[bool],
-    is_short: bool,
 ) -> Result<(u64, u64)>
 where
     R: sam::alignment::Record + Send + Sync,
@@ -714,7 +698,7 @@ where
                         }
                         let proj = project_group_with(&gas, g2t, cfg, &mut pctx);
                         let Some((rec, fld_sample, naive_sig)) =
-                            build_projected_record(&gas, &gn_as, &proj, tx_is_minus, is_short)
+                            build_projected_record(&gas, &gn_as, &proj, tx_is_minus)
                         else {
                             continue; // nothing passed the similarity filter
                         };

@@ -62,42 +62,6 @@ pub fn log_add(x: f64, y: f64) -> f64 {
     hi + (lo - hi).exp().ln_1p()
 }
 
-/// Numerically stable `log(exp(x) - exp(y))`, requires `x >= y`.
-///
-/// Same factoring as [`log_add`], with a minus sign:
-/// `log(e^x - e^y) = x + log(1 - e^(y-x))`.
-///
-/// The precondition is real: subtracting a larger probability from a smaller one
-/// would give a negative number, which has no logarithm.
-///
-/// Returns `LOG_0` when `x == y`.
-#[inline]
-pub fn log_sub(x: f64, y: f64) -> f64 {
-    // Checked in debug/test builds only; compiles away in release.
-    debug_assert!(x >= y, "log_sub requires x >= y (x={x}, y={y})");
-    // Subtracting zero probability changes nothing.
-    if y == LOG_0 {
-        return x;
-    }
-    // Equal probabilities cancel exactly; the general formula would give
-    // log(1 - 1) = log(0), which is right but arrives via a rounding-sensitive
-    // path.
-    if x == y {
-        return LOG_0;
-    }
-    // x + log(1 - exp(y - x)); y - x < 0.
-    x + (-((y - x).exp())).ln_1p()
-}
-
-/// Log-sum-exp over an iterator of log-space values.
-///
-/// `fold` starts from `LOG_0` (probability zero, the identity for addition) and
-/// folds each value in with [`log_add`], so an empty input correctly yields
-/// `LOG_0` rather than an error.
-pub fn log_sum<I: IntoIterator<Item = f64>>(values: I) -> f64 {
-    values.into_iter().fold(LOG_0, log_add)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,24 +92,5 @@ mod tests {
         let (x, y) = (-3.2_f64, -1.1_f64);
         let naive = (x.exp() + y.exp()).ln();
         approx(log_add(x, y), naive);
-    }
-
-    /// Subtraction against the naive formula, plus both identity cases.
-    #[test]
-    fn sub_works() {
-        let (x, y) = (2.0_f64, 1.0_f64);
-        let naive = (x.exp() - y.exp()).ln();
-        approx(log_sub(x, y), naive);
-        approx(log_sub(x, LOG_0), x);
-        approx(log_sub(x, x), LOG_0);
-    }
-
-    /// Folding must accumulate correctly and return the additive identity for an
-    /// empty sequence.
-    #[test]
-    fn sum_works() {
-        let vals = [LOG_1, LOG_1, LOG_1];
-        approx(log_sum(vals), 3.0_f64.ln());
-        approx(log_sum(std::iter::empty::<f64>()), LOG_0);
     }
 }

@@ -140,30 +140,6 @@ impl Default for ScoreConfig {
     }
 }
 
-/// Collapse to one mapping per transcript (best score), apply decoy
-/// domination, and weight the survivors. Returns the read's weighted
-/// equivalence-class members (sorted by `tid`), or empty if the read is
-/// unmapped or decoy-dominated.
-pub fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredMapping> {
-    finalize_mappings_counted(raw, cfg).0
-}
-
-/// Like [`finalize_mappings`] but also reports `(decoy_dominated, num_below_thresh)`:
-/// whether the fragment was dropped because its best placement was a decoy, and
-/// how many surviving non-decoy alignments were filtered for weight `< min_aln_prob`.
-pub fn finalize_mappings_counted(
-    raw: Vec<RawMapping>,
-    cfg: &ScoreConfig,
-) -> (Vec<ScoredMapping>, bool, u32) {
-    let mut out = Vec::new();
-    // Allocating variant already, so a fresh scratch costs it nothing relative
-    // to the `Vec` it returns.
-    let mut raw = raw;
-    let (decoy_dominated, num_below) =
-        finalize_mappings_counted_into(&mut out, &mut raw, cfg, &mut DedupScratch::default());
-    (out, decoy_dominated, num_below)
-}
-
 /// Above this many raw mappings the prefix scan's `O(k·n)` starts to lose to a
 /// hash table.
 ///
@@ -434,6 +410,12 @@ pub fn filter_sketch_decoys<R: RefProvider>(
 
 #[cfg(test)]
 mod tests {
+    /// Allocating form of [`finalize_mappings_counted_into`] for the tests.
+    fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredMapping> {
+        let (mut out, mut raw) = (Vec::new(), raw);
+        finalize_mappings_counted_into(&mut out, &mut raw, cfg, &mut DedupScratch::default());
+        out
+    }
 
     /// A threshold means two implementations of one rule, so they must agree —
     /// including on the tie rule, which is what makes the survivors identical

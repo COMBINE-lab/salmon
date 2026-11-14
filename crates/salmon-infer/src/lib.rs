@@ -333,44 +333,6 @@ fn max_rel_diff_mode(
     }
 }
 
-/// The Dirichlet part of the VBEM objective at abundances `alpha`:
-/// `Σ_t [lnΓ(ã_t) + (a0_t − ã_t)·ln ω_t] − lnΓ(Σ ã)`, where `ã = alpha + a0`,
-/// `a0` is the prior and `ln ω_t = ψ(ã_t) − ψ(Σ ã)` (what `exp_theta` exponentiates).
-///
-/// Added to the kernel's data term `Σ_c n_c ln Σ_t ω_t w_ct` this is the evidence
-/// lower bound with the assignment distribution optimized for
-/// `q(θ) = Dir(ã)` — the quantity each VBEM step cannot decrease, which is
-/// what makes it a valid monotonicity check for DAAREM. Chunked like
-/// [`max_rel_diff_par`], so the sum's grouping does not depend on the pool.
-fn vbem_objective_prior_term(alpha: &[f64], prior: &[f64], parallel: bool) -> f64 {
-    use statrs::function::gamma::{digamma, ln_gamma};
-    let total: f64 = alpha.iter().zip(prior).map(|(a, p0)| a + p0).sum();
-    let psi_total = digamma(total);
-    let chunk_sum = |lo: usize, hi: usize| -> f64 {
-        let mut s = 0.0;
-        for t in lo..hi {
-            let at = alpha[t] + prior[t];
-            // Transcripts the M-step treats as absent (exp_theta = 0) carry no
-            // variational mass and contribute nothing here either.
-            if at > 0.0 {
-                s += ln_gamma(at) + (prior[t] - at) * (digamma(at) - psi_total);
-            }
-        }
-        s
-    };
-    let nchunks = alpha.len().div_ceil(VECTOR_REDUCTION_CHUNK);
-    let per_chunk = |c: usize| {
-        let lo = c * VECTOR_REDUCTION_CHUNK;
-        chunk_sum(lo, (lo + VECTOR_REDUCTION_CHUNK).min(alpha.len()))
-    };
-    let parts: Vec<f64> = if parallel {
-        (0..nchunks).into_par_iter().map(per_chunk).collect()
-    } else {
-        (0..nchunks).map(per_chunk).collect()
-    };
-    parts.iter().sum::<f64>() - ln_gamma(total)
-}
-
 /// Run the optimizer to convergence (parallel EM/VBEM over the packed layout).
 ///
 /// `eq` must already have `combined_weights` populated (call
@@ -651,14 +613,11 @@ pub(crate) fn run_em_counts(
             // DAAREM's monotonicity control needs the objective at every point it
             // evaluates `F` at, so the objective rides along with the M-step: the
             // data term comes out of the kernel, the rest is O(num_txps).
+            // Plain EM only: the CLI refuses `--emAccel daarem` with VBEM.
+            assert!(!opts.use_vbem, "DAAREM requires plain EM");
             let n_total = counts.iter().sum::<u64>() as f64;
             let mut f = |src: &[f64], dst: &mut [f64]| -> f64 {
-                let data = step(src, dst, true);
-                if opts.use_vbem {
-                    data + vbem_objective_prior_term(src, &prior_alphas, parallel)
-                } else {
-                    data - n_total * src.iter().sum::<f64>().ln()
-                }
+                step(src, dst, true) - n_total * src.iter().sum::<f64>().ln()
             };
             converged = daarem::daarem_loop(
                 &mut f,
@@ -1230,9 +1189,9 @@ mod tests {
     }
 
     /// DAAREM's monotonicity control is only as good as its objective, so check
-    /// the objective is the one the M-steps climb: under plain EM and plain VBEM
-    /// steps it must never decrease (beyond rounding), and for EM it must equal
-    /// the multinomial log-likelihood computed directly.
+    /// the objective is the one the M-steps climb: under plain EM steps it must
+    /// never decrease (beyond rounding), and it must equal the multinomial
+    /// log-likelihood computed directly.
     #[test]
     fn daarem_objective_is_monotone_under_plain_steps() {
         let eq = build(
@@ -1248,52 +1207,32 @@ mod tests {
         );
         let p = PackedEqClasses::from_collapsed(&eq, 5);
         let n_total = p.counts.iter().sum::<u64>() as f64;
-        let prior = vec![0.01; 5];
-        let mut exp_theta = vec![0.0; 5];
         let mut scratch = vec![];
-        for use_vbem in [false, true] {
-            let mut x = vec![n_total / 5.0; 5];
-            let mut y = vec![0.0; 5];
-            let mut prev = f64::NEG_INFINITY;
-            for _ in 0..200 {
-                let obj = if use_vbem {
-                    packed::vbem_step_seq::<true>(
-                        &p,
-                        &p.counts,
-                        &prior,
-                        &x,
-                        &mut y,
-                        &mut exp_theta,
-                        &mut scratch,
-                    ) + vbem_objective_prior_term(&x, &prior, false)
-                } else {
-                    let data = packed::em_step_seq::<true>(&p, &p.counts, &x, &mut y, &mut scratch);
-                    let sx: f64 = x.iter().sum();
-                    let direct: f64 = (0..p.num_classes())
-                        .map(|c| {
-                            let (tids, ws) = p.class(c);
-                            let d: f64 = tids
-                                .iter()
-                                .zip(ws)
-                                .map(|(&t, &w)| x[t as usize] / sx * w)
-                                .sum();
-                            p.counts[c] as f64 * d.ln()
-                        })
+        let mut x = vec![n_total / 5.0; 5];
+        let mut y = vec![0.0; 5];
+        let mut prev = f64::NEG_INFINITY;
+        for _ in 0..200 {
+            let data = packed::em_step_seq::<true>(&p, &p.counts, &x, &mut y, &mut scratch);
+            let sx: f64 = x.iter().sum();
+            let direct: f64 = (0..p.num_classes())
+                .map(|c| {
+                    let (tids, ws) = p.class(c);
+                    let d: f64 = tids
+                        .iter()
+                        .zip(ws)
+                        .map(|(&t, &w)| x[t as usize] / sx * w)
                         .sum();
-                    let obj = data - n_total * sx.ln();
-                    assert!(
-                        (obj - direct).abs() < 1e-8 * direct.abs(),
-                        "{obj} vs {direct}"
-                    );
-                    obj
-                };
-                assert!(
-                    obj >= prev - 1e-9 * obj.abs(),
-                    "vbem={use_vbem}: {obj} < {prev}"
-                );
-                prev = obj;
-                std::mem::swap(&mut x, &mut y);
-            }
+                    p.counts[c] as f64 * d.ln()
+                })
+                .sum();
+            let obj = data - n_total * sx.ln();
+            assert!(
+                (obj - direct).abs() < 1e-8 * direct.abs(),
+                "{obj} vs {direct}"
+            );
+            assert!(obj >= prev - 1e-9 * obj.abs(), "{obj} < {prev}");
+            prev = obj;
+            std::mem::swap(&mut x, &mut y);
         }
     }
 

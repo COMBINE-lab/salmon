@@ -469,7 +469,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
     // otherwise lose its transcript evidence entirely (the decoy pair leaves no
     // surviving non-decoy mapping, so `best_valid` is None and even
     // `--allowDecoyOrphans` cannot rescue it). Instead we keep both and let the
-    // decoy-domination logic in `finalize_mappings_counted` adjudicate
+    // decoy-domination logic in `finalize_mappings_counted_into` adjudicate
     // (default: drop the decoy-dominated transcript orphan; `--allowDecoyOrphans`:
     // keep it), matching C++ salmon's orphan handling on a decoy-aware index.
     if raw

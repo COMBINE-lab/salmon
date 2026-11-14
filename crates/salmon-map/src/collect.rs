@@ -155,7 +155,7 @@ thread_local! {
 /// scratch (cheaper than a per-read hash map for the small anchor counts of a
 /// single read) and chains each group. Candidate order differs from a hash-map
 /// grouping, but every downstream consumer (`best_per_target`, pairing,
-/// `finalize_mappings`) keys/dedups by `tid`, so results are unchanged.
+/// `finalize_mappings_counted_into`) keys/dedups by `tid`, so results are unchanged.
 pub fn candidates_from_raw_hits(
     raw_hits: &[(i32, ProjectedHits<'_>)],
     encoding: &EntryEncoding,
