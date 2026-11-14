@@ -187,6 +187,30 @@ impl Default for GibbsOptions {
     }
 }
 
+impl GibbsOptions {
+    /// The prior that follows the main optimizer (salmon): with VBEM a
+    /// per-transcript `max(1.0, vbPrior)`, or `vbPrior` per nucleotide under
+    /// `--perNucleotidePrior` (a VBEM option) to match the point estimate; with
+    /// plain EM a flat 1e-3 per transcript. Every driver builds its options here,
+    /// so the rule cannot drift between them again.
+    pub fn for_em(em: &crate::EmOptions, num_samples: u32, thinning: u32) -> Self {
+        let per_nucleotide = em.use_vbem && em.per_nucleotide_prior;
+        let prior = if per_nucleotide {
+            em.vb_prior
+        } else if em.use_vbem {
+            em.vb_prior.max(1.0)
+        } else {
+            1e-3
+        };
+        Self {
+            num_samples,
+            thinning,
+            prior,
+            per_transcript_prior: !per_nucleotide,
+        }
+    }
+}
+
 /// salmon's Gibbs rate parameter `beta`.
 /// The rate of the Gamma prior on each transcript's expression rate.
 const GIBBS_BETA: f64 = 0.1;
@@ -593,5 +617,38 @@ mod per_nucleotide_prior_reaches_replicates {
             "--perNucleotidePrior must change the replicates: flat mean {a}, \
              per-nucleotide mean {b}"
         );
+    }
+
+    /// Every driver takes its Gibbs prior from `for_em`. The default path kept
+    /// `max(1, vbPrior)` per nucleotide after only the `--online` copy was fixed,
+    /// a prior 100x the point estimate's at `--vbPrior 0.01`.
+    #[test]
+    fn gibbs_prior_follows_the_optimizer() {
+        let em = |use_vbem, per_nucleotide_prior| crate::EmOptions {
+            use_vbem,
+            per_nucleotide_prior,
+            vb_prior: 0.01,
+            ..Default::default()
+        };
+        let g = |o: &crate::EmOptions| {
+            let g = GibbsOptions::for_em(o, 10, 16);
+            (g.prior, g.per_transcript_prior)
+        };
+        assert_eq!(
+            g(&em(true, false)),
+            (1.0, true),
+            "VBEM: max(1, vbPrior) per transcript"
+        );
+        assert_eq!(
+            g(&em(true, true)),
+            (0.01, false),
+            "VBEM per nucleotide: vbPrior"
+        );
+        assert_eq!(
+            g(&em(false, true)),
+            (1e-3, true),
+            "plain EM ignores the VBEM-only flag"
+        );
+        assert_eq!(g(&em(false, false)), (1e-3, true));
     }
 }
