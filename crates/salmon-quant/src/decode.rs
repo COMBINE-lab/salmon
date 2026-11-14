@@ -263,7 +263,10 @@ pub fn plan(
         )
         .with_context(|| format!("opening {}", path.display()))?;
         handles.extend(opened.handle.clone());
-        let mut reader = piscem_rs::io::fastx::reader_with_batch_size(opened.reader)
+        // piscem measured 4096 and 16384 as one throughput plateau; the smaller
+        // end holds a quarter of the in-flight records (and their RAD chunk)
+        // per mapping thread, which was most of the per-thread peak RSS.
+        let mut reader = paraseq::fastx::Reader::new_with_batch_size(opened.reader, 4096)
             .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?;
         // A truncated or malformed record then names its file: with paired or
         // several inputs, the error alone would not say which one. A stream's
