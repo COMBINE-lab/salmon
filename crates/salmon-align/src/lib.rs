@@ -1704,6 +1704,8 @@ fn process_fragment(
     let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
     let mut sp_geom: Vec<(usize, usize, bool)> = Vec::with_capacity(placements.len());
     let mut sp_pl: Vec<usize> = Vec::with_capacity(placements.len());
+    // Error-model score of each, `None` when it could not be scored.
+    let mut sp_basis: Vec<Option<f64>> = Vec::with_capacity(placements.len());
     // Orphan bookkeeping, folded into the loop below so it costs two register
     // ORs per surviving placement and no second pass.
     //
@@ -1737,8 +1739,13 @@ fn process_fragment(
         let refseq = ctx.ref_bytes.get(tid as usize).unwrap_or(&[]);
         // Conditional log-weight basis = salmon's `errLike` (Σ(fg−bg) over the
         // mate(s) under the error model; uniform 0.0 when it is disabled).
+        // Unscorable under the model (reference not in `-t`, or a record without
+        // bases): its 0 would beat every real alignment, so it is re-ranked with
+        // the fragment's worst score after the loop, as the RAD path does.
+        let unscored = ctx.model.is_some()
+            && (refseq.is_empty() || idxs.iter().any(|&i| recs[i].read_2bit.is_empty()));
         let basis = if let Some(m) = ctx.model {
-            if refseq.is_empty() {
+            if unscored {
                 0.0
             } else {
                 let mut ll = 0.0;
@@ -1804,6 +1811,15 @@ fn process_fragment(
         sp_online.push(aux + start_pos);
         sp_geom.push((frag_start, frag_end, proper));
         sp_pl.push(pi);
+        sp_basis.push((!unscored).then_some(basis));
+    }
+    if let Some(worst) = sp_basis.iter().flatten().copied().reduce(f64::min) {
+        for (k, b) in sp_basis.iter().enumerate() {
+            if b.is_none() {
+                sp_eq[k] += worst;
+                sp_online[k] += worst;
+            }
+        }
     }
     // a fragment whose every reported alignment was incompatible is a
     // zero-probability fragment: it is not assigned and joins no eq-class —

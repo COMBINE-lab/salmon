@@ -1743,7 +1743,12 @@ fn collect_bias_fragment(
                     }
                 }
             }
-            if let (Some(gc), true) = (local.gc_obs.as_mut(), proper && fe < rl) {
+            // GC needs this transcript's own bases: with none, its view would
+            // read the next transcript's (the seq branch above has the same guard).
+            if let (Some(gc), true) = (
+                local.gc_obs.as_mut(),
+                proper && fe < rl && !refseq.is_empty(),
+            ) {
                 let view = cfg.gc_store.view(*tid as usize);
                 if let Some((ff, cf)) = salmon_model::gc_desc(&view, fs as i32, fe as i32) {
                     gc.inc(ff, cf, p);
