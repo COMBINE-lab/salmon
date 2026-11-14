@@ -47,6 +47,14 @@ pub mod timing;
 // `salmon_core::mate::MateStatus`. It also lets a type move between
 // modules later without breaking every caller.
 pub use atomic::AtomicF64;
+
+/// Current local time as an asctime-style string (`Wed Jun 10 20:34:58 2026`),
+/// matching salmon's `start_time`/`end_time` format, which downstream tools parse.
+pub fn asctime_now() -> String {
+    jiff::Zoned::now()
+        .strftime("%a %b %e %H:%M:%S %Y")
+        .to_string()
+}
 pub use diagnostics::{
     free_disk_bytes, input_diagnostics, peak_rss_kb, Diagnostic, EmComponentsMeta, MetaFieldSource,
     MissingMetaField,

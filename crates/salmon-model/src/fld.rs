@@ -710,7 +710,7 @@ impl DiscreteFld {
     /// tally; returns the observed format.
     fn add_len(&self, len: usize, is_fw: bool, mate_fw: bool) -> LibraryFormat {
         let l = len.min(self.max_len);
-        let fmt = observed_pair_format(is_fw, mate_fw);
+        let fmt = salmon_core::observed_paired_format(is_fw, mate_fw);
         if fmt.orientation == ReadOrientation::Same {
             self.same[l].fetch_add(1, Ordering::Relaxed);
             self.n_same.fetch_add(1, Ordering::Relaxed);
@@ -839,7 +839,7 @@ impl LocalFld {
             return;
         };
         let l = p.len.min(self.max_len);
-        let fmt = observed_pair_format(p.is_fw, p.mate_fw);
+        let fmt = salmon_core::observed_paired_format(p.is_fw, p.mate_fw);
         if fmt.orientation == ReadOrientation::Same {
             self.same[l] += 1;
         } else {
@@ -855,28 +855,6 @@ impl LocalFld {
 /// length, ties to the lowest transcript id (see [`DiscreteFld::add_fragment`]).
 fn shortest_pair(pairs: impl IntoIterator<Item = PairObs>) -> Option<PairObs> {
     pairs.into_iter().min_by_key(|p| (p.len, p.tid))
-}
-
-/// A proper pair's observed format from its mate strands: opposite-strand
-/// (inward/outward) or same-strand, exactly as the RAD reader classifies
-/// placements.
-fn observed_pair_format(is_fw: bool, mate_fw: bool) -> LibraryFormat {
-    let (orientation, strandedness) = if is_fw != mate_fw {
-        let s = if is_fw {
-            ReadStrandedness::SA
-        } else {
-            ReadStrandedness::AS
-        };
-        (ReadOrientation::Toward, s)
-    } else {
-        let s = if is_fw {
-            ReadStrandedness::S
-        } else {
-            ReadStrandedness::A
-        };
-        (ReadOrientation::Same, s)
-    };
-    LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)
 }
 
 /// Where a run's fragment-length distribution came from, reported as

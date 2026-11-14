@@ -17,6 +17,8 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 # transparent decompression of compressed --geneMap annotations
 niffler = { workspace = true }
+# asctime-style start/end timestamps in meta_info.json
+jiff = "0.2"
 
 # statvfs, for the free-disk-space probe behind the RAD-intermediate
 # preflight/low-space checks (unix only; the probe reports None elsewhere)

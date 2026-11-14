@@ -38,59 +38,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-/// `log(exp(a)+exp(b))` with `-inf` as log-zero.
-///
-/// A local copy of [`salmon_core::math::log_add`]; see that module for why
-/// probabilities live in log space and how the stable formulation works.
-#[inline]
-fn log_add(a: f64, b: f64) -> f64 {
-    if a == f64::NEG_INFINITY {
-        return b;
-    }
-    if b == f64::NEG_INFINITY {
-        return a;
-    }
-    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
-    hi + (lo - hi).exp().ln_1p()
-}
-
-/// An `f64` accumulator supporting lock-free log-space addition.
-///
-/// Same bit-pattern-in-an-integer trick as [`salmon_core::AtomicF64`]: CPUs have
-/// atomic integer instructions but no atomic floats, and mapping threads update
-/// these masses continuously.
-struct AtomicF64(AtomicU64);
-impl AtomicF64 {
-    fn new(v: f64) -> Self {
-        Self(AtomicU64::new(v.to_bits()))
-    }
-    #[inline]
-    fn load(&self) -> f64 {
-        f64::from_bits(self.0.load(Ordering::Relaxed))
-    }
-    /// `self = logAdd(self, x)` (CAS retry loop).
-    ///
-    /// "CAS" is compare-and-swap: store the new value only if nobody else changed
-    /// the slot since we read it, otherwise retry on top of their value.
-    #[inline]
-    fn log_add_assign(&self, x: f64) {
-        // Adding log-zero is a no-op; skipping it avoids a pointless CAS.
-        if x == f64::NEG_INFINITY {
-            return;
-        }
-        let mut cur = self.0.load(Ordering::Relaxed);
-        loop {
-            let new = log_add(f64::from_bits(cur), x).to_bits();
-            match self
-                .0
-                .compare_exchange_weak(cur, new, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                Ok(_) => break,
-                Err(e) => cur = e,
-            }
-        }
-    }
-}
+use salmon_core::math::log_add;
+use salmon_core::AtomicF64;
 
 /// Shared online-inference state, updated concurrently by the mapping workers.
 pub struct OnlineInference {

@@ -28,7 +28,6 @@ flate2 = { workspace = true }
 rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 noodles-bgzf = "0.52"
-jiff = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -1545,12 +1545,4 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     Ok(result)
 }
 
-/// Current local time as an asctime-style string (`Wed Jun 10 20:34:58 2026`),
-/// matching salmon's `start_time`/`end_time` format.
-///
-/// Matched exactly because downstream tools parse these fields.
-pub(crate) fn asctime_now() -> String {
-    jiff::Zoned::now()
-        .strftime("%a %b %e %H:%M:%S %Y")
-        .to_string()
-}
+pub(crate) use salmon_core::asctime_now;

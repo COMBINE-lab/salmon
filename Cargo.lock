@@ -2637,7 +2637,6 @@ dependencies = [
  "crossbeam-channel",
  "crossbeam-queue",
  "flate2",
- "jiff",
  "libradicl",
  "noodles-bam",
  "noodles-bgzf",
@@ -2681,6 +2680,7 @@ name = "salmon-core"
 version = "2.11.0"
 dependencies = [
  "flate2",
+ "jiff",
  "libc",
  "niffler",
  "serde",
@@ -2772,7 +2772,6 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "flate2",
- "jiff",
  "libradicl",
  "noodles-bam",
  "noodles-bgzf",
