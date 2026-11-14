@@ -1322,7 +1322,11 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
             // the same reference would differ.
             seed: 1,
             mphf_build: Default::default(),
-            emit_tiny: None,
+            // salmon loads the SSHash dictionary only (`ReferenceIndex::load`);
+            // piscem's auto Tiny artifacts (.tdct/.tct) are never read, and below
+            // its k-mer threshold they cost about half the build time and ~24
+            // bytes per k-mer of disk and peak memory.
+            emit_tiny: Some(false),
             tmp_dir: Some(sshash_tmp.clone()),
             ram_limit_gib: opts.ram_limit_gib,
         };
