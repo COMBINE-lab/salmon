@@ -258,10 +258,18 @@ pub fn best_per_target(mut candidates: Vec<MappingCandidate>) -> Vec<MappingCand
     // than hashing each key, and needs no allocation and no scratch parameter.
     // The kept elements stay in their original relative order, so the
     // highest-coverage-first ordering established above survives.
+    // Above the threshold measured for `finalize_mappings_counted_into`, a set
+    // replaces the quadratic scan (a repeat read can hit ~1000 targets).
+    let mut seen = (candidates.len() > crate::score::DEDUP_HASH_THRESHOLD)
+        .then(|| ahash::AHashSet::with_capacity(candidates.len()));
     let mut kept = 0usize;
     for i in 0..candidates.len() {
         let key = (candidates[i].tid, candidates[i].is_fw);
-        if candidates[..kept].iter().all(|c| (c.tid, c.is_fw) != key) {
+        let new = match &mut seen {
+            Some(set) => set.insert(key),
+            None => candidates[..kept].iter().all(|c| (c.tid, c.is_fw) != key),
+        };
+        if new {
             candidates.swap(i, kept);
             kept += 1;
         }
@@ -419,5 +427,37 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(candidates_from_raw_hits(&raw, &enc, 100, 31, &cfg).len(), 3);
+    }
+
+    /// The scan and the set path must keep the same candidate per target and
+    /// the same order: best coverage first, ties in input order.
+    #[test]
+    fn best_per_target_is_the_same_above_the_hash_threshold() {
+        let cand = |tid: u32, cov: i32| MappingCandidate {
+            tid,
+            is_fw: tid.is_multiple_of(2),
+            chain: MemChain::new(
+                vec![Mem::new(0, tid as i32, cov)],
+                0.0,
+                tid.is_multiple_of(2),
+            ),
+            read_len: 100,
+        };
+        // 3 chains per target, 100 targets: 300 candidates, 100 survivors.
+        let all: Vec<_> = (0..300u32)
+            .map(|i| cand(i % 100, 20 + ((i * 7) % 3) as i32))
+            .collect();
+        let small: Vec<_> = (0..100u32)
+            .flat_map(|t| best_per_target(all.iter().filter(|c| c.tid == t).cloned().collect()))
+            .collect();
+        let big = best_per_target(all);
+        assert_eq!(big.len(), 100);
+        for c in &big {
+            let s = small.iter().find(|s| s.tid == c.tid).unwrap();
+            assert_eq!(s.chain.covered_read_bases(), c.chain.covered_read_bases());
+        }
+        assert!(big
+            .windows(2)
+            .all(|w| w[0].chain.covered_read_bases() >= w[1].chain.covered_read_bases()));
     }
 }

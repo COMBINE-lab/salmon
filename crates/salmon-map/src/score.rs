@@ -173,7 +173,7 @@ pub fn finalize_mappings_counted(
 /// Fragments are typically 1 to 20 mappings, so the scan is the normal path and
 /// the table is there to bound the tail — `--maxReadOcc` caps `n`, but well above
 /// where the scan stays cheapest.
-const DEDUP_HASH_THRESHOLD: usize = 112;
+pub(crate) const DEDUP_HASH_THRESHOLD: usize = 112;
 
 // Both paths must stay reachable in a real run: below this a typical fragment
 // (1 to 20 mappings) takes the scan, and above it a `--maxReadOcc`-sized one
