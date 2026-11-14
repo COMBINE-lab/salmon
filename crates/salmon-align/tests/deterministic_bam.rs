@@ -943,3 +943,40 @@ fn only_mate_suffixes_are_stripped_from_read_names() {
     // r/a and r/b are two fragments; s/1 and s/2 are the mates of one.
     assert_eq!(summary.num_processed, 3);
 }
+
+/// Every alignment path opens its input more than once (header, then records),
+/// so a named pipe lost its data to the first open and the second open waited
+/// forever for a writer that had gone. It has to be refused up front instead.
+#[cfg(unix)]
+#[test]
+fn a_fifo_alignment_input_is_refused_not_hung() {
+    let dir = tempfile::tempdir().unwrap();
+    let sam = write_sam(dir.path());
+    let fifo = dir.path().join("pipe.sam");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    // Detached: once the input is refused, nothing ever opens the read end.
+    let (src, dst) = (sam.clone(), fifo.clone());
+    std::thread::spawn(move || {
+        let _ = std::io::copy(
+            &mut std::fs::File::open(src).unwrap(),
+            &mut std::fs::File::create(dst).unwrap(),
+        );
+    });
+    let out = dir.path().join("q");
+    std::fs::create_dir_all(&out).unwrap();
+    let opts = opts_for(&fifo, &out);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let r = write_alignment_rad(&opts, &out.join("aln.rad"), ChunkCodec::None);
+        let _ = tx.send(r.map(|_| ()).map_err(|e| format!("{e:#}")));
+    });
+    let err = rx
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("salmon hung on a FIFO alignment input")
+        .expect_err("a FIFO alignment input must be refused");
+    assert!(err.contains("not a regular file"), "{err}");
+}
