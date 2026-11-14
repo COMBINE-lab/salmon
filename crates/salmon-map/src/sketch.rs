@@ -318,7 +318,11 @@ pub fn map_read_pair_sketch_into<'idx, R: RefProvider>(
                     // surviving mate's `pos` is set. Derive the same position
                     // fields selective alignment fills so bias context, the
                     // ambiguous-fragment FLD term, and SAM output all work.
-                    let frag = h.frag_len();
+                    // piscem's template length counts one base too many
+                    // (`rc.pos + rc_len - fw.pos + 1` over 0-based starts), so
+                    // [100,150) + [300,350) reads 251 where selective alignment
+                    // says 250. Orphans report 0 and stay 0.
+                    let frag = (h.frag_len() - 1).max(0);
                     let (ref_pos, fw_pos, rc_pos, read_len, r1_pos, r2_pos, r2_fw) = match status
                     {
                         MateStatus::PairedEndPaired => {

@@ -405,6 +405,15 @@ fn pseudoalignment_only_mode() {
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "sketch pair: {sp:?}"
     );
+    // The fragment is [50, 430): 380 bases ending at 429, as selective alignment
+    // measures it. piscem's `tlen` is one longer, which shifted every sketch FLD
+    // sample and put `rc_pos` one past the fragment.
+    let pair = sp
+        .iter()
+        .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+        .unwrap();
+    assert_eq!(pair.fragment_len, 380, "{pair:?}");
+    assert_eq!(pair.rc_pos, 429, "{pair:?}");
 }
 
 #[test]
