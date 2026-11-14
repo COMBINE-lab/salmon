@@ -488,6 +488,22 @@ impl EquivalenceClassBuilder {
         }
     }
 
+    /// Fold a locally accumulated class into the shared table. Exact: the
+    /// accumulators are integers, so merge order cannot change the result.
+    fn merge(&self, group: TranscriptGroup, value: TGValue) {
+        let mut shard = self.shard(group.hash);
+        if let Some((_, v)) = shard.find_mut(group.hash, |(g, _)| {
+            g.hash == group.hash && g.txps == group.txps && g.bins == group.bins
+        }) {
+            for (a, b) in v.acc.iter_mut().zip(&value.acc) {
+                *a += b;
+            }
+            v.count += value.count;
+        } else {
+            shard.insert_unique(group.hash, (group, value), |(g, _)| g.hash);
+        }
+    }
+
     /// Number of distinct equivalence classes accumulated so far.
     pub fn len(&self) -> usize {
         self.shards
@@ -537,6 +553,59 @@ impl EquivalenceClassBuilder {
         CollapsedEqClasses {
             classes,
             total_count,
+        }
+    }
+}
+
+/// Per-worker, lock-free front for [`EquivalenceClassBuilder`]. Skewed
+/// libraries send most fragments to a few hot classes, and every thread
+/// hitting the same shard mutex serialized the pass; batching those locally
+/// takes the lock once per class per flush instead of once per fragment.
+/// Bounded at [`LocalEqCache::CAP`] classes so memory stays per-thread small.
+/// Call [`flush`](Self::flush) when the worker is done, or the tail is lost.
+#[derive(Default)]
+pub struct LocalEqCache {
+    table: hashbrown::HashTable<(TranscriptGroup, TGValue)>,
+}
+
+impl LocalEqCache {
+    const CAP: usize = 4096;
+
+    /// Same contract as [`EquivalenceClassBuilder::add_slices`].
+    pub fn add_slices(
+        &mut self,
+        shared: &EquivalenceClassBuilder,
+        txps: &[u32],
+        bins: &[u32],
+        weights: &[f64],
+        count: u64,
+    ) {
+        let hash = TranscriptGroup::hash_label(txps, bins);
+        if let Some((_, v)) = self.table.find_mut(hash, |(g, _)| {
+            g.hash == hash && g.txps == txps && g.bins == bins
+        }) {
+            v.accumulate(weights, count);
+            return;
+        }
+        if self.table.len() >= Self::CAP {
+            self.flush(shared);
+        }
+        let group = TranscriptGroup {
+            txps: txps.to_vec(),
+            bins: bins.to_vec(),
+            hash,
+        };
+        self.table.insert_unique(
+            hash,
+            (group, TGValue::from_slice(weights, count)),
+            |(g, _)| g.hash,
+        );
+    }
+
+    /// Move everything accumulated so far into `shared`.
+    pub fn flush(&mut self, shared: &EquivalenceClassBuilder) {
+        for (g, v) in self.table.drain() {
+            shared.merge(g, v);
         }
     }
 }
