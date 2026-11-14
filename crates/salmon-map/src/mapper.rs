@@ -137,6 +137,13 @@ fn collect_candidates<'idx, R: RefProvider>(
     }
 }
 
+/// One chain per `(tid, is_fw)` among the chains that pass the consensus filter.
+/// Filtering first, as the paired path does: a target survives when any of its
+/// chains scores high enough, not only its highest-coverage one.
+fn single_end_candidates(cands: Vec<MappingCandidate>, cf: f32) -> Vec<MappingCandidate> {
+    best_per_target(consensus_filter(cands, cf))
+}
+
 /// Map a single-end read to weighted equivalence-class members.
 pub fn map_single_read<'idx, R: RefProvider>(
     index: &'idx ReferenceIndex,
@@ -169,15 +176,8 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
     cfg: &MapConfig,
     scratch: &mut MapScratch,
 ) {
-    let cands = consensus_filter(
-        best_per_target(collect_candidates(
-            index,
-            hs,
-            refs,
-            read,
-            MATE_BUFFER_UNUSED,
-            cfg,
-        )),
+    let cands = single_end_candidates(
+        collect_candidates(index, hs, refs, read, MATE_BUFFER_UNUSED, cfg),
         cfg.collect.consensus_fraction,
     );
     let had_candidates = !cands.is_empty();
@@ -571,15 +571,8 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
     read: &[u8],
     cfg: &MapConfig,
 ) -> Option<DebugMapping> {
-    let cands = consensus_filter(
-        best_per_target(collect_candidates(
-            index,
-            hs,
-            refs,
-            read,
-            MATE_BUFFER_UNUSED,
-            cfg,
-        )),
+    let cands = single_end_candidates(
+        collect_candidates(index, hs, refs, read, MATE_BUFFER_UNUSED, cfg),
         cfg.collect.consensus_fraction,
     );
     let best = cands.iter().max_by_key(|c| c.chain.covered_read_bases())?;
@@ -822,5 +815,34 @@ mod orphan_as_tests {
             anchor_score - orphan_read1_score(false, anchor_score),
             anchor_score
         );
+    }
+
+    /// Target 0's highest-coverage chain carries a gap penalty that drops it
+    /// below the consensus cutoff, but its other chain clears it. The target
+    /// must survive, as it does for a mate on the paired path.
+    #[test]
+    fn single_end_keeps_target_whose_other_chain_passes_consensus() {
+        use crate::chain::MemChain;
+        use crate::mem::Mem;
+        let cand = |tid, mems, score| MappingCandidate {
+            tid,
+            is_fw: true,
+            chain: MemChain::new(mems, score, true),
+            read_len: 100,
+        };
+        let cands = vec![
+            // coverage 60, score 20 (gapped)
+            cand(0, vec![Mem::new(0, 100, 30), Mem::new(30, 180, 30)], 20.0),
+            // coverage 55, score 55
+            cand(0, vec![Mem::new(0, 500, 55)], 55.0),
+            cand(1, vec![Mem::new(0, 100, 60)], 60.0),
+        ];
+        let kept = single_end_candidates(cands, 0.65);
+        let t0: Vec<f32> = kept
+            .iter()
+            .filter(|c| c.tid == 0)
+            .map(|c| c.chain.score)
+            .collect();
+        assert_eq!(t0, [55.0]);
     }
 }
