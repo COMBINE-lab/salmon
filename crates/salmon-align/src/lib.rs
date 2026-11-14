@@ -1941,10 +1941,10 @@ fn process_fragment(
                 if let Some(pos) = local.pos_obs.as_mut() {
                     let lc = ctx.length_class.unwrap()[*tid as usize];
                     if let Some(five) = fwd_five {
-                        pos.0[lc].add_mass(five as i32, rl as i32, p.ln());
+                        pos.0[lc].add_mass(five as i32, rl as i32, p);
                     }
                     if let Some(five) = rev_five {
-                        pos.1[lc].add_mass(five as i32, rl as i32, p.ln());
+                        pos.1[lc].add_mass(five as i32, rl as i32, p);
                     }
                 }
             }
