@@ -407,3 +407,28 @@ fn bias_model_shapes_are_recorded() {
     );
     assert_eq!(meta(&tuned)["gc_bias_bins"], 120, "30 GC x 4 conditional");
 }
+
+/// `--skipQuant --numBootstraps 30` draws no samples, yet `samp_type` read the
+/// requested count and said "bootstrap" next to `num_bootstraps: 0`; tximport
+/// keys off the pair (COMBINE-lab/salmon#1314).
+#[test]
+fn samp_type_says_none_when_no_samples_are_drawn() {
+    let dir = tempfile::tempdir().unwrap();
+    let (index, r1, r2) = fixture(dir.path());
+    let out = dir.path().join("q");
+    assert!(Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&index)
+        .args(["-l", "IU", "-1"])
+        .arg(&r1)
+        .arg("-2")
+        .arg(&r2)
+        .args(["-p", "2", "--skipQuant", "--numBootstraps", "30", "-o"])
+        .arg(&out)
+        .status()
+        .unwrap()
+        .success());
+    let m = meta(&out);
+    assert_eq!(m["num_bootstraps"], 0);
+    assert_eq!(m["samp_type"], "none");
+}
