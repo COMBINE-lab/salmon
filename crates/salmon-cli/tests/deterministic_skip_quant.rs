@@ -194,3 +194,52 @@ fn skip_quant_under_deterministic_alignment_keeps_the_rad_in_the_output_dir() {
         "nothing should be left in --radScratchDir: {in_scratch:?}"
     );
 }
+
+#[test]
+/// Genome projection under `--skipQuant` has the same deliverable, so a phase 2
+/// that fails afterwards must not delete it. Its error path cleaned the RAD up
+/// as an intermediate, while its success path (and the `-a` driver) kept it.
+fn skip_quant_genome_projection_keeps_the_rad_when_phase_2_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let gtf = dir.path().join("a.gtf");
+    let mut gtf_text = String::new();
+    for (tx, start, end) in [("txA", 1001, 3000), ("txB", 5001, 7000)] {
+        let attrs = format!("gene_id \"g{tx}\"; transcript_id \"{tx}\";");
+        for kind in ["transcript", "exon"] {
+            gtf_text.push_str(&format!(
+                "chr1\tt\t{kind}\t{start}\t{end}\t.\t+\t.\t{attrs}\n"
+            ));
+        }
+    }
+    std::fs::write(&gtf, gtf_text).unwrap();
+    let sam = dir.path().join("g.sam");
+    let mut sam_text = String::from("@HD\tVN:1.6\tSO:queryname\n@SQ\tSN:chr1\tLN:10000\n");
+    for i in 0..100 {
+        let p = if i % 2 == 0 { 1001 } else { 5001 } + i;
+        sam_text.push_str(&format!(
+            "r{i}\t0\tchr1\t{p}\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0\n"
+        ));
+    }
+    std::fs::write(&sam, sam_text).unwrap();
+    let out = dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    // A file where phase 2 wants its `aux_info` directory makes phase 2 fail
+    // after phase 1 has written the RAD.
+    std::fs::write(out.join("aux_info"), "").unwrap();
+
+    let ok = Command::new(SALMON)
+        .args(["quant", "-a"])
+        .arg(&sam)
+        .arg("--annotation")
+        .arg(&gtf)
+        .args(["-l", "SF", "-p", "2", "--skipQuant", "-o"])
+        .arg(&out)
+        .status()
+        .unwrap()
+        .success();
+    assert!(!ok, "phase 2 was set up to fail");
+    assert!(
+        out.join("genome_projected.rad").is_file(),
+        "the --skipQuant deliverable must survive a failing phase 2"
+    );
+}

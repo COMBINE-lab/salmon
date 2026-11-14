@@ -1922,7 +1922,9 @@ fn run_genome_project(
     let res = match quantify_rad(&q, &rad_path) {
         Ok(r) => r,
         Err(e) => {
-            if !explicit && !keep_rad {
+            // Under `--skipQuant` the RAD is the deliverable: keep it, as the
+            // success path below and the `-a` driver do.
+            if !explicit && !keep_rad && !deliverable {
                 cleanup_intermediate_rad(&rad_path);
             }
             return Err(e).context("genome-projected quantification failed");
