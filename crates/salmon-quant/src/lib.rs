@@ -924,8 +924,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         tracing::info!("mapped {m} / {p} fragments ({pct:.2}%)");
     }
     timer.mark("mapping");
-    if let Some(sw) = &sam_writer {
-        sw.flush().context("flushing SAM output")?;
+    if let Some(sw) = sam_writer {
+        sw.finish().context("finalizing SAM output")?;
     }
     if let Some(output) = bam_output {
         output.finish().context("finalizing BAM output")?;

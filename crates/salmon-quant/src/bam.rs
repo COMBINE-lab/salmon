@@ -39,7 +39,7 @@
 
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -166,6 +166,8 @@ pub struct BamOutput {
     recycled: Receiver<Vec<u8>>,
     failure: Arc<WriterFailure>,
     handle: Option<JoinHandle<io::Result<()>>>,
+    /// `(partial, final)`: renamed on a clean `finish`, removed otherwise.
+    staged: Option<(PathBuf, PathBuf)>,
 }
 
 impl BamOutput {
@@ -186,7 +188,8 @@ impl BamOutput {
                     .with_context(|| format!("creating BAM output dir {}", parent.display()))?;
             }
         }
-        let file = std::fs::File::create(path)
+        let staged = staging_path(path);
+        let file = std::fs::File::create(staged.as_deref().unwrap_or(path))
             .with_context(|| format!("creating BAM output {}", path.display()))?;
         let queue_capacity = (threads.max(1) * 2).clamp(4, 32);
         let (sender, receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) =
@@ -246,6 +249,7 @@ impl BamOutput {
             recycled,
             failure,
             handle: Some(handle),
+            staged: staged.map(|partial| (partial, path.to_path_buf())),
         })
     }
 
@@ -287,8 +291,11 @@ impl BamOutput {
             .take()
             .unwrap()
             .join()
-            .map_err(|_| anyhow::anyhow!("BAM writer thread panicked"))?
-            .map_err(anyhow::Error::from)
+            .map_err(|_| anyhow::anyhow!("BAM writer thread panicked"))??;
+        if let Some((partial, target)) = self.staged.take() {
+            std::fs::rename(&partial, &target)?;
+        }
+        Ok(())
     }
 }
 
@@ -300,7 +307,23 @@ impl Drop for BamOutput {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+        if let Some((partial, _)) = self.staged.take() {
+            let _ = std::fs::remove_file(partial);
+        }
     }
+}
+
+/// Where to write `path` so a failed run never leaves a truncated file there:
+/// `<path>.partial`, renamed into place on success. `None` (write in place) for
+/// an existing non-regular target such as `/dev/stdout` or a FIFO, which a
+/// rename would replace instead of feeding.
+pub(crate) fn staging_path(path: &Path) -> Option<PathBuf> {
+    if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+        return None;
+    }
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(".partial");
+    Some(partial.into())
 }
 
 /// One mapping worker's private BAM encode buffer, bound to the output it feeds.
@@ -524,6 +547,17 @@ fn encode_record(buf: &mut Vec<u8>, record: &AlignmentRecord<'_>) -> io::Result<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn staging_path_skips_non_regular_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("m.bam");
+        assert_eq!(
+            super::staging_path(&out),
+            Some(dir.path().join("m.bam.partial"))
+        );
+        assert_eq!(super::staging_path(std::path::Path::new("/dev/null")), None);
+    }
+
     use super::*;
 
     /// Pin the sizing heuristic to the measured balance point, so a future edit
