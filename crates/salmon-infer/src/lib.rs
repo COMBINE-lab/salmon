@@ -384,7 +384,8 @@ pub fn optimize(
     opts: &EmOptions,
     eff_lens: EffLens<'_>,
 ) -> EmResult {
-    let packed = PackedEqClasses::from_collapsed(eq, num_txps);
+    // The EM reads no per-mapping weights; only Gibbs does.
+    let packed = PackedEqClasses::from_collapsed_for(eq, num_txps, PosteriorMethod::None);
     optimize_packed_with_init(&packed, opts, true, InitAlphas::NONE, eff_lens)
 }
 
