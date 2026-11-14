@@ -441,7 +441,7 @@ fn write_meta_info(
         frag_length_sd: res.frag_len_sd,
         frag_length_source: res.frag_len_source.as_str(),
         seq_bias_correct: opts.seq_bias,
-        gc_bias_correct: opts.gc_bias,
+        gc_bias_correct: opts.gc_bias && !res.bias_dump.obs_gc.is_empty(),
         pos_bias_correct: opts.pos_bias,
         // Not the seq/GC/pos bin count, despite the name. C++ salmon writes
         // `bcounts.size()` here (`GZipWriter.cpp:532`), where `bcounts` is the
