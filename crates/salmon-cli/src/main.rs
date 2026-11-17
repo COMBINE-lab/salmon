@@ -2838,18 +2838,20 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         );
     }
     // The one-pass reads path writes no intermediate RAD, so the flags that
-    // place or shape one are inert — `-a --online` and `--rad` already say so.
+    // place or keep one are inert. `--writeRad` still writes a RAD of the
+    // mappings there, so it is not listed, and the codec flags are inert only
+    // without it.
     if args.online {
+        let no_rad = args.write_rad.is_none();
         warn_inert_in_mode(
             "the deprecated one-pass reads path (--online)",
             None,
             "it writes no intermediate RAD",
             &[
-                ("--writeRad", args.write_rad.is_some()),
                 ("--keepRad", args.keep_rad),
                 ("--radScratchDir", args.rad_scratch_dir.is_some()),
-                ("--radCompress", args.rad_compress.is_some()),
-                ("--noCompressRad", args.no_compress_rad),
+                ("--radCompress", no_rad && args.rad_compress.is_some()),
+                ("--noCompressRad", no_rad && args.no_compress_rad),
             ],
         );
     }
@@ -2947,18 +2949,10 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // RAD chunk compression (only consumed when a RAD is actually written:
     // --writeRad output or the --deterministic intermediate). --noCompressRad
     // overrides --radCompress.
-    opts.rad_codec = if args.no_compress_rad {
-        ChunkCodec::None
-    } else {
-        match args.rad_compress.as_deref().unwrap_or("lz4") {
-            "none" => ChunkCodec::None,
-            "lz4" => ChunkCodec::Lz4,
-            "zstd" => ChunkCodec::Zstd,
-            other => {
-                anyhow::bail!("unknown --radCompress codec '{other}' (expected lz4|zstd|none)")
-            }
-        }
-    };
+    opts.rad_codec = rad_codec_from_args(
+        args.no_compress_rad,
+        args.rad_compress.as_deref().unwrap_or("lz4"),
+    )?;
     opts.num_bootstraps = args.num_bootstraps;
     opts.num_gibbs_samples = args.num_gibbs_samples;
     opts.thinning_factor = args.thinning_factor.unwrap_or(16);
