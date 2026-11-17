@@ -20,6 +20,7 @@ pub(super) fn open(names: &[&str]) -> Result<Library, String> {
 }
 
 /// `*lib.get(name)`: the symbol must have the C signature `T` in the vendor headers.
+#[cfg(gpu = "rocm")]
 macro_rules! sym {
     ($lib:expr, $name:literal) => {
         // SAFETY: `$name` has this signature in the vendor's runtime / rtc header,
@@ -28,6 +29,7 @@ macro_rules! sym {
             .map_err(|e| format!("{}: {e}", $name))?
     };
 }
+#[cfg(gpu = "rocm")]
 pub(super) use sym;
 
 /// `prefix + name` from `lib`, typed `T` by the caller.

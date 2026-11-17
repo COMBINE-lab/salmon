@@ -471,8 +471,10 @@ impl KmerDevice {
             counts_d.cu_deviceptr(),
         ];
         let mut n = counts.len() as u32;
-        let mut params: Vec<*mut std::ffi::c_void> =
-            ptrs.iter_mut().map(|p| (p as *mut _).cast()).collect();
+        let mut params: Vec<*mut std::ffi::c_void> = ptrs
+            .iter_mut()
+            .map(|p| std::ptr::from_mut(p).cast())
+            .collect();
         params.push((&mut n as *mut u32).cast());
         // SAFETY: one pointer per `kmer_hits` parameter, in order and of its
         // type (eight device pointers, then the count); the buffers outlive
