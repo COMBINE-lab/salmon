@@ -102,25 +102,10 @@ jobs:
             -o target/sample_quant_alignment
           test -s target/sample_quant_alignment/quant.sf
 
-  # The experimental GPU warm start (`--gpu`) lives behind off-by-default
-  # features that `build-test` never compiles. These jobs keep the backends
-  # building and lint-clean; neither runner has a usable GPU, so the GPU tests
-  # (which skip without a device) are run by hand on real hardware.
-  gpu-metal:
-    runs-on: macos-15
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Clippy (metal)
-        run: cargo clippy -p salmon-infer --features metal --all-targets -- -D warnings
-      - name: Build CLI (metal)
-        run: cargo build -p salmon-cli --features metal
-
+  # The GPU warm start's Metal (macOS) and ROCm (Linux) backends are default
+  # features, so `build-test` lints, builds and tests them (the GPU tests skip
+  # without a device). CUDA stays opt-in because cuda-bindings needs the CUDA
+  # headers at build time; this job keeps it building and lint-clean.
   gpu-cuda-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -146,20 +131,3 @@ jobs:
             cuda-cudart-dev-13-0 cuda-crt-13-0 libcurand-dev-13-0
       - name: Clippy (cuda)
         run: cargo clippy -p salmon-infer --features cuda --all-targets -- -D warnings
-
-  gpu-rocm-check:
-    # No ROCm install needed: the backend dlopens libamdhip64/libhiprtc at run
-    # time, so without them the tests check the no-device skip path only.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Clippy (rocm)
-        run: cargo clippy -p salmon-infer --features rocm --all-targets -- -D warnings
-      - name: Test (rocm, no device)
-        run: cargo test -p salmon-infer --features rocm gpu

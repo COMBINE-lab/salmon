@@ -51,7 +51,7 @@ use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::{RefseqLoad, SalmonIndex};
 use salmon_infer::optimize_packed_with_init;
-pub use salmon_infer::{EmAccel, EmOptions, EmStop, GPU_BACKEND};
+pub use salmon_infer::{EmAccel, EmOptions, EmStop};
 use salmon_map::MapConfig;
 use salmon_model::dumps::{dump_bias_models_to_file, BiasDump};
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};

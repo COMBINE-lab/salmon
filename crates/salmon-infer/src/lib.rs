@@ -35,7 +35,7 @@ use salmon_eqclass::CollapsedEqClasses;
 
 mod components;
 mod daarem;
-#[cfg(any(feature = "metal", feature = "cuda", feature = "rocm", test))]
+#[cfg(any(gpu, test))]
 mod gpu;
 mod online;
 mod packed;
@@ -47,11 +47,11 @@ pub use packed::{PackedEqClasses, PosteriorMethod};
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
 
 /// The GPU backend compiled into this build for [`EmOptions::gpu`], if any.
-pub const GPU_BACKEND: Option<&str> = if cfg!(feature = "metal") {
+pub const GPU_BACKEND: Option<&str> = if cfg!(gpu = "metal") {
     Some("metal")
-} else if cfg!(feature = "cuda") {
+} else if cfg!(gpu = "cuda") {
     Some("cuda")
-} else if cfg!(feature = "rocm") {
+} else if cfg!(gpu = "rocm") {
     Some("rocm")
 } else {
     None
@@ -215,7 +215,9 @@ pub struct EmOptions {
     /// stopping rule of unaccelerated plain EM (default [`EmStop::Global`])
     pub em_stop: EmStop,
     /// experimental: warm-start parallel point-estimate runs on the GPU backend
-    /// in [`GPU_BACKEND`] (ignored when none is compiled in); see `gpu`
+    /// in [`GPU_BACKEND`] when it finds a device and the problem is large enough
+    /// (ignored when none is compiled in). Off here; the CLI turns it on unless
+    /// `--no-gpu`. See `gpu`.
     pub gpu: bool,
 }
 
@@ -496,7 +498,7 @@ pub(crate) fn run_em_counts(
     let (mut gpu_iters, mut min_iter) = (0u32, min_iter);
     // GPU only for open-ended point-estimate runs: bootstrap replicates pass
     // `parallel = false`, bias-seed runs are fixed-length (`min_iter == max_iter`).
-    #[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
+    #[cfg(gpu)]
     if opts.gpu && parallel && min_iter < opts.max_iter {
         if let Some((warm, n)) = gpu::converge(p, counts, &alphas, &prior_alphas, opts, min_iter) {
             alphas = warm;
