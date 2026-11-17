@@ -540,9 +540,17 @@ chromosomes salmon never loaded and a guessed checksum is worse than none.
 
 Placements on a reference the annotation does not describe (a decoy, or a
 transcript absent from the GTF) are dropped rather than half-projected. Two
-transcripts of one gene often imply the same genomic alignment; those duplicates
-are kept, tagged secondary as they already were, because deciding between them
-is a quantification question and `quant.sf` is salmon's answer to it.
+transcripts of one gene often imply the same genomic alignment; that alignment is
+written once, and `NH`, `HI` and `MAPQ` count distinct genomic alignments rather
+than transcripts. Otherwise a read with one place on the genome would look like a
+multimapper to every genome-coordinate tool (RSeQC drops reads below `MAPQ` 30,
+Qualimap skips `NH > 1`). Nothing is decided between the transcripts: their
+records would be identical, and which transcript a read came from is
+`quant.sf`'s question, not the BAM's.
+
+Every `N` comes from the annotation, so splice-junction QC on this output
+(RSeQC `junction_annotation`, `junction_saturation`) finds no novel junctions by
+construction.
 
 ### `MAPQ`
 

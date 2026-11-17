@@ -514,6 +514,37 @@ struct Placed {
     projection: Option<crate::splice::Projection>,
 }
 
+/// The fields of a record that describe its alignment, for telling whether two
+/// placements projected onto the same genomic one. Everything that is a property
+/// of the placement rather than of the alignment (`NH`, `HI`, `MAPQ`, `AS`, `ZW`,
+/// the secondary bit) is left out.
+#[derive(Clone, PartialEq)]
+struct RecordKey {
+    flags: u16,
+    reference_id: Option<usize>,
+    position: i32,
+    cigar: Vec<CigarOp>,
+    mate_reference_id: Option<usize>,
+    mate_position: Option<i32>,
+    template_length: i32,
+    transcript_strand: Option<u8>,
+}
+
+impl RecordKey {
+    fn of(record: &AlignmentRecord<'_>) -> Self {
+        Self {
+            flags: record.flags & !SECONDARY,
+            reference_id: record.reference_id,
+            position: record.position,
+            cigar: record.cigar.to_vec(),
+            mate_reference_id: record.mate_reference_id,
+            mate_position: record.mate_position,
+            template_length: record.template_length,
+            transcript_strand: record.transcript_strand,
+        }
+    }
+}
+
 /// Derive one mate's CIGAR and start position, realizing the alignment when the
 /// run asked for it and the reference sequence is there to align against.
 ///
@@ -708,302 +739,367 @@ pub fn emit_fragment_records(
     let (name2, r2_seq, r2_qual) = r2.map_or((name1, &[][..], None), |(id, seq, qual)| {
         (read_name(id), seq, qual)
     });
-    let nh = maps.len();
-    let mapq = mapping_quality(nh);
     let read_group = options.read_group.map(|rg| rg.id.as_str());
     // Where the unmapped mate of an orphan should be filed, taken from the
-    // primary placement. Recorded while emitting so the mate can be written once
-    // afterwards rather than once per placement.
-    let mut orphan_mate: Option<(usize, i32, bool)> = None;
+    // primary placement, and whether that placement is the left mate. Recorded
+    // while emitting so the mate can be written once afterwards rather than once
+    // per placement.
+    let mut orphan_mate: Option<(usize, i32, bool, bool)> = None;
     // Placements can all be refused by the genome projector when the annotation
     // does not describe their transcript. A fragment that mapped but produced no
     // record would vanish from the output with the run still reporting it as
     // mapped, so track whether anything was written for it.
     let mut emitted = 0usize;
-    let mut emit = |record: &AlignmentRecord<'_>| {
-        emitted += 1;
-        emit_record(record)
+
+    // In genome coordinates, transcripts of one gene often place a read on the
+    // very same alignment. Written once per transcript, a read with one genomic
+    // alignment would carry `NH > 1` and a multimapper's `MAPQ`, and every
+    // genome-coordinate tool would discard or down-weight it as ambiguous. So a
+    // first pass projects every placement without writing anything, and the
+    // second writes only the first placement of each distinct genomic alignment,
+    // with `NH`, `HI` and `MAPQ` counting those. Nothing is chosen between
+    // transcripts: the records would be identical, and the transcript they differ
+    // by has no field in a genome-coordinate record.
+    // shortcut: the first pass realizes multi-placement fragments twice; keep the
+    // projected placements per fragment if `--spliced` throughput matters.
+    let dedupe = options.projector.is_some() && maps.len() > 1;
+    let mut keys: Vec<Vec<RecordKey>> = if dedupe {
+        vec![Vec::new(); maps.len()]
+    } else {
+        Vec::new()
     };
+    // Each placement's `HI`, 0 when it writes nothing (only set when deduping).
+    let mut rank: Vec<usize> = Vec::new();
+    let mut nh = maps.len();
 
-    for (index, mapping) in maps.iter().enumerate() {
-        // The first placement is primary; the rest are marked secondary so a
-        // downstream counter does not count this fragment once per placement.
-        let secondary = if index == 0 { 0 } else { SECONDARY };
-        // HI is 1-based, unlike the loop index.
-        let hi = index + 1;
-        let tid = mapping.tid as usize;
-        let txp_len = salmon.ref_len(tid) as i32;
-        // salmon's XT tag. In practice it is always `T`: a placement on a decoy
-        // means the read probably came from no transcript at all, so scoring
-        // drops it long before a record is written, and a decoy-aware run was
-        // confirmed to emit no `D` at all. The branch stays because the tag is
-        // defined over the reference table, not over what currently survives
-        // filtering, and a future policy that kept decoy placements would need
-        // it to be right.
-        let xt = if salmon.is_decoy(mapping.tid) {
-            b'D'
-        } else {
-            b'T'
+    for dry_run in [true, false] {
+        if dry_run && !dedupe {
+            continue;
+        }
+        if !dry_run && dedupe {
+            let mut distinct = 0;
+            rank = (0..keys.len())
+                .map(|i| {
+                    if keys[i].is_empty() || keys[..i].contains(&keys[i]) {
+                        0
+                    } else {
+                        distinct += 1;
+                        distinct
+                    }
+                })
+                .collect();
+            nh = distinct;
+        }
+        let mapq = mapping_quality(nh);
+        let mut emit = |index: usize, record: &AlignmentRecord<'_>| {
+            if dry_run {
+                keys[index].push(RecordKey::of(record));
+                return Ok(());
+            }
+            emitted += 1;
+            emit_record(record)
         };
-        let weight = mapping.weight as f32;
-        // XS is about the transcript's orientation on the genome, so it only
-        // exists once records are in genome coordinates.
-        let transcript_strand = options
-            .projector
-            .and_then(|projector| projector.strand(tid))
-            .map(|forward| if forward { b'+' } else { b'-' });
 
-        match mapping.status {
-            MateStatus::PairedEndPaired => {
-                let p1 = place(
-                    scratch,
-                    0,
-                    options,
-                    salmon,
-                    tid,
-                    r1_seq,
-                    mapping.is_fw,
-                    mapping.r1_pos,
-                    txp_len,
-                );
-                let mut p2 = place(
-                    scratch,
-                    1,
-                    options,
-                    salmon,
-                    tid,
-                    r2_seq,
-                    mapping.r2_fw,
-                    mapping.r2_pos,
-                    txp_len,
-                );
-                let mut p1 = p1;
-                if let Some(projector) = options.projector {
-                    if !project_placement(scratch, &mut p1, projector, tid)
-                        || !project_placement(scratch, &mut p2, projector, tid)
-                    {
-                        continue;
-                    }
+        for (index, mapping) in maps.iter().enumerate() {
+            // HI is 1-based, unlike the loop index.
+            let hi = if dedupe && !dry_run {
+                match rank[index] {
+                    0 => continue,
+                    hi => hi,
                 }
-                // TLEN is the observed template (fragment) length, truncated at
-                // the transcript end for the same reason positions are clamped.
-                let mut fragment_length = mapping.fragment_len;
-                let min_pos = mapping.r1_pos.min(mapping.r2_pos);
-                if min_pos + fragment_length > txp_len {
-                    fragment_length = txp_len - min_pos;
-                }
-                // SAM signs TLEN: positive on the leftmost mate, negative on the
-                // rightmost, so the two records sum to zero.
-                let tlen1 = if mapping.r1_pos <= mapping.r2_pos {
-                    fragment_length
-                } else {
-                    -fragment_length
-                };
-                let mut f1 = PAIRED | PROPER_PAIR | READ1 | secondary;
-                let mut f2 = PAIRED | PROPER_PAIR | READ2 | secondary;
-                // Each mate's own strand sets its IS_RC bit and the *other*
-                // record's MATE_RC bit, so the pair stays mutually consistent.
-                if !mapping.is_fw {
-                    f1 |= IS_RC;
-                    f2 |= MATE_RC;
-                }
-                if !mapping.r2_fw {
-                    f2 |= IS_RC;
-                    f1 |= MATE_RC;
-                }
-                // A projected reverse-strand transcript turns the alignment
-                // around, so both records' strand bits swap and their stored
-                // bases are reverse-complemented once more. TLEN is recomputed
-                // over the genomic span, which introns make longer than the
-                // transcript one.
-                let flipped = p1.projection.is_some_and(|p| p.flipped);
-                let (mut f1, mut f2) = (f1, f2);
-                let (mut tlen1, mut tlen2) = (tlen1, -tlen1);
-                let (mut rc1, mut rc2) = (!mapping.is_fw, !mapping.r2_fw);
-                if flipped {
-                    f1 = flip_strand_bits(f1);
-                    f2 = flip_strand_bits(f2);
-                    rc1 = !rc1;
-                    rc2 = !rc2;
-                }
-                if p1.projection.is_some() {
-                    (tlen1, tlen2) = projected_template_length(scratch, &p1, &p2);
-                }
-                let reference = placed_reference(&p1, tid);
-                let (cigar1, md1) = borrow_cigar(scratch, &p1);
-                let (cigar2, md2) = borrow_cigar(scratch, &p2);
-                emit(&AlignmentRecord {
-                    name: name1,
-                    flags: f1,
-                    reference_id: Some(reference),
-                    position: p1.position,
-                    mapping_quality: mapq,
-                    cigar: cigar1,
-                    mate_reference_id: Some(reference),
-                    mate_position: Some(p2.position),
-                    template_length: tlen1,
-                    sequence: r1_seq,
-                    qualities: r1_qual,
-                    reverse_complement: rc1,
-                    nh,
-                    hi,
-                    xt,
-                    alignment_score: p1.score.unwrap_or(mapping.r1_score),
-                    weight,
-                    edit_distance: p1.edit_distance,
-                    md: md1,
-                    read_group,
-                    mate_cigar: Some(cigar2),
-                    mate_mapping_quality: Some(mapq),
-                    transcript_strand,
-                })?;
-                emit(&AlignmentRecord {
-                    name: name2,
-                    flags: f2,
-                    reference_id: Some(reference),
-                    position: p2.position,
-                    mapping_quality: mapq,
-                    cigar: cigar2,
-                    mate_reference_id: Some(reference),
-                    mate_position: Some(p1.position),
-                    template_length: tlen2,
-                    sequence: r2_seq,
-                    qualities: r2_qual,
-                    reverse_complement: rc2,
-                    nh,
-                    hi,
-                    xt,
-                    alignment_score: p2.score.unwrap_or(mapping.score - mapping.r1_score),
-                    weight,
-                    edit_distance: p2.edit_distance,
-                    md: md2,
-                    read_group,
-                    mate_cigar: Some(cigar1),
-                    mate_mapping_quality: Some(mapq),
-                    transcript_strand,
-                })?;
-            }
-            MateStatus::SingleEnd => {
-                let mut p = place(
-                    scratch,
-                    0,
-                    options,
-                    salmon,
-                    tid,
-                    r1_seq,
-                    mapping.is_fw,
-                    mapping.r1_pos,
-                    txp_len,
-                );
-                if let Some(projector) = options.projector {
-                    if !project_placement(scratch, &mut p, projector, tid) {
-                        continue;
-                    }
-                }
-                let flipped = p.projection.is_some_and(|p| p.flipped);
-                let forward = mapping.is_fw != flipped;
-                let reference = placed_reference(&p, tid);
-                let (cigar, md) = borrow_cigar(scratch, &p);
-                emit(&AlignmentRecord {
-                    name: name1,
-                    flags: secondary | if forward { 0 } else { IS_RC },
-                    reference_id: Some(reference),
-                    position: p.position,
-                    mapping_quality: mapq,
-                    cigar,
-                    mate_reference_id: None,
-                    mate_position: None,
-                    template_length: 0,
-                    sequence: r1_seq,
-                    qualities: r1_qual,
-                    reverse_complement: !forward,
-                    nh,
-                    hi,
-                    xt,
-                    alignment_score: p.score.unwrap_or(mapping.r1_score),
-                    weight,
-                    edit_distance: p.edit_distance,
-                    md,
-                    read_group,
-                    mate_cigar: None,
-                    mate_mapping_quality: None,
-                    transcript_strand,
-                })?;
-            }
-            // Orphan: one mate placed, the other not. One record is emitted, for
-            // whichever mate mapped, flagged so a reader knows the pair is
-            // incomplete rather than that this read is single-end.
-            MateStatus::PairedEndLeft | MateStatus::PairedEndRight => {
-                let left = mapping.status == MateStatus::PairedEndLeft;
-                let (name, sequence, qualities, position, forward, score, read_flag) = if left {
-                    (
-                        name1,
+            } else {
+                index + 1
+            };
+            // The first placement written is primary; the rest are marked secondary
+            // so a downstream counter does not count this fragment once per
+            // placement.
+            let secondary = if hi == 1 { 0 } else { SECONDARY };
+            let tid = mapping.tid as usize;
+            let txp_len = salmon.ref_len(tid) as i32;
+            // salmon's XT tag. In practice it is always `T`: a placement on a decoy
+            // means the read probably came from no transcript at all, so scoring
+            // drops it long before a record is written, and a decoy-aware run was
+            // confirmed to emit no `D` at all. The branch stays because the tag is
+            // defined over the reference table, not over what currently survives
+            // filtering, and a future policy that kept decoy placements would need
+            // it to be right.
+            let xt = if salmon.is_decoy(mapping.tid) {
+                b'D'
+            } else {
+                b'T'
+            };
+            let weight = mapping.weight as f32;
+            // XS is about the transcript's orientation on the genome, so it only
+            // exists once records are in genome coordinates.
+            let transcript_strand = options
+                .projector
+                .and_then(|projector| projector.strand(tid))
+                .map(|forward| if forward { b'+' } else { b'-' });
+
+            match mapping.status {
+                MateStatus::PairedEndPaired => {
+                    let p1 = place(
+                        scratch,
+                        0,
+                        options,
+                        salmon,
+                        tid,
                         r1_seq,
-                        r1_qual,
+                        mapping.is_fw,
                         mapping.r1_pos,
-                        mapping.is_fw,
-                        mapping.r1_score,
-                        READ1,
-                    )
-                } else {
-                    (
-                        name2,
+                        txp_len,
+                    );
+                    let mut p2 = place(
+                        scratch,
+                        1,
+                        options,
+                        salmon,
+                        tid,
                         r2_seq,
-                        r2_qual,
+                        mapping.r2_fw,
                         mapping.r2_pos,
-                        // An orphan's strand is `is_fw`, whichever mate it is;
-                        // `r2_fw` is only set for a proper pair.
-                        mapping.is_fw,
-                        mapping.score - mapping.r1_score,
-                        READ2,
-                    )
-                };
-                let mut p = place(
-                    scratch, 0, options, salmon, tid, sequence, forward, position, txp_len,
-                );
-                if let Some(projector) = options.projector {
-                    if !project_placement(scratch, &mut p, projector, tid) {
-                        continue;
+                        txp_len,
+                    );
+                    let mut p1 = p1;
+                    if let Some(projector) = options.projector {
+                        if !project_placement(scratch, &mut p1, projector, tid)
+                            || !project_placement(scratch, &mut p2, projector, tid)
+                        {
+                            continue;
+                        }
                     }
+                    // TLEN is the observed template (fragment) length, truncated at
+                    // the transcript end for the same reason positions are clamped.
+                    let mut fragment_length = mapping.fragment_len;
+                    let min_pos = mapping.r1_pos.min(mapping.r2_pos);
+                    if min_pos + fragment_length > txp_len {
+                        fragment_length = txp_len - min_pos;
+                    }
+                    // SAM signs TLEN: positive on the leftmost mate, negative on the
+                    // rightmost, so the two records sum to zero.
+                    let tlen1 = if mapping.r1_pos <= mapping.r2_pos {
+                        fragment_length
+                    } else {
+                        -fragment_length
+                    };
+                    let mut f1 = PAIRED | PROPER_PAIR | READ1 | secondary;
+                    let mut f2 = PAIRED | PROPER_PAIR | READ2 | secondary;
+                    // Each mate's own strand sets its IS_RC bit and the *other*
+                    // record's MATE_RC bit, so the pair stays mutually consistent.
+                    if !mapping.is_fw {
+                        f1 |= IS_RC;
+                        f2 |= MATE_RC;
+                    }
+                    if !mapping.r2_fw {
+                        f2 |= IS_RC;
+                        f1 |= MATE_RC;
+                    }
+                    // A projected reverse-strand transcript turns the alignment
+                    // around, so both records' strand bits swap and their stored
+                    // bases are reverse-complemented once more. TLEN is recomputed
+                    // over the genomic span, which introns make longer than the
+                    // transcript one.
+                    let flipped = p1.projection.is_some_and(|p| p.flipped);
+                    let (mut f1, mut f2) = (f1, f2);
+                    let (mut tlen1, mut tlen2) = (tlen1, -tlen1);
+                    let (mut rc1, mut rc2) = (!mapping.is_fw, !mapping.r2_fw);
+                    if flipped {
+                        f1 = flip_strand_bits(f1);
+                        f2 = flip_strand_bits(f2);
+                        rc1 = !rc1;
+                        rc2 = !rc2;
+                    }
+                    if p1.projection.is_some() {
+                        (tlen1, tlen2) = projected_template_length(scratch, &p1, &p2);
+                    }
+                    let reference = placed_reference(&p1, tid);
+                    let (cigar1, md1) = borrow_cigar(scratch, &p1);
+                    let (cigar2, md2) = borrow_cigar(scratch, &p2);
+                    emit(
+                        index,
+                        &AlignmentRecord {
+                            name: name1,
+                            flags: f1,
+                            reference_id: Some(reference),
+                            position: p1.position,
+                            mapping_quality: mapq,
+                            cigar: cigar1,
+                            mate_reference_id: Some(reference),
+                            mate_position: Some(p2.position),
+                            template_length: tlen1,
+                            sequence: r1_seq,
+                            qualities: r1_qual,
+                            reverse_complement: rc1,
+                            nh,
+                            hi,
+                            xt,
+                            alignment_score: p1.score.unwrap_or(mapping.r1_score),
+                            weight,
+                            edit_distance: p1.edit_distance,
+                            md: md1,
+                            read_group,
+                            mate_cigar: Some(cigar2),
+                            mate_mapping_quality: Some(mapq),
+                            transcript_strand,
+                        },
+                    )?;
+                    emit(
+                        index,
+                        &AlignmentRecord {
+                            name: name2,
+                            flags: f2,
+                            reference_id: Some(reference),
+                            position: p2.position,
+                            mapping_quality: mapq,
+                            cigar: cigar2,
+                            mate_reference_id: Some(reference),
+                            mate_position: Some(p1.position),
+                            template_length: tlen2,
+                            sequence: r2_seq,
+                            qualities: r2_qual,
+                            reverse_complement: rc2,
+                            nh,
+                            hi,
+                            xt,
+                            alignment_score: p2.score.unwrap_or(mapping.score - mapping.r1_score),
+                            weight,
+                            edit_distance: p2.edit_distance,
+                            md: md2,
+                            read_group,
+                            mate_cigar: Some(cigar1),
+                            mate_mapping_quality: Some(mapq),
+                            transcript_strand,
+                        },
+                    )?;
                 }
-                let forward = forward != p.projection.is_some_and(|p| p.flipped);
-                let reference = placed_reference(&p, tid);
-                if index == 0 {
-                    orphan_mate = Some((reference, p.position, !forward));
+                MateStatus::SingleEnd => {
+                    let mut p = place(
+                        scratch,
+                        0,
+                        options,
+                        salmon,
+                        tid,
+                        r1_seq,
+                        mapping.is_fw,
+                        mapping.r1_pos,
+                        txp_len,
+                    );
+                    if let Some(projector) = options.projector {
+                        if !project_placement(scratch, &mut p, projector, tid) {
+                            continue;
+                        }
+                    }
+                    let flipped = p.projection.is_some_and(|p| p.flipped);
+                    let forward = mapping.is_fw != flipped;
+                    let reference = placed_reference(&p, tid);
+                    let (cigar, md) = borrow_cigar(scratch, &p);
+                    emit(
+                        index,
+                        &AlignmentRecord {
+                            name: name1,
+                            flags: secondary | if forward { 0 } else { IS_RC },
+                            reference_id: Some(reference),
+                            position: p.position,
+                            mapping_quality: mapq,
+                            cigar,
+                            mate_reference_id: None,
+                            mate_position: None,
+                            template_length: 0,
+                            sequence: r1_seq,
+                            qualities: r1_qual,
+                            reverse_complement: !forward,
+                            nh,
+                            hi,
+                            xt,
+                            alignment_score: p.score.unwrap_or(mapping.r1_score),
+                            weight,
+                            edit_distance: p.edit_distance,
+                            md,
+                            read_group,
+                            mate_cigar: None,
+                            mate_mapping_quality: None,
+                            transcript_strand,
+                        },
+                    )?;
                 }
-                let (cigar, md) = borrow_cigar(scratch, &p);
-                emit(&AlignmentRecord {
-                    name,
-                    flags: PAIRED
-                        | MATE_UNMAPPED
-                        | read_flag
-                        | secondary
-                        | if forward { 0 } else { IS_RC },
-                    reference_id: Some(reference),
-                    position: p.position,
-                    mapping_quality: mapq,
-                    cigar,
-                    // The unmapped mate is filed here too when it is written at
-                    // all, so point at it; with no such record to point at,
-                    // naming a mate position would be a dangling reference.
-                    mate_reference_id: options.write_unaligned.then_some(reference),
-                    mate_position: options.write_unaligned.then_some(p.position),
-                    template_length: 0,
-                    sequence,
-                    qualities,
-                    reverse_complement: !forward,
-                    nh,
-                    hi,
-                    xt,
-                    alignment_score: p.score.unwrap_or(score),
-                    weight,
-                    edit_distance: p.edit_distance,
-                    md,
-                    read_group,
-                    mate_cigar: None,
-                    mate_mapping_quality: None,
-                    transcript_strand,
-                })?;
+                // Orphan: one mate placed, the other not. One record is emitted, for
+                // whichever mate mapped, flagged so a reader knows the pair is
+                // incomplete rather than that this read is single-end.
+                MateStatus::PairedEndLeft | MateStatus::PairedEndRight => {
+                    let left = mapping.status == MateStatus::PairedEndLeft;
+                    let (name, sequence, qualities, position, forward, score, read_flag) = if left {
+                        (
+                            name1,
+                            r1_seq,
+                            r1_qual,
+                            mapping.r1_pos,
+                            mapping.is_fw,
+                            mapping.r1_score,
+                            READ1,
+                        )
+                    } else {
+                        (
+                            name2,
+                            r2_seq,
+                            r2_qual,
+                            mapping.r2_pos,
+                            // An orphan's strand is `is_fw`, whichever mate it is;
+                            // `r2_fw` is only set for a proper pair.
+                            mapping.is_fw,
+                            mapping.score - mapping.r1_score,
+                            READ2,
+                        )
+                    };
+                    let mut p = place(
+                        scratch, 0, options, salmon, tid, sequence, forward, position, txp_len,
+                    );
+                    if let Some(projector) = options.projector {
+                        if !project_placement(scratch, &mut p, projector, tid) {
+                            continue;
+                        }
+                    }
+                    let forward = forward != p.projection.is_some_and(|p| p.flipped);
+                    let reference = placed_reference(&p, tid);
+                    if hi == 1 && !dry_run {
+                        orphan_mate = Some((reference, p.position, !forward, left));
+                    }
+                    let (cigar, md) = borrow_cigar(scratch, &p);
+                    emit(
+                        index,
+                        &AlignmentRecord {
+                            name,
+                            flags: PAIRED
+                                | MATE_UNMAPPED
+                                | read_flag
+                                | secondary
+                                | if forward { 0 } else { IS_RC },
+                            reference_id: Some(reference),
+                            position: p.position,
+                            mapping_quality: mapq,
+                            cigar,
+                            // The unmapped mate is filed here too when it is written at
+                            // all, so point at it; with no such record to point at,
+                            // naming a mate position would be a dangling reference.
+                            mate_reference_id: options.write_unaligned.then_some(reference),
+                            mate_position: options.write_unaligned.then_some(p.position),
+                            template_length: 0,
+                            sequence,
+                            qualities,
+                            reverse_complement: !forward,
+                            nh,
+                            hi,
+                            xt,
+                            alignment_score: p.score.unwrap_or(score),
+                            weight,
+                            edit_distance: p.edit_distance,
+                            md,
+                            read_group,
+                            mate_cigar: None,
+                            mate_mapping_quality: None,
+                            transcript_strand,
+                        },
+                    )?;
+                }
             }
         }
     }
@@ -1013,10 +1109,9 @@ pub fn emit_fragment_records(
     // `samtools fastq` cannot round-trip it, and anything following the flag
     // finds nothing. Write it, filed at the mapped mate's position so the two sit
     // together in a sorted file, which is where readers expect to find it.
-    if let (true, Some((reference, position, mate_reverse))) =
+    if let (true, Some((reference, position, mate_reverse, left))) =
         (options.write_unaligned, orphan_mate)
     {
-        let left = maps[0].status == MateStatus::PairedEndLeft;
         // The mate that did *not* map is the opposite of the one that did.
         let (name, sequence, qualities, read_flag) = if left {
             (name2, r2_seq, r2_qual, READ2)
@@ -1035,7 +1130,7 @@ pub fn emit_fragment_records(
             record.position = position;
             record.mate_reference_id = Some(reference);
             record.mate_position = Some(position);
-            emit(&record)?;
+            emit_record(&record)?;
         }
     }
     // Nothing survived projection, so the fragment mapped and yet has no record.

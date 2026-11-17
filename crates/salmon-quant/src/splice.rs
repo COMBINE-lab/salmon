@@ -40,11 +40,9 @@
 //! # What is deliberately not done here
 //!
 //! Two transcripts of the same gene often imply the *same* genomic alignment for
-//! a read. This module projects each placement independently and leaves the
-//! duplicates in place, tagged as secondary exactly as they were in transcript
-//! space, rather than silently collapsing them: which of them to keep is a
-//! quantification decision, and salmon's answer to it is `quant.sf`, not the
-//! BAM.
+//! a read. This module projects each placement independently; the record writer
+//! (`mapping_record::emit_fragment_records`) then writes each distinct genomic
+//! alignment once.
 
 use std::collections::HashMap;
 use std::path::Path;

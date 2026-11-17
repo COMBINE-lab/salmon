@@ -553,3 +553,101 @@ fn unaligned_fragments_appear_only_when_asked_for() {
         );
     }
 }
+
+/// Two isoforms of one gene that share a read's genomic alignment must not make
+/// it look like a multimapper once `--spliced` projects it: genome-coordinate
+/// tools read `NH > 1` or a low `MAPQ` as "ambiguous" and drop the read (RSeQC
+/// below `MAPQ` 30, Qualimap on `NH > 1`), which on a real annotation would be
+/// most reads.
+#[test]
+fn isoforms_sharing_an_alignment_write_it_once_under_spliced() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    // One chromosome, three exons: [0,300) [500,800) [900,1200). txA is the first
+    // two, txB all three, so any read inside txA maps to both identically.
+    let (genome, _) = fixture_transcripts();
+    let tx_a = format!("{}{}", &genome[0..300], &genome[500..800]);
+    let tx_b = format!("{tx_a}{}", &genome[900..1200]);
+    std::fs::write(dir.join("genome.fa"), format!(">chr1\n{genome}\n")).unwrap();
+    std::fs::write(dir.join("txp.fa"), format!(">txA\n{tx_a}\n>txB\n{tx_b}\n")).unwrap();
+    let mut gtf = String::new();
+    for (id, exons) in [("txA", 2), ("txB", 3)] {
+        let attrs = format!("gene_id \"g1\"; transcript_id \"{id}\";");
+        let end = [800, 800, 1200][exons - 1];
+        gtf.push_str(&format!(
+            "chr1\tt\ttranscript\t1\t{end}\t.\t+\t.\t{attrs}\n"
+        ));
+        for (start, end) in [(1, 300), (501, 800), (901, 1200)].into_iter().take(exons) {
+            gtf.push_str(&format!(
+                "chr1\tt\texon\t{start}\t{end}\t.\t+\t.\t{attrs}\n"
+            ));
+        }
+    }
+    std::fs::write(dir.join("genes.gtf"), gtf).unwrap();
+
+    // Mate 1 spans the first junction, mate 2 sits in the second exon.
+    let revcomp: String = tx_a[400..460]
+        .bytes()
+        .rev()
+        .map(|b| match b {
+            b'A' => 'T',
+            b'C' => 'G',
+            b'G' => 'C',
+            _ => 'A',
+        })
+        .collect();
+    let quality = "I".repeat(60);
+    std::fs::write(
+        dir.join("r1.fq"),
+        format!("@p/1\n{}\n+\n{quality}\n", &tx_a[260..320]),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("r2.fq"),
+        format!("@p/2\n{revcomp}\n+\n{quality}\n"),
+    )
+    .unwrap();
+
+    let index = dir.join("idx");
+    let mut build_options = IndexBuildOptions::new(vec![dir.join("txp.fa")], index.clone());
+    build_options.threads = 1;
+    build(&build_options).expect("building the index");
+    let sam = dir.join("mappings.sam");
+    let mut options = QuantOptions::new(index, dir.join("out"));
+    options.mates1 = vec![dir.join("r1.fq")];
+    options.mates2 = vec![dir.join("r2.fq")];
+    options.lib_type = "IU".to_string();
+    options.num_threads = 1;
+    options.write_mappings = Some(sam.clone());
+    options.spliced_output = true;
+    options.annotation = Some(dir.join("genes.gtf"));
+    options.genome_fasta = Some(dir.join("genome.fa"));
+    quantify(&options).expect("quantifying");
+    let sam = std::fs::read_to_string(&sam).unwrap();
+
+    let records = records(&sam);
+    assert_eq!(
+        records.len(),
+        2,
+        "one record per mate, not one per isoform:\n{sam}"
+    );
+    for record in &records {
+        let flags: u16 = record[1].parse().unwrap();
+        assert_eq!(
+            flags & 0x100,
+            0,
+            "the only alignment is primary: {record:?}"
+        );
+        assert_eq!(record[2], "chr1");
+        assert_eq!(
+            record[4], "255",
+            "one genomic alignment is a unique one: {record:?}"
+        );
+        assert_eq!(tag(record, "NH:i:"), Some("NH:i:1"));
+        assert_eq!(tag(record, "HI:i:"), Some("HI:i:1"));
+    }
+    assert!(
+        records.iter().any(|r| r[5] == "40M200N20M"),
+        "mate 1 should be split at the junction: {records:?}"
+    );
+}
