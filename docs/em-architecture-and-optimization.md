@@ -621,20 +621,25 @@ the CPU runs, with only a debug-level log line.
 
 Layout (`gpu::Problem`): single-transcript classes are folded into a constant
 per transcript, the rest stay in packed order as a CSR plus its transpose
-(transcript → classes, ascending). Each M-step is three gather-only kernels:
+(transcript → classes, ascending). Both CSRs are cut into chunks of at most
+32 incidences. Each M-step is a few gather-only kernels:
 
 1. VBEM only, `et[t] = exp(ψ(α_t + prior_t))`: an `f32` port of
    `exp_digamma`. The global ψ normaliser is dropped, as in the component
    engine.
-2. Per class, `scale[c] = count_c / Σ basis[t]·w`.
-3. Per transcript, `out[t] = single[t] + basis[t] · Σ w·scale[c]`.
+2. Per class, `scale[c] = count_c / Σ basis[t]·w`: `chunk_dot` sums each
+   chunk, one thread per chunk, then `class_finish` adds a class's chunks.
+3. Per transcript, `out[t] = single[t] + basis[t] · Σ w·scale[c]`: the same
+   `chunk_dot` over the transpose, then `txp_finish`.
 
-There are no atomics and each thread sums in a fixed order, so GPU
-output is deterministic for a given device and driver. It is **not**
-bit-identical to a CPU-only run: it agrees to the convergence tolerance. Sorting
-classes by size and transcripts by degree, which tightens per-tile loop bounds,
-was measured 1.3–1.5× slower on Metal because it destroys gather locality, so
-packed order is kept.
+One thread per chunk keeps a SIMD group's threads about equally busy, whereas
+one thread per row would wait on the longest row: transcript degrees run from
+about 50 to about 45,000. There are no atomics and each thread sums in a fixed
+order, so GPU output is deterministic for a given device and driver. It is
+**not** bit-identical to a CPU-only run: it agrees to the convergence
+tolerance. Sorting classes by size and transcripts by degree was measured
+1.3–1.5× slower on Metal because it destroys gather locality, so packed order
+is kept.
 
 Known `f32` limit: `exp(ψ(x))` underflows below `x ≈ 0.0115`. A VBEM class
 whose members all sit below that is therefore dropped on the GPU, where `f64`
@@ -643,6 +648,9 @@ so this takes a start vector that already holds such zeros, and the `f64` CPU
 finish restores the class.
 
 ### Measurements (Metal, Apple M4 Max: 12P+4E CPU cores, 40-core GPU)
+
+These were taken with one thread per class or transcript, before the chunked
+kernels.
 
 These use a synthetic GENCODE-scale problem, not the RAD of §9: 536,311
 classes, 4,926,193 incidences, 238,442 transcripts and 3.96M fragments. Its
@@ -664,8 +672,7 @@ The CUDA backend has not run on NVIDIA hardware. CI only compiles it against
 CUDA 13 headers (`gpu-cuda-check`). Running it needs CUDA 13.3 and compute
 capability ≥ 8.0, because cuTile JIT-compiles through Tile IR. The open items
 before the GPU path could leave experimental status are timings on the §9 RAD,
-measurements on NVIDIA and AMD hardware, and the per-tile longest-row loop of
-the cuTile kernels on skewed classes.
+and measurements on NVIDIA and AMD hardware.
 
 The ROCm backend has not run on AMD hardware either. It opens `libamdhip64`
 and `libhiprtc` (ROCm 7; earlier releases export hiprtc from `libamdhip64`) at
@@ -673,7 +680,7 @@ run time, so the default Linux build needs no ROCm installed. CI's Linux
 `build-test` jobs lint it and run the GPU tests, which only reach their
 no-device skip there. hiprtc compiles the kernels for the current
 device's architecture with default IEEE math; the module API launches them,
-one thread per class or transcript, 256 per block.
+256 threads per block.
 
 ```bash
 cargo build --release -p salmon-cli                    # Metal (macOS) / ROCm (Linux) built in

@@ -2,10 +2,11 @@
 //! (NVIDIA CUDA Rust's Tile track; kernels are JIT-compiled through Tile IR on
 //! first launch, which needs CUDA 13.3 and compute capability >= 8.0).
 //!
-//! Every kernel works on tiles of `B` lanes (classes or transcripts) and only
-//! writes its own dense, partitioned output: gathers, no scatters, no atomics.
-//! Variable-length rows are walked with masked pointer gathers up to the
-//! tile's longest row.
+//! Every kernel works on tiles of `B` lanes and only writes its own dense,
+//! partitioned output: gathers, no scatters, no atomics. `chunk_dot` has one
+//! lane per chunk of at most `CHUNK_LEN` incidences, so a tile's lanes are
+//! about equally busy; `class_finish`/`txp_finish` then sum each row's chunks.
+//! Rows are walked with masked pointer gathers up to the tile's longest row.
 //!
 //! Untested: this has not run on NVIDIA hardware; CI (`gpu-cuda-check`) only
 //! compiles it against the CUDA 13 headers.
@@ -67,42 +68,40 @@ mod kernels {
         et.store(select(live, e, zero));
     }
 
-    /// `scale[c] = count[c] / Σ basis[label]·w` over class `c`'s members,
-    /// 0 when the sum is not positive.
+    /// `partial[k] = Σ x[idx]·w` over chunk `k` (at most `CHUNK_LEN`
+    /// incidences), for the class pass and the transcript pass alike.
     #[cutile::entry()]
-    fn class_scale<const B: i32>(
-        scale: &mut Tensor<f32, { [B] }>,
+    fn chunk_dot<const B: i32>(
+        partial: &mut Tensor<f32, { [B] }>,
         lo: &Tensor<i32, { [-1] }>,
         len: &Tensor<i32, { [-1] }>,
-        count: &Tensor<f32, { [-1] }>,
-        labels: &Tensor<i32, { [-1] }>,
+        idx: &Tensor<i32, { [-1] }>,
         w: &Tensor<f32, { [-1] }>,
-        basis: &Tensor<f32, { [-1] }>,
+        x: &Tensor<f32, { [-1] }>,
     ) {
-        let lo: Tile<i32, { [B] }> = lo.load_like(scale);
-        let len: Tile<i32, { [B] }> = len.load_like(scale);
+        let lo: Tile<i32, { [B] }> = lo.load_like(partial);
+        let len: Tile<i32, { [B] }> = len.load_like(partial);
         let longest: Tile<i32, { [] }> = reduce_max(len, 0i32);
         let n: i32 = tile_to_scalar(longest);
-        let p: PointerTile<*const i32, { [] }> = pointer_to_tile(labels.as_ptr());
+        let p: PointerTile<*const i32, { [] }> = pointer_to_tile(idx.as_ptr());
         let p: PointerTile<*const i32, { [1] }> = p.reshape(shape![1]);
-        let lab_at: PointerTile<*const i32, { [B] }> = p.broadcast(scale.shape());
+        let idx_at: PointerTile<*const i32, { [B] }> = p.broadcast(partial.shape());
         let p: PointerTile<*const f32, { [] }> = pointer_to_tile(w.as_ptr());
         let p: PointerTile<*const f32, { [1] }> = p.reshape(shape![1]);
-        let w_at: PointerTile<*const f32, { [B] }> = p.broadcast(scale.shape());
-        let p: PointerTile<*const f32, { [] }> = pointer_to_tile(basis.as_ptr());
+        let w_at: PointerTile<*const f32, { [B] }> = p.broadcast(partial.shape());
+        let p: PointerTile<*const f32, { [] }> = pointer_to_tile(x.as_ptr());
         let p: PointerTile<*const f32, { [1] }> = p.reshape(shape![1]);
-        let basis_at: PointerTile<*const f32, { [B] }> = p.broadcast(scale.shape());
-        let zero: Tile<f32, { [B] }> = constant(0.0f32, scale.shape());
-        let mut denom: Tile<f32, { [B] }> = zero;
+        let x_at: PointerTile<*const f32, { [B] }> = p.broadcast(partial.shape());
+        let mut acc: Tile<f32, { [B] }> = constant(0.0f32, partial.shape());
         for k in 0i32..n {
-            let kk: Tile<i32, { [B] }> = broadcast_scalar(k, scale.shape());
+            let kk: Tile<i32, { [B] }> = broadcast_scalar(k, partial.shape());
             let live: Tile<bool, { [B] }> = lt_tile(kk, len);
             let at: Tile<i32, { [B] }> = lo + kk;
-            // SAFETY: unmasked lanes are inside class rows of the uploaded
-            // CSR, whose labels index `basis`.
-            let (lab, _t0): (Tile<i32, { [B] }>, Token) = unsafe {
+            // SAFETY: unmasked lanes are inside chunks of the uploaded CSR,
+            // whose indices address `x`.
+            let (i, _t0): (Tile<i32, { [B] }>, Token) = unsafe {
                 load_ptr_tko(
-                    addptr_tile(lab_at, at),
+                    addptr_tile(idx_at, at),
                     ordering::Weak,
                     None::<scope::TileBlock>,
                     Some(live),
@@ -122,9 +121,9 @@ mod kernels {
                     Latency::<0>,
                 )
             };
-            let (b, _t2): (Tile<f32, { [B] }>, Token) = unsafe {
+            let (xv, _t2): (Tile<f32, { [B] }>, Token) = unsafe {
                 load_ptr_tko(
-                    addptr_tile(basis_at, lab),
+                    addptr_tile(x_at, i),
                     ordering::Weak,
                     None::<scope::TileBlock>,
                     Some(live),
@@ -133,23 +132,60 @@ mod kernels {
                     Latency::<0>,
                 )
             };
-            // `basis >= 0`, so this is also VBEM's "positive expectations only"
-            denom = denom + b * wt;
+            // `x >= 0` (basis or class scale), so no positivity mask is needed
+            acc = acc + xv * wt;
+        }
+        partial.store(acc);
+    }
+
+    /// `Σ partial` over each lane's chunks `lo..lo + len`.
+    #[cutile::entry()]
+    fn class_finish<const B: i32>(
+        scale: &mut Tensor<f32, { [B] }>,
+        lo: &Tensor<i32, { [-1] }>,
+        len: &Tensor<i32, { [-1] }>,
+        partial: &Tensor<f32, { [-1] }>,
+        count: &Tensor<f32, { [-1] }>,
+    ) {
+        let lo: Tile<i32, { [B] }> = lo.load_like(scale);
+        let len: Tile<i32, { [B] }> = len.load_like(scale);
+        let longest: Tile<i32, { [] }> = reduce_max(len, 0i32);
+        let n: i32 = tile_to_scalar(longest);
+        let p: PointerTile<*const f32, { [] }> = pointer_to_tile(partial.as_ptr());
+        let p: PointerTile<*const f32, { [1] }> = p.reshape(shape![1]);
+        let p_at: PointerTile<*const f32, { [B] }> = p.broadcast(scale.shape());
+        let zero: Tile<f32, { [B] }> = constant(0.0f32, scale.shape());
+        let mut denom: Tile<f32, { [B] }> = zero;
+        for k in 0i32..n {
+            let kk: Tile<i32, { [B] }> = broadcast_scalar(k, scale.shape());
+            let live: Tile<bool, { [B] }> = lt_tile(kk, len);
+            let at: Tile<i32, { [B] }> = lo + kk;
+            // SAFETY: unmasked lanes index this class's chunks in `partial`.
+            let (v, _t0): (Tile<f32, { [B] }>, Token) = unsafe {
+                load_ptr_tko(
+                    addptr_tile(p_at, at),
+                    ordering::Weak,
+                    None::<scope::TileBlock>,
+                    Some(live),
+                    Some(0.0f32),
+                    None,
+                    Latency::<0>,
+                )
+            };
+            denom = denom + v;
         }
         let cnt: Tile<f32, { [B] }> = count.load_like(scale);
         let ok: Tile<bool, { [B] }> = gt_tile(denom, constant(1.17549435e-38f32, scale.shape()));
         scale.store(select(ok, cnt / denom, zero));
     }
 
-    /// `out[t] = single[t] + basis[t] · Σ w·scale[cls]` over transcript `t`'s classes.
+    /// `out[t] = single[t] + basis[t] · Σ partial` over transcript `t`'s chunks.
     #[cutile::entry()]
-    fn txp_gather<const B: i32>(
+    fn txp_finish<const B: i32>(
         out: &mut Tensor<f32, { [B] }>,
         lo: &Tensor<i32, { [-1] }>,
         len: &Tensor<i32, { [-1] }>,
-        cls: &Tensor<i32, { [-1] }>,
-        w: &Tensor<f32, { [-1] }>,
-        scale: &Tensor<f32, { [-1] }>,
+        partial: &Tensor<f32, { [-1] }>,
         basis: &Tensor<f32, { [-1] }>,
         single: &Tensor<f32, { [-1] }>,
     ) {
@@ -157,36 +193,18 @@ mod kernels {
         let len: Tile<i32, { [B] }> = len.load_like(out);
         let longest: Tile<i32, { [] }> = reduce_max(len, 0i32);
         let n: i32 = tile_to_scalar(longest);
-        let p: PointerTile<*const i32, { [] }> = pointer_to_tile(cls.as_ptr());
-        let p: PointerTile<*const i32, { [1] }> = p.reshape(shape![1]);
-        let cls_at: PointerTile<*const i32, { [B] }> = p.broadcast(out.shape());
-        let p: PointerTile<*const f32, { [] }> = pointer_to_tile(w.as_ptr());
+        let p: PointerTile<*const f32, { [] }> = pointer_to_tile(partial.as_ptr());
         let p: PointerTile<*const f32, { [1] }> = p.reshape(shape![1]);
-        let w_at: PointerTile<*const f32, { [B] }> = p.broadcast(out.shape());
-        let p: PointerTile<*const f32, { [] }> = pointer_to_tile(scale.as_ptr());
-        let p: PointerTile<*const f32, { [1] }> = p.reshape(shape![1]);
-        let scale_at: PointerTile<*const f32, { [B] }> = p.broadcast(out.shape());
+        let p_at: PointerTile<*const f32, { [B] }> = p.broadcast(out.shape());
         let mut acc: Tile<f32, { [B] }> = constant(0.0f32, out.shape());
         for k in 0i32..n {
             let kk: Tile<i32, { [B] }> = broadcast_scalar(k, out.shape());
             let live: Tile<bool, { [B] }> = lt_tile(kk, len);
             let at: Tile<i32, { [B] }> = lo + kk;
-            // SAFETY: unmasked lanes are inside transcript rows of the uploaded
-            // transpose, whose class ids index `scale`.
-            let (c, _t0): (Tile<i32, { [B] }>, Token) = unsafe {
+            // SAFETY: unmasked lanes index this transcript's chunks in `partial`.
+            let (v, _t0): (Tile<f32, { [B] }>, Token) = unsafe {
                 load_ptr_tko(
-                    addptr_tile(cls_at, at),
-                    ordering::Weak,
-                    None::<scope::TileBlock>,
-                    Some(live),
-                    Some(0i32),
-                    None,
-                    Latency::<0>,
-                )
-            };
-            let (wt, _t1): (Tile<f32, { [B] }>, Token) = unsafe {
-                load_ptr_tko(
-                    addptr_tile(w_at, at),
+                    addptr_tile(p_at, at),
                     ordering::Weak,
                     None::<scope::TileBlock>,
                     Some(live),
@@ -195,18 +213,7 @@ mod kernels {
                     Latency::<0>,
                 )
             };
-            let (sc, _t2): (Tile<f32, { [B] }>, Token) = unsafe {
-                load_ptr_tko(
-                    addptr_tile(scale_at, c),
-                    ordering::Weak,
-                    None::<scope::TileBlock>,
-                    Some(live),
-                    Some(0.0f32),
-                    None,
-                    Latency::<0>,
-                )
-            };
-            acc = acc + wt * sc;
+            acc = acc + v;
         }
         let b: Tile<f32, { [B] }> = basis.load_like(out);
         let s: Tile<f32, { [B] }> = single.load_like(out);
@@ -241,14 +248,22 @@ pub(super) fn available() -> bool {
 
 pub(super) struct Device {
     vb: bool,
+    /// class side: chunks of `labels`/`w`, then each class's chunks
     c_lo: Tensor<i32>,
     c_len: Tensor<i32>,
+    c_first: Tensor<i32>,
+    c_nchunk: Tensor<i32>,
+    c_partial: Tensor<f32>,
     count: Tensor<f32>,
     labels: Tensor<i32>,
     w: Tensor<f32>,
     scale: Tensor<f32>,
+    /// transcript side, likewise over `t_cls`/`t_w`
     t_lo: Tensor<i32>,
     t_len: Tensor<i32>,
+    t_first: Tensor<i32>,
+    t_nchunk: Tensor<i32>,
+    t_partial: Tensor<f32>,
     t_cls: Tensor<i32>,
     t_w: Tensor<f32>,
     single: Tensor<f32>,
@@ -271,18 +286,27 @@ impl Device {
         let f32s = |v: &[f64]| -> Vec<f32> { v.iter().map(|&x| x as f32).collect() };
         // `Problem::new` bounds every index by `i32::MAX`.
         let i32s = |v: &[u32]| -> Vec<i32> { v.iter().map(|&x| x as i32).collect() };
-        let (c_lo, c_len) = rows(&prob.c_start);
-        let (t_lo, t_len) = rows(&prob.t_start);
+        let (c_lo, c_len) = rows(&prob.c_chunk);
+        let (c_first, c_nchunk) = rows(&prob.c_first);
+        let (t_lo, t_len) = rows(&prob.t_chunk);
+        let (t_first, t_nchunk) = rows(&prob.t_first);
+        let (ncc, ntc) = (c_lo.len(), t_lo.len());
         Ok(Self {
             vb,
             c_lo: upload(c_lo)?,
             c_len: upload(c_len)?,
+            c_first: upload(c_first)?,
+            c_nchunk: upload(c_nchunk)?,
+            c_partial: upload(vec![0f32; ncc])?,
             count: upload(prob.count.clone())?,
             labels: upload(i32s(&prob.labels))?,
             w: upload(prob.w.clone())?,
             scale: upload(vec![0f32; prob.num_classes()])?,
             t_lo: upload(t_lo)?,
             t_len: upload(t_len)?,
+            t_first: upload(t_first)?,
+            t_nchunk: upload(t_nchunk)?,
+            t_partial: upload(vec![0f32; ntc])?,
             t_cls: upload(i32s(&prob.t_cls))?,
             t_w: upload(prob.t_w.clone())?,
             single: upload(prob.single.clone())?,
@@ -309,24 +333,40 @@ impl Device {
                     .map_err(err)?;
             }
             let basis = if self.vb { &self.et } else { src };
-            kernels::class_scale(
-                (&mut self.scale).partition([B]),
+            kernels::chunk_dot(
+                (&mut self.c_partial).partition([B]),
                 &self.c_lo,
                 &self.c_len,
-                &self.count,
                 &self.labels,
                 &self.w,
                 basis,
             )
             .sync()
             .map_err(err)?;
-            kernels::txp_gather(
-                dst.partition([B]),
+            kernels::class_finish(
+                (&mut self.scale).partition([B]),
+                &self.c_first,
+                &self.c_nchunk,
+                &self.c_partial,
+                &self.count,
+            )
+            .sync()
+            .map_err(err)?;
+            kernels::chunk_dot(
+                (&mut self.t_partial).partition([B]),
                 &self.t_lo,
                 &self.t_len,
                 &self.t_cls,
                 &self.t_w,
                 &self.scale,
+            )
+            .sync()
+            .map_err(err)?;
+            kernels::txp_finish(
+                dst.partition([B]),
+                &self.t_first,
+                &self.t_nchunk,
+                &self.t_partial,
                 basis,
                 &self.single,
             )
