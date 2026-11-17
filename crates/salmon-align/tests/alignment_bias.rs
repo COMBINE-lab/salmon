@@ -77,4 +77,12 @@ fn all_bias_alignment_mode_smoke() {
     assert!(!result.bias_dump.exp5_seq.is_empty());
     assert!(!result.bias_dump.obs5_pos.is_empty());
     assert!(!result.bias_dump.exp5_pos.is_empty());
+    // `add_mass` takes a linear mass; this path passed its log (<= 0), which the
+    // fixed-point cast turned into 0, so every observed bin kept only its
+    // pseudocount and each (normalized) class came out flat.
+    let flat = |bins: &Vec<f64>| bins.iter().all(|&m| (m - bins[0]).abs() < 1e-12);
+    assert!(
+        !result.bias_dump.obs5_pos.iter().all(flat),
+        "the observed positional model saw no mass"
+    );
 }
