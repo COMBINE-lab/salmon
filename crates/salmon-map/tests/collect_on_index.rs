@@ -517,6 +517,56 @@ fn dovetail_pair_rejected_by_default_accepted_with_flag() {
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "sketch --allowDovetail should pair the dovetail: {sk_allow:?}"
     );
+    // Same fragment as selective alignment: it starts at the forward mate (200),
+    // not at the reverse mate's earlier start (150).
+    let pair = sk_allow
+        .iter()
+        .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+        .unwrap();
+    assert_eq!(
+        (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+        (200, 50, 200, 249),
+        "{pair:?}"
+    );
+}
+
+#[test]
+/// A sketch pair whose forward mate hangs 10 bases off the transcript start:
+/// the fragment [-10, 380) is clipped to [0, 380), 380 bases, so its 3' end
+/// (`rc_pos`) is the fragment's last base, 379, as piscem's RAD writer clips it.
+fn sketch_pair_overhanging_the_start_is_clipped() {
+    let transcript = gen_seq(600, 0x5EED);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
+    let mut r1 = gen_seq(10, 0xBAD);
+    r1.extend_from_slice(&transcript[0..70]);
+    let r2 = revcomp(&transcript[300..380]);
+    for (a, b) in [(&r1, &r2), (&r2, &r1)] {
+        let sp = map_read_pair_sketch(
+            idx.inner(),
+            &mut hs,
+            &mut scratch,
+            a,
+            b,
+            false,
+            false,
+            SkippingStrategy::Permissive,
+            256,
+            2500,
+            &idx,
+            false,
+        );
+        let pair = sp
+            .iter()
+            .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+            .unwrap_or_else(|| panic!("no pair: {sp:?}"));
+        assert_eq!(
+            (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+            (0, 380, 0, 379),
+            "{pair:?}"
+        );
+    }
 }
 
 #[test]
