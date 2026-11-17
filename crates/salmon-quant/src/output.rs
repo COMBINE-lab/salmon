@@ -416,12 +416,15 @@ fn write_meta_info(
     } else {
         0.0
     };
-    let samp_type = if opts.num_bootstraps > 0 {
-        "bootstrap"
-    } else if opts.num_gibbs_samples > 0 {
-        "gibbs"
-    } else {
+    // What was actually drawn, as salmon-align writes it: a run that draws no
+    // samples (e.g. `--skipQuant`) must not claim a sample type that
+    // `num_bootstraps: 0` beside it contradicts.
+    let samp_type = if res.bootstraps.is_empty() {
         "none"
+    } else if opts.num_bootstraps > 0 {
+        "bootstrap"
+    } else {
+        "gibbs"
     };
     // eq-class properties match salmon's default in-memory representation.
     let eq_class_properties = if opts.range_factorization_bins > 0 {
