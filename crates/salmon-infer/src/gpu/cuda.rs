@@ -41,10 +41,10 @@ mod kernels {
         let mut den: Tile<f32, { [B] }> = one;
         let mut j: Tile<f32, { [B] }> = zero;
         for _i in 0i32..5i32 {
-            let a: Tile<f32, { [B] }> = x + j;
-            let b: Tile<f32, { [B] }> = a + one;
-            num = num * (a * b) + (a + b) * den;
-            den = den * (a * b);
+            let xa: Tile<f32, { [B] }> = x + j;
+            let xb: Tile<f32, { [B] }> = xa + one;
+            num = num * (xa * xb) + (xa + xb) * den;
+            den = den * (xa * xb);
             j = j + two;
         }
         let small: Tile<bool, { [B] }> = lt_tile(x, ten);
@@ -52,13 +52,14 @@ mod kernels {
         let s: Tile<f32, { [B] }> = select(small, num / den, zero);
         let r: Tile<f32, { [B] }> = one / y;
         let r2: Tile<f32, { [B] }> = r * r;
+        // literals, not `1.0 / 12.0`: `constant` lowers to a Tile IR dense attribute
         let c1: Tile<f32, { [B] }> = constant(0.5f32, et.shape());
-        let c2: Tile<f32, { [B] }> = constant(1.0f32 / 12.0f32, et.shape());
-        let c3: Tile<f32, { [B] }> = constant(1.0f32 / 120.0f32, et.shape());
-        let c4: Tile<f32, { [B] }> = constant(1.0f32 / 252.0f32, et.shape());
-        let c5: Tile<f32, { [B] }> = constant(1.0f32 / 240.0f32, et.shape());
-        let c6: Tile<f32, { [B] }> = constant(1.0f32 / 132.0f32, et.shape());
-        let c7: Tile<f32, { [B] }> = constant(691.0f32 / 32760.0f32, et.shape());
+        let c2: Tile<f32, { [B] }> = constant(0.083_333_336f32, et.shape());
+        let c3: Tile<f32, { [B] }> = constant(0.008_333_334f32, et.shape());
+        let c4: Tile<f32, { [B] }> = constant(0.003_968_254f32, et.shape());
+        let c5: Tile<f32, { [B] }> = constant(0.004_166_667f32, et.shape());
+        let c6: Tile<f32, { [B] }> = constant(0.007_575_758f32, et.shape());
+        let c7: Tile<f32, { [B] }> = constant(0.021_092_797f32, et.shape());
         let u: Tile<f32, { [B] }> =
             zero - c1 * r - r2 * (c2 - r2 * (c3 - r2 * (c4 - r2 * (c5 - r2 * (c6 - r2 * c7)))));
         let e: Tile<f32, { [B] }> = y * exp(u - s);

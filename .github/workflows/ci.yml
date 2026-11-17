@@ -136,11 +136,13 @@ jobs:
       - name: Install CUDA 13 headers (no driver, no GPU)
         # cuda-bindings bindgens cuda.h and curand.h at build time and loads
         # libcuda only at run time, so headers are all a compile check needs.
+        # cudart-dev brings cuda.h (driver-dev) and cccl; since CUDA 13 the
+        # crt/ headers that cuda_runtime.h includes ship separately (cuda-crt).
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cuda-driver-dev-13-0 cuda-cudart-dev-13-0 libcurand-dev-13-0
+            cuda-cudart-dev-13-0 cuda-crt-13-0 libcurand-dev-13-0
       - name: Clippy (cuda)
         run: cargo clippy -p salmon-infer --features cuda --all-targets -- -D warnings
