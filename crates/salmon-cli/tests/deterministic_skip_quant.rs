@@ -243,3 +243,55 @@ fn skip_quant_genome_projection_keeps_the_rad_when_phase_2_fails() {
         "the --skipQuant deliverable must survive a failing phase 2"
     );
 }
+
+/// With an explicit `-l ISR`, the full run drops fragments whose every placement
+/// is wrong-strand, so they are not mapped. `--skipQuant` reports the mapping
+/// pass's own totals, which used to count them as mapped and so reported a
+/// higher mapping rate than the full run for the same input
+/// (COMBINE-lab/salmon#1314).
+#[test]
+fn skip_quant_does_not_count_wrong_strand_fragments_as_mapped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fasta, f1, f2) = fixture(dir.path());
+    // The fixture is ISF; appending it with the mates swapped adds as many ISR
+    // fragments, so half the input is wrong-strand for `-l ISR`.
+    let (a, b) = (std::fs::read(&f1).unwrap(), std::fs::read(&f2).unwrap());
+    let (r1, r2) = (dir.path().join("m1.fq"), dir.path().join("m2.fq"));
+    std::fs::write(&r1, [a.as_slice(), &b].concat()).unwrap();
+    std::fs::write(&r2, [b.as_slice(), &a].concat()).unwrap();
+    let index = dir.path().join("idx");
+    assert!(Command::new(SALMON)
+        .args(["index", "-t"])
+        .arg(&fasta)
+        .arg("-i")
+        .arg(&index)
+        .args(["-p", "2"])
+        .status()
+        .unwrap()
+        .success());
+
+    let num_mapped = |tag: &str, skip: bool| -> u64 {
+        let out = dir.path().join(tag);
+        let mut cmd = Command::new(SALMON);
+        cmd.args(["quant", "-i"])
+            .arg(&index)
+            .args(["-l", "ISR", "-1"])
+            .arg(&r1)
+            .arg("-2")
+            .arg(&r2)
+            .args(["-p", "2", "-o"])
+            .arg(&out);
+        if skip {
+            cmd.arg("--skipQuant");
+        }
+        assert!(cmd.status().unwrap().success(), "{tag} run failed");
+        let meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(out.join("aux_info/meta_info.json")).unwrap())
+                .unwrap();
+        meta["num_mapped"].as_u64().unwrap()
+    };
+
+    let full = num_mapped("full", false);
+    assert_eq!(full, 200, "only the ISR half maps");
+    assert_eq!(num_mapped("skip", true), full, "--skipQuant must agree");
+}
