@@ -594,10 +594,12 @@ construction:
 - **Mates salmon cannot find.** STAR places a mate from shorter seeds than
   salmon's k-mers, so about 1% of fragments STAR writes as pairs have one mate
   only in salmon, and are not written. `--recoverOrphans` searches for the mate
-  and closes most of that gap, at a large cost in run time.
+  and closes most of that gap (uniquely placed reads within 0.3% of STAR's),
+  at a cost in run time. The pairs it recovers are also quantified, so
+  `quant.sf` changes with it.
 - **Ties.** Where alignments score alike, which one is primary, and whether an
   alternative STAR's seed search never tries is written, can differ (a few
-  percent of multimappers).
+  percent of multimappers). The choice is the same from run to run.
 - **Without a gentrome index** intronic and intergenic reads are not in the
   output at all, so those fractions are near zero whatever the library.
 

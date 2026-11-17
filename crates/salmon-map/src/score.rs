@@ -315,6 +315,8 @@ pub fn finalize_mappings_counted_into(
                 .filter(|m| m.is_decoy && Some(m.score) == best_decoy)
                 .map(|m| scored(&m, 1.0)),
         );
+        // The survivors come out in hash order; written records must not.
+        decoys.sort_by_key(|m| m.tid);
         (true, 0)
     };
     let Some(best_valid) = best_valid else {
@@ -356,6 +358,7 @@ pub fn finalize_mappings_counted_into(
         out.push(scored(&m, weight));
     }
     out.sort_by_key(|m| m.tid);
+    decoys.sort_by_key(|m| m.tid);
     (false, num_below)
 }
 
@@ -662,6 +665,29 @@ mod tests {
         // enough placements to take the hashed dedup path rather than the scan
         buf.extend((0..DEDUP_HASH_THRESHOLD as u32 + 8).map(|t| raw(t, 100, false)));
         run(&mut buf, "hashed-dedup");
+    }
+
+    #[test]
+    /// Tied decoy placements become HI 1, 2, … in the order they leave here, so
+    /// that order must not depend on the dedup's hashing or the threads.
+    fn decoys_come_out_in_tid_order() {
+        let cfg = ScoreConfig::default();
+        let (mut out, mut decoys) = (Vec::new(), Vec::new());
+        let mut scratch = DedupScratch::default();
+        let tids = |d: &[ScoredMapping]| d.iter().map(|m| m.tid).collect::<Vec<_>>();
+        // dominated: the read is dropped, the decoys are kept
+        let mut buf: Vec<_> = (0..DEDUP_HASH_THRESHOLD as u32 + 8)
+            .rev()
+            .map(|t| raw(t + 1, 100, true))
+            .chain([raw(0, 90, false)])
+            .collect();
+        finalize_mappings_counted_into(&mut out, &mut buf, &cfg, &mut scratch, &mut decoys);
+        assert!(out.is_empty());
+        assert!(tids(&decoys).is_sorted() && decoys.len() > 1);
+        // beside a transcript
+        buf.extend([raw(9, 100, true), raw(0, 100, false), raw(3, 100, true)]);
+        finalize_mappings_counted_into(&mut out, &mut buf, &cfg, &mut scratch, &mut decoys);
+        assert_eq!(tids(&decoys), [3, 9]);
     }
 
     // --- sketch-mode decoy filtering ---
