@@ -410,6 +410,9 @@ pub struct AlignQuantResult {
     /// fragment mass dropped in the final min-alpha redistribution (every member
     /// of an equivalence class truncated); normally 0.
     pub inference_truncated_mass: f64,
+    /// the GPU backend that warm-started the EM/VBEM point estimate, or `None`
+    /// when it ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
     pub num_eq_classes: usize,
     pub frag_len_mean: f64,
     pub frag_len_sd: f64,
@@ -1848,6 +1851,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         em_converged: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         em_components: Option<salmon_core::EmComponentsMeta>,
+        /// GPU backend that warm-started the EM/VBEM; null when CPU only
+        gpu_backend: Option<&'static str>,
         detected_library_type: Option<String>,
         /// which inference path produced these results: `deterministic` (RAD
         /// input — every quantification since 2.12.0). Pre-2.12 one-pass runs
@@ -2112,6 +2117,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
         em_components: res.em_components.as_ref().map(|c| c.to_meta()),
+        gpu_backend: res.gpu_backend,
         detected_library_type: res.detected_library_type.clone(),
         inference_path: match res.source {
             FragmentSource::Rad => "deterministic",

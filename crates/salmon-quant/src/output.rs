@@ -278,6 +278,9 @@ struct MetaInfo {
     /// per-component convergence of the EM/VBEM (absent off the component engine)
     #[serde(skip_serializing_if = "Option::is_none")]
     em_components: Option<salmon_core::EmComponentsMeta>,
+    /// GPU backend that warm-started the EM/VBEM (`metal`, `cuda`, `rocm`);
+    /// null when it ran on the CPU only
+    gpu_backend: Option<&'static str>,
     /// library format observed by the auto-detector (null if not observed)
     detected_library_type: Option<String>,
     /// which inference path produced these results: always `none` here (the
@@ -403,6 +406,7 @@ fn write_meta_info(
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
         em_components: res.em_components.as_ref().map(|c| c.to_meta()),
+        gpu_backend: None,
         detected_library_type: res.detected_library_type.clone(),
         inference_path: "none",
         total_time_seconds: res.total_seconds,
