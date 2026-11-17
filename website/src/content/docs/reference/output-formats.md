@@ -550,7 +550,12 @@ records would be identical, and which transcript a read came from is
 
 Every `N` comes from the annotation, so splice-junction QC on this output
 (RSeQC `junction_annotation`, `junction_saturation`) finds no novel junctions by
-construction.
+construction. Likewise salmon maps to transcripts, so reads from introns or
+between genes are not in the output at all: intronic and intergenic fractions
+computed from it (Qualimap `rnaseq`, RSeQC `read_distribution`) are near zero
+whatever the library, and say nothing about pre-mRNA or genomic DNA content.
+Library-level QC (strandedness, insert size, duplication, TIN, 5'–3' bias) is
+unaffected.
 
 ### `MAPQ`
 
