@@ -3477,16 +3477,18 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         enc.write_all(b"\n")?;
         enc.finish()?;
 
-        let f = std::fs::File::create(bdir.join("bootstraps.gz"))?;
-        let mut enc = GzEncoder::new(f, Compression::new(6));
-        for sample in &res.bootstraps {
-            // Restricted to the same rows as quant.sf so the two stay aligned
-            // positionally, which is what tximport assumes.
-            for &i in &rows {
-                enc.write_all(&sample[i].to_le_bytes())?;
-            }
-        }
-        enc.finish()?;
+        // Restricted to the same rows as quant.sf so the two stay aligned
+        // positionally, which is what tximport assumes.
+        salmon_model::dumps::write_gz_segments(
+            &bdir.join("bootstraps.gz"),
+            res.bootstraps.len(),
+            |s, buf| {
+                buf.reserve(rows.len() * 8);
+                for &i in &rows {
+                    buf.extend_from_slice(&res.bootstraps[s][i].to_le_bytes());
+                }
+            },
+        )?;
     }
 
     // libParams/flenDist.txt, logs/salmon_quant.log, and the aux dumps (shared).

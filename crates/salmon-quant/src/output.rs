@@ -152,12 +152,11 @@ fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
     enc.write_all(&select_names_tsv(&res.names, &row_indices))?;
     enc.finish()?;
 
-    let f = std::fs::File::create(dir.join("bootstraps.gz"))?;
-    let mut enc = GzEncoder::new(f, Compression::new(6));
-    for sample in &res.bootstraps {
-        enc.write_all(&select_sample_bytes(sample, &row_indices))?;
-    }
-    enc.finish()?;
+    salmon_model::dumps::write_gz_segments(
+        &dir.join("bootstraps.gz"),
+        res.bootstraps.len(),
+        |s, buf| *buf = select_sample_bytes(&res.bootstraps[s], &row_indices),
+    )?;
     Ok(())
 }
 
