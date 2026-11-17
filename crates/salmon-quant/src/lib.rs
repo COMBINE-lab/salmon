@@ -34,7 +34,7 @@
 
 mod bam;
 pub mod decode;
-mod mapping_record;
+pub mod mapping_record;
 mod output;
 mod processor;
 mod sam;
@@ -120,6 +120,13 @@ pub struct QuantOptions {
     /// compression just keeps up with record production; set it only to
     /// benchmark or to compensate for unusually slow/fast storage.
     pub bam_compress_threads: Option<std::num::NonZeroUsize>,
+    /// `--rgLine`: the `@RG` line to declare in the mapping output's header, and
+    /// the `ID` every record's `RG` tag then refers to.
+    pub read_group: Option<mapping_record::ReadGroup>,
+    /// `--sampleUnaligned`: also write a `FLAG 0x4` record for every fragment
+    /// that did not map, so the mapping output covers the whole library rather
+    /// than only the part that mapped.
+    pub write_unaligned: bool,
     /// write per-fragment mappings to this RAD file (`--writeRad`); sketch or
     /// selective-alignment profile is chosen from `sketch`. Quantification still
     /// runs; combine with `skip_quant` to map only.
@@ -257,6 +264,8 @@ impl QuantOptions {
             dump_eq: false,
             dump_eq_weights: false,
             write_unmapped_names: false,
+            read_group: None,
+            write_unaligned: false,
             write_mappings: None,
             write_bam: None,
             bam_compress_threads: None,
@@ -439,8 +448,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // bias we can skip loading them entirely — with a genome decoy this is a
     // multi-GB resident-memory saving.
     // The bias models read whole transcripts as bytes; mapping only reads short
-    // windows, so it holds them at two bits per base.
-    let refseq_load = if opts.seq_bias || opts.gc_bias {
+    // windows, so it holds them at two bits per base. Realizing a mapping-output
+    // record reads the bytes too, so writing records costs the byte store.
+    let writes_records = opts.write_mappings.is_some() || opts.write_bam.is_some();
+    let refseq_load = if opts.seq_bias || opts.gc_bias || writes_records {
         RefseqLoad::Bytes
     } else if !opts.sketch {
         RefseqLoad::Packed
@@ -497,11 +508,35 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     } else {
         opts.num_threads
     };
+    // Run-wide mapping-output settings, shared by the header and every record so
+    // the two cannot disagree. Realizing a base-level CIGAR costs two banded DPs
+    // per emitted record, so it is only switched on when records are being
+    // written at all.
+    // UR is a URI, not a path: samtools writes `file://` + an absolute path, and
+    // anything resolving the reference expects the same shape.
+    let index_uri = format!(
+        "file://{}",
+        std::fs::canonicalize(&opts.index_dir)
+            .unwrap_or_else(|_| opts.index_dir.clone())
+            .display()
+    );
+    let record_options = mapping_record::RecordOptions {
+        read_group: opts.read_group.as_ref(),
+        align_config: writes_records.then_some(&opts.map_config.align),
+        // The index directory is the honest answer to "where did these bases
+        // come from": it is what the run was pointed at, and what someone
+        // reproducing it needs.
+        reference_uri: Some(&index_uri),
+        write_unaligned: opts.write_unaligned,
+    };
     // SAM sink for `--writeMappings` (header written here).
     let sam_writer: Option<sam::SamWriter> = match &opts.write_mappings {
         Some(path) => {
             let cmd = format!("salmon quant -i {}", opts.index_dir.display());
-            Some(sam::SamWriter::create(path, &salmon, &cmd).context("opening SAM output")?)
+            Some(
+                sam::SamWriter::create(path, &salmon, &cmd, &record_options)
+                    .context("opening SAM output")?,
+            )
         }
         None => None,
     };
@@ -509,8 +544,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         Some(path) => {
             let cmd = format!("salmon quant -i {}", opts.index_dir.display());
             Some(
-                bam::BamOutput::create(path, &salmon, &cmd, nthreads, opts.bam_compress_threads)
-                    .context("opening BAM output")?,
+                bam::BamOutput::create(
+                    path,
+                    &salmon,
+                    &cmd,
+                    nthreads,
+                    opts.bam_compress_threads,
+                    &record_options,
+                )
+                .context("opening BAM output")?,
             )
         }
         None => None,
@@ -724,6 +766,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         )?;
 
         let shared = Shared {
+            record_options: &record_options,
+            write_unaligned: opts.write_unaligned,
             busy: &plan.busy,
             salmon: &salmon,
             eq: &eq_builder,
