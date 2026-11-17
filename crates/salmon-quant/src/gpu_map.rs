@@ -1,0 +1,61 @@
+//! `--sketch` mapping with the GPU k-mer lookup (`salmon_infer::kmers`): one
+//! GPU call per batch finds every read's raw hits, then each fragment is mapped
+//! from them (`salmon_map::sketch_hits`) exactly as the CPU `Strict` path
+//! would; a read past `HITS_CAP` hits, or one the replay declines, is mapped on
+//! the CPU instead.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use salmon_infer::kmers::{Hit, KmerGpu, HITS_CAP};
+
+/// The device table, and the switch that sends every later batch to the CPU
+/// after a GPU failure.
+#[derive(Clone, Copy)]
+pub(crate) struct GpuMap<'a> {
+    pub gpu: &'a KmerGpu,
+    pub off: &'a AtomicBool,
+}
+
+/// One batch's reads and their hits (reused across a worker's batches).
+#[derive(Default)]
+pub(crate) struct BatchHits {
+    seq: Vec<u8>,
+    off: Vec<u32>,
+    hits: Vec<Hit>,
+    counts: Vec<u32>,
+}
+
+impl BatchHits {
+    /// Look `reads` up on the GPU; `false` means map this batch on the CPU.
+    pub fn lookup<R: AsRef<[u8]>>(&mut self, g: GpuMap, reads: impl Iterator<Item = R>) -> bool {
+        if g.off.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.seq.clear();
+        self.off.clear();
+        self.off.push(0);
+        for r in reads {
+            self.seq.extend_from_slice(r.as_ref());
+            // a batch is a few thousand reads, far below 4 GiB
+            self.off.push(self.seq.len() as u32);
+        }
+        match g
+            .gpu
+            .hits(&self.seq, &self.off, &mut self.hits, &mut self.counts)
+        {
+            Ok(()) => true,
+            Err(e) => {
+                if !g.off.swap(true, Ordering::Relaxed) {
+                    tracing::warn!("GPU k-mer lookup failed ({e}); mapping the rest on the CPU");
+                }
+                false
+            }
+        }
+    }
+
+    /// Read `i`'s hits, `None` when it had more than the GPU kept.
+    pub fn read(&self, i: usize) -> Option<&[Hit]> {
+        let n = self.counts[i] as usize;
+        (n <= HITS_CAP).then(|| &self.hits[i * HITS_CAP..i * HITS_CAP + n])
+    }
+}

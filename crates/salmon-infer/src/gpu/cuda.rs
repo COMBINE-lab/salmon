@@ -12,6 +12,7 @@
 //! compiles it against the CUDA 13 headers.
 #![allow(unsafe_code)]
 
+use cutile::cuda_core;
 use cutile::prelude::*;
 
 use super::Problem;
@@ -242,7 +243,7 @@ fn rows(start: &[u32]) -> (Vec<i32>, Vec<i32>) {
 }
 
 /// Whether a CUDA device answers at all (else the CPU runs; tests skip).
-pub(super) fn available() -> bool {
+pub(crate) fn available() -> bool {
     api::zeros::<f32>(&[B]).sync().is_ok()
 }
 
@@ -394,5 +395,100 @@ impl Device {
             host(&self.alpha[1 - self.cur])?,
             host(&self.alpha[self.cur])?,
         ))
+    }
+}
+
+/// The k-mer table on the device (`kmers.rs`), with its lookup kernel in CUDA
+/// C++ compiled by NVRTC (cuTile's tile kernels have no per-thread loops).
+pub(crate) struct KmerDevice {
+    ctx: std::sync::Arc<cuda_core::Context>,
+    f: cuda_core::Function,
+    keys: cuda_core::DeviceBuffer<u64>,
+    vals: cuda_core::DeviceBuffer<u32>,
+    kstart: cuda_core::DeviceBuffer<u32>,
+    prm: cuda_core::DeviceBuffer<u32>,
+}
+
+impl KmerDevice {
+    pub(crate) fn new(k: u32, keys: &[u64], vals: &[u32], kstart: &[u32]) -> Result<Self, String> {
+        let nvrtc = super::dl::open(&[
+            "libnvrtc.so",
+            "libnvrtc.so.13",
+            "libnvrtc.so.12",
+            "/usr/local/cuda/lib64/libnvrtc.so",
+        ])?;
+        // PTX for the lowest architecture cuTile supports; the driver JITs it up.
+        let arch = [c"--gpu-architecture=compute_80"];
+        let ptx = super::dl::rtc_compile(&nvrtc, "nvrtc", "PTX", &super::dl::kmer_src(), &arch)?;
+        let ptx = String::from_utf8_lossy(&ptx);
+        let ctx = cuda_core::Context::new(0).map_err(err)?;
+        let module = ctx
+            .load_module_from_ptx_src(ptx.trim_end_matches('\0'))
+            .map_err(err)?;
+        let stream = ctx.new_stream().map_err(err)?;
+        let up = |v: &[u32]| cuda_core::DeviceBuffer::from_host(&stream, v).map_err(err);
+        let prm = [
+            k,
+            keys.len() as u32,
+            (kstart.len() - 1) as u32,
+            crate::kmers::HITS_CAP as u32,
+        ];
+        Ok(Self {
+            f: module.load_function("kmer_hits").map_err(err)?,
+            keys: cuda_core::DeviceBuffer::from_host(&stream, keys).map_err(err)?,
+            vals: up(vals)?,
+            kstart: up(kstart)?,
+            prm: up(&prm)?,
+            ctx,
+        })
+    }
+
+    /// See `KmerGpu::hits`; `hits` and `counts` are already sized. Each call
+    /// has its own stream and buffers, so mapping threads overlap.
+    pub(crate) fn hits(
+        &self,
+        seq: &[u8],
+        off: &[u32],
+        hits: &mut [u32],
+        counts: &mut [u32],
+    ) -> Result<(), String> {
+        let stream = self.ctx.new_stream().map_err(err)?;
+        // a zero-length upload is no allocation; the kernel never reads it
+        let seq = if seq.is_empty() { &[0u8][..] } else { seq };
+        let seq_d = cuda_core::DeviceBuffer::from_host(&stream, seq).map_err(err)?;
+        let off_d = cuda_core::DeviceBuffer::from_host(&stream, off).map_err(err)?;
+        let hits_d = cuda_core::DeviceBuffer::<u32>::zeroed(&stream, hits.len()).map_err(err)?;
+        let counts_d =
+            cuda_core::DeviceBuffer::<u32>::zeroed(&stream, counts.len()).map_err(err)?;
+        let mut ptrs = [
+            seq_d.cu_deviceptr(),
+            off_d.cu_deviceptr(),
+            self.keys.cu_deviceptr(),
+            self.vals.cu_deviceptr(),
+            self.kstart.cu_deviceptr(),
+            self.prm.cu_deviceptr(),
+            hits_d.cu_deviceptr(),
+            counts_d.cu_deviceptr(),
+        ];
+        let mut n = counts.len() as u32;
+        let mut params: Vec<*mut std::ffi::c_void> =
+            ptrs.iter_mut().map(|p| (p as *mut _).cast()).collect();
+        params.push((&mut n as *mut u32).cast());
+        // SAFETY: one pointer per `kmer_hits` parameter, in order and of its
+        // type (eight device pointers, then the count); the buffers outlive
+        // the stream's work, which `copy_to_host` waits for.
+        unsafe {
+            cuda_core::launch_kernel_on_stream(
+                &self.f,
+                (n.div_ceil(256), 1, 1),
+                (256, 1, 1),
+                0,
+                &stream,
+                &mut params,
+            )
+        }
+        .map_err(err)?;
+        hits_d.copy_to_host(&stream, hits).map_err(err)?;
+        counts_d.copy_to_host(&stream, counts).map_err(err)
     }
 }

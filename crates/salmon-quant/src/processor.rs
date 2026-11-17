@@ -94,6 +94,8 @@ pub(crate) struct Shared<'a> {
     /// discard a fragment mapping to more than this many places (`--maxReadOcc`)
     pub max_read_occ: usize,
     pub skip: SkippingStrategy,
+    /// `--sketch` raw hits from the GPU k-mer lookup, when a device took the table
+    pub gpu: Option<crate::gpu_map::GpuMap<'a>>,
     /// range-factorization bins (0 = disabled)
     pub range_factorization_bins: u32,
     /// expected library format for strand-compatibility filtering; `None` when
@@ -399,6 +401,8 @@ pub(crate) struct QuantProcessor<'a> {
     /// per-thread RAD chunk buffer (flushed as one chunk per batch); `None`
     /// unless `--writeRad` is set
     pub rad_buf: Option<salmon_rad::FragmentChunkBuf>,
+    /// this worker's GPU lookup buffers (`--sketch` with a device)
+    pub gpu_hits: crate::gpu_map::BatchHits,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -434,6 +438,7 @@ impl<'a> QuantProcessor<'a> {
             rad_buf: shared.rad.map(|rad| {
                 salmon_rad::FragmentChunkBuf::with_capacity_codec(64 * 1024, rad.codec())
             }),
+            gpu_hits: Default::default(),
         }
     }
 }
@@ -1359,6 +1364,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             sam_buf,
             bam_scratch,
             rad_buf,
+            gpu_hits,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -1390,7 +1396,12 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // Reused across the batch's reads (the `*_into` calls clear it), so the
         // per-fragment result Vec isn't reallocated per read.
         let mut placements: Vec<ScoredMapping> = Vec::new();
-        for (r1, r2) in pairs {
+        let pairs: Vec<_> = pairs.collect();
+        let on_gpu = sh.sketch
+            && sh.gpu.is_some_and(|g| {
+                gpu_hits.lookup(g, pairs.iter().flat_map(|(a, b)| [a.seq(), b.seq()]))
+            });
+        for (i, (r1, r2)) in pairs.into_iter().enumerate() {
             // Per fragment, not per batch: a batch runs far longer than one
             // broker sampling window, so a per-batch counter would leave whole
             // windows reading zero work and report a thread mapping flat out as
@@ -1398,7 +1409,26 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             busy.tick();
             let s1 = r1.seq();
             let s2 = r2.seq();
-            if sh.sketch {
+            let from_gpu = on_gpu
+                && match (gpu_hits.read(2 * i), gpu_hits.read(2 * i + 1)) {
+                    (Some(h1), Some(h2)) => salmon_map::sketch_hits::map_read_pair_hits_into(
+                        &mut placements,
+                        idx,
+                        sketch_scratch.as_mut().unwrap(),
+                        (s1.len(), h1),
+                        (s2.len(), h2),
+                        sh.sketch_strict_orphan,
+                        sh.map_cfg.pair.allow_dovetail,
+                        sh.map_cfg.collect.max_hit_occ,
+                        sh.max_read_occ,
+                        sh.salmon,
+                        sh.map_cfg.score.allow_decoy_orphans,
+                    ),
+                    _ => false,
+                };
+            if from_gpu {
+                // mapped from the GPU raw hits
+            } else if sh.sketch {
                 map_read_pair_sketch_into(
                     &mut placements,
                     idx,
@@ -1546,6 +1576,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             sam_buf,
             bam_scratch,
             rad_buf,
+            gpu_hits,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -1566,10 +1597,29 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it).
         let mut placements: Vec<ScoredMapping> = Vec::new();
-        for rec in records {
+        let records: Vec<_> = records.collect();
+        let on_gpu = sh.sketch
+            && sh
+                .gpu
+                .is_some_and(|g| gpu_hits.lookup(g, records.iter().map(|r| r.seq())));
+        for (i, rec) in records.into_iter().enumerate() {
             busy.tick(); // see the paired-end loop
             let s = rec.seq();
-            if sh.sketch {
+            let from_gpu = on_gpu
+                && gpu_hits.read(i).is_some_and(|h| {
+                    salmon_map::sketch_hits::map_single_read_hits_into(
+                        &mut placements,
+                        idx,
+                        sketch_scratch.as_mut().unwrap(),
+                        s.len(),
+                        h,
+                        sh.map_cfg.collect.max_hit_occ,
+                        sh.max_read_occ,
+                    )
+                });
+            if from_gpu {
+                // mapped from the GPU raw hits
+            } else if sh.sketch {
                 map_single_read_sketch_into(
                     &mut placements,
                     idx,

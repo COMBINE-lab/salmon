@@ -26,14 +26,15 @@ objc2 = { version = "0.6", optional = true }
 objc2-foundation = { version = "0.3", optional = true }
 objc2-metal = { version = "0.3.2", optional = true }
 
-# `rocm` opens libamdhip64/libhiprtc at run time, so it builds without ROCm.
+# `rocm` and `cuda` open libamdhip64/hiprtc and NVRTC at run time, so they
+# build without them installed (both backends are Linux-only in practice).
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = { version = "0.8", optional = true }
 
 [features]
 # Metal is used on macOS only and ROCm on Linux only (no-ops elsewhere).
 metal = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-metal", "dep:tracing"]
-cuda = ["dep:cutile", "dep:tracing"]
+cuda = ["dep:cutile", "dep:libloading", "dep:tracing"]
 rocm = ["dep:libloading", "dep:tracing"]
 
 [dev-dependencies]

@@ -689,3 +689,51 @@ cargo test -p salmon-infer --features metal gpu        # GPU tests skip without 
 salmon quant ...            # GPU when a device is found and the problem is large enough
 salmon quant ... --no-gpu   # CPU only
 ```
+
+### `--sketch` k-mer lookup on the GPU
+
+Under `--sketch`, the same backends also run the k-mer lookup of mapping, after
+kallisto's GPU port (bioRxiv 2026.03.04.709526). After the index loads, every
+k-mer of every unitig that occurs in a reference goes into a flat
+open-addressing table: canonical k-mer to its unitig position, about 24 bytes
+per k-mer on the device, so roughly 3.6 GB for a human transcriptome. The
+table is built on the CPU, because Metal has no 64-bit compare-and-swap, and
+it is rebuilt on every run (`gpu_kmer_table` in the timing log).
+
+Each batch of reads then makes one GPU call, with one thread per read. The
+thread runs piscem's `SkippingStrategy::Strict` hit collection
+(`walk_safely_until`): it looks a k-mer up, follows the read along that
+unitig while each next read k-mer is the next unitig k-mer, and emits piscem's
+raw hits. Back on the CPU, `salmon_map::sketch_hits` replays piscem's target
+selection on those hits. That replay covers live targets, occurrence recovery,
+ambiguous equivalence classes and the `--maxReadOcc` cut, and is followed by
+the usual pairing. A fragment therefore gets exactly the mappings of the CPU
+`Strict` path. Two kinds of read are mapped on the CPU instead:
+
+- a read with more than 32 raw hits;
+- an index with a poison table, where the replay declines.
+
+`--sketch` now uses `Strict` on the CPU as well, so `--no-gpu` changes timing
+and not mappings. The equivalence classes are identical with and without a
+GPU; the counts still differ to the EM tolerance when the EM is also
+warm-started on the GPU. Two tests check this without a GPU:
+
+- `crates/salmon-map/tests/sketch_hits_parity.rs`: piscem's raw hits and
+  mappings against the CPU reference `KmerTable::hits`;
+- `kmers::tests::gpu_hits_match_the_cpu_reference`: the GPU kernel against
+  that reference.
+
+Measured on the M4 Max with 16 threads, on 2M synthetic read pairs against
+191k transcripts (208 Mb):
+
+| `--sketch` mapping | time |
+|---|---:|
+| CPU, `Permissive` (before this change) | 0.59–0.64 s |
+| CPU, `Strict` (`--no-gpu`) | 0.92–0.93 s |
+| Metal k-mer lookup | 0.40 s |
+| table build (once per run) | 1.15–1.3 s |
+
+At this rate the table build pays for itself, against `Strict` on the CPU,
+from about 5M pairs. These numbers come from synthetic data only, not from a
+human sample. The CUDA and ROCm lookups are compiled by NVRTC and hiprtc from
+the same C source as the Metal one, and have not run on hardware.

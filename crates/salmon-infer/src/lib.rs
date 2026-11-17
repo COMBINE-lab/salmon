@@ -37,6 +37,7 @@ mod components;
 mod daarem;
 #[cfg(any(gpu, test))]
 mod gpu;
+pub mod kmers;
 mod online;
 mod packed;
 pub mod uncertainty;
