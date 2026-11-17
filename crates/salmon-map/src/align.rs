@@ -1251,8 +1251,9 @@ fn window_dp(
         // `max over k < j of d[k] - go - ge*(j-1-k)`, `d` being the score
         // before gaps: a running maximum of `d[k] + ge*k`, which keeps the
         // loop-carried work to one `max` per cell.
-        let mut run = NEG;
-        for (j, h) in (first as i32..).zip(&mut h_cur[first..=last]) {
+        let (mut run, j0) = gap_scan4(&mut h_cur[first..=last], first as i32, go, ge);
+        // the columns the chunks left over
+        for (j, h) in (j0..).zip(&mut h_cur[j0 as usize..=last]) {
             let d = *h;
             *h = d.max(run - go - ge * (j - 1));
             run = run.max(d + ge * j);
@@ -1294,6 +1295,48 @@ fn window_dp(
         }
     }
     Some(best)
+}
+
+/// The reference-gap pass of [`window_dp`] over the whole chunks of four
+/// columns of `row` (the first being column `first`), four columns at a time:
+/// prefix maxima of `d[k] + ge*k` within a chunk, then the carry from the
+/// chunks before. Returns the running maximum and the first column left to
+/// the scalar loop. Integer `max` and `add` are exact, so the result is the
+/// scalar loop's.
+#[cfg(all(target_arch = "x86_64", target_feature = "sse4.1"))]
+#[allow(unsafe_code)] // SSE4.1 intrinsics; see the SAFETY note
+fn gap_scan4(row: &mut [i32], first: i32, go: i32, ge: i32) -> (i32, i32) {
+    use std::arch::x86_64::*;
+    const NEG: i32 = i32::MIN / 4;
+    let mut j0 = first;
+    // SAFETY: SSE4.1 is enabled at compile time, and every load and store is
+    // an unaligned one of exactly the four `i32`s of `c`.
+    unsafe {
+        let negv = _mm_set1_epi32(NEG);
+        let mut runv = negv;
+        let mut jv = _mm_setr_epi32(ge * j0, ge * (j0 + 1), ge * (j0 + 2), ge * (j0 + 3));
+        let step = _mm_set1_epi32(4 * ge);
+        let open = _mm_set1_epi32(go - ge);
+        for c in row.as_chunks_mut::<4>().0 {
+            let d = _mm_loadu_si128(c.as_ptr() as *const __m128i);
+            let e = _mm_add_epi32(d, jv);
+            let p = _mm_max_epi32(e, _mm_alignr_epi8(e, negv, 12));
+            let p = _mm_max_epi32(p, _mm_alignr_epi8(p, negv, 8));
+            let before = _mm_max_epi32(_mm_alignr_epi8(p, runv, 12), runv);
+            let h = _mm_max_epi32(d, _mm_sub_epi32(before, _mm_add_epi32(jv, open)));
+            _mm_storeu_si128(c.as_mut_ptr() as *mut __m128i, h);
+            runv = _mm_max_epi32(runv, _mm_shuffle_epi32(p, 0xFF));
+            jv = _mm_add_epi32(jv, step);
+            j0 += 4;
+        }
+        (_mm_cvtsi128_si32(runv), j0)
+    }
+}
+
+/// Without SSE4.1 the scalar loop in [`window_dp`] does all of the row.
+#[cfg(not(all(target_arch = "x86_64", target_feature = "sse4.1")))]
+fn gap_scan4(_row: &mut [i32], first: i32, _go: i32, _ge: i32) -> (i32, i32) {
+    (i32::MIN / 4, first)
 }
 
 /// Diagonals either side of a group's most hit one that [`find_in_window`]
