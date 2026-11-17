@@ -693,12 +693,30 @@ salmon quant ... --no-gpu   # CPU only
 ### `--sketch` k-mer lookup on the GPU
 
 Under `--sketch`, the same backends also run the k-mer lookup of mapping, after
-kallisto's GPU port (bioRxiv 2026.03.04.709526). After the index loads, every
-k-mer of every unitig that occurs in a reference goes into a flat
-open-addressing table: canonical k-mer to its unitig position, about 24 bytes
-per k-mer on the device, so roughly 3.6 GB for a human transcriptome. The
-table is built on the CPU, because Metal has no 64-bit compare-and-swap, and
-it is rebuilt on every run (`gpu_kmer_table` in the timing log).
+kallisto's GPU port (bioRxiv 2026.03.04.709526). By default the device runs
+piscem's own lookup, the sshash dictionary, flattened for the GPU:
+
+1. A read k-mer's minimizer is computed exactly as sshash computes it, with
+   the same hasher seed and tie rule.
+2. The minimizer selects a bucket, whose super-k-mer positions give the
+   candidate k-mer starts.
+3. Each candidate is verified against the SPSS text, 2 bits per base.
+
+sshash's minimal perfect hash (minimizer → bucket) is replaced by an exact
+open-addressing table over the buckets' minimizers, which gives the same
+answer. A heavy bucket is scanned instead of going through the skew index;
+k-mers are unique, so the scan finds the same k-mer. The device holds the SPSS
+text, the bucket offsets and the bucket table: about 5 bytes per k-mer, or
+0.5 GB for the 106M k-mers of the index below. The bucket table accounts for
+most of it.
+
+The structures are copied from the loaded index on a background thread
+(`gpu_kmer_table` in the timing log, about 0.35–0.55 s here). The CPU maps
+the first batches in the meantime, so the build no longer delays the run. The
+earlier lookup, a flat table from every canonical k-mer to its unitig
+position, stays behind `SALMON_GPU_LOOKUP=table` while the two are compared.
+That table takes about 24 bytes per k-mer on the device, against 5, and
+about 1.1 s to build, against 0.35–0.55 s. It maps no faster.
 
 Each batch of reads then makes one GPU call, with one thread per read. The
 thread runs piscem's `SkippingStrategy::Strict` hit collection
@@ -722,32 +740,33 @@ GPU; the counts still differ to the EM tolerance when the EM is also
 warm-started on the GPU. Two tests check this without a GPU:
 
 - `crates/salmon-map/tests/sketch_hits_parity.rs`: piscem's raw hits and
-  mappings against the CPU reference `KmerTable::hits`;
+  mappings against the CPU reference `KmerTable::hits`, for both lookups.
+  With a device, it also checks the kernel against that reference;
 - `kmers::tests::gpu_hits_match_the_cpu_reference`: the GPU kernel against
   that reference.
 
 Measured on the M4 Max with 16 threads, against 191k synthetic transcripts
-(208 Mb). Each figure is the fastest of 3 runs; "run" is the whole
-`salmon quant`, whose GPU variant also warm-starts the EM on the GPU. Another
-process was using about 10 of the 16 cores during these runs, so the CPU
-figures in particular are pessimistic. The `Permissive` row comes from an
-earlier, unloaded series.
+(208 Mb). Each figure is the fastest of 3 alternated runs; "run" is the whole
+`salmon quant`, whose GPU variant also warm-starts the EM on the GPU. Other
+processes kept the load average between 28 and 73 during these runs, so the
+figures are noisy and the CPU ones in particular are pessimistic.
+"Mapping" includes the background build on the GPU rows. The
+equivalence classes are byte-identical across all rows.
 
-| `--sketch`, 16 threads | table build | mapping | run |
+| `--sketch`, 16 threads | GPU build | mapping | run |
 |---|---:|---:|---:|
-| 2M pairs, Metal | 0.81 s | 0.18 s | 1.95 s |
-| 2M pairs, CPU `Strict` (`--no-gpu`) | | 0.38 s | 1.07 s |
-| 2M pairs, CPU `Permissive` (before this change) | | 0.29 s | 0.97 s |
-| 10M pairs, Metal | 0.77 s | 0.75 s | 2.63 s |
-| 10M pairs, CPU `Strict` (`--no-gpu`) | | 1.89 s | 2.84 s |
-| 10M pairs, CPU `Permissive` (before this change) | | 1.36 s | 2.27 s |
+| 2M pairs, Metal, sshash lookup, built in the background | 0.35 s | 0.53 s | 1.40 s |
+| 2M pairs, Metal, k-mer table, built before mapping | 1.11 s | 0.31 s | 3.40 s |
+| 2M pairs, CPU `Strict` (`--no-gpu`) | | 0.50 s | 1.23 s |
+| 10M pairs, Metal, sshash lookup, built in the background | 0.31 s | 1.26 s | 2.51 s |
+| 10M pairs, Metal, k-mer table, built before mapping | 1.09 s | 2.12 s | 5.13 s |
+| 10M pairs, CPU `Strict` (`--no-gpu`) | | 2.86 s | 3.88 s |
 
-The Metal lookup maps about 2.1–2.5 times faster than `Strict` on the CPU,
-and faster than the former `Permissive`. The table build (~0.8 s, rebuilt on
-every run) is what keeps short runs slower: against `Strict`, the whole run
-breaks even at roughly 6–7M pairs. On the CPU, looking k-mers up in this
-table is about 8% slower than piscem's sshash dictionary (500k reads, one
-thread: 0.48 s against 0.44 s), so the CPU path keeps piscem. These
+At 10M pairs the whole GPU run is about 1.5 times faster than the CPU.
+At 2M pairs the build barely finishes before the reads run out, and the run
+is still about 0.17 s slower. Most of that gap is the EM warm start: on this
+problem it takes 0.20–0.26 s on the GPU against 0.05–0.17 s on the CPU,
+measured alone. These
 numbers come from synthetic data only, not from a
 human sample. The CUDA and ROCm lookups are compiled by NVRTC and hiprtc from
 the same C source as the Metal one, and have not run on hardware.

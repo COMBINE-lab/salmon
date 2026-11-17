@@ -412,11 +412,11 @@ pub(crate) struct KmerDevice {
 
 impl KmerDevice {
     pub(crate) fn new(
-        k: u32,
         keys: &[u64],
         vals: &[u32],
         kstart: &[u32],
         useq: &[u64],
+        prm: &[u32],
     ) -> Result<Self, String> {
         let nvrtc = super::dl::open(&[
             "libnvrtc.so",
@@ -434,19 +434,13 @@ impl KmerDevice {
             .map_err(err)?;
         let stream = ctx.new_stream().map_err(err)?;
         let up = |v: &[u32]| cuda_core::DeviceBuffer::from_host(&stream, v).map_err(err);
-        let prm = [
-            k,
-            keys.len() as u32,
-            (kstart.len() - 1) as u32,
-            crate::kmers::HITS_CAP as u32,
-        ];
         Ok(Self {
             f: module.load_function("kmer_hits").map_err(err)?,
             keys: cuda_core::DeviceBuffer::from_host(&stream, keys).map_err(err)?,
             vals: up(vals)?,
             kstart: up(kstart)?,
             useq: cuda_core::DeviceBuffer::from_host(&stream, useq).map_err(err)?,
-            prm: up(&prm)?,
+            prm: up(prm)?,
             ctx,
         })
     }

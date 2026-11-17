@@ -3183,6 +3183,7 @@ dependencies = [
  "serde_json",
  "sshash-lib",
  "tempfile",
+ "value-traits",
 ]
 
 [[package]]
