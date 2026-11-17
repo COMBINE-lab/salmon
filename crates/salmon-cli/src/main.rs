@@ -1373,9 +1373,10 @@ fn requant_options(
 /// and phase 1 loads the index, we hand the index's sequences to phase 2 — so
 /// `--deterministic --seqBias/--gcBias/--posBias` needs no separate `-t`.
 /// Where a two-phase run's salmon-owned intermediate RAD lives: in
-/// `--radScratchDir` when given (created if needed; pid-suffixed so concurrent
-/// runs sharing one scratch volume cannot collide at the finalize rename), else
-/// under the output directory as before.
+/// `--radScratchDir` when given (created if needed; suffixed with the pid and the
+/// start time so concurrent runs sharing one scratch volume cannot collide — a pid
+/// alone repeats across containers and nodes), else under the output directory as
+/// before.
 fn intermediate_rad_path(
     out_dir: &std::path::Path,
     scratch_dir: Option<&std::path::Path>,
@@ -1385,7 +1386,10 @@ fn intermediate_rad_path(
         Some(d) => {
             std::fs::create_dir_all(d)
                 .with_context(|| format!("creating --radScratchDir {}", d.display()))?;
-            Ok(d.join(format!("{stem}-{}.rad", std::process::id())))
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |t| t.as_nanos());
+            Ok(d.join(format!("{stem}-{}-{nanos:x}.rad", std::process::id())))
         }
         None => Ok(out_dir.join(format!("{stem}.rad"))),
     }
@@ -3837,6 +3841,15 @@ mod tests {
         assert!(
             name.starts_with("intermediate_mappings-") && name.ends_with(".rad"),
             "pid-suffixed name, got {name}"
+        );
+        // The pid alone repeats across containers and nodes; the start time
+        // after it keeps two such runs apart.
+        let pid = format!("intermediate_mappings-{}-", std::process::id());
+        assert!(
+            name.strip_prefix(&pid)
+                .and_then(|r| r.strip_suffix(".rad"))
+                .is_some_and(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_hexdigit())),
+            "pid and start time in the name, got {name}"
         );
     }
 
