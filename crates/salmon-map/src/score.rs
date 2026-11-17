@@ -140,30 +140,6 @@ impl Default for ScoreConfig {
     }
 }
 
-/// Collapse to one mapping per transcript (best score), apply decoy
-/// domination, and weight the survivors. Returns the read's weighted
-/// equivalence-class members (sorted by `tid`), or empty if the read is
-/// unmapped or decoy-dominated.
-pub fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredMapping> {
-    finalize_mappings_counted(raw, cfg).0
-}
-
-/// Like [`finalize_mappings`] but also reports `(decoy_dominated, num_below_thresh)`:
-/// whether the fragment was dropped because its best placement was a decoy, and
-/// how many surviving non-decoy alignments were filtered for weight `< min_aln_prob`.
-pub fn finalize_mappings_counted(
-    raw: Vec<RawMapping>,
-    cfg: &ScoreConfig,
-) -> (Vec<ScoredMapping>, bool, u32) {
-    let mut out = Vec::new();
-    // Allocating variant already, so a fresh scratch costs it nothing relative
-    // to the `Vec` it returns.
-    let mut raw = raw;
-    let (decoy_dominated, num_below) =
-        finalize_mappings_counted_into(&mut out, &mut raw, cfg, &mut DedupScratch::default());
-    (out, decoy_dominated, num_below)
-}
-
 /// Above this many raw mappings the prefix scan's `O(k·n)` starts to lose to a
 /// hash table.
 ///
@@ -270,9 +246,13 @@ fn dedup_by_table(raw: &mut Vec<RawMapping>, scratch: &mut DedupScratch) {
     raw.extend(table.iter().copied());
 }
 
-/// Like [`finalize_mappings_counted`] but writes into a caller-provided buffer
-/// (cleared first), so a per-thread `Vec` can be reused across reads instead of
-/// allocating a fresh result each time. Returns `(decoy_dominated, num_below)`.
+/// Collapse to one mapping per transcript (best score), apply decoy
+/// domination, and weight the survivors, writing the read's weighted
+/// equivalence-class members (sorted by `tid`) into `out` (cleared first; left
+/// empty if the read is unmapped or decoy-dominated). A per-thread `Vec` can be
+/// reused across reads. Returns `(decoy_dominated, num_below)`: whether the
+/// fragment was dropped because its best placement was a decoy, and how many
+/// surviving non-decoy alignments were filtered for weight `< min_aln_prob`.
 ///
 /// `raw` is consumed in place and left empty on every return path, so the caller
 /// can refill the same buffer for the next fragment.
@@ -370,7 +350,7 @@ pub fn finalize_mappings_counted_into(
 }
 
 /// Apply decoy filtering to sketch-mode mappings, consistent with the decoy
-/// logic [`finalize_mappings_counted`] applies on the selective-alignment path.
+/// logic [`finalize_mappings_counted_into`] applies on the selective-alignment path.
 ///
 /// Sketch mappings ([`map_read_pair_sketch`](crate::map_read_pair_sketch) /
 /// [`map_single_read_sketch`](crate::map_single_read_sketch)) are built directly
@@ -434,6 +414,12 @@ pub fn filter_sketch_decoys<R: RefProvider>(
 
 #[cfg(test)]
 mod tests {
+    /// Allocating form of [`finalize_mappings_counted_into`] for the tests.
+    fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredMapping> {
+        let (mut out, mut raw) = (Vec::new(), raw);
+        finalize_mappings_counted_into(&mut out, &mut raw, cfg, &mut DedupScratch::default());
+        out
+    }
 
     /// A threshold means two implementations of one rule, so they must agree —
     /// including on the tie rule, which is what makes the survivors identical

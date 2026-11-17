@@ -404,11 +404,3 @@ impl FragmentChunkBuf {
             .into_bytes_with_codec(self.codec)
     }
 }
-
-impl Default for FragmentChunkBuf {
-    /// 64 KiB: large enough that chunk framing and lock overhead are negligible,
-    /// small enough that many worker threads' buffers stay cheap.
-    fn default() -> Self {
-        Self::with_capacity(64 * 1024)
-    }
-}
