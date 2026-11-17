@@ -2556,20 +2556,11 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             0x5A13_0000,
         )
     } else if opts.num_gibbs_samples > 0 {
-        let prior = if opts.em.use_vbem {
-            opts.em.vb_prior.max(1.0)
-        } else {
-            1e-3
-        };
-        let gopts = salmon_infer::GibbsOptions {
-            num_samples: opts.num_gibbs_samples,
-            thinning: opts.thinning_factor,
-            prior,
-            // Honour --perNucleotidePrior here as the EM does; hardcoding a
-            // per-transcript prior made the flag a no-op for Gibbs on every
-            // path (#1140, audit D13).
-            per_transcript_prior: !opts.em.per_nucleotide_prior,
-        };
+        let gopts = salmon_infer::GibbsOptions::for_em(
+            &opts.em,
+            opts.num_gibbs_samples,
+            opts.thinning_factor,
+        );
         salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
     } else {
         Vec::new()
