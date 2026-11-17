@@ -613,8 +613,8 @@ pub(crate) fn run_em_counts(
             // DAAREM's monotonicity control needs the objective at every point it
             // evaluates `F` at, so the objective rides along with the M-step: the
             // data term comes out of the kernel, the rest is O(num_txps).
-            // Plain EM only: the CLI refuses `--emAccel daarem` with VBEM.
-            assert!(!opts.use_vbem, "DAAREM requires plain EM");
+            // Plain EM only: `opts.validate()` at the top of this function has
+            // already refused DAAREM under VBEM.
             let n_total = counts.iter().sum::<u64>() as f64;
             let mut f = |src: &[f64], dst: &mut [f64]| -> f64 {
                 step(src, dst, true) - n_total * src.iter().sum::<f64>().ln()
