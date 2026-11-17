@@ -258,7 +258,13 @@ pub fn project_genome_bam_to_rad(
 /// Reconstruct each transcript's 5'→3' sequence (tid order = `txs` slice order,
 /// which is how `build_g2t` assigns ids) by concatenating its exon slices in
 /// ascending genomic order and reverse-complementing `-`-strand transcripts.
+///
+/// A transcript with an exon the genome cannot supply (contig absent or named
+/// differently, exon past the contig end) gets no sequence at all: skipping only
+/// that exon would shift every later base. The bias and error models skip a
+/// transcript without sequence, and the count is reported.
 fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> salmon_core::RefSeqs {
+    let mut incomplete = 0usize;
     let seqs = txs
         .iter()
         .map(|tx| {
@@ -266,8 +272,12 @@ fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> salmon_core::RefSe
             exons.sort_by_key(|e| e.start);
             let mut seq = Vec::new();
             for e in &exons {
-                if let Some(s) = fdb.get_slice(&tx.seqname, e.start, e.end) {
-                    seq.extend_from_slice(&s);
+                match fdb.get_slice(&tx.seqname, e.start, e.end) {
+                    Some(s) => seq.extend_from_slice(&s),
+                    None => {
+                        incomplete += 1;
+                        return Vec::new();
+                    }
                 }
             }
             if tx.strand == '-' {
@@ -276,6 +286,14 @@ fn reconstruct_ref_seqs(txs: &[Transcript], fdb: &FastaDb) -> salmon_core::RefSe
             seq
         })
         .collect::<Vec<_>>();
+    if incomplete > 0 {
+        tracing::warn!(
+            "{incomplete} of {} annotated transcripts have an exon --genome cannot supply \
+             (contig missing, named differently, or too short); they get no sequence, so \
+             sequence/GC bias and the error model skip them",
+            txs.len()
+        );
+    }
     salmon_core::RefSeqs::from_sequences(seqs)
 }
 

@@ -739,7 +739,7 @@ impl GroupWorker for ScoreWriteWorker<'_> {
             return Ok(());
         };
         // Per placement: Σ(fg−bg) over its mate(s) under the fixed model (0 when
-        // the reference is missing, matching the online path), quantized to i32.
+        // the reference is missing; re-ranked below), quantized to i32.
         let mut scores: Vec<i32> = data
             .infos
             .iter()
@@ -772,12 +772,17 @@ impl GroupWorker for ScoreWriteWorker<'_> {
                     .clamp(i32::MIN as f64, i32::MAX as f64) as i32
             })
             .collect();
-        // A placement that still has a record without bases could not be scored,
-        // and its 0 would beat the real ones. Rank it with the worst of them.
+        // A placement that still has a record without bases, or that sits on a
+        // reference `-t` did not cover, could not be scored, and its 0 would beat
+        // the real ones. Rank it with the worst of them.
         let scored = |info: &PlacementInfo| {
-            info.idxs
-                .iter()
-                .all(|&i| !data.frags[i].read_2bit.is_empty())
+            self.ref_bytes
+                .get(info.tid as usize)
+                .is_some_and(|s| !s.is_empty())
+                && info
+                    .idxs
+                    .iter()
+                    .all(|&i| !data.frags[i].read_2bit.is_empty())
         };
         let worst = data
             .infos
