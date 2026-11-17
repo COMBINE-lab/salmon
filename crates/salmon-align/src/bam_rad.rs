@@ -414,7 +414,7 @@ fn analyze_group<R: sam::alignment::Record>(
 ) -> Option<GroupData> {
     scratch.clear();
     for r in group {
-        if let Some((_, f)) = record_to_frag(r, header, need_seq) {
+        if let Some(f) = record_to_frag(r, header, need_seq) {
             scratch.push(f);
         }
     }

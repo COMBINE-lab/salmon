@@ -1041,21 +1041,20 @@ fn read_alignment_header(path: &Path) -> Result<Header> {
     }
 }
 
-/// Convert one mapped alignment record into a `FragRecord`, returning its
-/// canonical read name alongside. `None` skips the record (unmapped / unnamed /
-/// no reference). Works over any noodles `alignment::Record`, so the same logic
-/// serves BAM and SAM input.
+/// Convert one mapped alignment record into a `FragRecord`. `None` skips the
+/// record (unmapped / unnamed / no reference). Works over any noodles
+/// `alignment::Record`, so the same logic serves BAM and SAM input.
 fn record_to_frag<R: sam::alignment::Record>(
     record: &R,
     header: &Header,
     need_seq: bool,
-) -> Option<(Vec<u8>, FragRecord)> {
+) -> Option<FragRecord> {
     let flags = record.flags().ok()?;
     if flags.is_unmapped() {
         return None;
     }
-    let name = record.name()?;
-    let cname = canonical_name(name.as_ref()).to_vec();
+    // Grouping by name happened on the reader thread; only presence matters here.
+    record.name()?;
 
     let tid = record.reference_sequence_id(header)?.ok()?;
     let pos = record
@@ -1068,14 +1067,14 @@ fn record_to_frag<R: sam::alignment::Record>(
     } else {
         Vec::new()
     };
-    let ops: Vec<(AlnOp, usize)> = record
-        .cigar()
-        .iter()
-        .filter_map(|r| r.ok())
-        .map(|op| (kind_to_op(op.kind()), op.len()))
-        .collect();
-    let ref_span: usize = ops
-        .iter()
+    let cigar = record.cigar();
+    let all_ops = || {
+        cigar
+            .iter()
+            .filter_map(|r| r.ok())
+            .map(|op| (kind_to_op(op.kind()), op.len()))
+    };
+    let ref_span: usize = all_ops()
         .filter(|(o, _)| {
             matches!(
                 o,
@@ -1084,7 +1083,12 @@ fn record_to_frag<R: sam::alignment::Record>(
         })
         .map(|(_, l)| l)
         .sum();
-    let ops = if need_seq { ops } else { Vec::new() };
+    // Only the error model reads the op list.
+    let ops: Vec<(AlnOp, usize)> = if need_seq {
+        all_ops().collect()
+    } else {
+        Vec::new()
+    };
     let parsed_score = record
         .data()
         .get(&Tag::ALIGNMENT_SCORE)
@@ -1115,25 +1119,22 @@ fn record_to_frag<R: sam::alignment::Record>(
         .get(&Tag::HIT_INDEX)
         .and_then(|r| r.ok())
         .and_then(|v| value_as_i32(&v));
-    Some((
-        cname,
-        FragRecord {
-            tid: tid as u32,
-            pos,
-            read_2bit,
-            ops,
-            score,
-            has_score,
-            frag_len,
-            is_reverse,
-            is_read1,
-            is_paired,
-            ref_span,
-            mate_tid,
-            mate_pos,
-            hi,
-        },
-    ))
+    Some(FragRecord {
+        tid: tid as u32,
+        pos,
+        read_2bit,
+        ops,
+        score,
+        has_score,
+        frag_len,
+        is_reverse,
+        is_read1,
+        is_paired,
+        ref_span,
+        mate_tid,
+        mate_pos,
+        hi,
+    })
 }
 
 /// Read-only configuration + shared (thread-safe) sinks for the online pass.
@@ -1337,7 +1338,7 @@ where
                     for raw_group in &raw_batch {
                         frags.clear();
                         for r in raw_group {
-                            if let Some((_, f)) = record_to_frag(r, header, need_seq) {
+                            if let Some(f) = record_to_frag(r, header, need_seq) {
                                 frags.push(f);
                             }
                         }
