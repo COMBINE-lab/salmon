@@ -544,7 +544,13 @@ pub struct LogBiasTable {
     diff: Vec<f64>,
     shifts: [u32; CONTEXT_LENGTH],
     masks: [u32; CONTEXT_LENGTH],
+    /// `eval(..).exp()` for every encoded context (4^9 of them), so the
+    /// per-position sweep is one lookup instead of nine adds and an `exp`.
+    exp_by_mer: Vec<f64>,
 }
+
+/// Number of distinct encoded contexts (2 bits per base).
+const NUM_MERS: usize = 1 << (2 * CONTEXT_LENGTH);
 
 impl LogBiasTable {
     /// Build the difference table from a normalized observed/expected pair.
@@ -556,23 +562,49 @@ impl LogBiasTable {
             .zip(&expected.probs)
             .map(|(&o, &e)| o - e)
             .collect();
-        Self {
+        let mut t = Self {
             diff,
             shifts: observed.shifts,
             masks: observed.masks,
-        }
+            exp_by_mer: Vec::new(),
+        };
+        t.exp_by_mer = (0..NUM_MERS as u32).map(|m| t.eval_mer(m).exp()).collect();
+        t
     }
 
     /// `log_bias` for a context (one encode, one table sweep).
     #[inline]
     pub fn eval(&self, context: &[u8], rev_comp: bool) -> f64 {
-        let mer = SBModel::encode(context, rev_comp);
+        self.eval_mer(SBModel::encode(context, rev_comp))
+    }
+
+    #[inline]
+    fn eval_mer(&self, mer: u32) -> f64 {
         let mut lp = 0.0;
         for pos in 0..CONTEXT_LENGTH {
             let idx = ((mer >> self.shifts[pos]) & self.masks[pos]) as usize;
             lp += self.diff[pos * ROWS + idx];
         }
         lp
+    }
+
+    /// `out[s + CONTEXT_LEFT] = eval(&seq[s..s + CONTEXT_LENGTH], false).exp()`
+    /// for every `s` in `0..seq.len() - CONTEXT_LENGTH`, bit-identically: the
+    /// context code is rolled one base at a time (it is a plain 2-bit shift
+    /// register) and the factor read from the precomputed table.
+    pub fn fill_exp_factors(&self, seq: &[u8], out: &mut [f64]) {
+        let n = seq.len().saturating_sub(CONTEXT_LENGTH);
+        if n == 0 {
+            return;
+        }
+        let mask = (NUM_MERS - 1) as u32;
+        let mut mer = SBModel::encode(&seq[..CONTEXT_LENGTH], false);
+        for s in 0..n {
+            if s > 0 {
+                mer = ((mer << 2) | base2bit(seq[s + CONTEXT_LENGTH - 1])) & mask;
+            }
+            out[s + CONTEXT_LEFT] = self.exp_by_mer[mer as usize];
+        }
     }
 }
 
@@ -816,6 +848,24 @@ mod tests {
         let eff =
             crate::corrected_effective_length_full(seq.len(), &cdf, lo, hi, &bias, 300.0, 1, false);
         assert!((eff - 300.0).abs() < 1e-6, "got {eff}");
+    }
+
+    /// The table-driven sweep must be bit-identical to evaluating each window,
+    /// including non-ACGT bases (which encode like `A`).
+    #[test]
+    fn fill_exp_factors_matches_eval() {
+        let bases = b"ACGTNacgtGGCATTAC";
+        let seq: Vec<u8> = (0..700)
+            .map(|i| bases[(i * 11 + 5) % bases.len()])
+            .collect();
+        let (obs, exp) = trained_pair(&seq);
+        let table = LogBiasTable::new(&obs, &exp);
+        let mut got = vec![1.0f64; seq.len()];
+        table.fill_exp_factors(&seq, &mut got);
+        for s in 0..seq.len() - CONTEXT_LENGTH {
+            let want = table.eval(&seq[s..s + CONTEXT_LENGTH], false).exp();
+            assert_eq!(got[s + CONTEXT_LEFT].to_bits(), want.to_bits(), "s={s}");
+        }
     }
 
     /// The FFT path exists purely to be faster, so it has to agree with the
