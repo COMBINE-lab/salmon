@@ -132,6 +132,13 @@ impl GcFragModel {
         self.counts_fp[i] += crate::bias_mass_to_fp(weight);
     }
 
+    /// True while no fragment has been recorded. Only proper pairs feed the
+    /// observed model, so a single-end run leaves it empty, and a ratio over an
+    /// empty (flat once normalized) table would "correct" by the expected model alone.
+    pub fn is_empty(&self) -> bool {
+        self.counts_fp.iter().all(|&c| c == 0)
+    }
+
     /// Value at a `(context, GC)` cell (a normalized density after `normalize`,
     /// or a clamped ratio for a model produced by [`gc_ratio`]).
     #[inline]

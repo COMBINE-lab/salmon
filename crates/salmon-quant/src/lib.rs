@@ -1159,8 +1159,18 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
         // Fragment-GC observed + expected models -> clamped ratio model.
         let store = gc_store;
-        let gc_ratio_model = if let Some(m) = gcbias_obs {
-            let mut obs = m.into_inner().unwrap();
+        // Only proper pairs feed the observed model; a ratio over an empty one
+        // would correct by the expected model alone (same guard as salmon-align).
+        let gcbias_obs = gcbias_obs.map(|m| m.into_inner().unwrap()).filter(|obs| {
+            if obs.is_empty() {
+                tracing::warn!(
+                    "--gcBias: no paired fragment was observed (single-end reads?), so \
+                     fragment-GC correction is skipped"
+                );
+            }
+            !obs.is_empty()
+        });
+        let gc_ratio_model = if let Some(mut obs) = gcbias_obs {
             let mut exp = salmon_model::build_expected_gc(
                 num_targets,
                 |t| salmon.ref_seq(t as u32),

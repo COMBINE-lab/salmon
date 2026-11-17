@@ -2284,7 +2284,7 @@ fn apply_bias_correction(
             salmon_model::LogBiasTable::new(or, er),
         )
     });
-    let gc_ratio_model = if let Some(mut obs) = gc_obs {
+    let gc_ratio_model = if let Some(mut obs) = gc_obs.filter(gc_obs_has_data) {
         let mut exp = salmon_model::build_expected_gc(
             num_targets,
             refseq_of,
@@ -2385,6 +2385,20 @@ fn apply_bias_correction(
             );
         });
     bias_dump
+}
+
+/// Whether the observed fragment-GC model saw any fragment; warns when it did not.
+/// Only proper pairs feed it, so a single-end run leaves it empty, and a ratio over
+/// that flat table would "correct" every transcript by the expected model alone.
+fn gc_obs_has_data(obs: &salmon_model::GcFragModel) -> bool {
+    let has = !obs.is_empty();
+    if !has {
+        tracing::warn!(
+            "--gcBias: no paired fragment was observed (single-end reads?), so fragment-GC \
+             correction is skipped"
+        );
+    }
+    has
 }
 
 /// Run alignment-based quantification end-to-end.
@@ -3315,7 +3329,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         }
         .as_str(),
         seq_bias_correct: opts.seq_bias,
-        gc_bias_correct: opts.gc_bias,
+        gc_bias_correct: opts.gc_bias && !res.bias_dump.obs_gc.is_empty(),
         pos_bias_correct: opts.pos_bias,
         // Not the running bias models' bin counts: C++ writes
         // `readBias(FORWARD).counts.size()` (GZipWriter.cpp), the legacy fixed
