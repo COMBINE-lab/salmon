@@ -515,6 +515,32 @@ mod tests {
         );
     }
 
+    /// The positional factor is `obs/exp` of two distributions over the same
+    /// bins, so along a long transcript (where the expected start density is
+    /// flat) it must average to 1: it moves mass along the transcript, it does
+    /// not create any. A bump in the middle bins made it average 1.26 when the
+    /// spline knots sat at the Cufflinks positions instead of the bin centres.
+    #[test]
+    fn positional_factor_averages_to_one_on_a_flat_expected_density() {
+        let len = 20_000;
+        let mut obs = SimplePosBias::new(NUM_POS_BINS);
+        let mut exp = SimplePosBias::new(NUM_POS_BINS);
+        for bin in 0..NUM_POS_BINS {
+            // Observed: three times the mass in bins 8..12, else flat.
+            let o = if (8..12).contains(&bin) { 3.0 } else { 1.0 };
+            obs.add_mass_bin(bin, o * 1e5);
+            exp.add_mass_bin(bin, 1e5);
+        }
+        obs.finalize();
+        exp.finalize();
+        let (mut o, mut e) = (vec![0.0; len], vec![0.0; len]);
+        obs.project_weights(&mut o);
+        exp.project_weights(&mut e);
+        let f = positional_factor(&o, &e);
+        let mean = f.iter().sum::<f64>() / len as f64;
+        assert!((mean - 1.0).abs() < 0.01, "mean positional factor {mean}");
+    }
+
     /// A transcript shorter than every fragment length has nothing to convolve,
     /// so only the lower barrier decides. It must not depend on which bias flag
     /// is on: the positional path used to skip it, leaving 75 against 45 here, a
