@@ -33,6 +33,7 @@
 
 mod bam;
 pub mod decode;
+mod gpu_map;
 mod mapping_record;
 mod output;
 mod processor;
@@ -410,6 +411,27 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
     let num_refs = salmon.num_refs();
     timer.mark("index_load");
 
+    // `--sketch` k-mer lookup on the GPU (same mappings as the CPU `Strict` path).
+    // shortcut: the table is rebuilt every run (see `gpu_kmer_table` timing);
+    // persist it beside the index if startup matters.
+    let kmer_gpu = if opts.sketch
+        && opts.em.gpu
+        && salmon.inner().poison_table().is_none()
+        && salmon_infer::kmers::KmerGpu::available()
+    {
+        let (kstart, keep, kmer) = salmon_map::sketch_hits::unitig_kmers(salmon.inner());
+        let built = salmon_infer::kmers::KmerTable::build(salmon.inner().k(), kstart, keep, kmer)
+            .ok_or_else(|| "the index's k-mers do not fit the table".to_string())
+            .and_then(|table| salmon_infer::kmers::KmerGpu::new(&table));
+        timer.mark("gpu_kmer_table");
+        built
+            .inspect_err(|e| tracing::warn!("GPU k-mer lookup off ({e}); mapping on the CPU"))
+            .ok()
+    } else {
+        None
+    };
+    let kmer_gpu_off = std::sync::atomic::AtomicBool::new(false);
+
     // The fragment-length prior (mean 250, sd 25 by default). A paired run
     // replaces it at end of pass with the order-independent `DiscreteFld`
     // estimate; a single-end run observes no lengths and bakes the prior.
@@ -613,6 +635,10 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
             // Strict (every k-mer between two hits is checked) so the GPU
             // k-mer lookup, which reads every k-mer, gives the same mappings.
             skip: SkippingStrategy::Strict,
+            gpu: kmer_gpu.as_ref().map(|gpu| gpu_map::GpuMap {
+                gpu,
+                off: &kmer_gpu_off,
+            }),
             expected_format,
             incompat_prior: opts.incompat_prior,
             ignore_incompat,

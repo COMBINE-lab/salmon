@@ -43,10 +43,14 @@ use metal as backend;
 use rocm as backend;
 #[cfg(gpu = "cuda")]
 mod cuda;
+#[cfg(any(gpu = "cuda", gpu = "rocm"))]
+mod dl;
 #[cfg(gpu = "metal")]
 mod metal;
 #[cfg(gpu = "rocm")]
 mod rocm;
+#[cfg(gpu)]
+pub(crate) use backend::{available, KmerDevice};
 
 /// M-steps submitted between two convergence checks (each check reads back
 /// two iterates).

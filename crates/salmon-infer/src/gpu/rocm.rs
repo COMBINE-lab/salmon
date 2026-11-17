@@ -10,10 +10,11 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
 use libloading::Library;
 
+use super::dl::{open, rtc_compile, sym};
 use super::Problem;
 
 /// Same kernels, math and argument order as `gpu/metal.rs`; the count is last.
@@ -84,28 +85,6 @@ type Ptr = *mut c_void;
 const THREADS: u32 = 256;
 const HOST_TO_DEVICE: c_int = 1;
 const DEVICE_TO_HOST: c_int = 2;
-
-fn open(names: &[&str]) -> Result<Library, String> {
-    let mut last = String::new();
-    for name in names {
-        // SAFETY: a ROCm system library, trusted like one linked at build time.
-        match unsafe { Library::new(name) } {
-            Ok(lib) => return Ok(lib),
-            Err(e) => last = e.to_string(),
-        }
-    }
-    Err(format!("cannot load {} ({last})", names[0]))
-}
-
-/// `*lib.get(name)`: the symbol must have the C signature `T` in the ROCm headers.
-macro_rules! sym {
-    ($lib:expr, $name:literal) => {
-        // SAFETY: `$name` has this signature in ROCm's hip_runtime_api.h / hiprtc.h,
-        // and the library outlives every use (it is kept beside the pointer).
-        *unsafe { $lib.get(concat!($name, "\0").as_bytes()) }
-            .map_err(|e| format!("{}: {e}", $name))?
-    };
-}
 
 /// The HIP runtime entry points, the module and every device allocation;
 /// dropping it frees them.
@@ -198,8 +177,8 @@ impl Hip {
         Ok(p)
     }
 
-    /// Compile `SRC` for the current device and load it as the module.
-    fn load_module(&mut self) -> Result<(), String> {
+    /// Compile `src` for the current device and load it as the module.
+    fn load_module(&mut self, src: &CStr) -> Result<(), String> {
         // ROCm 7 moved hiprtc to its own library; earlier ones export it from libamdhip64.
         let own = open(&[
             "libhiprtc.so",
@@ -209,70 +188,11 @@ impl Hip {
         ])
         .ok();
         let rtc = own.as_ref().unwrap_or(&self.lib);
-        let create: unsafe extern "C" fn(
-            *mut Ptr,
-            *const c_char,
-            *const c_char,
-            c_int,
-            *const *const c_char,
-            *const *const c_char,
-        ) -> c_int = sym!(rtc, "hiprtcCreateProgram");
-        let compile: unsafe extern "C" fn(Ptr, c_int, *const *const c_char) -> c_int =
-            sym!(rtc, "hiprtcCompileProgram");
-        let size_of: unsafe extern "C" fn(Ptr, *mut usize) -> c_int =
-            sym!(rtc, "hiprtcGetCodeSize");
-        let code_of: unsafe extern "C" fn(Ptr, *mut c_char) -> c_int = sym!(rtc, "hiprtcGetCode");
-        let log_size: unsafe extern "C" fn(Ptr, *mut usize) -> c_int =
-            sym!(rtc, "hiprtcGetProgramLogSize");
-        let log_of: unsafe extern "C" fn(Ptr, *mut c_char) -> c_int =
-            sym!(rtc, "hiprtcGetProgramLog");
-        let destroy: unsafe extern "C" fn(*mut Ptr) -> c_int = sym!(rtc, "hiprtcDestroyProgram");
-        let load: unsafe extern "C" fn(*mut Ptr, *const c_void) -> c_int =
-            sym!(self.lib, "hipModuleLoadData");
-        fn rtc_ok(code: c_int) -> Result<(), String> {
-            match code {
-                0 => Ok(()),
-                _ => Err(format!("hiprtc error {code}")),
-            }
-        }
-
-        let mut prog = null_mut();
-        // SAFETY: NUL-terminated source and name, no headers; `prog` is
-        // destroyed on every path below.
-        rtc_ok(unsafe {
-            create(
-                &mut prog,
-                SRC.as_ptr(),
-                c"salmon_em.hip".as_ptr(),
-                0,
-                null(),
-                null(),
-            )
-        })?;
         // No --offload-arch: hiprtc targets the current device. Default (IEEE)
         // math, not -ffast-math, as on Metal.
-        let opts = [c"-O3".as_ptr()];
-        // SAFETY: `prog` is live; the buffers are sized from the size queries.
-        let code = unsafe {
-            let built = if compile(prog, 1, opts.as_ptr()) != 0 {
-                let mut n = 0;
-                log_size(prog, &mut n);
-                let mut log = vec![0u8; n.max(1)];
-                log_of(prog, log.as_mut_ptr().cast());
-                Err(format!(
-                    "hiprtc compile failed: {}",
-                    String::from_utf8_lossy(&log).trim_end_matches('\0')
-                ))
-            } else {
-                let mut n = 0;
-                rtc_ok(size_of(prog, &mut n)).and_then(|()| {
-                    let mut code = vec![0u8; n];
-                    rtc_ok(code_of(prog, code.as_mut_ptr().cast())).map(|()| code)
-                })
-            };
-            destroy(&mut prog);
-            built?
-        };
+        let code = rtc_compile(rtc, "hiprtc", "Code", src, &[c"-O3"])?;
+        let load: unsafe extern "C" fn(*mut Ptr, *const c_void) -> c_int =
+            sym!(self.lib, "hipModuleLoadData");
         let mut module = null_mut();
         // SAFETY: `code` is the code object hiprtc just produced.
         self.check(
@@ -323,17 +243,29 @@ impl Hip {
 
     fn download(&self, p: Ptr, n: usize) -> Result<Vec<f32>, String> {
         let mut out = vec![0f32; n];
-        // SAFETY: `p` holds at least `n` f32s and `out` has room for them.
+        self.download_into(p, &mut out)?;
+        Ok(out)
+    }
+
+    fn download_into<T: Copy>(&self, p: Ptr, out: &mut [T]) -> Result<(), String> {
+        // SAFETY: `p` holds at least `out.len()` `T`s and `out` has room for them.
         let copied = unsafe {
             (self.memcpy)(
                 out.as_mut_ptr().cast(),
                 p,
-                std::mem::size_of_val(out.as_slice()),
+                std::mem::size_of_val(out),
                 DEVICE_TO_HOST,
             )
         };
-        self.check(copied, "hipMemcpy")?;
-        Ok(out)
+        self.check(copied, "hipMemcpy")
+    }
+
+    /// Free the allocations made since there were `from`.
+    fn release(&mut self, from: usize) {
+        for p in self.allocs.drain(from..) {
+            // SAFETY: from hipMalloc, freed once (drained from the list).
+            unsafe { (self.free)(p) };
+        }
     }
 }
 
@@ -353,7 +285,7 @@ impl Drop for Hip {
 }
 
 /// Whether this machine has the HIP runtime and an AMD GPU (else the CPU runs; tests skip).
-pub(super) fn available() -> bool {
+pub(crate) fn available() -> bool {
     Hip::load().is_ok_and(|h| h.devices > 0)
 }
 
@@ -400,7 +332,7 @@ impl Device {
         if hip.devices == 0 {
             return Err("no ROCm device".into());
         }
-        hip.load_module()?;
+        hip.load_module(SRC)?;
         let f32s = |v: &[f64]| v.iter().map(|&x| x as f32).collect::<Vec<f32>>();
         let nt = prob.num_txps();
         let zeros_t = vec![0f32; nt];
@@ -473,5 +405,84 @@ impl Device {
             self.hip.download(self.alpha[1 - self.cur], nt)?,
             self.hip.download(self.alpha[self.cur], nt)?,
         ))
+    }
+}
+
+/// The k-mer table on the device (`kmers.rs`).
+pub(crate) struct KmerDevice {
+    /// one caller at a time: per-call buffers live in `Hip::allocs`
+    // shortcut: calls from the mapping threads serialize here (and on the null
+    // stream); give each a stream and its own buffers if the GPU idles.
+    hip: std::sync::Mutex<Hip>,
+    f: Ptr,
+    keys: Ptr,
+    vals: Ptr,
+    kstart: Ptr,
+    prm: Ptr,
+}
+
+// SAFETY: the HIP runtime is thread-safe and its device pointers are valid
+// from any host thread; `Hip` is only used under the mutex.
+unsafe impl Send for KmerDevice {}
+unsafe impl Sync for KmerDevice {}
+
+impl KmerDevice {
+    pub(crate) fn new(k: u32, keys: &[u64], vals: &[u32], kstart: &[u32]) -> Result<Self, String> {
+        let mut hip = Hip::load()?;
+        if hip.devices == 0 {
+            return Err("no ROCm device".into());
+        }
+        hip.load_module(&super::dl::kmer_src())?;
+        let prm = [
+            k,
+            keys.len() as u32,
+            (kstart.len() - 1) as u32,
+            crate::kmers::HITS_CAP as u32,
+        ];
+        Ok(Self {
+            f: hip.function(c"kmer_hits")?,
+            keys: hip.upload(keys)?,
+            vals: hip.upload(vals)?,
+            kstart: hip.upload(kstart)?,
+            prm: hip.upload(&prm)?,
+            hip: std::sync::Mutex::new(hip),
+        })
+    }
+
+    /// See `KmerGpu::hits`; `hits` and `counts` are already sized.
+    pub(crate) fn hits(
+        &self,
+        seq: &[u8],
+        off: &[u32],
+        hits: &mut [u32],
+        counts: &mut [u32],
+    ) -> Result<(), String> {
+        let mut hip = self.hip.lock().map_err(|_| "ROCm device poisoned")?;
+        let base = hip.allocs.len();
+        let mut run = |hip: &mut Hip| -> Result<(), String> {
+            let seq_d = hip.upload(seq)?;
+            let off_d = hip.upload(off)?;
+            let hits_d = hip.upload(&*hits)?;
+            let counts_d = hip.upload(&*counts)?;
+            let bufs = [
+                seq_d,
+                off_d,
+                self.keys,
+                self.vals,
+                self.kstart,
+                self.prm,
+                hits_d,
+                counts_d,
+            ];
+            hip.dispatch(self.f, &bufs, counts.len() as u32)?;
+            // SAFETY: plain C call.
+            let synced = unsafe { (hip.sync)() };
+            hip.check(synced, "hipDeviceSynchronize")?;
+            hip.download_into(hits_d, hits)?;
+            hip.download_into(counts_d, counts)
+        };
+        let res = run(&mut hip);
+        hip.release(base);
+        res
     }
 }

@@ -568,6 +568,8 @@ struct QuantArgs {
     /// and ROCm on Linux are built in, CUDA with `--features cuda`), a device is
     /// found and there are at least 250k class-transcript incidences. GPU runs
     /// agree with CPU-only runs to the convergence tolerance, not bit for bit.
+    /// Under `--sketch` it also keeps the k-mer lookup on the CPU; on the GPU it
+    /// gives the same mappings.
     #[arg(long = "no-gpu")]
     no_gpu: bool,
     /// Disable the live mapping progress spinner (it is shown only on an

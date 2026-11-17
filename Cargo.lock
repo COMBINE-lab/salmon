@@ -3142,6 +3142,7 @@ dependencies = [
  "piscem-rs",
  "salmon-core",
  "salmon-index",
+ "salmon-infer",
  "serde_json",
  "sshash-lib",
  "tempfile",

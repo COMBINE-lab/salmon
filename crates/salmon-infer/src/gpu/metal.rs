@@ -100,7 +100,7 @@ type Buf = Retained<ProtocolObject<dyn MTLBuffer>>;
 type Pso = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 
 /// Whether this machine exposes a Metal device at all (else the CPU runs; tests skip).
-pub(super) fn available() -> bool {
+pub(crate) fn available() -> bool {
     MTLCreateSystemDefaultDevice().is_some()
 }
 
@@ -314,5 +314,126 @@ impl Device {
             .to_vec()
         };
         Ok((read(&self.alpha[1 - self.cur]), read(&self.alpha[self.cur])))
+    }
+}
+
+/// The k-mer lookup kernel (`kmers.rs`): one thread per read.
+fn kmer_src() -> String {
+    let prelude = "#include <metal_stdlib>\nusing namespace metal;\n\
+        typedef uchar u8; typedef uint u32; typedef ulong u64; typedef long i64;\n\
+        #define G device\n#define PRIV thread\n#define FN static inline\n";
+    let entry = r#"
+kernel void kmer_hits(device const u8* seq [[buffer(0)]],
+                      device const u32* off [[buffer(1)]],
+                      device const u64* keys [[buffer(2)]],
+                      device const u32* vals [[buffer(3)]],
+                      device const u32* kstart [[buffer(4)]],
+                      device const u32* prm [[buffer(5)]],
+                      device u32* hits [[buffer(6)]],
+                      device u32* counts [[buffer(7)]],
+                      constant uint& n [[buffer(8)]],
+                      uint i [[thread_position_in_grid]]) {
+    if (i >= n) return;
+    map_mate(i, seq, off, keys, vals, kstart, prm, hits, counts);
+}
+"#;
+    format!("{prelude}{}{entry}", crate::kmers::KMER_BODY)
+}
+
+/// The k-mer table on the device, shared by every mapping thread.
+pub(crate) struct KmerDevice {
+    dev: Retained<ProtocolObject<dyn MTLDevice>>,
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    pso: Pso,
+    keys: Buf,
+    vals: Buf,
+    kstart: Buf,
+    prm: Buf,
+}
+
+// SAFETY: MTLDevice, MTLCommandQueue, MTLComputePipelineState and MTLBuffer
+// are thread-safe in Metal; each `hits` call encodes into its own command
+// buffer and only reads the shared buffers.
+unsafe impl Send for KmerDevice {}
+unsafe impl Sync for KmerDevice {}
+
+impl KmerDevice {
+    pub(crate) fn new(k: u32, keys: &[u64], vals: &[u32], kstart: &[u32]) -> Result<Self, String> {
+        autoreleasepool(|_| {
+            let dev = MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
+            let lib = dev
+                .newLibraryWithSource_options_error(&NSString::from_str(&kmer_src()), None)
+                .map_err(describe)?;
+            let prm = [
+                k,
+                keys.len() as u32,
+                (kstart.len() - 1) as u32,
+                crate::kmers::HITS_CAP as u32,
+            ];
+            Ok(Self {
+                queue: dev.newCommandQueue().ok_or("no Metal command queue")?,
+                pso: pipeline(&dev, &lib, "kmer_hits")?,
+                keys: buffer(&dev, keys)?,
+                vals: buffer(&dev, vals)?,
+                kstart: buffer(&dev, kstart)?,
+                prm: buffer(&dev, &prm)?,
+                dev,
+            })
+        })
+    }
+
+    /// See `KmerGpu::hits`; `hits` and `counts` are already sized.
+    pub(crate) fn hits(
+        &self,
+        seq: &[u8],
+        off: &[u32],
+        hits: &mut [u32],
+        counts: &mut [u32],
+    ) -> Result<(), String> {
+        autoreleasepool(|_| {
+            let n = counts.len() as u32;
+            let seq_b = buffer(&self.dev, seq)?;
+            let off_b = buffer(&self.dev, off)?;
+            let hits_b = buffer(&self.dev, &*hits)?;
+            let counts_b = buffer(&self.dev, &*counts)?;
+            let cb = self
+                .queue
+                .commandBuffer()
+                .ok_or("no Metal command buffer")?;
+            let enc = cb
+                .computeCommandEncoder()
+                .ok_or("no Metal compute encoder")?;
+            let bufs = [
+                &seq_b,
+                &off_b,
+                &self.keys,
+                &self.vals,
+                &self.kstart,
+                &self.prm,
+                &hits_b,
+                &counts_b,
+            ];
+            dispatch(&enc, &self.pso, &bufs, n);
+            enc.endEncoding();
+            cb.commit();
+            cb.waitUntilCompleted();
+            if cb.status() != MTLCommandBufferStatus::Completed {
+                return Err(cb
+                    .error()
+                    .map(describe)
+                    .unwrap_or_else(|| "Metal command buffer failed".to_string()));
+            }
+            let copy = |b: &Buf, out: &mut [u32]| {
+                // SAFETY: a shared-storage buffer made from `out`, so of its
+                // length, and the GPU work on it has completed.
+                let src = unsafe {
+                    std::slice::from_raw_parts(b.contents().as_ptr().cast::<u32>(), out.len())
+                };
+                out.copy_from_slice(src);
+            };
+            copy(&hits_b, hits);
+            copy(&counts_b, counts);
+            Ok(())
+        })
     }
 }
