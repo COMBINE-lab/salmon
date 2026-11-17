@@ -31,6 +31,8 @@
 //! foreground likelihood `fg`; the background `bg` accumulates the match
 //! self-transition `(0,0)`. The per-alignment score used downstream is `fg − bg`.
 
+use salmon_core::math::log_add;
+
 /// Alignment symbols (salmon's `AlignmentModelChar`).
 const ALN_DASH: usize = 4;
 const ALN_SOFT_CLIP: usize = 5;
@@ -103,18 +105,6 @@ impl AlnOp {
             _ => {}
         }
     }
-}
-
-#[inline]
-fn log_add(a: f64, b: f64) -> f64 {
-    if a == f64::NEG_INFINITY {
-        return b;
-    }
-    if b == f64::NEG_INFINITY {
-        return a;
-    }
-    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
-    hi + (lo - hi).exp().ln_1p()
 }
 
 /// An 82×82 log-space transition matrix with maintained per-row sums, so a
