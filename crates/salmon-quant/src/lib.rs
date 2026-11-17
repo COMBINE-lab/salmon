@@ -610,7 +610,9 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
             sketch: opts.sketch,
             sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
-            skip: SkippingStrategy::Permissive,
+            // Strict (every k-mer between two hits is checked) so the GPU
+            // k-mer lookup, which reads every k-mer, gives the same mappings.
+            skip: SkippingStrategy::Strict,
             expected_format,
             incompat_prior: opts.incompat_prior,
             ignore_incompat,
