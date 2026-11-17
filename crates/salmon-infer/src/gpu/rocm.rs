@@ -1,8 +1,8 @@
 //! ROCm/HIP backend of the GPU warm start (AMD GPUs, Linux).
 //!
 //! The Metal kernels in HIP C++, compiled at run time for the current device
-//! with hiprtc and launched with the HIP module API, one thread per class or
-//! transcript. `libamdhip64` and `libhiprtc` are opened at run time, so the
+//! with hiprtc and launched with the HIP module API, one thread per chunk of
+//! incidences, then one per class or transcript to sum the chunks. `libamdhip64` and `libhiprtc` are opened at run time, so the
 //! feature builds without ROCm installed, and a machine without it logs a
 //! warning and stays on the CPU.
 //!
@@ -16,7 +16,7 @@ use libloading::Library;
 
 use super::Problem;
 
-/// Same math and argument order as `gpu/metal.rs`; the count is last.
+/// Same kernels, math and argument order as `gpu/metal.rs`; the count is last.
 const SRC: &CStr = cr#"
 // exp(psi(x)) for x > 0: f32 port of components.rs `exp_digamma`.
 static __device__ float exp_digamma(float x) {
@@ -45,29 +45,36 @@ extern "C" __global__ void et_kernel(const float* alpha, const float* prior, flo
     et[t] = ap > 1e-10f ? exp_digamma(ap) : 0.0f;  // DIGAMMA_MIN
 }
 
-extern "C" __global__ void class_scale(const unsigned* c_start, const unsigned* labels,
-                                       const float* w, const float* count,
-                                       const float* basis, float* scale, unsigned n) {
+// partial[k] = sum of x[idx[e]] * w[e] over chunk k (both CSR directions)
+extern "C" __global__ void chunk_dot(const unsigned* chunk, const unsigned* idx,
+                                     const float* w, const float* x, float* partial,
+                                     unsigned n) {
+    unsigned k = blockIdx.x * blockDim.x + threadIdx.x;
+    if (k >= n) return;
+    float acc = 0.0f;
+    for (unsigned e = chunk[k]; e < chunk[k + 1]; ++e) {
+        float b = x[idx[e]];
+        acc += b > 0.0f ? b * w[e] : 0.0f;
+    }
+    partial[k] = acc;
+}
+
+extern "C" __global__ void class_finish(const unsigned* first, const float* partial,
+                                        const float* count, float* scale, unsigned n) {
     unsigned c = blockIdx.x * blockDim.x + threadIdx.x;
     if (c >= n) return;
     float denom = 0.0f;
-    for (unsigned e = c_start[c]; e < c_start[c + 1]; ++e) {
-        float b = basis[labels[e]];
-        denom += b > 0.0f ? b * w[e] : 0.0f;
-    }
+    for (unsigned k = first[c]; k < first[c + 1]; ++k) denom += partial[k];
     scale[c] = denom > 1.17549435e-38f ? count[c] / denom : 0.0f;  // FLT_MIN
 }
 
-extern "C" __global__ void txp_gather(const unsigned* t_start, const unsigned* t_cls,
-                                      const float* t_w, const float* scale,
+extern "C" __global__ void txp_finish(const unsigned* first, const float* partial,
                                       const float* basis, const float* single, float* out,
                                       unsigned n) {
     unsigned t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= n) return;
     float acc = 0.0f;
-    for (unsigned e = t_start[t]; e < t_start[t + 1]; ++e) {
-        acc += t_w[e] * scale[t_cls[e]];
-    }
+    for (unsigned k = first[t]; k < first[t + 1]; ++k) acc += partial[k];
     out[t] = single[t] + basis[t] * acc;
 }
 "#;
@@ -353,24 +360,32 @@ pub(super) fn available() -> bool {
 pub(super) struct Device {
     /// `Some` under VBEM
     et: Option<Ptr>,
-    scale: Ptr,
-    gather: Ptr,
-    c_start: Ptr,
+    dot: Ptr,
+    class_finish: Ptr,
+    txp_finish: Ptr,
+    c_chunk: Ptr,
+    c_first: Ptr,
     labels: Ptr,
     w: Ptr,
     count: Ptr,
-    t_start: Ptr,
+    t_chunk: Ptr,
+    t_first: Ptr,
     t_cls: Ptr,
     t_w: Ptr,
     single: Ptr,
     prior: Ptr,
     basis: Ptr,
     class_scale: Ptr,
+    /// per-chunk sums, reused by the class pass and then the transcript pass
+    partial: Ptr,
     /// ping-pong iterates; `alpha[cur]` is the latest
     alpha: [Ptr; 2],
     cur: usize,
     nc: u32,
     nt: u32,
+    /// chunks on the class and on the transcript side
+    ncc: u32,
+    ntc: u32,
     hip: Hip,
 }
 
@@ -389,29 +404,36 @@ impl Device {
         let f32s = |v: &[f64]| v.iter().map(|&x| x as f32).collect::<Vec<f32>>();
         let nt = prob.num_txps();
         let zeros_t = vec![0f32; nt];
+        let (ncc, ntc) = (prob.c_chunk.len() - 1, prob.t_chunk.len() - 1);
         Ok(Self {
             et: if vb {
                 Some(hip.function(c"et_kernel")?)
             } else {
                 None
             },
-            scale: hip.function(c"class_scale")?,
-            gather: hip.function(c"txp_gather")?,
-            c_start: hip.upload(&prob.c_start)?,
+            dot: hip.function(c"chunk_dot")?,
+            class_finish: hip.function(c"class_finish")?,
+            txp_finish: hip.function(c"txp_finish")?,
+            c_chunk: hip.upload(&prob.c_chunk)?,
+            c_first: hip.upload(&prob.c_first)?,
             labels: hip.upload(&prob.labels)?,
             w: hip.upload(&prob.w)?,
             count: hip.upload(&prob.count)?,
-            t_start: hip.upload(&prob.t_start)?,
+            t_chunk: hip.upload(&prob.t_chunk)?,
+            t_first: hip.upload(&prob.t_first)?,
             t_cls: hip.upload(&prob.t_cls)?,
             t_w: hip.upload(&prob.t_w)?,
             single: hip.upload(&prob.single)?,
             prior: hip.upload(&f32s(prior))?,
             basis: hip.upload(&zeros_t)?,
             class_scale: hip.upload(&vec![0f32; prob.num_classes()])?,
+            partial: hip.upload(&vec![0f32; ncc.max(ntc)])?,
             alpha: [hip.upload(&f32s(init))?, hip.upload(&zeros_t)?],
             cur: 0,
             nc: prob.num_classes() as u32,
             nt: nt as u32,
+            ncc: ncc as u32,
+            ntc: ntc as u32,
             hip,
         })
     }
@@ -428,25 +450,15 @@ impl Device {
                 }
                 None => src,
             };
-            let class_bufs = [
-                self.c_start,
-                self.labels,
-                self.w,
-                self.count,
-                basis,
-                self.class_scale,
-            ];
-            self.hip.dispatch(self.scale, &class_bufs, self.nc)?;
-            let txp_bufs = [
-                self.t_start,
-                self.t_cls,
-                self.t_w,
-                self.class_scale,
-                basis,
-                self.single,
-                dst,
-            ];
-            self.hip.dispatch(self.gather, &txp_bufs, self.nt)?;
+            let (hip, p) = (&self.hip, self.partial);
+            let class_dot = [self.c_chunk, self.labels, self.w, basis, p];
+            hip.dispatch(self.dot, &class_dot, self.ncc)?;
+            let class_fin = [self.c_first, p, self.count, self.class_scale];
+            hip.dispatch(self.class_finish, &class_fin, self.nc)?;
+            let txp_dot = [self.t_chunk, self.t_cls, self.t_w, self.class_scale, p];
+            hip.dispatch(self.dot, &txp_dot, self.ntc)?;
+            let txp_fin = [self.t_first, p, basis, self.single, dst];
+            hip.dispatch(self.txp_finish, &txp_fin, self.nt)?;
             self.cur = 1 - self.cur;
         }
         // SAFETY: plain C call.

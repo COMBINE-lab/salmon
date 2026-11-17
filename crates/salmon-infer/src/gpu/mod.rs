@@ -9,13 +9,20 @@
 //! (gather-only kernels, no atomics), and are *not* bit-identical to a CPU-only
 //! run. See `docs/em-architecture-and-optimization.md`.
 //!
-//! All backends (Metal, CUDA, ROCm) run the same three kernels over [`Problem`]:
+//! All backends (Metal, CUDA, ROCm) run the same kernels over [`Problem`]:
 //! 1. `et` (VBEM only): `et[t] = exp(ψ(alpha[t] + prior[t]))`, the global ψ
 //!    normalizer dropped as in the component engine (it cancels per class);
-//! 2. `class_scale`: `scale[c] = count[c] / Σ basis[label]·w` per class;
-//! 3. `txp_gather`: `out[t] = single[t] + basis[t] · Σ w·scale[class]` per
-//!    transcript, where `single[t]` is the count of `t`'s single-transcript
-//!    classes, credited whatever `basis[t]` is (as the CPU kernels do).
+//! 2. `chunk_dot` over the class CSR, then `class_finish`:
+//!    `scale[c] = count[c] / Σ basis[label]·w` per class;
+//! 3. `chunk_dot` over the transcript CSR, then `txp_finish`:
+//!    `out[t] = single[t] + basis[t] · Σ w·scale[class]` per transcript, where
+//!    `single[t]` is the count of `t`'s single-transcript classes, credited
+//!    whatever `basis[t]` is (as the CPU kernels do).
+//!
+//! `chunk_dot` has one thread per chunk of at most [`CHUNK_LEN`] incidences
+//! (rows are cut into chunks), so threads stay about equally busy although
+//! row lengths span three orders of magnitude; the finish kernels sum each
+//! row's chunk partials.
 //!
 //! shortcut: `exp(ψ(x))` underflows `f32` below `x ≈ 0.0115`, so under VBEM a
 //! class whose members *all* sit below that is dropped on the GPU, where `f64`
@@ -57,28 +64,50 @@ const MIN_INCIDENCES: usize = if cfg!(test) { 1 } else { 250_000 };
 ///
 /// Single-transcript classes are folded into `single`; the others keep their
 /// packed order, whose neighbouring classes share transcripts, so the gathers
-/// stay local. shortcut: sorting rows by size (tighter per-tile loop bounds)
-/// measured 1.3-1.5x slower on Metal for that loss of locality; revisit with a
-/// sort within small windows if cuTile's per-tile longest-row loop shows up on
-/// NVIDIA hardware. Every array is indexed with `i32`-sized offsets (cuTile
-/// pointer arithmetic), hence the size check in [`Problem::new`].
+/// stay local (sorting rows by size measured 1.3-1.5x slower on Metal for that
+/// loss of locality; the chunks balance the load instead). Every array is
+/// indexed with `i32`-sized offsets (cuTile pointer arithmetic), hence the size
+/// check in [`Problem::new`].
 pub(crate) struct Problem {
-    /// class CSR offsets into `labels`/`w`; `len = classes + 1`
-    pub c_start: Vec<u32>,
     /// transcript id of each incidence
     pub labels: Vec<u32>,
     /// `combined` weight (`weight / effLen`) of each incidence
     pub w: Vec<f32>,
     /// fragment count of each class
     pub count: Vec<f32>,
-    /// per-transcript CSR offsets into `t_cls`/`t_w`; `len = num_txps + 1`
-    pub t_start: Vec<u32>,
     /// class index (into `count`) of each incidence, ascending within a transcript
     pub t_cls: Vec<u32>,
     /// the same weight as `w`, in transcript order
     pub t_w: Vec<f32>,
     /// summed count of each transcript's single-transcript classes
     pub single: Vec<f32>,
+    /// the class CSR (rows into `labels`/`w`) and its transpose (rows into
+    /// `t_cls`/`t_w`), cut into chunks of at most [`CHUNK_LEN`] incidences:
+    /// chunk `k` spans `c_chunk[k]..c_chunk[k + 1]` of `labels`, and class `c`
+    /// owns chunks `c_first[c]..c_first[c + 1]` (likewise `t_chunk`/`t_first`).
+    /// One GPU thread per chunk keeps a SIMD group's threads equally busy:
+    /// real transcript degrees run from ~50 to ~45,000.
+    pub c_chunk: Vec<u32>,
+    pub c_first: Vec<u32>,
+    pub t_chunk: Vec<u32>,
+    pub t_first: Vec<u32>,
+}
+
+/// Incidences per chunk (see [`Problem::c_chunk`]).
+pub(crate) const CHUNK_LEN: u32 = 32;
+
+/// Cut the rows of a CSR (`start`, `len = rows + 1`) into chunks of at most
+/// [`CHUNK_LEN`]: returns the chunk boundaries and each row's first chunk.
+fn chunks(start: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    let mut bounds = Vec::new();
+    let mut first = Vec::with_capacity(start.len());
+    for r in start.windows(2) {
+        first.push(bounds.len() as u32);
+        bounds.extend((r[0]..r[1]).step_by(CHUNK_LEN as usize));
+    }
+    first.push(bounds.len() as u32);
+    bounds.push(*start.last().unwrap_or(&0));
+    (bounds, first)
 }
 
 impl Problem {
@@ -125,15 +154,19 @@ impl Problem {
                 fill[t] += 1;
             }
         }
+        let (c_chunk, c_first) = chunks(&c_start);
+        let (t_chunk, t_first) = chunks(&t_start);
         Some(Self {
-            c_start,
             labels,
             w,
             count,
-            t_start,
             t_cls,
             t_w,
             single,
+            c_chunk,
+            c_first,
+            t_chunk,
+            t_first,
         })
     }
 
@@ -240,13 +273,18 @@ mod tests {
     fn layout_covers_every_incidence_once_in_both_directions() {
         let p = fixture();
         let g = Problem::new(&p, &p.counts).unwrap();
+        let row_starts = |bounds: &[u32], first: &[u32]| -> Vec<u32> {
+            first.iter().map(|&k| bounds[k as usize]).collect()
+        };
+        let c_start = row_starts(&g.c_chunk, &g.c_first);
+        let t_start = row_starts(&g.t_chunk, &g.t_first);
         assert_eq!(g.num_txps(), p.num_txps);
         // single-transcript classes are folded into `single`
         assert_eq!(g.single, [0.0, 3.0, 0.0, 0.0, 0.0, 2.0]);
         // the others keep their order, members and count
         let seen: Vec<(Vec<u32>, u64)> = (0..g.num_classes())
             .map(|c| {
-                let r = g.c_start[c] as usize..g.c_start[c + 1] as usize;
+                let r = c_start[c] as usize..c_start[c + 1] as usize;
                 (g.labels[r].to_vec(), g.count[c] as u64)
             })
             .collect();
@@ -256,20 +294,45 @@ mod tests {
             .collect();
         assert_eq!(seen, want);
         // the transcript side is the transpose of the class side
-        assert_eq!(*g.t_start.last().unwrap() as usize, g.labels.len());
+        assert_eq!(*t_start.last().unwrap() as usize, g.labels.len());
         for t in 0..p.num_txps as u32 {
-            let r = g.t_start[t as usize] as usize..g.t_start[t as usize + 1] as usize;
+            let r = t_start[t as usize] as usize..t_start[t as usize + 1] as usize;
             let cls = &g.t_cls[r.clone()];
             assert!(cls.windows(2).all(|s| s[0] < s[1]), "ascending class order");
             for (&c, &w) in cls.iter().zip(&g.t_w[r]) {
-                let e = (g.c_start[c as usize]..g.c_start[c as usize + 1])
+                let e = (c_start[c as usize]..c_start[c as usize + 1])
                     .find(|&e| g.labels[e as usize] == t)
                     .expect("transcript belongs to the class it lists");
                 assert_eq!(g.w[e as usize], w);
             }
         }
         // transcript 4 is in no class
-        assert_eq!(g.t_start[4], g.t_start[5]);
+        assert_eq!(t_start[4], t_start[5]);
+        check_chunks(&c_start, &g.c_chunk, &g.c_first);
+        check_chunks(&t_start, &g.t_chunk, &g.t_first);
+    }
+
+    /// Each row's chunks tile exactly its range, each 1..=CHUNK_LEN long.
+    fn check_chunks(start: &[u32], bounds: &[u32], first: &[u32]) {
+        assert_eq!(first.len(), start.len());
+        assert_eq!(bounds.last(), start.last());
+        for r in 0..start.len() - 1 {
+            let mut e = start[r];
+            for k in first[r] as usize..first[r + 1] as usize {
+                let (a, b) = (bounds[k], bounds[k + 1]);
+                assert!(a == e && a < b && b - a <= CHUNK_LEN, "row {r} chunk {k}");
+                e = b;
+            }
+            assert_eq!(e, start[r + 1], "row {r} fully covered");
+        }
+    }
+
+    #[test]
+    fn long_and_empty_rows_are_chunked() {
+        let start = [0, 0, 5, 5 + 2 * CHUNK_LEN + 1, 5 + 2 * CHUNK_LEN + 1];
+        let (bounds, first) = chunks(&start);
+        check_chunks(&start, &bounds, &first);
+        assert_eq!(first, [0, 0, 1, 4, 4]);
     }
 
     /// A pseudo-random problem with uneven class sizes, large enough to span

@@ -1,6 +1,7 @@
 //! Metal backend of the GPU warm start (macOS).
 //!
-//! One thread per class or transcript. Buffers use shared
+//! One thread per chunk of incidences, then one per class or transcript to sum
+//! the chunks (see `gpu/mod.rs`). Buffers use shared
 //! storage, so on Apple silicon's unified memory a read-back is a slice copy.
 #![allow(unsafe_code)]
 
@@ -17,7 +18,7 @@ use objc2_metal::{
 
 use super::Problem;
 
-/// The three kernels of `gpu/mod.rs`. Buffer indices are the argument order
+/// The kernels of `gpu/mod.rs`. Buffer indices are the argument order
 /// [`Device::run`] binds; the element count is always the last argument.
 const SRC: &str = r#"
 #include <metal_stdlib>
@@ -52,37 +53,45 @@ kernel void et_kernel(device const float* alpha [[buffer(0)]],
     et[t] = ap > 1e-10f ? exp_digamma(ap) : 0.0f;  // DIGAMMA_MIN
 }
 
-kernel void class_scale(device const uint* c_start [[buffer(0)]],
-                        device const uint* labels [[buffer(1)]],
-                        device const float* w [[buffer(2)]],
-                        device const float* count [[buffer(3)]],
-                        device const float* basis [[buffer(4)]],
-                        device float* scale [[buffer(5)]],
-                        constant uint& n [[buffer(6)]],
-                        uint c [[thread_position_in_grid]]) {
+// partial[k] = sum of x[idx[e]] * w[e] over chunk k (both CSR directions)
+kernel void chunk_dot(device const uint* chunk [[buffer(0)]],
+                      device const uint* idx [[buffer(1)]],
+                      device const float* w [[buffer(2)]],
+                      device const float* x [[buffer(3)]],
+                      device float* partial [[buffer(4)]],
+                      constant uint& n [[buffer(5)]],
+                      uint k [[thread_position_in_grid]]) {
+    if (k >= n) return;
+    float acc = 0.0f;
+    for (uint e = chunk[k]; e < chunk[k + 1]; ++e) {
+        float b = x[idx[e]];
+        acc += b > 0.0f ? b * w[e] : 0.0f;
+    }
+    partial[k] = acc;
+}
+
+kernel void class_finish(device const uint* first [[buffer(0)]],
+                         device const float* partial [[buffer(1)]],
+                         device const float* count [[buffer(2)]],
+                         device float* scale [[buffer(3)]],
+                         constant uint& n [[buffer(4)]],
+                         uint c [[thread_position_in_grid]]) {
     if (c >= n) return;
     float denom = 0.0f;
-    for (uint e = c_start[c]; e < c_start[c + 1]; ++e) {
-        float b = basis[labels[e]];
-        denom += b > 0.0f ? b * w[e] : 0.0f;
-    }
+    for (uint k = first[c]; k < first[c + 1]; ++k) denom += partial[k];
     scale[c] = denom > 1.17549435e-38f ? count[c] / denom : 0.0f;  // FLT_MIN
 }
 
-kernel void txp_gather(device const uint* t_start [[buffer(0)]],
-                       device const uint* t_cls [[buffer(1)]],
-                       device const float* t_w [[buffer(2)]],
-                       device const float* scale [[buffer(3)]],
-                       device const float* basis [[buffer(4)]],
-                       device const float* single [[buffer(5)]],
-                       device float* out [[buffer(6)]],
-                       constant uint& n [[buffer(7)]],
+kernel void txp_finish(device const uint* first [[buffer(0)]],
+                       device const float* partial [[buffer(1)]],
+                       device const float* basis [[buffer(2)]],
+                       device const float* single [[buffer(3)]],
+                       device float* out [[buffer(4)]],
+                       constant uint& n [[buffer(5)]],
                        uint t [[thread_position_in_grid]]) {
     if (t >= n) return;
     float acc = 0.0f;
-    for (uint e = t_start[t]; e < t_start[t + 1]; ++e) {
-        acc += t_w[e] * scale[t_cls[e]];
-    }
+    for (uint k = first[t]; k < first[t + 1]; ++k) acc += partial[k];
     out[t] = single[t] + basis[t] * acc;
 }
 "#;
@@ -99,24 +108,32 @@ pub(super) struct Device {
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     /// `Some` under VBEM
     et: Option<Pso>,
-    scale: Pso,
-    gather: Pso,
-    c_start: Buf,
+    dot: Pso,
+    class_finish: Pso,
+    txp_finish: Pso,
+    c_chunk: Buf,
+    c_first: Buf,
     labels: Buf,
     w: Buf,
     count: Buf,
-    t_start: Buf,
+    t_chunk: Buf,
+    t_first: Buf,
     t_cls: Buf,
     t_w: Buf,
     single: Buf,
     prior: Buf,
     basis: Buf,
     class_scale: Buf,
+    /// per-chunk sums, reused by the class pass and then the transcript pass
+    partial: Buf,
     /// ping-pong iterates; `alpha[cur]` is the latest
     alpha: [Buf; 2],
     cur: usize,
     nc: u32,
     nt: u32,
+    /// chunks on the class and on the transcript side
+    ncc: u32,
+    ntc: u32,
 }
 
 fn describe(e: Retained<NSError>) -> String {
@@ -205,6 +222,7 @@ impl Device {
             let f32s = |v: &[f64]| v.iter().map(|&x| x as f32).collect::<Vec<f32>>();
             let nt = prob.num_txps();
             let zeros_t = vec![0f32; nt];
+            let (ncc, ntc) = (prob.c_chunk.len() - 1, prob.t_chunk.len() - 1);
             Ok(Self {
                 queue: dev.newCommandQueue().ok_or("no Metal command queue")?,
                 et: if vb {
@@ -212,23 +230,29 @@ impl Device {
                 } else {
                     None
                 },
-                scale: pipeline(&dev, &lib, "class_scale")?,
-                gather: pipeline(&dev, &lib, "txp_gather")?,
-                c_start: buffer(&dev, &prob.c_start)?,
+                dot: pipeline(&dev, &lib, "chunk_dot")?,
+                class_finish: pipeline(&dev, &lib, "class_finish")?,
+                txp_finish: pipeline(&dev, &lib, "txp_finish")?,
+                c_chunk: buffer(&dev, &prob.c_chunk)?,
+                c_first: buffer(&dev, &prob.c_first)?,
                 labels: buffer(&dev, &prob.labels)?,
                 w: buffer(&dev, &prob.w)?,
                 count: buffer(&dev, &prob.count)?,
-                t_start: buffer(&dev, &prob.t_start)?,
+                t_chunk: buffer(&dev, &prob.t_chunk)?,
+                t_first: buffer(&dev, &prob.t_first)?,
                 t_cls: buffer(&dev, &prob.t_cls)?,
                 t_w: buffer(&dev, &prob.t_w)?,
                 single: buffer(&dev, &prob.single)?,
                 prior: buffer(&dev, &f32s(prior))?,
                 basis: buffer(&dev, &zeros_t)?,
                 class_scale: buffer(&dev, &vec![0f32; prob.num_classes()])?,
+                partial: buffer(&dev, &vec![0f32; ncc.max(ntc)])?,
                 alpha: [buffer(&dev, &f32s(init))?, buffer(&dev, &zeros_t)?],
                 cur: 0,
                 nc: prob.num_classes() as u32,
                 nt: nt as u32,
+                ncc: ncc as u32,
+                ntc: ntc as u32,
             })
         })
     }
@@ -254,25 +278,15 @@ impl Device {
                     }
                     None => src,
                 };
-                let class_bufs = [
-                    &self.c_start,
-                    &self.labels,
-                    &self.w,
-                    &self.count,
-                    basis,
-                    &self.class_scale,
-                ];
-                dispatch(&enc, &self.scale, &class_bufs, self.nc);
-                let txp_bufs = [
-                    &self.t_start,
-                    &self.t_cls,
-                    &self.t_w,
-                    &self.class_scale,
-                    basis,
-                    &self.single,
-                    dst,
-                ];
-                dispatch(&enc, &self.gather, &txp_bufs, self.nt);
+                let p = &self.partial;
+                let class_dot = [&self.c_chunk, &self.labels, &self.w, basis, p];
+                dispatch(&enc, &self.dot, &class_dot, self.ncc);
+                let class_fin = [&self.c_first, p, &self.count, &self.class_scale];
+                dispatch(&enc, &self.class_finish, &class_fin, self.nc);
+                let txp_dot = [&self.t_chunk, &self.t_cls, &self.t_w, &self.class_scale, p];
+                dispatch(&enc, &self.dot, &txp_dot, self.ntc);
+                let txp_fin = [&self.t_first, p, basis, &self.single, dst];
+                dispatch(&enc, &self.txp_finish, &txp_fin, self.nt);
                 self.cur = 1 - self.cur;
             }
             enc.endEncoding();
