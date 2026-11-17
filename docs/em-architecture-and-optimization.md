@@ -602,7 +602,8 @@ they set it.
 Because the GPU is used by default, the same command can give slightly
 different counts on a machine with a supported GPU and on one without.
 The two agree to the convergence tolerance, as described below. Use `--no-gpu`
-for bit-for-bit reproducibility across machines.
+for bit-for-bit reproducibility across machines. In `meta_info.json`,
+`gpu_backend` names the backend that ran, or is `null` for a CPU-only run.
 
 ### What it does
 

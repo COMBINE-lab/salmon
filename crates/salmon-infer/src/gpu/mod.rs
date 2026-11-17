@@ -392,6 +392,7 @@ mod tests {
             let gpu =
                 optimize_packed_with_init(&p, &gpu_opts, true, InitAlphas::NONE, EffLens::NONE);
             assert!(cpu.converged && gpu.converged, "vb={vb}");
+            assert_eq!((cpu.gpu_backend, gpu.gpu_backend), (None, GPU_BACKEND));
             let mass = |a: &[f64]| a.iter().sum::<f64>();
             let (mc, mg) = (mass(&cpu.alphas), mass(&gpu.alphas));
             assert!((mc - mg).abs() < 1e-6 * mc, "vb={vb}: mass {mc} vs {mg}");

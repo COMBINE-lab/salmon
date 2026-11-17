@@ -282,6 +282,9 @@ pub struct EmResult {
     /// reassigned to any surviving transcript (reported, not rescaled away). 0 in
     /// the normal case.
     pub dropped_mass: f64,
+    /// the GPU backend that warm-started this run ([`GPU_BACKEND`]), or `None`
+    /// when it ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
 }
 
 /// Relative-difference convergence check, matching salmon: the max over
@@ -392,7 +395,7 @@ pub fn optimize_packed_with_init(
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
 ) -> EmResult {
-    let (alphas, iters, converged, components) = run_em_counts(
+    let (alphas, iters, converged, components, gpu_backend) = run_em_counts(
         p,
         &p.counts,
         opts,
@@ -413,6 +416,7 @@ pub fn optimize_packed_with_init(
         converged,
         components,
         dropped_mass,
+        gpu_backend,
     }
 }
 
@@ -456,7 +460,7 @@ pub(crate) fn finalize_truncate_redistribute(
 }
 
 /// Run EM/VBEM to convergence on `p` with explicit per-class `counts`, returning
-/// `(alphas, iters, converged)` *without* the final min-alpha truncation (so
+/// `(alphas, iters, converged, components, gpu_backend)` *without* the final min-alpha truncation (so
 /// bootstrap can apply its own scaling first). `min_iter` is the minimum number
 /// of iterations before the convergence check engages.
 pub(crate) fn run_em_counts(
@@ -467,7 +471,13 @@ pub(crate) fn run_em_counts(
     min_iter: u32,
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
-) -> (Vec<f64>, u32, bool, Option<ComponentSummary>) {
+) -> (
+    Vec<f64>,
+    u32,
+    bool,
+    Option<ComponentSummary>,
+    Option<&'static str>,
+) {
     if let Err(e) = opts.validate() {
         // Callers are expected to validate up front (the CLI does); reaching
         // here is a programming error, not a data condition.
@@ -495,7 +505,7 @@ pub(crate) fn run_em_counts(
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
     #[allow(unused_mut)]
-    let (mut gpu_iters, mut min_iter) = (0u32, min_iter);
+    let (mut gpu_iters, mut min_iter, mut gpu_backend) = (0u32, min_iter, None);
     // GPU only for open-ended point-estimate runs: bootstrap replicates pass
     // `parallel = false`, bias-seed runs are fixed-length (`min_iter == max_iter`).
     #[cfg(gpu)]
@@ -503,6 +513,7 @@ pub(crate) fn run_em_counts(
         if let Some((warm, n)) = gpu::converge(p, counts, &alphas, &prior_alphas, opts, min_iter) {
             alphas = warm;
             gpu_iters = n;
+            gpu_backend = GPU_BACKEND;
             // the GPU steps already served the minimum-iteration floor
             min_iter = min_iter.saturating_sub(n);
         }
@@ -531,7 +542,13 @@ pub(crate) fn run_em_counts(
             };
             let (alphas, iters, converged, summary) =
                 components::run(&mut cplan, &alphas, &prior_alphas, &set);
-            return (alphas, iters + gpu_iters, converged, Some(summary));
+            return (
+                alphas,
+                iters + gpu_iters,
+                converged,
+                Some(summary),
+                gpu_backend,
+            );
         }
     }
     let mut exp_theta = vec![0.0f64; num_txps];
@@ -664,7 +681,7 @@ pub(crate) fn run_em_counts(
             );
         }
     }
-    (alphas, it + gpu_iters, converged, None)
+    (alphas, it + gpu_iters, converged, None, gpu_backend)
 }
 
 /// SQUAREM (SqS3) acceleration of the fixed-point iteration.
