@@ -35,7 +35,7 @@ use salmon_eqclass::CollapsedEqClasses;
 
 mod components;
 mod daarem;
-#[cfg(any(feature = "metal", feature = "cuda", test))]
+#[cfg(any(feature = "metal", feature = "cuda", feature = "rocm", test))]
 mod gpu;
 mod packed;
 pub mod uncertainty;
@@ -49,6 +49,8 @@ pub const GPU_BACKEND: Option<&str> = if cfg!(feature = "metal") {
     Some("metal")
 } else if cfg!(feature = "cuda") {
     Some("cuda")
+} else if cfg!(feature = "rocm") {
+    Some("rocm")
 } else {
     None
 };
@@ -532,7 +534,7 @@ pub(crate) fn run_em_counts(
     let (mut gpu_iters, mut min_iter) = (0u32, min_iter);
     // GPU only for open-ended point-estimate runs: bootstrap replicates pass
     // `parallel = false`, bias-seed runs are fixed-length (`min_iter == max_iter`).
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
     if opts.gpu && parallel && min_iter < opts.max_iter {
         if let Some((warm, n)) = gpu::converge(p, counts, &alphas, &prior_alphas, opts, min_iter) {
             alphas = warm;

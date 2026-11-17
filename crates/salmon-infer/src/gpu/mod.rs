@@ -8,7 +8,7 @@
 //! (gather-only kernels, no atomics), and are *not* bit-identical to a CPU-only
 //! run. See `docs/em-architecture-and-optimization.md`.
 //!
-//! Both backends run the same three kernels over [`Problem`]:
+//! All backends (Metal, CUDA, ROCm) run the same three kernels over [`Problem`]:
 //! 1. `et` (VBEM only): `et[t] = exp(ψ(alpha[t] + prior[t]))`, the global ψ
 //!    normalizer dropped as in the component engine (it cancels per class);
 //! 2. `class_scale`: `scale[c] = count[c] / Σ basis[label]·w` per class;
@@ -23,22 +23,26 @@
 //! Upgrade to per-class log-space scaling if warm starts like that matter.
 
 use crate::packed::PackedEqClasses;
-#[cfg(any(feature = "metal", feature = "cuda"))]
+#[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
 use crate::{max_rel_diff, EmOptions, GPU_BACKEND};
 
 #[cfg(all(feature = "cuda", not(feature = "metal")))]
 mod cuda;
 #[cfg(feature = "metal")]
 mod metal;
+#[cfg(all(feature = "rocm", not(any(feature = "metal", feature = "cuda"))))]
+mod rocm;
 
 #[cfg(all(feature = "cuda", not(feature = "metal")))]
 use cuda as backend;
 #[cfg(feature = "metal")]
 use metal as backend;
+#[cfg(all(feature = "rocm", not(any(feature = "metal", feature = "cuda"))))]
+use rocm as backend;
 
 /// M-steps submitted between two convergence checks (each check reads back
 /// two iterates).
-#[cfg(any(feature = "metal", feature = "cuda"))]
+#[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
 const CHUNK: u32 = 10;
 
 /// The packed classes re-laid out for gather-only GPU kernels, in `f32`.
@@ -138,7 +142,7 @@ impl Problem {
 /// `min_iter` steps) or `max_iter`; returns the last iterate and the number of
 /// M-steps run. `None` — no usable device, or a problem too large for the
 /// kernels' index width — means "continue on the CPU from `init`".
-#[cfg(any(feature = "metal", feature = "cuda"))]
+#[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
 pub(crate) fn converge(
     p: &PackedEqClasses,
     counts: &[u64],
@@ -254,7 +258,7 @@ mod tests {
 
     /// A pseudo-random problem with uneven class sizes, large enough to span
     /// many threadgroups / tiles.
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
     fn random_fixture(num_txps: usize, num_classes: usize) -> PackedEqClasses {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let mut rnd = || {
@@ -290,7 +294,7 @@ mod tests {
         p
     }
 
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
     #[test]
     fn one_gpu_step_matches_the_cpu_kernels() {
         if !backend::available() {
@@ -341,7 +345,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "metal", feature = "cuda"))]
+    #[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
     #[test]
     fn gpu_warm_start_converges_to_the_cpu_answer() {
         use crate::{optimize_packed_with_init, EffLens, InitAlphas};

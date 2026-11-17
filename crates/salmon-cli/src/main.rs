@@ -564,9 +564,9 @@ struct QuantArgs {
     #[arg(long = "useEM")]
     use_em: bool,
     /// Experimental: warm-start the EM/VBEM point estimate on the GPU, then
-    /// finish on the CPU. Needs a build with `--features metal` (macOS) or
-    /// `--features cuda` (Linux, CUDA 13.3). Results agree with the CPU to the
-    /// convergence tolerance, not bit for bit.
+    /// finish on the CPU. Needs a build with `--features metal` (macOS),
+    /// `--features cuda` (Linux, CUDA 13.3) or `--features rocm` (Linux, AMD).
+    /// Results agree with the CPU to the convergence tolerance, not bit for bit.
     #[arg(long = "gpu")]
     gpu: bool,
     /// Disable the live mapping progress spinner (it is shown only on an
@@ -2374,8 +2374,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     }
     if args.gpu && salmon_quant::GPU_BACKEND.is_none() {
         anyhow::bail!(
-            "--gpu needs a salmon built with `--features metal` (macOS) or \
-             `--features cuda` (Linux)"
+            "--gpu needs a salmon built with `--features metal` (macOS), \
+             `--features cuda` or `--features rocm` (Linux)"
         );
     }
     let range_factorization_bins = if args.meta {
