@@ -3357,16 +3357,27 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
         ..MapConfig::default()
     };
 
-    let f = std::fs::File::open(&args.reads).context("opening reads")?;
+    let path = args.reads.display();
+    let f = std::fs::File::open(&args.reads).with_context(|| format!("opening reads {path}"))?;
     let mut lines = std::io::BufReader::new(f).lines();
     println!("name\ttid\trefname\tref_pos\tis_fw\tchain_cov\tread_len\tcov_frac\tfull_score\tperfect\tscore_frac\tnum_mems");
-    while let Some(Ok(header)) = lines.next() {
-        let seq = match lines.next() {
-            Some(Ok(s)) => s,
-            _ => break,
+    // Refuse a short or corrupt file rather than print a partial table and exit
+    // 0, as `quant` does for the same input (#1314).
+    while let Some(header) = lines.next() {
+        let header = header.with_context(|| format!("reading {path}"))?;
+        if header.is_empty() {
+            continue; // a trailing blank line is not a partial record (quant agrees)
+        }
+        let mut field = || -> Result<String> {
+            lines
+                .next()
+                .with_context(|| format!("{path}: record {header} is truncated"))?
+                .with_context(|| format!("reading {path}"))
         };
-        let _ = lines.next(); // '+'
-        let _ = lines.next(); // qual
+        let (seq, plus, qual) = (field()?, field()?, field()?);
+        if !header.starts_with('@') || !plus.starts_with('+') || qual.len() != seq.len() {
+            anyhow::bail!("{path}: record {header} is not a well-formed FASTQ record");
+        }
         let name = header
             .trim_start_matches('@')
             .split_whitespace()

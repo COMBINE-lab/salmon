@@ -567,6 +567,57 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
     );
 }
 
+/// `debug-map` read its FASTQ with a hand-rolled line loop that stopped at the
+/// first I/O error or missing line and exited 0, so a truncated or corrupt
+/// file printed a partial table indistinguishable from a complete one. `quant`
+/// refuses the same inputs; `debug-map` must too (COMBINE-lab/salmon#1314).
+#[test]
+fn debug_map_refuses_a_truncated_or_corrupt_fastq() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let full = std::fs::read_to_string(&fx.se).unwrap();
+    let lines: Vec<&str> = full.lines().collect();
+    let debug_map = |reads: &Path| {
+        run(&[
+            os("debug-map"),
+            os("-i"),
+            fx.index.as_os_str(),
+            os("-r"),
+            reads.as_os_str(),
+        ])
+    };
+
+    assert!(debug_map(&fx.se).status.success(), "intact FASTQ must run");
+
+    let mut bad: Vec<(String, Vec<u8>)> = (1..=3)
+        .map(|extra| {
+            let keep = lines.len() - 4 + extra;
+            (
+                format!("ending {extra} line(s) into a record"),
+                format!("{}\n", lines[..keep].join("\n")).into_bytes(),
+            )
+        })
+        .collect();
+    // Last quality line cut short: every line is present, the record is not.
+    bad.push(("cut mid-quality".into(), full[..full.len() - 10].into()));
+    // Not UTF-8 (e.g. a gzip file passed by mistake) is a read error.
+    let mut binary = full.clone().into_bytes();
+    binary.extend_from_slice(b"@x\n\xff\xfe\n+\nII\n");
+    bad.push(("with a non-UTF-8 record".into(), binary));
+
+    for (what, bytes) in bad {
+        let path = dir.path().join("bad.fq");
+        std::fs::write(&path, bytes).unwrap();
+        let o = debug_map(&path);
+        assert!(!o.status.success(), "debug-map must refuse a FASTQ {what}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains("bad.fq"),
+            "the error must name the file:\n{err}"
+        );
+    }
+}
+
 // ---- Group 3: incompatibilities detectable at invocation ------------------
 
 /// Genome projection lives inside the `-a` branch, so `--annotation` with any
