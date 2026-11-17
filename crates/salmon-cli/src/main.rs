@@ -2832,9 +2832,11 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         );
     }
     // The one-pass reads path writes no intermediate RAD, so the flags that
-    // place or keep one are inert. `--writeRad` (and the codec flags shaping
-    // it) still writes a RAD of the mappings there, so it is not listed.
+    // place or keep one are inert. `--writeRad` still writes a RAD of the
+    // mappings there, so it is not listed, and the codec flags are inert only
+    // without it.
     if args.online {
+        let no_rad = args.write_rad.is_none();
         warn_inert_in_mode(
             "the deprecated one-pass reads path (--online)",
             None,
@@ -2842,6 +2844,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             &[
                 ("--keepRad", args.keep_rad),
                 ("--radScratchDir", args.rad_scratch_dir.is_some()),
+                ("--radCompress", no_rad && args.rad_compress.is_some()),
+                ("--noCompressRad", no_rad && args.no_compress_rad),
             ],
         );
     }

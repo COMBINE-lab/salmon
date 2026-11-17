@@ -429,4 +429,22 @@ fn online_write_rad_is_not_reported_inert() {
     assert!(o.status.success(), "{log}");
     assert!(rad.exists());
     assert!(!log.contains("writes no intermediate RAD"), "{log}");
+
+    // Without `--writeRad` nothing is written, so the codec flag is inert and
+    // must still say so.
+    let o = Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&index)
+        .args(["-l", "U", "-r"])
+        .arg(&r1)
+        .args(["--online", "--radCompress", "zstd", "-o"])
+        .arg(dir.path().join("q2"))
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{log}");
+    assert!(
+        log.contains("--radCompress has no effect") && log.contains("writes no intermediate RAD"),
+        "{log}"
+    );
 }
