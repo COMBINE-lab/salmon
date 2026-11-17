@@ -232,6 +232,7 @@ pub fn corrected_effective_length_full(
     // than a fresh lookup pair.
     let mut prev_mass = cond(sp);
     let mut eff = 0.0f64;
+    let mut frag_tab: Vec<i32> = Vec::new();
     while !done {
         // With a stride > 1 the last step can overshoot; clamp and finish.
         if fl >= max_len {
@@ -255,10 +256,20 @@ pub fn corrected_effective_length_full(
             // Specialized GC-only loop: one lookup per fragment, no branches on
             // absent models.
             (false, Some((gc, ctx)), None) => {
+                // Tabulating this length's GC fractions pays off once the
+                // sweep is at least as long as the table.
+                let tab = (kmax >= fl).then(|| {
+                    crate::gcbias::frag_frac_table(fl, &mut frag_tab);
+                    &frag_tab[..]
+                });
                 let mut kstart = 0i32;
                 while kstart < kmax {
                     let frag_end = kstart + fl - 1;
-                    if let Some((ff, cf)) = ctx.desc(kstart, frag_end) {
+                    let d = match tab {
+                        Some(t) => ctx.desc_tab(kstart, frag_end, t),
+                        None => ctx.desc(kstart, frag_end),
+                    };
+                    if let Some((ff, cf)) = d {
                         mass += gc.get(ff, cf);
                     } else {
                         // No usable GC context (too close to an end): neutral.
@@ -269,6 +280,10 @@ pub fn corrected_effective_length_full(
             }
             // General loop: multiply in whichever factors are present.
             _ => {
+                let tab = (gc_model.is_some() && kmax >= fl).then(|| {
+                    crate::gcbias::frag_frac_table(fl, &mut frag_tab);
+                    &frag_tab[..]
+                });
                 let mut kstart = 0i32;
                 while kstart < kmax {
                     let frag_start = kstart;
@@ -279,7 +294,11 @@ pub fn corrected_effective_length_full(
                         1.0
                     };
                     if let (Some(gc), Some(ctx)) = (gc_model, gc_ctx.as_ref()) {
-                        if let Some((ff, cf)) = ctx.desc(frag_start, frag_end) {
+                        let d = match tab {
+                            Some(t) => ctx.desc_tab(frag_start, frag_end, t),
+                            None => ctx.desc(frag_start, frag_end),
+                        };
+                        if let Some((ff, cf)) = d {
                             frag_factor *= gc.get(ff, cf);
                         }
                     }
