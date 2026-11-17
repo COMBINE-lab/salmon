@@ -48,7 +48,7 @@ pub enum SeedMode {
     UniMem,
 }
 use crate::pair::{
-    extents_dovetail, fragment_extent, join_reads_and_filter, pair_fragment, PairingConfig,
+    extents_admissible, fragment_extent, join_reads_and_filter, pair_fragment, PairingConfig,
 };
 use crate::score::{
     finalize_mappings_counted_into, MapScratch, RawMapping, ScoreConfig, ScoredMapping,
@@ -758,7 +758,11 @@ fn recover_mate(
         }
         // partner ends `end_col` bases past the window start -> fragment length
         let partner_end = win_start + aln.end_col as i32;
-        if !allow_dovetail && extents_dovetail((a_s, a_e), (partner_end - plen, partner_end)) {
+        if !extents_admissible(
+            (a_s, a_e),
+            (partner_end - plen, partner_end),
+            allow_dovetail,
+        ) {
             return None;
         }
         (aln.score, partner_end - plen, partner_end)
@@ -779,7 +783,11 @@ fn recover_mate(
         }
         let partner_end_abs = win_start + aln.end_col as i32;
         let partner_start_abs = partner_end_abs - plen;
-        if !allow_dovetail && extents_dovetail((partner_start_abs, partner_end_abs), (a_s, a_e)) {
+        if !extents_admissible(
+            (partner_start_abs, partner_end_abs),
+            (a_s, a_e),
+            allow_dovetail,
+        ) {
             return None;
         }
         (aln.score, partner_start_abs, partner_end_abs)

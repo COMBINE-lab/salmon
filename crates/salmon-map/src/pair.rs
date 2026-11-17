@@ -159,6 +159,7 @@ fn observed_format(l: &MappingCandidate, r: &MappingCandidate) -> LibraryFormat 
 /// returned early for non-inward orientations, so outward pairs (a fragment
 /// mapping to a paralog whose homologous segments are in inverted arrangement)
 /// were kept where salmon drops them.
+#[cfg(test)]
 fn is_dovetailed(l: &MappingCandidate, r: &MappingCandidate) -> bool {
     if l.is_fw == r.is_fw {
         return false;
@@ -203,6 +204,34 @@ pub(crate) fn pair_fragment(l: &MappingCandidate, r: &MappingCandidate) -> (i32,
 /// reverse mate; an overhang on either side is a dovetail.
 pub(crate) fn extents_dovetail(fw: (i32, i32), rc: (i32, i32)) -> bool {
     fw.0 > rc.0 || fw.1 > rc.1
+}
+
+/// Whether opposite-strand mates with these `(start, end)` extents face away
+/// from each other: the forward mate's 5' end (its start) is at or past the
+/// reverse mate's 5' end (its end), so no insert lies between them.
+pub(crate) fn extents_outward(fw: (i32, i32), rc: (i32, i32)) -> bool {
+    fw.0 >= rc.1
+}
+
+/// Whether opposite-strand mates with these extents may form a concordant pair:
+/// never when they face away from each other (outward), and only when cleanly
+/// nested unless dovetails are allowed. `--allowDovetail` admits inward
+/// dovetails only; an outward pair is not a dovetail of an inward library, and
+/// forming it let the deterministic path (whose RAD re-derives orientation as
+/// inward) count it with its outer span while `--online` dropped it as
+/// incompatible.
+pub(crate) fn extents_admissible(fw: (i32, i32), rc: (i32, i32), allow_dovetail: bool) -> bool {
+    !extents_outward(fw, rc) && (allow_dovetail || !extents_dovetail(fw, rc))
+}
+
+/// [`extents_admissible`] for a pair's candidates (opposite strands).
+fn pair_admissible(l: &MappingCandidate, r: &MappingCandidate, allow_dovetail: bool) -> bool {
+    let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
+    extents_admissible(
+        (fw.proj_start(), fw.proj_end()),
+        (rc.proj_start(), rc.proj_end()),
+        allow_dovetail,
+    )
 }
 
 thread_local! {
@@ -317,9 +346,10 @@ pub fn join_reads_and_filter(
                     if frag_len <= 0 || frag_len > cfg.max_fragment_len {
                         continue;
                     }
-                    if !cfg.allow_dovetail && is_dovetailed(l, r) {
+                    if !pair_admissible(l, r, cfg.allow_dovetail) {
                         // An otherwise-valid concordant pair, dropped only because
-                        // the mates dovetail — flag it for the num_dovetail count.
+                        // the mates dovetail (or face away from each other) — flag
+                        // it for the num_dovetail count.
                         DOVETAIL_REJECTED.with(|c| c.set(true));
                         continue;
                     }
@@ -357,7 +387,7 @@ pub fn join_reads_and_filter(
                             continue;
                         }
                         let format = observed_format(l, r);
-                        if !cfg.allow_dovetail && is_dovetailed(l, r) {
+                        if !pair_admissible(l, r, cfg.allow_dovetail) {
                             continue;
                         }
                         joints.push(JointMapping {
@@ -754,8 +784,7 @@ mod tests {
 
     #[test]
     /// With `--allowDovetail`, a dovetailed or contained pair's `fragment_len` is
-    /// the 5'-to-5' span, not the union of the mates; an outward pair keeps the
-    /// union.
+    /// the 5'-to-5' span, not the union of the mates.
     fn allowed_dovetail_fragment_len_is_five_prime_span() {
         let cfg = PairingConfig {
             allow_dovetail: true,
@@ -765,7 +794,6 @@ mod tests {
             ((150, 50), (100, 60), 10),  // dovetail: [150,160)
             ((100, 100), (120, 60), 80), // fw past rc's 5' end: [100,180)
             ((100, 50), (80, 120), 100), // rc past fw's 5' end: [100,200)
-            ((714, 50), (176, 60), 588), // outward: union [176,764)
             ((100, 50), (300, 50), 250), // clean: [100,350)
         ] {
             for fw_left in [true, false] {
@@ -783,8 +811,9 @@ mod tests {
     }
 
     #[test]
-    /// Same for outward-facing pairs, which the common protocols do not produce.
-    fn outward_pair_filtered_by_default_but_kept_when_enabled() {
+    /// Outward-facing pairs never form, with or without `--allowDovetail`: an
+    /// outward pair is not a dovetail of an inward library.
+    fn outward_pair_never_forms() {
         // OUTWARD (AWAY) pair: the forward mate lies entirely downstream of the
         // reverse mate (fw 5′=714 > rc 5′=236). This is the real-data sim.617247
         // case — a fragment that is a proper inward pair on its true transcript
@@ -810,17 +839,20 @@ mod tests {
         let j = join_reads_and_filter(l, r, &PairingConfig::default());
         assert!(j.iter().all(|m| m.status.is_orphan()), "{j:?}");
 
-        // enabled: kept as a concordant pair
+        // --allowDovetail: still not a pair (it falls back to orphans), so the
+        // deterministic path cannot count it as an inward pair that `--online`
+        // drops as incompatible.
         let (l, r) = make();
         let cfg = PairingConfig {
             allow_dovetail: true,
             ..Default::default()
         };
         let j = join_reads_and_filter(l, r, &cfg);
-        assert!(
-            j.iter().any(|m| m.status == MateStatus::PairedEndPaired),
-            "{j:?}"
-        );
+        assert!(j.iter().all(|m| m.status.is_orphan()), "{j:?}");
+        assert!(dovetail_rejected());
+        // Mates that abut back to back (fw starts where rc ends) are outward too.
+        assert!(extents_outward((236, 286), (176, 236)));
+        assert!(!extents_admissible((236, 286), (176, 236), true));
     }
 
     #[test]
