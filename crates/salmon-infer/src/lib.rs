@@ -35,6 +35,8 @@ use salmon_eqclass::CollapsedEqClasses;
 
 mod components;
 mod daarem;
+#[cfg(any(feature = "metal", feature = "cuda", test))]
+mod gpu;
 mod online;
 mod packed;
 pub mod uncertainty;
@@ -43,6 +45,15 @@ pub use components::ComponentSummary;
 pub use online::OnlineInference;
 pub use packed::{PackedEqClasses, PosteriorMethod};
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
+
+/// The GPU backend compiled into this build for [`EmOptions::gpu`], if any.
+pub const GPU_BACKEND: Option<&str> = if cfg!(feature = "metal") {
+    Some("metal")
+} else if cfg!(feature = "cuda") {
+    Some("cuda")
+} else {
+    None
+};
 
 /// EM/VBEM acceleration scheme applied on top of the fixed-point map.
 ///
@@ -201,6 +212,9 @@ pub struct EmOptions {
     pub vb_stop: EmStop,
     /// stopping rule of unaccelerated plain EM (default [`EmStop::Global`])
     pub em_stop: EmStop,
+    /// experimental: warm-start parallel point-estimate runs on the GPU backend
+    /// in [`GPU_BACKEND`] (ignored when none is compiled in); see `gpu`
+    pub gpu: bool,
 }
 
 impl Default for EmOptions {
@@ -217,6 +231,7 @@ impl Default for EmOptions {
             accel: EmAccel::None,
             vb_stop: EmStop::Projected,
             em_stop: EmStop::Global,
+            gpu: false,
         }
     }
 }
@@ -475,6 +490,19 @@ pub(crate) fn run_em_counts(
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
+    #[allow(unused_mut)]
+    let (mut gpu_iters, mut min_iter) = (0u32, min_iter);
+    // GPU only for open-ended point-estimate runs: bootstrap replicates pass
+    // `parallel = false`, bias-seed runs are fixed-length (`min_iter == max_iter`).
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    if opts.gpu && parallel && min_iter < opts.max_iter {
+        if let Some((warm, n)) = gpu::converge(p, counts, &alphas, &prior_alphas, opts, min_iter) {
+            alphas = warm;
+            gpu_iters = n;
+            // the GPU steps already served the minimum-iteration floor
+            min_iter = min_iter.saturating_sub(n);
+        }
+    }
     // Unaccelerated runs go through the component-decomposed engine: the
     // same fixed-point iteration and stopping rule, laid out and scheduled by
     // connected component (see `components`). The accelerators extrapolate
@@ -499,7 +527,7 @@ pub(crate) fn run_em_counts(
             };
             let (alphas, iters, converged, summary) =
                 components::run(&mut cplan, &alphas, &prior_alphas, &set);
-            return (alphas, iters, converged, Some(summary));
+            return (alphas, iters + gpu_iters, converged, Some(summary));
         }
     }
     let mut exp_theta = vec![0.0f64; num_txps];
@@ -632,7 +660,7 @@ pub(crate) fn run_em_counts(
             );
         }
     }
-    (alphas, it, converged, None)
+    (alphas, it + gpu_iters, converged, None)
 }
 
 /// SQUAREM (SqS3) acceleration of the fixed-point iteration.

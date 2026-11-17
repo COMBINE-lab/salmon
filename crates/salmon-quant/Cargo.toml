@@ -29,6 +29,11 @@ rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 noodles-bgzf = "0.52"
 
+[features]
+# Experimental GPU warm start of the EM (`--gpu`); see salmon-infer.
+metal = ["salmon-infer/metal"]
+cuda = ["salmon-infer/cuda"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 noodles-bam = "0.98"
