@@ -36,11 +36,8 @@ use rand_distr::{Binomial, Distribution, Gamma};
 use rand_pcg::Pcg64Mcg;
 use rayon::prelude::*;
 
-use crate::packed::PackedEqClasses;
+use crate::packed::{PackedEqClasses, MIN_EQ_CLASS_WEIGHT};
 use crate::{run_em_counts, EffLens, EmOptions, InitAlphas};
-
-/// Smallest class denominator below which mass is redistributed evenly (Gibbs).
-const MIN_EQ_CLASS_WEIGHT: f64 = f64::MIN_POSITIVE;
 
 /// Draw a multinomial count vector: `total` draws over categories with the given
 /// (non-normalized) `weights`, via the conditional-binomial method — `O(k)` in

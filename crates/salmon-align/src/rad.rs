@@ -69,8 +69,7 @@ use libradicl::readers::{MetaChunk, MetaChunkStream, ParallelRadReader};
 use libradicl::record::{MappedRecord, PiscemBulkReadRecord, RecordContext};
 
 use salmon_core::{
-    is_compatible, LibraryFormat, MateStatus, PhaseTimer, ReadOrientation, ReadStrandedness,
-    ReadType,
+    is_compatible, LibraryFormat, MateStatus, PhaseTimer, ReadOrientation, ReadType,
 };
 use salmon_eqclass::{
     range_factorize_bins_into, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement,
@@ -420,31 +419,8 @@ struct RadScratch {
 /// cannot be distinguished — acceptable for the common inward libraries).
 fn rad_frag_format(p: &RadPlacement) -> (Option<LibraryFormat>, bool, MateStatus) {
     if p.status == MateStatus::PairedEndPaired {
-        let (orientation, strandedness) = if p.is_fw != p.mate_fw {
-            (
-                ReadOrientation::Toward,
-                if p.is_fw {
-                    ReadStrandedness::SA
-                } else {
-                    ReadStrandedness::AS
-                },
-            )
-        } else {
-            (
-                ReadOrientation::Same,
-                if p.is_fw {
-                    ReadStrandedness::S
-                } else {
-                    ReadStrandedness::A
-                },
-            )
-        };
         (
-            Some(LibraryFormat::new(
-                ReadType::PairedEnd,
-                orientation,
-                strandedness,
-            )),
+            Some(salmon_core::observed_paired_format(p.is_fw, p.mate_fw)),
             p.is_fw,
             MateStatus::PairedEndPaired,
         )

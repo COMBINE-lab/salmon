@@ -468,12 +468,7 @@ pub struct AlignQuantResult {
     pub diagnostics: Vec<salmon_core::Diagnostic>,
 }
 
-/// Current local time as an asctime-style string, matching salmon's timestamps.
-pub fn asctime_now() -> String {
-    jiff::Zoned::now()
-        .strftime("%a %b %e %H:%M:%S %Y")
-        .to_string()
-}
+pub use salmon_core::asctime_now;
 
 /// Extract an integer tag value (e.g. `AS`) as `i32`.
 fn value_as_i32(v: &Value) -> Option<i32> {
