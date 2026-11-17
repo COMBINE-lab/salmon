@@ -554,22 +554,27 @@ fn unaligned_fragments_appear_only_when_asked_for() {
     }
 }
 
-/// Two isoforms of one gene that share a read's genomic alignment must not make
-/// it look like a multimapper once `--spliced` projects it: genome-coordinate
-/// tools read `NH > 1` or a low `MAPQ` as "ambiguous" and drop the read (RSeQC
-/// below `MAPQ` 30, Qualimap on `NH > 1`), which on a real annotation would be
-/// most reads.
-#[test]
-fn isoforms_sharing_an_alignment_write_it_once_under_spliced() {
-    let dir = tempfile::tempdir().unwrap();
-    let dir = dir.path();
-    // One chromosome, three exons: [0,300) [500,800) [900,1200). txA is the first
-    // two, txB all three, so any read inside txA maps to both identically.
+/// One chromosome, three exons: [0,300) [500,800) [900,1200). txA is the first
+/// two, txB all three, so any read inside txA maps to both identically.
+fn spliced_gene() -> (String, String, String) {
     let (genome, _) = fixture_transcripts();
     let tx_a = format!("{}{}", &genome[0..300], &genome[500..800]);
     let tx_b = format!("{tx_a}{}", &genome[900..1200]);
+    (genome, tx_a, tx_b)
+}
+
+/// Run `--spliced` mapping output over one inward-facing pair, `mate2` given on
+/// the forward strand, and return the SAM text. `decoy` indexes the chromosome
+/// as a decoy, as a gentrome index does.
+fn run_spliced(dir: &Path, mate1: &str, mate2: &str, decoy: bool) -> String {
+    let (genome, tx_a, tx_b) = spliced_gene();
     std::fs::write(dir.join("genome.fa"), format!(">chr1\n{genome}\n")).unwrap();
-    std::fs::write(dir.join("txp.fa"), format!(">txA\n{tx_a}\n>txB\n{tx_b}\n")).unwrap();
+    let mut fasta = format!(">txA\n{tx_a}\n>txB\n{tx_b}\n");
+    if decoy {
+        fasta.push_str(&format!(">chr1\n{genome}\n"));
+        std::fs::write(dir.join("decoys.txt"), "chr1\n").unwrap();
+    }
+    std::fs::write(dir.join("txp.fa"), fasta).unwrap();
     let mut gtf = String::new();
     for (id, exons) in [("txA", 2), ("txB", 3)] {
         let attrs = format!("gene_id \"g1\"; transcript_id \"{id}\";");
@@ -585,8 +590,7 @@ fn isoforms_sharing_an_alignment_write_it_once_under_spliced() {
     }
     std::fs::write(dir.join("genes.gtf"), gtf).unwrap();
 
-    // Mate 1 spans the first junction, mate 2 sits in the second exon.
-    let revcomp: String = tx_a[400..460]
+    let revcomp: String = mate2
         .bytes()
         .rev()
         .map(|b| match b {
@@ -596,12 +600,9 @@ fn isoforms_sharing_an_alignment_write_it_once_under_spliced() {
             _ => 'A',
         })
         .collect();
-    let quality = "I".repeat(60);
-    std::fs::write(
-        dir.join("r1.fq"),
-        format!("@p/1\n{}\n+\n{quality}\n", &tx_a[260..320]),
-    )
-    .unwrap();
+    let quality = "I".repeat(mate1.len());
+    std::fs::write(dir.join("r1.fq"), format!("@p/1\n{mate1}\n+\n{quality}\n")).unwrap();
+    let quality = "I".repeat(revcomp.len());
     std::fs::write(
         dir.join("r2.fq"),
         format!("@p/2\n{revcomp}\n+\n{quality}\n"),
@@ -611,6 +612,7 @@ fn isoforms_sharing_an_alignment_write_it_once_under_spliced() {
     let index = dir.join("idx");
     let mut build_options = IndexBuildOptions::new(vec![dir.join("txp.fa")], index.clone());
     build_options.threads = 1;
+    build_options.decoys = decoy.then(|| dir.join("decoys.txt"));
     build(&build_options).expect("building the index");
     let sam = dir.join("mappings.sam");
     let mut options = QuantOptions::new(index, dir.join("out"));
@@ -623,7 +625,20 @@ fn isoforms_sharing_an_alignment_write_it_once_under_spliced() {
     options.annotation = Some(dir.join("genes.gtf"));
     options.genome_fasta = Some(dir.join("genome.fa"));
     quantify(&options).expect("quantifying");
-    let sam = std::fs::read_to_string(&sam).unwrap();
+    std::fs::read_to_string(&sam).unwrap()
+}
+
+/// Two isoforms of one gene that share a read's genomic alignment must not make
+/// it look like a multimapper once `--spliced` projects it: genome-coordinate
+/// tools read `NH > 1` or a low `MAPQ` as "ambiguous" and drop the read (RSeQC
+/// below `MAPQ` 30, Qualimap on `NH > 1`), which on a real annotation would be
+/// most reads.
+#[test]
+fn isoforms_sharing_an_alignment_write_it_once_under_spliced() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, tx_a, _) = spliced_gene();
+    // Mate 1 spans the first junction, mate 2 sits in the second exon.
+    let sam = run_spliced(dir.path(), &tx_a[260..320], &tx_a[400..460], false);
 
     let records = records(&sam);
     assert_eq!(
@@ -650,4 +665,28 @@ fn isoforms_sharing_an_alignment_write_it_once_under_spliced() {
         records.iter().any(|r| r[5] == "40M200N20M"),
         "mate 1 should be split at the junction: {records:?}"
     );
+}
+
+/// An intronic read belongs to no transcript, so a gentrome index lets the
+/// genome decoy claim it and quantification drops it. Genome-coordinate QC needs
+/// it all the same (intronic and intergenic fractions are what it measures), so
+/// `--spliced` writes it where the decoy put it.
+#[test]
+fn a_read_the_genome_decoy_claims_is_written_under_spliced() {
+    let dir = tempfile::tempdir().unwrap();
+    let (genome, _, _) = spliced_gene();
+    // Both mates inside the first intron, [300,500).
+    let sam = run_spliced(dir.path(), &genome[310..370], &genome[430..490], true);
+
+    let records = records(&sam);
+    assert_eq!(records.len(), 2, "both mates, once each:\n{sam}");
+    for record in &records {
+        assert_eq!(record[2], "chr1");
+        assert_eq!(tag(record, "XT:A:"), Some("XT:A:D"));
+        assert_eq!(tag(record, "NH:i:"), Some("NH:i:1"));
+        assert_eq!(record[5], "60M");
+    }
+    let mut positions: Vec<&str> = records.iter().map(|r| r[3]).collect();
+    positions.sort_unstable();
+    assert_eq!(positions, ["311", "431"], "genome coordinates: {records:?}");
 }

@@ -237,8 +237,13 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
             below += 1;
         }
     }
-    let (decoy_dominated, below_final) =
-        finalize_mappings_counted_into(out, raw, &cfg.score, &mut scratch.dedup);
+    let (decoy_dominated, below_final) = finalize_mappings_counted_into(
+        out,
+        raw,
+        &cfg.score,
+        &mut scratch.dedup,
+        &mut scratch.decoys,
+    );
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,
@@ -478,8 +483,13 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
     {
         raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
     }
-    let (decoy_dominated, below_final) =
-        finalize_mappings_counted_into(out, raw, &cfg.score, &mut scratch.dedup);
+    let (decoy_dominated, below_final) = finalize_mappings_counted_into(
+        out,
+        raw,
+        &cfg.score,
+        &mut scratch.dedup,
+        &mut scratch.decoys,
+    );
     set_last_map_stats(MapStats {
         had_candidates,
         decoy_dominated,

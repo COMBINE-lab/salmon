@@ -816,13 +816,9 @@ pub fn emit_fragment_records(
             let secondary = if hi == 1 { 0 } else { SECONDARY };
             let tid = mapping.tid as usize;
             let txp_len = salmon.ref_len(tid) as i32;
-            // salmon's XT tag. In practice it is always `T`: a placement on a decoy
-            // means the read probably came from no transcript at all, so scoring
-            // drops it long before a record is written, and a decoy-aware run was
-            // confirmed to emit no `D` at all. The branch stays because the tag is
-            // defined over the reference table, not over what currently survives
-            // filtering, and a future policy that kept decoy placements would need
-            // it to be right.
+            // salmon's XT tag. `D` only under `--spliced`, which writes the decoy
+            // placements of a fragment a genome decoy dominated; everywhere else
+            // scoring drops those before a record is written.
             let xt = if salmon.is_decoy(mapping.tid) {
                 b'D'
             } else {

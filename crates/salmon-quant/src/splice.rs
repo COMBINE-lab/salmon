@@ -68,6 +68,9 @@ struct ExonBlock {
 struct TranscriptModel {
     chromosome: usize,
     forward: bool,
+    /// A genome decoy named like a chromosome: the identity, with no transcript
+    /// and so no strand to report.
+    decoy: bool,
     exons: Vec<ExonBlock>,
 }
 
@@ -129,7 +132,8 @@ pub struct GenomeProjector {
     /// `(name, length)` per chromosome, in the order they appear in `@SQ`.
     chromosomes: Vec<(String, u64)>,
     /// One entry per salmon reference id; `None` for a reference the annotation
-    /// does not describe (a decoy, or a transcript absent from the GTF).
+    /// does not describe (a decoy not named like a genome sequence, or a
+    /// transcript absent from the GTF).
     models: Vec<Option<TranscriptModel>>,
 }
 
@@ -145,6 +149,7 @@ impl GenomeProjector {
     /// than a pass over the genome.
     pub fn build(
         reference_names: &[&str],
+        is_decoy: impl Fn(usize) -> bool,
         annotation: &Path,
         genome: &Path,
     ) -> anyhow::Result<Self> {
@@ -152,13 +157,21 @@ impl GenomeProjector {
         let transcripts = bramble_rs::annotation::load_transcripts(annotation)
             .with_context(|| format!("reading annotation {}", annotation.display()))?;
 
-        // Only the chromosomes the annotation actually places transcripts on go
-        // into the header, in the genome's own order, so the reference table stays
-        // as small as the output needs while keeping a stable, familiar ordering.
+        // Only the chromosomes the annotation places transcripts on, or a genome
+        // decoy names, go into the header, in the genome's own order, so the
+        // reference table stays as small as the output needs while keeping a
+        // stable, familiar ordering.
+        let decoy_names: std::collections::HashSet<&str> = reference_names
+            .iter()
+            .enumerate()
+            .filter(|&(tid, _)| is_decoy(tid))
+            .map(|(_, &name)| name)
+            .collect();
         let mut used: HashMap<&str, usize> = HashMap::new();
         let mut chromosomes: Vec<(String, u64)> = Vec::new();
         for (name, length) in &chromosome_lengths {
-            if transcripts.iter().any(|t| t.seqname == *name) {
+            if decoy_names.contains(name.as_str()) || transcripts.iter().any(|t| t.seqname == *name)
+            {
                 used.insert(name.as_str(), chromosomes.len());
                 chromosomes.push((name.clone(), *length));
             }
@@ -169,7 +182,23 @@ impl GenomeProjector {
         let mut missing_chromosome = 0usize;
         let models = reference_names
             .iter()
-            .map(|name| {
+            .enumerate()
+            .map(|(tid, name)| {
+                // A decoy is a chromosome when the genome has one by its name (a
+                // gentrome index): its placements already are genome alignments.
+                if is_decoy(tid) {
+                    let &chromosome = used.get(name)?;
+                    return Some(TranscriptModel {
+                        chromosome,
+                        forward: true,
+                        decoy: true,
+                        exons: vec![ExonBlock {
+                            genome_start: 0,
+                            transcript_start: 0,
+                            len: u32::try_from(chromosomes[chromosome].1).ok()?,
+                        }],
+                    });
+                }
                 let transcript = by_id.get(name)?;
                 let Some(&chromosome) = used.get(transcript.seqname.as_str()) else {
                     missing_chromosome += 1;
@@ -179,7 +208,8 @@ impl GenomeProjector {
             })
             .collect::<Vec<_>>();
 
-        let described = models.iter().filter(|m| m.is_some()).count();
+        let described = models.iter().flatten().filter(|m| !m.decoy).count();
+        let decoys = models.iter().flatten().filter(|m| m.decoy).count();
         anyhow::ensure!(
             described > 0,
             "no transcript in the index appears in {}: check that the annotation matches the \
@@ -195,6 +225,7 @@ impl GenomeProjector {
         }
         tracing::info!(
             transcripts = described,
+            decoys,
             total = reference_names.len(),
             chromosomes = chromosomes.len(),
             "genome projection ready"
@@ -220,7 +251,8 @@ impl GenomeProjector {
     /// or `None` if the annotation does not describe it. This is what `XS`
     /// reports for a spliced alignment.
     pub fn strand(&self, tid: usize) -> Option<bool> {
-        Some(self.models.get(tid)?.as_ref()?.forward)
+        let model = self.models.get(tid)?.as_ref()?;
+        (!model.decoy).then_some(model.forward)
     }
 
     /// Whether reference `tid` can be projected at all.
@@ -231,7 +263,7 @@ impl GenomeProjector {
     /// Project a transcript-coordinate alignment onto the genome, writing the
     /// genomic CIGAR into `out`.
     ///
-    /// Returns `None` when the reference has no exon structure (a decoy, or a
+    /// Returns `None` when the reference has no exon structure (a non-genome decoy, or a
     /// transcript the annotation does not mention), in which case the caller has
     /// nothing genomic to write for this placement.
     #[allow(clippy::too_many_arguments)]
@@ -525,6 +557,7 @@ fn model_for(
     TranscriptModel {
         chromosome,
         forward,
+        decoy: false,
         exons,
     }
 }
@@ -598,6 +631,7 @@ mod tests {
         TranscriptModel {
             chromosome: 0,
             forward: true,
+            decoy: false,
             exons: vec![
                 ExonBlock {
                     genome_start: 100,
@@ -624,6 +658,7 @@ mod tests {
         TranscriptModel {
             chromosome: 0,
             forward: false,
+            decoy: false,
             exons: vec![
                 ExonBlock {
                     genome_start: 500,

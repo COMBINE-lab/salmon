@@ -501,7 +501,7 @@ Each record carries:
 | `NM` / `MD` | Edit distance and the reference bases at each mismatch, matching what `samtools calmd` recomputes from the input FASTA. Indexing has to replace non-ACGT bases with ACGT, since the k-mer structure cannot hold them, but the build records where it did so and the record reports the `N` that was there rather than the substitute. `@SQ M5` is computed the same way, so the header names the reference the user supplied. |
 | `NH` / `HI` | How many placements this fragment has, and which one this record is. |
 | `AS` | The selective-alignment score. |
-| `XT` | `T` for a transcript placement, `D` for a decoy. In practice always `T`: a fragment whose best placement is a decoy is dropped by scoring before any record is written, so a decoy-aware index changes which fragments appear, not what `XT` says about them. |
+| `XT` | `T` for a transcript placement, `D` for a decoy. Always `T` without `--spliced`: a fragment whose best placement is a decoy is dropped by scoring before any record is written. `--spliced` writes those (see below). |
 | `ZW` | The placement's equivalence-class weight. |
 | `MC` / `MQ` | The mate's CIGAR and mapping quality, so a mate-aware tool does not have to sort the file to find them. |
 
@@ -538,8 +538,13 @@ position becomes the alignment's leftmost genomic base, and the strand bits and
 stored bases flip to match. `M5` is omitted, because the references are then
 chromosomes salmon never loaded and a guessed checksum is worse than none.
 
-Placements on a reference the annotation does not describe (a decoy, or a
-transcript absent from the GTF) are dropped rather than half-projected. Two
+A decoy whose name is a genome sequence (the chromosomes of a gentrome index)
+is already in genome coordinates. When such a decoy dominates a fragment,
+quantification drops it as usual, but `--spliced` writes its best decoy
+placements, `XT:A:D`, so the BAM still holds the library's intronic and
+intergenic reads. Placements on any other reference the annotation does not
+describe (another decoy, or a transcript absent from the GTF) are dropped rather
+than half-projected. Two
 transcripts of one gene often imply the same genomic alignment; that alignment is
 written once, and `NH`, `HI` and `MAPQ` count distinct genomic alignments rather
 than transcripts. Otherwise a read with one place on the genome would look like a
@@ -550,8 +555,8 @@ records would be identical, and which transcript a read came from is
 
 Every `N` comes from the annotation, so splice-junction QC on this output
 (RSeQC `junction_annotation`, `junction_saturation`) finds no novel junctions by
-construction. Likewise salmon maps to transcripts, so reads from introns or
-between genes are not in the output at all: intronic and intergenic fractions
+construction. Reads from introns or between genes reach the output only through
+a genome decoy: without a gentrome index, intronic and intergenic fractions
 computed from it (Qualimap `rnaseq`, RSeQC `read_distribution`) are near zero
 whatever the library, and say nothing about pre-mRNA or genomic DNA content.
 Library-level QC (strandedness, insert size, duplication, TIN, 5'–3' bias) is

@@ -174,6 +174,10 @@ pub struct MapScratch {
     /// concordant pairs aligned while looking for a valid one, as
     /// `(joint index, mate 1, mate 2)`, so they are not aligned again
     pub(crate) pair_alns: Vec<(usize, Option<Alignment>, Option<Alignment>)>,
+    /// The best-scoring decoy placements of the last fragment, when a decoy
+    /// dominated it (empty otherwise). Never quantified: genome-coordinate
+    /// mapping output writes them, since a genome decoy is a chromosome.
+    pub decoys: Vec<ScoredMapping>,
 }
 
 /// Reusable table for the large-fragment deduplication path.
@@ -256,13 +260,18 @@ fn dedup_by_table(raw: &mut Vec<RawMapping>, scratch: &mut DedupScratch) {
 ///
 /// `raw` is consumed in place and left empty on every return path, so the caller
 /// can refill the same buffer for the next fragment.
+///
+/// `decoys` (cleared first) receives a decoy-dominated fragment's best-scoring
+/// decoy placements, which `out` never holds.
 pub fn finalize_mappings_counted_into(
     out: &mut Vec<ScoredMapping>,
     raw: &mut Vec<RawMapping>,
     cfg: &ScoreConfig,
     scratch: &mut DedupScratch,
+    decoys: &mut Vec<ScoredMapping>,
 ) -> (bool, u32) {
     out.clear();
+    decoys.clear();
     if raw.is_empty() {
         return (false, 0);
     }
@@ -291,24 +300,32 @@ pub fn finalize_mappings_counted_into(
         .filter(|m| !m.is_decoy)
         .map(|m| m.score)
         .max();
-    let Some(best_valid) = best_valid else {
-        // only decoy mappings -> dropped, dominated by a decoy
-        best_per_tid.clear();
-        return (true, 0);
-    };
     let best_decoy = best_per_tid
         .iter()
         .filter(|m| m.is_decoy)
         .map(|m| m.score)
         .max();
+    // A decoy-dominated fragment keeps its best decoy placements aside.
+    let mut dominated = |best_per_tid: &mut Vec<RawMapping>| {
+        decoys.extend(
+            best_per_tid
+                .drain(..)
+                .filter(|m| m.is_decoy && Some(m.score) == best_decoy)
+                .map(|m| scored(&m, 1.0)),
+        );
+        (true, 0)
+    };
+    let Some(best_valid) = best_valid else {
+        // only decoy mappings -> dropped, dominated by a decoy
+        return dominated(best_per_tid);
+    };
 
     // Decoy domination (matches salmon's `bestScore < decoyThresh * bestDecoyScore`):
     // drop the read when its best transcript score falls below the decoy bar —
     // unless `--allowDecoyOrphans` asks us to keep the transcript placement(s).
     if let Some(bd) = best_decoy {
         if (best_valid as f64) < cfg.decoy_thresh * (bd as f64) && !cfg.allow_decoy_orphans {
-            best_per_tid.clear();
-            return (true, 0);
+            return dominated(best_per_tid);
         }
     }
     let mut num_below = 0u32;
@@ -327,26 +344,30 @@ pub fn finalize_mappings_counted_into(
             num_below += 1;
             continue;
         }
-        out.push(ScoredMapping {
-            tid: m.tid,
-            is_fw: m.is_fw,
-            status: m.status,
-            score: m.score,
-            fragment_len: m.fragment_len,
-            read_len: m.read_len,
-            weight,
-            ref_pos: m.ref_pos,
-            fw_pos: m.fw_pos,
-            rc_pos: m.rc_pos,
-            format: m.format,
-            r1_pos: m.r1_pos,
-            r2_pos: m.r2_pos,
-            r2_fw: m.r2_fw,
-            r1_score: m.r1_score,
-        });
+        out.push(scored(&m, weight));
     }
     out.sort_by_key(|m| m.tid);
     (false, num_below)
+}
+
+fn scored(m: &RawMapping, weight: f64) -> ScoredMapping {
+    ScoredMapping {
+        tid: m.tid,
+        is_fw: m.is_fw,
+        status: m.status,
+        score: m.score,
+        fragment_len: m.fragment_len,
+        read_len: m.read_len,
+        weight,
+        ref_pos: m.ref_pos,
+        fw_pos: m.fw_pos,
+        rc_pos: m.rc_pos,
+        format: m.format,
+        r1_pos: m.r1_pos,
+        r2_pos: m.r2_pos,
+        r2_fw: m.r2_fw,
+        r1_score: m.r1_score,
+    }
 }
 
 /// Apply decoy filtering to sketch-mode mappings, consistent with the decoy
@@ -417,7 +438,13 @@ mod tests {
     /// Allocating form of [`finalize_mappings_counted_into`] for the tests.
     fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredMapping> {
         let (mut out, mut raw) = (Vec::new(), raw);
-        finalize_mappings_counted_into(&mut out, &mut raw, cfg, &mut DedupScratch::default());
+        finalize_mappings_counted_into(
+            &mut out,
+            &mut raw,
+            cfg,
+            &mut DedupScratch::default(),
+            &mut Vec::new(),
+        );
         out
     }
 
@@ -603,7 +630,7 @@ mod tests {
         let mut buf: Vec<RawMapping> = Vec::new();
 
         let mut run = |buf: &mut Vec<RawMapping>, what: &str| -> usize {
-            finalize_mappings_counted_into(&mut out, buf, &cfg, &mut scratch);
+            finalize_mappings_counted_into(&mut out, buf, &cfg, &mut scratch, &mut Vec::new());
             assert!(buf.is_empty(), "`raw` left non-empty by the {what} path");
             out.len()
         };

@@ -537,7 +537,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 .as_deref()
                 .context("--spliced needs --genome for the chromosome lengths @SQ must declare")?;
             let names: Vec<&str> = (0..num_refs).map(|t| salmon.ref_name(t)).collect();
-            Some(splice::GenomeProjector::build(&names, annotation, genome)?)
+            Some(splice::GenomeProjector::build(
+                &names,
+                |t| salmon_core::RefProvider::is_decoy(&salmon, t as u32),
+                annotation,
+                genome,
+            )?)
         } else {
             None
         };

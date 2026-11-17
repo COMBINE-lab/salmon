@@ -1250,6 +1250,26 @@ fn accumulate_vm_stats(maps_empty: bool, counters: &mut Counters) {
     }
 }
 
+/// What a fragment writes to the mapping output: its quantified placements, or,
+/// under `--spliced`, the placements of a fragment a genome decoy dominated. A
+/// genome decoy is a chromosome, so those are already genome alignments, and
+/// leaving them out would hide every intronic and intergenic read from
+/// genome-coordinate QC. They are never quantified.
+fn written_placements<'p>(
+    sh: &Shared<'_>,
+    placements: &'p [ScoredMapping],
+    decoys: &'p [ScoredMapping],
+) -> &'p [ScoredMapping] {
+    if placements.is_empty()
+        && sh.record_options.projector.is_some()
+        && decoys.len() <= sh.max_read_occ
+    {
+        decoys
+    } else {
+        placements
+    }
+}
+
 /// Merge this thread's observed bias models (sequence and GC) into the shared
 /// accumulators.
 /// The open `unmapped_names.txt`, shared by every worker.
@@ -1463,10 +1483,11 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             // Only assembled when there is somewhere for it to go: a run without
             // mapping output should not pay for reading the mate's id and
             // qualities on every fragment.
+            let written = written_placements(&sh, &placements, &scratch.map.decoys);
             let mate = (sh.sam.is_some() || bam_scratch.is_some())
                 .then(|| (r2.id(), s2.as_ref(), r2.qual()));
             if sh.sam.is_some() {
-                if !placements.is_empty() {
+                if !written.is_empty() {
                     crate::sam::write_fragment(
                         sam_buf,
                         sh.salmon,
@@ -1474,7 +1495,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         s1.as_ref(),
                         r1.qual(),
                         mate,
-                        &placements,
+                        written,
                         sh.record_options,
                         emit_scratch,
                     );
@@ -1491,14 +1512,14 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 }
             }
             if let Some(scratch) = bam_scratch.as_mut() {
-                if !placements.is_empty() {
+                if !written.is_empty() {
                     scratch.write_fragment(
                         sh.salmon,
                         r1.id(),
                         s1.as_ref(),
                         r1.qual(),
                         mate,
-                        &placements,
+                        written,
                         sh.record_options,
                         emit_scratch,
                     )?;
@@ -1652,7 +1673,8 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if !sh.sketch {
                 accumulate_vm_stats(placements.is_empty(), counters);
             }
-            if sh.sam.is_some() && !placements.is_empty() {
+            let written = written_placements(&sh, &placements, &scratch.map.decoys);
+            if sh.sam.is_some() && !written.is_empty() {
                 crate::sam::write_fragment(
                     sam_buf,
                     sh.salmon,
@@ -1660,7 +1682,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     s.as_ref(),
                     rec.qual(),
                     None,
-                    &placements,
+                    written,
                     sh.record_options,
                     emit_scratch,
                 );
@@ -1676,14 +1698,14 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
-                if !placements.is_empty() {
+                if !written.is_empty() {
                     scratch.write_fragment(
                         sh.salmon,
                         rec.id(),
                         s.as_ref(),
                         rec.qual(),
                         None,
-                        &placements,
+                        written,
                         sh.record_options,
                         emit_scratch,
                     )?;
