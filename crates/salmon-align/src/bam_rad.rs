@@ -122,7 +122,7 @@ pub fn write_alignment_rad(
     // The user-fixed expected format (`None` for auto / unstranded), resolved
     // against the FLD-detected format at end of pass.
     let expected_format = match opts.lib_type.as_str() {
-        "A" | "IU" | "U" => None,
+        "A" => None,
         s => LibraryFormat::parse(s).ok(),
     };
     // The `-l A` caveat belongs to alignment *input*, not to the estimator

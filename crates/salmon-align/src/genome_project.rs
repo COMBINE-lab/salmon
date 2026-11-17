@@ -197,7 +197,7 @@ pub fn project_genome_bam_to_rad(
     let (frag_dist, det_fmt) = fld.finish(opts.fld_mean, opts.fld_sd);
     writer.set_frag_length_dist(frag_dist.log_pmf());
     let expected_format = match opts.lib_type.as_str() {
-        "A" | "IU" | "U" => None,
+        "A" => None,
         s => LibraryFormat::parse(s).ok(),
     };
     // The `-l A` caveat belongs to alignment *input*, not to the estimator
