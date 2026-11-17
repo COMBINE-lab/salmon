@@ -19,6 +19,8 @@ use crate::mapping_record::{self, AlignmentRecord, CigarKind};
 /// than once per record, so it is never contended in practice.
 pub struct SamWriter {
     inner: Mutex<Box<dyn Write + Send>>,
+    /// `(partial, final)`: renamed on a clean `finish`, removed otherwise.
+    staged: Option<(std::path::PathBuf, std::path::PathBuf)>,
 }
 
 impl SamWriter {
@@ -30,7 +32,8 @@ impl SamWriter {
                     .with_context(|| format!("creating SAM output dir {}", parent.display()))?;
             }
         }
-        let file = std::fs::File::create(path)
+        let staged = crate::bam::staging_path(path);
+        let file = std::fs::File::create(staged.as_deref().unwrap_or(path))
             .with_context(|| format!("creating SAM output {}", path.display()))?;
         let mut writer: Box<dyn Write + Send> =
             Box::new(std::io::BufWriter::with_capacity(1 << 20, file));
@@ -38,6 +41,7 @@ impl SamWriter {
         writer.write_all(mapping_record::header_text(salmon, cmd).as_bytes())?;
         Ok(Self {
             inner: Mutex::new(writer),
+            staged: staged.map(|partial| (partial, path.to_path_buf())),
         })
     }
 
@@ -53,8 +57,20 @@ impl SamWriter {
         self.inner.lock().unwrap().write_all(block.as_bytes())
     }
 
-    pub fn flush(&self) -> std::io::Result<()> {
-        self.inner.lock().unwrap().flush()
+    pub fn finish(mut self) -> std::io::Result<()> {
+        self.inner.get_mut().unwrap().flush()?;
+        if let Some((partial, target)) = self.staged.take() {
+            std::fs::rename(partial, target)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for SamWriter {
+    fn drop(&mut self) {
+        if let Some((partial, _)) = self.staged.take() {
+            let _ = std::fs::remove_file(partial);
+        }
     }
 }
 
