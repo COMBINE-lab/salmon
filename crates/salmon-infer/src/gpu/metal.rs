@@ -328,13 +328,14 @@ kernel void kmer_hits(device const u8* seq [[buffer(0)]],
                       device const u64* keys [[buffer(2)]],
                       device const u32* vals [[buffer(3)]],
                       device const u32* kstart [[buffer(4)]],
-                      device const u32* prm [[buffer(5)]],
-                      device u32* hits [[buffer(6)]],
-                      device u32* counts [[buffer(7)]],
-                      constant uint& n [[buffer(8)]],
+                      device const u64* useq [[buffer(5)]],
+                      device const u32* prm [[buffer(6)]],
+                      device u32* hits [[buffer(7)]],
+                      device u32* counts [[buffer(8)]],
+                      constant uint& n [[buffer(9)]],
                       uint i [[thread_position_in_grid]]) {
     if (i >= n) return;
-    map_mate(i, seq, off, keys, vals, kstart, prm, hits, counts);
+    map_mate(i, seq, off, keys, vals, kstart, useq, prm, hits, counts);
 }
 "#;
     format!("{prelude}{}{entry}", crate::kmers::KMER_BODY)
@@ -348,6 +349,7 @@ pub(crate) struct KmerDevice {
     keys: Buf,
     vals: Buf,
     kstart: Buf,
+    useq: Buf,
     prm: Buf,
 }
 
@@ -358,7 +360,13 @@ unsafe impl Send for KmerDevice {}
 unsafe impl Sync for KmerDevice {}
 
 impl KmerDevice {
-    pub(crate) fn new(k: u32, keys: &[u64], vals: &[u32], kstart: &[u32]) -> Result<Self, String> {
+    pub(crate) fn new(
+        k: u32,
+        keys: &[u64],
+        vals: &[u32],
+        kstart: &[u32],
+        useq: &[u64],
+    ) -> Result<Self, String> {
         autoreleasepool(|_| {
             let dev = MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
             let lib = dev
@@ -376,6 +384,7 @@ impl KmerDevice {
                 keys: buffer(&dev, keys)?,
                 vals: buffer(&dev, vals)?,
                 kstart: buffer(&dev, kstart)?,
+                useq: buffer(&dev, useq)?,
                 prm: buffer(&dev, &prm)?,
                 dev,
             })
@@ -409,6 +418,7 @@ impl KmerDevice {
                 &self.keys,
                 &self.vals,
                 &self.kstart,
+                &self.useq,
                 &self.prm,
                 &hits_b,
                 &counts_b,

@@ -121,11 +121,11 @@ pub(super) fn kmer_src() -> std::ffi::CString {
         #define G\n#define PRIV\n#define FN static __device__ inline\n";
     let entry = r#"
 extern "C" __global__ void kmer_hits(const u8* seq, const u32* off, const u64* keys,
-                                     const u32* vals, const u32* kstart, const u32* prm,
-                                     u32* hits, u32* counts, unsigned n) {
+                                     const u32* vals, const u32* kstart, const u64* useq,
+                                     const u32* prm, u32* hits, u32* counts, unsigned n) {
     unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    map_mate(i, seq, off, keys, vals, kstart, prm, hits, counts);
+    map_mate(i, seq, off, keys, vals, kstart, useq, prm, hits, counts);
 }
 "#;
     std::ffi::CString::new(format!("{prelude}{}{entry}", crate::kmers::KMER_BODY))

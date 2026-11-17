@@ -704,7 +704,10 @@ Each batch of reads then makes one GPU call, with one thread per read. The
 thread runs piscem's `SkippingStrategy::Strict` hit collection
 (`walk_safely_until`): it looks a k-mer up, follows the read along that
 unitig while each next read k-mer is the next unitig k-mer, and emits piscem's
-raw hits. Back on the CPU, `salmon_map::sketch_hits` replays piscem's target
+raw hits. As in piscem, the walk compares the read with the unitig's own
+bases, which also go to the device at 2 bits per base. The table is only
+probed where a walk starts or a k-mer is missing, about 9 times per 100-base
+read instead of about 70. Back on the CPU, `salmon_map::sketch_hits` replays piscem's target
 selection on those hits. That replay covers live targets, occurrence recovery,
 ambiguous equivalence classes and the `--maxReadOcc` cut, and is followed by
 the usual pairing. A fragment therefore gets exactly the mappings of the CPU
@@ -724,25 +727,27 @@ warm-started on the GPU. Two tests check this without a GPU:
   that reference.
 
 Measured on the M4 Max with 16 threads, against 191k synthetic transcripts
-(208 Mb). Each range is the minimum and maximum of 3 runs; "run" is the whole
-`salmon quant`, whose GPU variant also warm-starts the EM on the GPU:
+(208 Mb). Each figure is the fastest of 3 runs; "run" is the whole
+`salmon quant`, whose GPU variant also warm-starts the EM on the GPU. Another
+process was using about 10 of the 16 cores during these runs, so the CPU
+figures in particular are pessimistic. The `Permissive` row comes from an
+earlier, unloaded series.
 
 | `--sketch`, 16 threads | table build | mapping | run |
 |---|---:|---:|---:|
-| 2M pairs, Metal | 0.70–0.71 s | 0.35–0.42 s | 1.85–2.03 s |
-| 2M pairs, CPU `Strict` (`--no-gpu`) | | 0.41–0.44 s | 1.11–1.15 s |
-| 2M pairs, CPU `Permissive` (before this change) | | 0.29–0.34 s | 0.97–1.08 s |
-| 10M pairs, Metal | 0.67–0.70 s | 1.54–1.69 s | 3.24–3.45 s |
-| 10M pairs, CPU `Strict` (`--no-gpu`) | | 1.85–2.10 s | 2.78–3.08 s |
-| 10M pairs, CPU `Permissive` (before this change) | | 1.36–1.49 s | 2.27–2.40 s |
+| 2M pairs, Metal | 0.81 s | 0.18 s | 1.95 s |
+| 2M pairs, CPU `Strict` (`--no-gpu`) | | 0.38 s | 1.07 s |
+| 2M pairs, CPU `Permissive` (before this change) | | 0.29 s | 0.97 s |
+| 10M pairs, Metal | 0.77 s | 0.75 s | 2.63 s |
+| 10M pairs, CPU `Strict` (`--no-gpu`) | | 1.89 s | 2.84 s |
+| 10M pairs, CPU `Permissive` (before this change) | | 1.36 s | 2.27 s |
 
-The Metal lookup maps 15–20% faster than `Strict` on the CPU, which itself
-costs 30–40% over the former `Permissive`. Metal is still slower than
-`Permissive`, and the whole run is slower with it: the table build (~0.7 s)
-outweighs the ~0.35 s it saves per 10M pairs, so it would pay off against
-`Strict` only beyond about 20M pairs. This has not been profiled. The likely
-limits are the target-selection replay, which stays on the CPU, the blocking
-GPU call per batch, and divergent walks with one thread per read. These
+The Metal lookup maps about 2.1–2.5 times faster than `Strict` on the CPU,
+and faster than the former `Permissive`. The table build (~0.8 s, rebuilt on
+every run) is what keeps short runs slower: against `Strict`, the whole run
+breaks even at roughly 6–7M pairs. On the CPU, looking k-mers up in this
+table is about 8% slower than piscem's sshash dictionary (500k reads, one
+thread: 0.48 s against 0.44 s), so the CPU path keeps piscem. These
 numbers come from synthetic data only, not from a
 human sample. The CUDA and ROCm lookups are compiled by NVRTC and hiprtc from
 the same C source as the Metal one, and have not run on hardware.
