@@ -239,7 +239,21 @@ fn gibbs_round(
     chain_seed: u64,
     round: u64,
     sc: &mut GibbsScratch,
+    serial: bool,
 ) {
+    if serial {
+        gibbs_round_serial(
+            p,
+            active,
+            eff_lens,
+            prior_alphas,
+            txp_count,
+            mu,
+            chain_seed,
+            round,
+        );
+        return;
+    }
     // Sample mu[i] ~ Gamma(txpCount[i] + prior[i], 1/(beta + effLen[i])); reset count.
     //
     // Shape = observed count + prior (more reads ⇒ tighter, higher draw); scale
@@ -290,44 +304,111 @@ fn gibbs_round(
         let mut probs: Vec<f64> = Vec::with_capacity(64);
         let mut draws: Vec<u64> = Vec::with_capacity(64);
         for ci in c0..c1 {
-            let class_count = p.counts[ci];
             let s = p.starts[ci] as usize;
             let e = p.starts[ci + 1] as usize;
-            let tids = &p.labels[s..e];
             let dst = &mut out[s - base..e - base];
-            // Note: the *raw* weights here, not the effective-length-divided
-            // `combined` ones — the length correction already lives in `mu`'s scale.
-            let weights = &p.weights[s..e];
-            if tids.len() > 1 {
-                probs.clear();
-                let mut denom = 0.0;
-                for (&tid, &w) in tids.iter().zip(weights) {
-                    // The 1000× factor only keeps the products away from denormal
-                    // territory; the multinomial normalizes them anyway.
-                    let v = 1000.0 * mu_ro[tid as usize] * w;
-                    probs.push(v);
-                    denom += v;
-                }
-                if denom <= MIN_EQ_CLASS_WEIGHT {
-                    // fall back to uniform over the class
-                    //
-                    // Every member drew a vanishing rate; assigning uniformly keeps
-                    // the chain moving instead of stalling on a zero denominator.
-                    for v in probs.iter_mut() {
-                        *v = 1.0;
-                    }
-                }
-                multinomial_into(class_count, &probs, &mut rng, &mut draws);
-                dst.copy_from_slice(&draws);
-            } else if tids.len() == 1 {
-                // Unambiguous class: nothing random about where its reads go.
-                dst[0] = class_count;
-            }
+            draw_class(p, ci, mu_ro, &mut rng, &mut probs, &mut draws);
+            dst.copy_from_slice(&draws);
         }
     });
     // Integer-valued sums, so this serial fold is exact in any order.
     for (&tid, &k) in p.labels.iter().zip(&sc.draws) {
         txp_count[tid as usize] += k as f64;
+    }
+}
+
+/// Draw class `ci`'s reads across its transcripts into `draws` (aligned with the
+/// class's labels).
+fn draw_class(
+    p: &PackedEqClasses,
+    ci: usize,
+    mu: &[f64],
+    rng: &mut Pcg64Mcg,
+    probs: &mut Vec<f64>,
+    draws: &mut Vec<u64>,
+) {
+    let class_count = p.counts[ci];
+    let s = p.starts[ci] as usize;
+    let e = p.starts[ci + 1] as usize;
+    let tids = &p.labels[s..e];
+    // Note: the *raw* weights here, not the effective-length-divided
+    // `combined` ones — the length correction already lives in `mu`'s scale.
+    let weights = &p.weights[s..e];
+    if tids.len() > 1 {
+        probs.clear();
+        let mut denom = 0.0;
+        for (&tid, &w) in tids.iter().zip(weights) {
+            // The 1000× factor only keeps the products away from denormal
+            // territory; the multinomial normalizes them anyway.
+            let v = 1000.0 * mu[tid as usize] * w;
+            probs.push(v);
+            denom += v;
+        }
+        if denom <= MIN_EQ_CLASS_WEIGHT {
+            // fall back to uniform over the class
+            //
+            // Every member drew a vanishing rate; assigning uniformly keeps
+            // the chain moving instead of stalling on a zero denominator.
+            for v in probs.iter_mut() {
+                *v = 1.0;
+            }
+        }
+        multinomial_into(class_count, probs, rng, draws);
+    } else {
+        // Unambiguous class: nothing random about where its reads go.
+        draws.clear();
+        draws.extend(tids.iter().map(|_| class_count));
+    }
+}
+
+/// [`gibbs_round`] when the chains already use every thread: the same blocks
+/// with the same streams, run in order, adding straight into `txp_count`
+/// instead of going through the `draws` buffer and a separate fold. The
+/// samples are identical to the parallel path's.
+#[allow(clippy::too_many_arguments)]
+fn gibbs_round_serial(
+    p: &PackedEqClasses,
+    active: &[u32],
+    eff_lens: &[f64],
+    prior_alphas: &[f64],
+    txp_count: &mut [f64],
+    mu: &mut [f64],
+    chain_seed: u64,
+    round: u64,
+) {
+    for (b, ids) in active.chunks(GIBBS_TXP_BLOCK).enumerate() {
+        let mut rng = block_rng(chain_seed, round, 2 * b as u64);
+        for &i in ids {
+            let i = i as usize;
+            let ci = txp_count[i] + prior_alphas[i];
+            let scale = 1.0 / (GIBBS_BETA + eff_lens[i]);
+            mu[i] = if ci > 0.0 {
+                Gamma::new(ci, scale).unwrap().sample(&mut rng)
+            } else {
+                0.0
+            };
+            txp_count[i] = 0.0;
+        }
+    }
+    let nclasses = p.num_classes();
+    let mut probs: Vec<f64> = Vec::with_capacity(64);
+    let mut draws: Vec<u64> = Vec::with_capacity(64);
+    for c0 in (0..nclasses).step_by(GIBBS_CLASS_BLOCK) {
+        let c1 = (c0 + GIBBS_CLASS_BLOCK).min(nclasses);
+        let mut rng = block_rng(chain_seed, round, 2 * (c0 / GIBBS_CLASS_BLOCK) as u64 + 1);
+        for ci in c0..c1 {
+            let s = p.starts[ci] as usize;
+            let e = p.starts[ci + 1] as usize;
+            if e - s == 1 {
+                // Unambiguous class: no draw, and no detour through `draws`.
+                txp_count[p.labels[s] as usize] += p.counts[ci] as f64;
+                continue;
+            }
+            draw_class(p, ci, mu, &mut rng, &mut probs, &mut draws);
+            for (&tid, &k) in p.labels[s..e].iter().zip(&draws) {
+                txp_count[tid as usize] += k as f64;
+            }
+        }
     }
 }
 
@@ -423,6 +504,9 @@ pub fn gibbs_sample(
     //
     // Each chain returns its block plus the offset to place it at, so the final
     // ordering is by sample index and not by which chain finished first.
+    // With no thread to spare beyond one per chain, splitting a round into
+    // parallel blocks only adds the fold; run the blocks in order instead.
+    let serial = rayon::current_num_threads() <= nchains;
     let blocks: Vec<(usize, Vec<Vec<f64>>)> = bounds
         .par_iter()
         .enumerate()
@@ -431,9 +515,16 @@ pub fn gibbs_sample(
             let mut txp_count = init.clone();
             let mut mu = vec![0.0f64; num_txps];
             // Per-chain scratch reused by every round (no per-class allocation).
-            let mut sc = GibbsScratch {
-                mu_active: vec![0.0; active.len()],
-                draws: vec![0; p.labels.len()],
+            let mut sc = if serial {
+                GibbsScratch {
+                    mu_active: Vec::new(),
+                    draws: Vec::new(),
+                }
+            } else {
+                GibbsScratch {
+                    mu_active: vec![0.0; active.len()],
+                    draws: vec![0; p.labels.len()],
+                }
             };
             let mut round = 0u64;
             let mut out: Vec<Vec<f64>> = Vec::with_capacity(end - start);
@@ -450,6 +541,7 @@ pub fn gibbs_sample(
                         chain_seed,
                         round,
                         &mut sc,
+                        serial,
                     );
                     round += 1;
                 }
