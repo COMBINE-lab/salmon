@@ -563,12 +563,13 @@ struct QuantArgs {
     /// Use the standard EM optimizer instead of VBEM.
     #[arg(long = "useEM")]
     use_em: bool,
-    /// Experimental: warm-start the EM/VBEM point estimate on the GPU, then
-    /// finish on the CPU. Needs a build with `--features metal` (macOS),
-    /// `--features cuda` (Linux, CUDA 13.3) or `--features rocm` (Linux, AMD).
-    /// Results agree with the CPU to the convergence tolerance, not bit for bit.
-    #[arg(long = "gpu")]
-    gpu: bool,
+    /// Keep the EM/VBEM point estimate on the CPU. By default it is warm-started
+    /// on the GPU (experimental) when salmon has a GPU backend (Metal on macOS
+    /// and ROCm on Linux are built in, CUDA with `--features cuda`), a device is
+    /// found and there are at least 250k class-transcript incidences. GPU runs
+    /// agree with CPU-only runs to the convergence tolerance, not bit for bit.
+    #[arg(long = "no-gpu")]
+    no_gpu: bool,
     /// Disable the live mapping progress spinner (it is shown only on an
     /// interactive terminal and never when `--quiet`).
     #[arg(long = "no-progress")]
@@ -2372,12 +2373,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
              default optimizer, use --emAccel none or squarem"
         );
     }
-    if args.gpu && salmon_quant::GPU_BACKEND.is_none() {
-        anyhow::bail!(
-            "--gpu needs a salmon built with `--features metal` (macOS), \
-             `--features cuda` or `--features rocm` (Linux)"
-        );
-    }
     let range_factorization_bins = if args.meta {
         0
     } else {
@@ -2425,7 +2420,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         let mut opts = AlignQuantOptions::new(bam, args.output);
         opts.lib_type = args.lib_type;
         opts.em.use_vbem = use_vbem;
-        opts.em.gpu = args.gpu;
+        opts.em.gpu = !args.no_gpu;
         opts.range_factorization_bins = range_factorization_bins;
         opts.transcripts = args.targets;
         opts.no_error_model = args.no_error_model;
@@ -2607,7 +2602,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         let mut opts = AlignQuantOptions::new(rad_path.clone(), args.output);
         opts.lib_type = args.lib_type;
         opts.em.use_vbem = use_vbem;
-        opts.em.gpu = args.gpu;
+        opts.em.gpu = !args.no_gpu;
         opts.range_factorization_bins = range_factorization_bins;
         // Bias correction from RAD: seq/GC use the reference at each fragment's
         // recorded position (the transcriptome `-t`), positional uses only the RAD.
@@ -2842,7 +2837,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.sketch = args.sketch;
     opts.sketch_strict_orphan = args.sketch_strict_orphans;
     opts.em.use_vbem = use_vbem;
-    opts.em.gpu = args.gpu;
+    opts.em.gpu = !args.no_gpu;
     opts.range_factorization_bins = range_factorization_bins;
     opts.incompat_prior = args.incompat_prior;
     opts.dump_eq = args.dump_eq;

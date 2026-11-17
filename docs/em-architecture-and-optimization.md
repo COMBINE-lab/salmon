@@ -576,14 +576,33 @@ to expose grouping differences, and it runs in under a second.
 
 ---
 
-## 10. Experimental GPU warm start (`--gpu`)
+## 10. Experimental GPU warm start (on by default; `--no-gpu`)
 
-An opt-in GPU path for the point estimate, off unless salmon is built with
-`--features metal` (macOS, Apple GPUs), `--features cuda` (Linux, written
-with NVIDIA's [CUDA Rust](https://github.com/NVIDIA/cuda-rust) Tile track,
-cuTile 0.5) or `--features rocm` (Linux, AMD GPUs: the same kernels in HIP C++,
-compiled at run time with hiprtc). Default builds and releases do not contain it, and nothing in §5
-changes for them.
+A GPU path for the point estimate. The standard `salmon-cli` build carries
+two backends as default features: Metal on macOS (Apple GPUs) and ROCm on
+Linux (AMD GPUs: the same kernels in HIP C++, compiled at run time with
+hiprtc). A third, `--features cuda`, is written with NVIDIA's
+[CUDA Rust](https://github.com/NVIDIA/cuda-rust) Tile track (cuTile 0.5) and
+stays opt-in because it needs the CUDA headers to build.
+
+`quant` uses the GPU automatically when all of these hold:
+
+- the build has a backend for this platform;
+- that backend finds a device;
+- the problem has at least 250,000 class–transcript incidences;
+- `--no-gpu` is not given.
+
+Otherwise the run is CPU-only and §5 holds unchanged. The size floor is the
+crossover measured on the machine below: with fewer incidences, the GPU's fixed
+setup of 25–50 ms costs more than its faster M-steps save (EM gains from about
+150k, VBEM from about 500k). A CPU-only build is `cargo build -p salmon-cli
+--no-default-features`. Library callers keep `EmOptions::gpu = false` unless
+they set it.
+
+Because the GPU is used by default, the same command can give slightly
+different counts on a machine with a supported GPU and on one without.
+The two agree to the convergence tolerance, as described below. Use `--no-gpu`
+for bit-for-bit reproducibility across machines.
 
 ### What it does
 
@@ -596,7 +615,8 @@ already taken, so a converged warm start usually needs only a few CPU steps.
 The GPU is skipped for bootstrap replicates (`parallel = false`) and for the
 fixed-length bias-seed runs (`min_iter == max_iter`). With no device, a kernel
 compile failure or more than 2³¹ incidences, it logs a warning and the CPU
-runs exactly as without `--gpu`.
+runs exactly as with `--no-gpu`. A machine with no device is not a failure:
+the CPU runs, with only a debug-level log line.
 
 Layout (`gpu::Problem`): single-transcript classes are folded into a constant
 per transcript, the rest stay in packed order as a CSR plus its transpose
@@ -608,7 +628,7 @@ per transcript, the rest stay in packed order as a CSR plus its transpose
 2. Per class, `scale[c] = count_c / Σ basis[t]·w`.
 3. Per transcript, `out[t] = single[t] + basis[t] · Σ w·scale[c]`.
 
-There are no atomics and each thread sums in a fixed order, so `--gpu`
+There are no atomics and each thread sums in a fixed order, so GPU
 output is deterministic for a given device and driver. It is **not**
 bit-identical to a CPU-only run: it agrees to the convergence tolerance. Sorting
 classes by size and transcripts by degree, which tightens per-tile loop bounds,
@@ -629,7 +649,7 @@ classes are drawn mostly within 40-transcript "genes", 25% are singletons and
 the size distribution is skewed. Times are for `optimize_packed_with_init`
 with default options and 16 CPU threads.
 
-| | CPU only | `--gpu` | M-steps (GPU + CPU) | transcripts >1% apart (count > 1) | L1 / total |
+| | CPU only (`--no-gpu`) | GPU warm start | M-steps (GPU + CPU) | transcripts >1% apart (count > 1) | L1 / total |
 |---|---:|---:|---:|---:|---:|
 | VBEM | 0.95 s | 0.57–0.60 s | 610 + 28 | 19 of 130,762 | 6.3e-6 |
 | EM (`--useEM`) | 1.00 s | 0.44 s | 800 + 1 | 0 of 137,975 | 6.8e-7 |
@@ -642,20 +662,22 @@ are at 2–6 reads, where the sparse objective has several optima (§8).
 The CUDA backend has not run on NVIDIA hardware. CI only compiles it against
 CUDA 13 headers (`gpu-cuda-check`). Running it needs CUDA 13.3 and compute
 capability ≥ 8.0, because cuTile JIT-compiles through Tile IR. The open items
-before `--gpu` could leave experimental status are timings on the §9 RAD,
+before the GPU path could leave experimental status are timings on the §9 RAD,
 measurements on NVIDIA and AMD hardware, and the per-tile longest-row loop of
 the cuTile kernels on skewed classes.
 
 The ROCm backend has not run on AMD hardware either. It opens `libamdhip64`
 and `libhiprtc` (ROCm 7; earlier releases export hiprtc from `libamdhip64`) at
-run time, so `--features rocm` builds on any machine without ROCm installed,
-and CI (`gpu-rocm-check`) runs clippy and the GPU tests, which only reach
-their no-device skip there. hiprtc compiles the kernels for the current
+run time, so the default Linux build needs no ROCm installed. CI's Linux
+`build-test` jobs lint it and run the GPU tests, which only reach their
+no-device skip there. hiprtc compiles the kernels for the current
 device's architecture with default IEEE math; the module API launches them,
 one thread per class or transcript, 256 per block.
 
 ```bash
-cargo build --release -p salmon-cli --features metal   # or: --features cuda / rocm
+cargo build --release -p salmon-cli                    # Metal (macOS) / ROCm (Linux) built in
+cargo build --release -p salmon-cli --features cuda    # NVIDIA (CUDA 13 headers needed)
 cargo test -p salmon-infer --features metal gpu        # GPU tests skip without a device
-salmon quant ... --gpu
+salmon quant ...            # GPU when a device is found and the problem is large enough
+salmon quant ... --no-gpu   # CPU only
 ```

@@ -48,7 +48,7 @@ use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 
 use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
 use salmon_index::{RefseqLoad, SalmonIndex};
-pub use salmon_infer::{BootstrapMode, EmAccel, EmOptions, EmStop, GPU_BACKEND};
+pub use salmon_infer::{BootstrapMode, EmAccel, EmOptions, EmStop};
 use salmon_map::MapConfig;
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector};
 pub use salmon_rad::ChunkCodec;

@@ -1,4 +1,5 @@
-//! Experimental GPU warm start for the EM/VBEM point estimate (`--gpu`).
+//! Experimental GPU warm start for the EM/VBEM point estimate (on by default
+//! in builds with a backend; `--no-gpu` turns it off).
 //!
 //! The GPU does not replace the optimizer. It runs the same fixed-point
 //! iteration in `f32` until the global relative-difference criterion is met,
@@ -23,27 +24,34 @@
 //! Upgrade to per-class log-space scaling if warm starts like that matter.
 
 use crate::packed::PackedEqClasses;
-#[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
+#[cfg(gpu)]
 use crate::{max_rel_diff, EmOptions, GPU_BACKEND};
 
-#[cfg(all(feature = "cuda", not(feature = "metal")))]
-mod cuda;
-#[cfg(feature = "metal")]
-mod metal;
-#[cfg(all(feature = "rocm", not(any(feature = "metal", feature = "cuda"))))]
-mod rocm;
-
-#[cfg(all(feature = "cuda", not(feature = "metal")))]
+// `build.rs` sets `cfg(gpu = ...)` to at most one backend.
+#[cfg(gpu = "cuda")]
 use cuda as backend;
-#[cfg(feature = "metal")]
+#[cfg(gpu = "metal")]
 use metal as backend;
-#[cfg(all(feature = "rocm", not(any(feature = "metal", feature = "cuda"))))]
+#[cfg(gpu = "rocm")]
 use rocm as backend;
+#[cfg(gpu = "cuda")]
+mod cuda;
+#[cfg(gpu = "metal")]
+mod metal;
+#[cfg(gpu = "rocm")]
+mod rocm;
 
 /// M-steps submitted between two convergence checks (each check reads back
 /// two iterates).
-#[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
+#[cfg(gpu)]
 const CHUNK: u32 = 10;
+
+/// Below this many class–transcript incidences the CPU is faster: the GPU's
+/// fixed setup (25–50 ms on Metal) outweighs its faster M-steps.
+// shortcut: crossover measured once (Apple M4 Max, 16 CPU threads, synthetic
+// classes; EM gains from ~150k, VBEM from ~500k); recalibrate per backend.
+#[cfg(gpu)]
+const MIN_INCIDENCES: usize = if cfg!(test) { 1 } else { 250_000 };
 
 /// The packed classes re-laid out for gather-only GPU kernels, in `f32`.
 ///
@@ -140,9 +148,10 @@ impl Problem {
 
 /// Iterate on the GPU from `init` until the global criterion holds (after
 /// `min_iter` steps) or `max_iter`; returns the last iterate and the number of
-/// M-steps run. `None` — no usable device, or a problem too large for the
-/// kernels' index width — means "continue on the CPU from `init`".
-#[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
+/// M-steps run. `None` — a problem too small to gain or too large for the
+/// kernels' index width, or no usable device — means "continue on the CPU from
+/// `init`".
+#[cfg(gpu)]
 pub(crate) fn converge(
     p: &PackedEqClasses,
     counts: &[u64],
@@ -152,8 +161,15 @@ pub(crate) fn converge(
     min_iter: u32,
 ) -> Option<(Vec<f64>, u32)> {
     let name = GPU_BACKEND.unwrap_or("gpu");
+    if p.labels.len() < MIN_INCIDENCES {
+        return None;
+    }
+    if !backend::available() {
+        tracing::debug!("no {name} GPU device; EM on the CPU");
+        return None;
+    }
     let Some(prob) = Problem::new(p, counts) else {
-        tracing::warn!("--gpu: problem exceeds the {name} kernels' 32-bit indexing; using the CPU");
+        tracing::warn!("GPU: problem exceeds the {name} kernels' 32-bit indexing; EM on the CPU");
         return None;
     };
     let run = || -> Result<(Vec<f64>, u32), String> {
@@ -178,11 +194,11 @@ pub(crate) fn converge(
     };
     match run() {
         Ok((alphas, it)) => {
-            tracing::info!("--gpu: {name} warm start ran {it} M-steps; finishing on the CPU");
+            tracing::info!("GPU ({name}) warm start ran {it} M-steps; finishing on the CPU");
             Some((alphas, it))
         }
         Err(e) => {
-            tracing::warn!("--gpu: {name} backend failed ({e}); using the CPU");
+            tracing::warn!("GPU ({name}) failed ({e}); EM on the CPU (--no-gpu skips the attempt)");
             None
         }
     }
@@ -258,7 +274,7 @@ mod tests {
 
     /// A pseudo-random problem with uneven class sizes, large enough to span
     /// many threadgroups / tiles.
-    #[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
+    #[cfg(gpu)]
     fn random_fixture(num_txps: usize, num_classes: usize) -> PackedEqClasses {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let mut rnd = || {
@@ -294,7 +310,7 @@ mod tests {
         p
     }
 
-    #[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
+    #[cfg(gpu)]
     #[test]
     fn one_gpu_step_matches_the_cpu_kernels() {
         if !backend::available() {
@@ -345,7 +361,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "metal", feature = "cuda", feature = "rocm"))]
+    #[cfg(gpu)]
     #[test]
     fn gpu_warm_start_converges_to_the_cpu_answer() {
         use crate::{optimize_packed_with_init, EffLens, InitAlphas};

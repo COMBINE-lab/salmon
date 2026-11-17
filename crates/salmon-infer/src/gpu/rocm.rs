@@ -345,8 +345,7 @@ impl Drop for Hip {
     }
 }
 
-/// Whether this machine has the HIP runtime and an AMD GPU (tests skip otherwise).
-#[cfg(test)]
+/// Whether this machine has the HIP runtime and an AMD GPU (else the CPU runs; tests skip).
 pub(super) fn available() -> bool {
     Hip::load().is_ok_and(|h| h.devices > 0)
 }

@@ -234,8 +234,7 @@ fn rows(start: &[u32]) -> (Vec<i32>, Vec<i32>) {
         .unzip()
 }
 
-/// Whether a CUDA device answers at all (tests skip otherwise).
-#[cfg(test)]
+/// Whether a CUDA device answers at all (else the CPU runs; tests skip).
 pub(super) fn available() -> bool {
     api::zeros::<f32>(&[B]).sync().is_ok()
 }

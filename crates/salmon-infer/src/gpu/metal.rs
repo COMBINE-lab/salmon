@@ -90,8 +90,7 @@ kernel void txp_gather(device const uint* t_start [[buffer(0)]],
 type Buf = Retained<ProtocolObject<dyn MTLBuffer>>;
 type Pso = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 
-/// Whether this machine exposes a Metal device at all (tests skip otherwise).
-#[cfg(test)]
+/// Whether this machine exposes a Metal device at all (else the CPU runs; tests skip).
 pub(super) fn available() -> bool {
     MTLCreateSystemDefaultDevice().is_some()
 }
