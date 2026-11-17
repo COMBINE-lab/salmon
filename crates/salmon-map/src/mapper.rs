@@ -625,7 +625,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
     let is_decoy = refs.is_decoy(tid);
 
     if cfg.recover_orphans {
-        if let Some((partner_score, frag_len)) =
+        if let Some((partner_score, partner_start, frag_start, frag_len)) =
             recover_mate(partner_read, refseq, anchor, cfg, revcomp_buf)
         {
             // Which physical mate is which. `anchor_is_left` says the anchor is
@@ -642,16 +642,6 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 !anchor.is_fw
             };
             let mate2_fw = !mate1_fw;
-            // Leftmost base of the fragment and of the recovered partner: a
-            // forward anchor starts the fragment and the partner ends it; a
-            // reverse anchor ends it and the partner starts it.
-            let (frag_start, partner_start) = if anchor.is_fw {
-                let fs = anchor.proj_start();
-                (fs, fs + frag_len - partner_read.len() as i32)
-            } else {
-                let fs = anchor.proj_end() - frag_len;
-                (fs, fs)
-            };
             let anchor_start = anchor.proj_start();
             raw.push(RawMapping {
                 tid,
@@ -735,15 +725,17 @@ fn push_orphan_or_recovered<R: RefProvider>(
 }
 
 /// Try to place the partner mate within a fragment-length window of the anchor.
-/// Returns `(partner_alignment_score, fragment_length)` on success. A placement
-/// that normal pairing would reject (too long, or dovetailed) is not a success.
+/// Returns `(partner_alignment_score, partner_start, fragment_start,
+/// fragment_length)` on success, the fragment spanning both mates' outermost ends
+/// as in `join_reads_and_filter`. A placement that normal pairing would reject
+/// (too long, or dovetailed) is not a success.
 fn recover_mate(
     partner_read: &[u8],
     refseq: RefView<'_>,
     anchor: &MappingCandidate,
     cfg: &MapConfig,
     revcomp_buf: &mut Vec<u8>,
-) -> Option<(i32, i32)> {
+) -> Option<(i32, i32, i32, i32)> {
     let max_frag = cfg.pair.max_fragment_len;
     let reflen = refseq.len() as i32;
     let mut window = Vec::new();
@@ -753,7 +745,7 @@ fn recover_mate(
     let plen = partner_read.len() as i32;
     let allow_dovetail = cfg.pair.allow_dovetail;
 
-    let (score, frag_len) = if anchor.is_fw {
+    let (score, p_s, p_e) = if anchor.is_fw {
         // The partner lies downstream and maps to the reverse strand.
         let win_start = a_s.max(0);
         let win_end = (a_s + max_frag).min(reflen);
@@ -774,7 +766,7 @@ fn recover_mate(
         if !allow_dovetail && extents_dovetail((a_s, a_e), (partner_end - plen, partner_end)) {
             return None;
         }
-        (aln.score, partner_end - a_s)
+        (aln.score, partner_end - plen, partner_end)
     } else {
         // The partner lies upstream and maps to the forward strand.
         let win_end = a_e.min(reflen);
@@ -795,9 +787,14 @@ fn recover_mate(
         if !allow_dovetail && extents_dovetail((partner_start_abs, partner_end_abs), (a_s, a_e)) {
             return None;
         }
-        (aln.score, (a_e - partner_start_abs).max(0))
+        (aln.score, partner_start_abs, partner_end_abs)
     };
-    (frag_len > 0 && frag_len <= max_frag).then_some((score, frag_len))
+    // Outermost ends, like normal pairing: with dovetails allowed the partner can
+    // sit inside the anchor, where `partner_end - anchor_start` came out shorter
+    // than the anchor itself.
+    let frag_start = a_s.min(p_s);
+    let frag_len = a_e.max(p_e) - frag_start;
+    (frag_len > 0 && frag_len <= max_frag).then_some((score, p_s, frag_start, frag_len))
 }
 
 #[cfg(test)]
