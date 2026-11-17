@@ -1029,9 +1029,15 @@ pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option
         h_cur[0] = NEG;
         ix_cur[0] = NEG;
         let mut iy = NEG; // gap consuming a reference base (deletion in the read)
-        let qi = query[i - 1];
+
+        // Case-insensitive like the rest of the mapper: reads reach here raw.
+        let qi = query[i - 1].to_ascii_uppercase();
         for j in 1..=m {
-            let s = if qi == window[j - 1] { ma } else { -mp };
+            let s = if qi == window[j - 1].to_ascii_uppercase() {
+                ma
+            } else {
+                -mp
+            };
             let diag = h_prev[j - 1].saturating_add(s);
             ix_cur[j] = (h_prev[j].saturating_sub(go))
                 .max(ix_prev[j].saturating_sub(ge))
@@ -1420,6 +1426,19 @@ mod tests {
         );
         assert!(a.valid);
         assert_eq!(a.end_col, 120, "end_col {}", a.end_col);
+    }
+
+    #[test]
+    /// Lowercase (soft-masked) read bases match their uppercase reference: the
+    /// forward-strand orphan partner is passed in as read from the FASTQ.
+    fn fitting_window_ignores_case() {
+        let window = gen_seq(200, 91);
+        let read = window[40..120].to_ascii_lowercase();
+        let cfg = AlignConfig::default();
+        let a = align_in_window(&read, &window, &cfg).unwrap();
+        assert_eq!(a.score, perfect_score(read.len(), &cfg));
+        assert!(a.valid);
+        assert_eq!(a.end_col, 120);
     }
 
     #[test]
