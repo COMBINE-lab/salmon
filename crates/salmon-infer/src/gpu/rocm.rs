@@ -418,6 +418,7 @@ pub(crate) struct KmerDevice {
     keys: Ptr,
     vals: Ptr,
     kstart: Ptr,
+    useq: Ptr,
     prm: Ptr,
 }
 
@@ -427,7 +428,13 @@ unsafe impl Send for KmerDevice {}
 unsafe impl Sync for KmerDevice {}
 
 impl KmerDevice {
-    pub(crate) fn new(k: u32, keys: &[u64], vals: &[u32], kstart: &[u32]) -> Result<Self, String> {
+    pub(crate) fn new(
+        k: u32,
+        keys: &[u64],
+        vals: &[u32],
+        kstart: &[u32],
+        useq: &[u64],
+    ) -> Result<Self, String> {
         let mut hip = Hip::load()?;
         if hip.devices == 0 {
             return Err("no ROCm device".into());
@@ -444,6 +451,7 @@ impl KmerDevice {
             keys: hip.upload(keys)?,
             vals: hip.upload(vals)?,
             kstart: hip.upload(kstart)?,
+            useq: hip.upload(useq)?,
             prm: hip.upload(&prm)?,
             hip: std::sync::Mutex::new(hip),
         })
@@ -470,6 +478,7 @@ impl KmerDevice {
                 self.keys,
                 self.vals,
                 self.kstart,
+                self.useq,
                 self.prm,
                 hits_d,
                 counts_d,

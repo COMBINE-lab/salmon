@@ -38,6 +38,11 @@ pub struct KmerTable {
     vals: Vec<u32>,
     /// first k-mer id of each unitig, plus the total (`len = unitigs + 1`)
     kstart: Vec<u32>,
+    /// the kept unitigs' bases, 2 bits each (base `b` in bits `2(b % 32)` of
+    /// word `b / 32`), k-mer `id` of unitig `u` starting at base
+    /// `id + u(k - 1)`; a walk compares the read to it, as piscem does,
+    /// instead of looking every k-mer up
+    seq: Vec<u64>,
 }
 
 #[inline]
@@ -87,11 +92,23 @@ impl KmerTable {
             .map(|u| u64::from(kstart[u + 1] - kstart[u]))
             .sum();
         let cap = u32::try_from((2 * kept).max(1)).ok()?;
+        let bases = u64::from(total) + nu as u64 * u64::from(k - 1);
+        // one spare word, so a k-mer read never runs off the end
+        let seq: Vec<AtomicU64> = (0..bases / 32 + 2).map(|_| AtomicU64::new(0)).collect();
         let keys: Vec<AtomicU64> = (0..cap).map(|_| AtomicU64::new(EMPTY)).collect();
         let vals: Vec<AtomicU32> = (0..cap).map(|_| AtomicU32::new(0)).collect();
         let unique = (0..nu).into_par_iter().filter(|&u| keep(u)).all(|u| {
+            let base0 = u64::from(kstart[u]) + u as u64 * u64::from(k - 1);
+            let put = |b: u64, x: u64| {
+                seq[(b / 32) as usize].fetch_or(x << (2 * (b % 32)), Ordering::Relaxed);
+            };
             (0..kstart[u + 1] - kstart[u]).all(|j| {
                 let fw = kmer(u, j);
+                if j == 0 {
+                    (0..u64::from(k)).for_each(|i| put(base0 + i, (fw >> (2 * i)) & 3));
+                } else {
+                    put(base0 + u64::from(j + k - 1), fw >> (2 * (k - 1)));
+                }
                 let rc = revcomp(fw, k);
                 let key = fw.min(rc);
                 let mut s = slot(key, cap);
@@ -118,7 +135,20 @@ impl KmerTable {
             keys: keys.into_iter().map(AtomicU64::into_inner).collect(),
             vals: vals.into_iter().map(AtomicU32::into_inner).collect(),
             kstart,
+            seq: seq.into_iter().map(AtomicU64::into_inner).collect(),
         })
+    }
+
+    /// The unitig's own k-mer with id `id` of unitig `u`.
+    #[inline]
+    fn unitig_kmer(&self, u: usize, id: u32) -> u64 {
+        let b = u64::from(id) + u as u64 * u64::from(self.k - 1);
+        let (w, sh) = ((b / 32) as usize, 2 * (b % 32));
+        let mut x = self.seq[w] >> sh;
+        if sh > 0 {
+            x |= self.seq[w + 1] << (64 - sh);
+        }
+        x & ((1u64 << (2 * self.k)) - 1)
     }
 
     pub fn k(&self) -> u32 {
@@ -191,14 +221,15 @@ impl KmerTable {
                 if it.exhausted() {
                     break;
                 }
-                match self.lookup(it.fw, it.rc) {
-                    Some((id2, fw2)) if i64::from(id2) == ccur => {
+                let want = self.unitig_kmer(u, ccur as u32);
+                match (it.fw == want, it.rc == want) {
+                    (false, false) => break,
+                    (fw2, _) => {
                         lfw = fw2;
                         lcpos += dir * inc;
                         lpos = it.pos;
                         ended = dist == 0;
                     }
-                    _ => break,
                 }
             }
             if lpos > last_pos {
@@ -387,9 +418,17 @@ FN void emit(G u32* out, PRIV u32& nh, u32 hcap, int pos, u32 u, bool fw, i64 cp
     }
     nh += 1;
 }
+// k-mer `id` of unitig `u`, read from the packed unitig bases `useq`
+FN u64 unitig_kmer(G const u64* useq, u32 u, i64 id, int k) {
+    u64 b = (u64)id + (u64)u * (u64)(k - 1);
+    u64 w = b / 32, sh = 2 * (b % 32);
+    u64 x = useq[w] >> sh;
+    if (sh > 0) x |= useq[w + 1] << (64 - sh);
+    return x & ((((u64)1) << (2 * k)) - 1);
+}
 // prm: k, table capacity, unitigs, hits per read
 FN void map_mate(u32 i, G const u8* seq, G const u32* off, G const u64* keys, G const u32* vals,
-                 G const u32* kstart, G const u32* prm, G u32* hits, G u32* counts) {
+                 G const u32* kstart, G const u64* useq, G const u32* prm, G u32* hits, G u32* counts) {
     G const u8* r = seq + off[i];
     int k = (int)prm[0];
     u32 cap = prm[1], nu = prm[2], hcap = prm[3];
@@ -430,9 +469,9 @@ FN void map_mate(u32 i, G const u8* seq, G const u32* off, G const u64* keys, G 
             if (dist < 0) break;
             ccur += dir * inc;
             if (exhausted(it)) break;
-            bool fw2 = false;
-            if (lookup(it.fw, it.rc, keys, vals, cap, fw2) != ccur) break;
-            lfw = fw2; lcpos += dir * inc; lpos = it.pos; ended = dist == 0;
+            u64 want = unitig_kmer(useq, lo, ccur, k);
+            if (it.fw != want && it.rc != want) break;
+            lfw = it.fw == want; lcpos += dir * inc; lpos = it.pos; ended = dist == 0;
         }
         if (lpos > last_pos) { emit(out, nh, hcap, lpos, lo, lfw, lcpos); last_pos = lpos; }
         if (ended || it.pos == start) advance(it, r);
@@ -464,8 +503,13 @@ impl KmerGpu {
     pub fn new(table: &KmerTable) -> Result<Self, String> {
         #[cfg(gpu)]
         {
-            let dev =
-                crate::gpu::KmerDevice::new(table.k, &table.keys, &table.vals, &table.kstart)?;
+            let dev = crate::gpu::KmerDevice::new(
+                table.k,
+                &table.keys,
+                &table.vals,
+                &table.kstart,
+                &table.seq,
+            )?;
             Ok(Self { dev })
         }
         #[cfg(not(gpu))]

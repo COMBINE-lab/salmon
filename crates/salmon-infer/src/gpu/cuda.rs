@@ -406,11 +406,18 @@ pub(crate) struct KmerDevice {
     keys: cuda_core::DeviceBuffer<u64>,
     vals: cuda_core::DeviceBuffer<u32>,
     kstart: cuda_core::DeviceBuffer<u32>,
+    useq: cuda_core::DeviceBuffer<u64>,
     prm: cuda_core::DeviceBuffer<u32>,
 }
 
 impl KmerDevice {
-    pub(crate) fn new(k: u32, keys: &[u64], vals: &[u32], kstart: &[u32]) -> Result<Self, String> {
+    pub(crate) fn new(
+        k: u32,
+        keys: &[u64],
+        vals: &[u32],
+        kstart: &[u32],
+        useq: &[u64],
+    ) -> Result<Self, String> {
         let nvrtc = super::dl::open(&[
             "libnvrtc.so",
             "libnvrtc.so.13",
@@ -438,6 +445,7 @@ impl KmerDevice {
             keys: cuda_core::DeviceBuffer::from_host(&stream, keys).map_err(err)?,
             vals: up(vals)?,
             kstart: up(kstart)?,
+            useq: cuda_core::DeviceBuffer::from_host(&stream, useq).map_err(err)?,
             prm: up(&prm)?,
             ctx,
         })
@@ -466,6 +474,7 @@ impl KmerDevice {
             self.keys.cu_deviceptr(),
             self.vals.cu_deviceptr(),
             self.kstart.cu_deviceptr(),
+            self.useq.cu_deviceptr(),
             self.prm.cu_deviceptr(),
             hits_d.cu_deviceptr(),
             counts_d.cu_deviceptr(),
