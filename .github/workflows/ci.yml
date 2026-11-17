@@ -101,3 +101,33 @@ jobs:
             -a sample_data/sample_alignments.bam \
             -o target/sample_quant_alignment
           test -s target/sample_quant_alignment/quant.sf
+
+  # The GPU warm start's Metal (macOS) and ROCm (Linux) backends are default
+  # features, so `build-test` lints, builds and tests them (the GPU tests skip
+  # without a device). CUDA stays opt-in because cuda-bindings needs the CUDA
+  # headers at build time; this job keeps it building and lint-clean.
+  gpu-cuda-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CUDA_HOME: /usr/local/cuda-13.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install CUDA 13 headers (no driver, no GPU)
+        # cuda-bindings bindgens cuda.h and curand.h at build time and loads
+        # libcuda only at run time, so headers are all a compile check needs.
+        # cudart-dev brings cuda.h (driver-dev) and cccl; since CUDA 13 the
+        # crt/ headers that cuda_runtime.h includes ship separately (cuda-crt).
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-cudart-dev-13-0 cuda-crt-13-0 libcurand-dev-13-0
+      - name: Clippy (cuda)
+        run: cargo clippy -p salmon-infer --features cuda --all-targets -- -D warnings

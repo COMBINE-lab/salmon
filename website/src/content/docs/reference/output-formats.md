@@ -124,6 +124,7 @@ aggregates (no per-fragment cost) and are emitted for every mode — reads,
 | `num_em_iterations` | int | EM/VBEM iterations actually run; when components stop separately (see `em_components`), the most any component ran |
 | `em_converged` | bool | whether the relative-difference criterion was met before the iteration cap — over all transcripts at once under the `global` stopping rule, by every connected component under `projected` |
 | `em_components` | object | how the optimizer's connected components ended (below); omitted with `--emAccel` |
+| `gpu_backend` | string \| null | GPU backend that warm-started the EM/VBEM point estimate (`metal`, `cuda` or `rocm`; experimental, on unless `--no-gpu`); `null` when it ran on the CPU only. A GPU run agrees with a CPU-only one to the convergence tolerance, not bit for bit |
 | `detected_library_type` | string \| null | library format observed by the auto-detector (reads / `--rad`); `null` if not observed (e.g. `-a` transcriptomic BAM) |
 | `seq_bias_context_length` | int | sequence-bias model context length, in nucleotides; omitted when `--seqBias` was not requested |
 | `gc_bias_bins` | int | total GC-bias bins, i.e. `--numGCBins` × `--conditionalGCBins`; omitted when `--gcBias` was not requested |

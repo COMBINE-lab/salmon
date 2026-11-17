@@ -434,6 +434,9 @@ pub struct AlignQuantResult {
     /// fragment mass dropped in the final min-alpha redistribution (every member
     /// of an equivalence class truncated); normally 0.
     pub inference_truncated_mass: f64,
+    /// the GPU backend that warm-started the EM/VBEM point estimate, or `None`
+    /// when it ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
     pub num_eq_classes: usize,
     pub frag_len_mean: f64,
     pub frag_len_sd: f64,
@@ -2755,6 +2758,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             converged: true,
             components: None,
             dropped_mass: 0.0,
+            gpu_backend: None,
         }
     } else if opts.init_uniform {
         salmon_infer::optimize_packed_with_init(
@@ -2814,6 +2818,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         );
     }
     let inference_truncated_mass = em.dropped_mass;
+    let gpu_backend = em.gpu_backend;
     let (em_iters, em_converged) = (em.iters, em.converged);
     let em_components = em.components.clone();
     if let Some(c) = &em_components {
@@ -2936,6 +2941,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         num_processed,
         num_mapped,
         inference_truncated_mass,
+        gpu_backend,
         num_eq_classes,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
@@ -3162,6 +3168,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         em_converged: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         em_components: Option<salmon_core::EmComponentsMeta>,
+        /// GPU backend that warm-started the EM/VBEM; null when CPU only
+        gpu_backend: Option<&'static str>,
         detected_library_type: Option<String>,
         /// which inference path produced these results: `deterministic` (RAD
         /// input — including `--deterministic`'s phase 2) or `online` (the
@@ -3427,6 +3435,7 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
         em_components: res.em_components.as_ref().map(|c| c.to_meta()),
+        gpu_backend: res.gpu_backend,
         detected_library_type: res.detected_library_type.clone(),
         inference_path: match res.source {
             FragmentSource::Rad => "deterministic",

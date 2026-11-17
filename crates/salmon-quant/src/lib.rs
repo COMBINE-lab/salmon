@@ -346,6 +346,9 @@ pub struct QuantResult {
     /// to any transcript in the final min-alpha redistribution because every
     /// member of the class was truncated; reported, not rescaled. Normally 0.
     pub inference_truncated_mass: f64,
+    /// the GPU backend that warm-started the EM/VBEM point estimate, or `None`
+    /// when it ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
     pub num_eq_classes: usize,
     /// index of the first decoy reference (`None` if the index has no decoys).
     /// The decoy block is `[first_decoy_index, first_decoy_index + num_decoys)`;
@@ -1079,6 +1082,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             converged: true,
             components: None,
             dropped_mass: 0.0,
+            gpu_backend: None,
         }
     } else if bias_on {
         let mut pre = opts.em.clone();
@@ -1336,6 +1340,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // eq-class co-members, so `counts` already sum to `total_count` minus only the
     // mass in fully-truncated classes (`dropped_mass`, normally 0). No rescale.
     let inference_truncated_mass = em.dropped_mass;
+    let gpu_backend = em.gpu_backend;
     let (em_iters, em_converged) = (em.iters, em.converged);
     let em_components = em.components.clone();
     if opts.skip_quant && want_rough_abund {
@@ -1482,6 +1487,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_incompatible_fragments: num_frags_incompat.load(Ordering::Relaxed),
         lib_format_counts: std::array::from_fn(|i| lib_format_counts[i].load(Ordering::Relaxed)),
         inference_truncated_mass,
+        gpu_backend,
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,
         num_decoys: salmon.info().num_decoys,
