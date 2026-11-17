@@ -73,8 +73,8 @@ use salmon_core::{
     ReadType,
 };
 use salmon_eqclass::{
-    range_factorize_bins_into, EquivalenceClassBuilder, LocalEqCache, NaiveEqBuilder,
-    NaivePlacement, NAIVE_NO_FMT,
+    range_factorize_bins_into, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement,
+    NAIVE_NO_FMT,
 };
 use salmon_model::{
     DiscreteFld, FragLengthSource, FragmentLengthDistribution, GcFragModel, GcStore, PairObs,
@@ -412,9 +412,6 @@ struct RadScratch {
     unnorm: Vec<f64>,
     /// bias pass only: per-group posterior probability
     post: Vec<f64>,
-    /// this worker's batch of classes; flushed to the shared builder when full
-    /// and by the worker on exit
-    eq_local: LocalEqCache,
 }
 
 /// Best-effort observed library format for a RAD placement (proper pairs only).
@@ -777,7 +774,6 @@ fn process_rad_fragment(
         tids,
         weights,
         bins,
-        eq_local,
         ..
     } = scratch;
     tids.clear();
@@ -816,7 +812,7 @@ fn process_rad_fragment(
     }
 
     range_factorize_bins_into(weights, cfg.range_factorization_bins, bins);
-    eq_local.add_slices(cfg.eq_builder, tids, bins, weights, 1);
+    cfg.eq_builder.add_slices(tids, bins, weights, 1);
     // Orphan only when nothing paired both mates: the most complete status
     // across a fragment's hits wins, as in the RAD fragment-level type.
     let outcome = if any_orphan && !any_pair {
@@ -1382,7 +1378,6 @@ where
                 }
             }
         }
-        scratch.eq_local.flush(cfg.eq_builder);
         local.merge_into(tallies);
     })
 }
@@ -1875,7 +1870,6 @@ where
                 }
             }
         }
-        scratch.eq_local.flush(cfg.eq_builder);
         local_tallies.merge_into(tallies);
         merged.lock().unwrap().merge(&local);
     })?;
