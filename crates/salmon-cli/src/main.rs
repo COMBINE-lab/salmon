@@ -2186,7 +2186,8 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     // Genome projection lives inside the `-a` branch, so `--annotation` without
     // it silently discards the entire request. clap's `requires` does not fire
     // for the cases that matter (see the flag's doc comment), so check here.
-    if args.annotation.is_some() && args.alignments.is_none() {
+    // `--spliced` is the other reader of `--annotation`, on FASTQ input.
+    if args.annotation.is_some() && args.alignments.is_none() && !args.spliced {
         anyhow::bail!(
             "--annotation selects genome-projection mode, which reads a genome BAM: pass it \
              together with `-a <genome.bam>`. With FASTQ or --rad input there is nothing to \
