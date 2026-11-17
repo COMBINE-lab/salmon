@@ -20,6 +20,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// Raw hits a GPU thread can write per read; a read with more is redone by
 /// the CPU (its count says so).
@@ -38,11 +39,88 @@ pub struct KmerTable {
     vals: Vec<u32>,
     /// first k-mer id of each unitig, plus the total (`len = unitigs + 1`)
     kstart: Vec<u32>,
-    /// the kept unitigs' bases, 2 bits each (base `b` in bits `2(b % 32)` of
-    /// word `b / 32`), k-mer `id` of unitig `u` starting at base
-    /// `id + u(k - 1)`; a walk compares the read to it, as piscem does,
-    /// instead of looking every k-mer up
+    /// the unitigs' bases, 2 bits each (base `b` in bits `2(b % 32)` of word
+    /// `b / 32`), unitig `u` starting at base [`Self::base`]; a walk compares
+    /// the read to it, as piscem does, instead of looking every k-mer up
     seq: Vec<u64>,
+    /// `Some`: look k-mers up through piscem's own sshash dictionary
+    /// structures instead of `keys`/`vals`/`kstart` (which are then empty)
+    sshash: Option<Sshash>,
+}
+
+/// sshash's lookup structures, flattened for the GPU (option B): a k-mer's
+/// minimizer selects a bucket, whose super-k-mer positions in the SPSS text
+/// give the candidate k-mer starts, verified against `seq`. sshash's minimal
+/// perfect hash minimizer → bucket is replaced by an exact open-addressing
+/// table (an MPHF plus its presence check answers the same), and a heavy
+/// bucket is scanned instead of going through the skew index (k-mers are
+/// unique, so the scan finds the same one).
+struct Sshash {
+    m: u32,
+    /// sshash's `DeterministicHasher` magic: `hash(v) = v * MIX ^ magic`
+    magic: u64,
+    /// each unitig's first base in `seq`, plus the total
+    soff: Vec<u64>,
+    /// bit `u` set: unitig `u` occurs in a reference (else its hits are dropped)
+    keep: Vec<u32>,
+    mkeys: Vec<u64>,
+    mvals: Vec<u32>,
+    /// bucket `b`'s positions are `offs[bstart[b]..bstart[b + 1]]`
+    bstart: Vec<u32>,
+    /// super-k-mer minimizer positions in the SPSS text
+    offs: Vec<u32>,
+}
+
+const MIX: u64 = 0x517c_c1b7_2722_0a95;
+
+/// The `m`-mer at base `b` of `seq`.
+#[inline]
+fn word_at(seq: &[u64], b: u64, len: u32) -> u64 {
+    let (w, sh) = ((b / 32) as usize, 2 * (b % 32));
+    let mut x = seq[w] >> sh;
+    if sh > 0 {
+        x |= seq[w + 1] << (64 - sh);
+    }
+    x & ((1u64 << (2 * len)) - 1)
+}
+
+/// sshash's `compute_minimizer` for `k <= 31`: `(value, pos_in_kmer)`.
+fn minimizer(fw: u64, rc: u64, k: u32, m: u32, magic: u64) -> (u64, u32) {
+    let mask = (1u64 << (2 * m)) - 1;
+    let kappa = |i: u32| ((fw >> (2 * i)) & mask).min((rc >> (2 * (k - m - i))) & mask);
+    let hash = |v: u64| v.wrapping_mul(MIX) ^ magic;
+    let mut min_value = kappa(0);
+    let mut min_hash = hash(min_value);
+    let (mut leftmost, mut rightmost, mut tie) = (0, 0, false);
+    for i in 1..=k - m {
+        let v = kappa(i);
+        let h = hash(v);
+        let (lt, eq) = (h < min_hash, h == min_hash);
+        if lt {
+            (min_hash, min_value, leftmost) = (h, v, i);
+        }
+        if lt || eq {
+            rightmost = i;
+        }
+        tie = !lt && (tie || eq);
+    }
+    if !tie {
+        return (min_value, leftmost);
+    }
+    // sshash's `resolve_tie`: the tied locus nearest the k-mer's centre
+    let two_c = u64::from(k - m);
+    let (mut best, mut lo, mut hi) = (u64::MAX, leftmost, leftmost);
+    for i in leftmost..=rightmost {
+        if hash(kappa(i)) == min_hash {
+            let dist = (2 * u64::from(i)).abs_diff(two_c);
+            if dist < best {
+                (best, lo, hi) = (dist, i, i);
+            } else if dist == best {
+                hi = i;
+            }
+        }
+    }
+    (min_value, if lo == hi || rc >= fw { lo } else { hi })
 }
 
 #[inline]
@@ -136,19 +214,149 @@ impl KmerTable {
             vals: vals.into_iter().map(AtomicU32::into_inner).collect(),
             kstart,
             seq: seq.into_iter().map(AtomicU64::into_inner).collect(),
+            sshash: None,
         })
     }
 
-    /// The unitig's own k-mer with id `id` of unitig `u`.
-    #[inline]
-    fn unitig_kmer(&self, u: usize, id: u32) -> u64 {
-        let b = u64::from(id) + u as u64 * u64::from(self.k - 1);
-        let (w, sh) = ((b / 32) as usize, 2 * (b % 32));
-        let mut x = self.seq[w] >> sh;
-        if sh > 0 {
-            x |= self.seq[w + 1] << (64 - sh);
+    /// Option B: look k-mers up through piscem's sshash dictionary. `spss` is
+    /// its 2-bit text (base `i` in bits `2(i % 4)` of byte `i / 4`), `soff`
+    /// each string's first base and the total, `keep(u)` whether unitig `u`
+    /// occurs in a reference, `magic` the dictionary hasher's, and bucket `b`
+    /// holds the super-k-mer positions `offs[bstart[b]..bstart[b + 1]]`.
+    ///
+    /// `None` when `k` is even or above 31, the text does not fit `u32`
+    /// positions, or two buckets share a minimizer (never in sshash).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_sshash(
+        k: usize,
+        m: usize,
+        magic: u64,
+        spss: &[u8],
+        soff: Vec<u64>,
+        keep: impl Fn(usize) -> bool + Sync,
+        bstart: Vec<u32>,
+        offs: Vec<u32>,
+    ) -> Option<Self> {
+        let k = u32::try_from(k).ok().filter(|&k| k % 2 == 1 && k <= 31)?;
+        let m = u32::try_from(m).ok().filter(|&m| m >= 1 && m <= k)?;
+        if *soff.last()? >= 1 << 32 {
+            return None;
         }
-        x & ((1u64 << (2 * self.k)) - 1)
+        // one spare word, so a k-mer read never runs off the end
+        let mut seq = vec![0u64; spss.len().div_ceil(8) + 2];
+        for (w, chunk) in seq.iter_mut().zip(spss.chunks(8)) {
+            let mut b = [0u8; 8];
+            b[..chunk.len()].copy_from_slice(chunk);
+            *w = u64::from_le_bytes(b);
+        }
+        let nu = soff.len() - 1;
+        let mut bits = vec![0u32; nu.div_ceil(32).max(1)];
+        let kept: Vec<bool> = (0..nu).into_par_iter().map(&keep).collect();
+        for (u, _) in kept.iter().enumerate().filter(|(_, &x)| x) {
+            bits[u / 32] |= 1 << (u % 32);
+        }
+        let nb = bstart.len() - 1;
+        let cap = u32::try_from((2 * nb).max(1)).ok()?;
+        let mkeys: Vec<AtomicU64> = (0..cap).map(|_| AtomicU64::new(EMPTY)).collect();
+        let mvals: Vec<AtomicU32> = (0..cap).map(|_| AtomicU32::new(0)).collect();
+        let unique = (0..nb).into_par_iter().all(|b| {
+            if bstart[b] == bstart[b + 1] {
+                return true;
+            }
+            let mmer = word_at(&seq, u64::from(offs[bstart[b] as usize]), m);
+            let key = mmer.min(revcomp(mmer, m));
+            let mut s = slot(key, cap);
+            loop {
+                match mkeys[s as usize].compare_exchange(
+                    EMPTY,
+                    key,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(other) if other == key => return false,
+                    Err(_) => s = if s + 1 == cap { 0 } else { s + 1 },
+                }
+            }
+            mvals[s as usize].store(b as u32, Ordering::Relaxed);
+            true
+        });
+        unique.then(|| Self {
+            k,
+            keys: Vec::new(),
+            vals: Vec::new(),
+            kstart: Vec::new(),
+            seq,
+            sshash: Some(Sshash {
+                m,
+                magic,
+                soff,
+                keep: bits,
+                mkeys: mkeys.into_iter().map(AtomicU64::into_inner).collect(),
+                mvals: mvals.into_iter().map(AtomicU32::into_inner).collect(),
+                bstart,
+                offs,
+            }),
+        })
+    }
+
+    /// Unitig `u`'s first base in `seq`.
+    #[inline]
+    fn base(&self, u: usize) -> u64 {
+        match &self.sshash {
+            Some(s) => s.soff[u],
+            None => u64::from(self.kstart[u]) + u as u64 * u64::from(self.k - 1),
+        }
+    }
+
+    /// `(unitig, k-mers in it, position, forward on it)` of the read k-mer.
+    #[inline]
+    fn locate(&self, fw: u64, rc: u64) -> Option<(usize, i64, i64, bool)> {
+        let Some(s) = &self.sshash else {
+            let (id, fw_on) = self.lookup(fw, rc)?;
+            let u = self.unitig(id);
+            let nk = i64::from(self.kstart[u + 1] - self.kstart[u]);
+            return Some((u, nk, i64::from(id - self.kstart[u]), fw_on));
+        };
+        let k = self.k;
+        let (v, p) = minimizer(fw, rc, k, s.m, s.magic);
+        let cap = s.mkeys.len() as u32;
+        let mut slot_ = slot(v, cap);
+        let b = loop {
+            match s.mkeys[slot_ as usize] {
+                x if x == v => break s.mvals[slot_ as usize] as usize,
+                EMPTY => return None,
+                _ => slot_ = if slot_ + 1 == cap { 0 } else { slot_ + 1 },
+            }
+        };
+        for &pos in &s.offs[s.bstart[b] as usize..s.bstart[b + 1] as usize] {
+            // sshash's `lookup_at_position`: the two loci that anchor the minimizer
+            for back in [p, k - s.m - p] {
+                let Some(kp) = u64::from(pos).checked_sub(u64::from(back)) else {
+                    continue;
+                };
+                let stored = word_at(&self.seq, kp, k);
+                let fw_on = if stored == fw {
+                    true
+                } else if stored == rc {
+                    false
+                } else {
+                    continue;
+                };
+                let u = s.soff.partition_point(|&o| o <= kp) - 1;
+                let nk = (s.soff[u + 1] - s.soff[u]) as i64 - i64::from(k) + 1;
+                let cpos = (kp - s.soff[u]) as i64;
+                if cpos >= nk {
+                    continue;
+                }
+                // piscem skips hits on a unitig no reference contains
+                if s.keep[u / 32] >> (u % 32) & 1 == 0 {
+                    return None;
+                }
+                return Some((u, nk, cpos, fw_on));
+            }
+        }
+        None
     }
 
     pub fn k(&self) -> u32 {
@@ -179,6 +387,55 @@ impl KmerTable {
         self.kstart.partition_point(|&s| s <= id) - 1
     }
 
+    /// The kernel's buffers `(keys, vals, aux, words, prm)`. Option A: the
+    /// table, `aux = kstart`, `words = seq`. Option B: the minimizer table,
+    /// `aux = bstart ‖ offs ‖ keep`, `words = seq ‖ soff`. `prm`: k, table
+    /// capacity, unitigs, hits per read, option B, m, magic (low, high), and
+    /// where `offs`, `keep` and `soff` start.
+    #[cfg_attr(not(gpu), allow(dead_code))]
+    fn device(&self) -> (&[u64], &[u32], Cow<'_, [u32]>, Cow<'_, [u64]>, [u32; 11]) {
+        let hcap = HITS_CAP as u32;
+        let Some(s) = &self.sshash else {
+            let nu = self.kstart.len() as u32 - 1;
+            let prm = [
+                self.k,
+                self.keys.len() as u32,
+                nu,
+                hcap,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ];
+            return (
+                &self.keys,
+                &self.vals,
+                Cow::Borrowed(&self.kstart),
+                Cow::Borrowed(&self.seq),
+                prm,
+            );
+        };
+        let aux = [&s.bstart[..], &s.offs, &s.keep].concat();
+        let words = [&self.seq[..], &s.soff].concat();
+        let prm = [
+            self.k,
+            s.mkeys.len() as u32,
+            s.soff.len() as u32 - 1,
+            hcap,
+            1,
+            s.m,
+            s.magic as u32,
+            (s.magic >> 32) as u32,
+            s.bstart.len() as u32,
+            (s.bstart.len() + s.offs.len()) as u32,
+            self.seq.len() as u32,
+        ];
+        (&s.mkeys, &s.mvals, Cow::Owned(aux), Cow::Owned(words), prm)
+    }
+
     /// The raw hits of `read`, appended to `out`: the CPU reference of the GPU
     /// kernel ([`KMER_BODY`]), line for line.
     pub fn hits(&self, read: &[u8], out: &mut Vec<Hit>) {
@@ -191,13 +448,11 @@ impl KmerTable {
                 it.advance();
                 continue;
             }
-            let Some((id, fw_on)) = self.lookup(it.fw, it.rc) else {
+            let Some((u, nk, cpos, fw_on)) = self.locate(it.fw, it.rc) else {
                 it.advance();
                 continue;
             };
-            let u = self.unitig(id);
-            let nk = (self.kstart[u + 1] - self.kstart[u]) as i64;
-            let cpos = (id - self.kstart[u]) as i64;
+            let base = self.base(u);
             let start = it.pos;
             if start > last_pos {
                 out.push([
@@ -209,7 +464,7 @@ impl KmerTable {
             }
             let dir: i64 = if fw_on { 1 } else { -1 };
             let mut dist = if fw_on { nk - 1 - cpos } else { cpos };
-            let mut ccur = i64::from(id);
+            let mut ccur = cpos;
             let (mut lpos, mut lcpos, mut lfw, mut ended) = (start, cpos, fw_on, false);
             while !it.exhausted() && dist > 0 {
                 let inc = i64::from(it.advance());
@@ -221,7 +476,7 @@ impl KmerTable {
                 if it.exhausted() {
                     break;
                 }
-                let want = self.unitig_kmer(u, ccur as u32);
+                let want = word_at(&self.seq, base + ccur as u64, self.k);
                 match (it.fw == want, it.rc == want) {
                     (false, false) => break,
                     (fw2, _) => {
@@ -418,20 +673,107 @@ FN void emit(G u32* out, PRIV u32& nh, u32 hcap, int pos, u32 u, bool fw, i64 cp
     }
     nh += 1;
 }
-// k-mer `id` of unitig `u`, read from the packed unitig bases `useq`
-FN u64 unitig_kmer(G const u64* useq, u32 u, i64 id, int k) {
-    u64 b = (u64)id + (u64)u * (u64)(k - 1);
-    u64 w = b / 32, sh = 2 * (b % 32);
-    u64 x = useq[w] >> sh;
-    if (sh > 0) x |= useq[w + 1] << (64 - sh);
-    return x & ((((u64)1) << (2 * k)) - 1);
+// the `len`-mer at base `b` of the packed bases `w`
+FN u64 word_at(G const u64* w, u64 b, int len) {
+    u64 i = b / 32, sh = 2 * (b % 32);
+    u64 x = w[i] >> sh;
+    if (sh > 0) x |= w[i + 1] << (64 - sh);
+    return x & ((((u64)1) << (2 * len)) - 1);
 }
-// prm: k, table capacity, unitigs, hits per read
+// option A: the k-mer table; the unitig, or -1
+FN i64 locate_a(u64 fw, u64 rc, G const u64* keys, G const u32* vals, G const u32* kstart,
+                G const u32* prm, PRIV i64& nk, PRIV i64& cpos, PRIV bool& fw_on) {
+    i64 id = lookup(fw, rc, keys, vals, prm[1], fw_on);
+    if (id < 0) return -1;
+    u32 lo = 0, hi = prm[2];
+    while (hi - lo > 1) {
+        u32 mid = (lo + hi) / 2;
+        if ((i64)kstart[mid] <= id) lo = mid; else hi = mid;
+    }
+    nk = (i64)(kstart[lo + 1] - kstart[lo]);
+    cpos = id - (i64)kstart[lo];
+    return (i64)lo;
+}
+FN u64 kappa(u64 fw, u64 rc, int k, int m, int i, u64 mask) {
+    u64 a = (fw >> (2 * i)) & mask, b = (rc >> (2 * (k - m - i))) & mask;
+    return a < b ? a : b;
+}
+FN u64 mini_hash(u64 v, u64 magic) { return (v * (u64)0x517cc1b727220a95UL) ^ magic; }
+// sshash's compute_minimizer and resolve_tie: the minimizer, its position in `pos`
+FN u64 minimizer(u64 fw, u64 rc, int k, int m, u64 magic, PRIV int& pos) {
+    u64 mask = (((u64)1) << (2 * m)) - 1;
+    u64 mv = kappa(fw, rc, k, m, 0, mask), mh = mini_hash(mv, magic);
+    int left = 0, right = 0;
+    bool tie = false;
+    for (int i = 1; i <= k - m; ++i) {
+        u64 v = kappa(fw, rc, k, m, i, mask), h = mini_hash(v, magic);
+        bool lt = h < mh, eq = h == mh;
+        if (lt) { mh = h; mv = v; left = i; }
+        if (lt || eq) right = i;
+        tie = !lt && (tie || eq);
+    }
+    pos = left;
+    if (!tie) return mv;
+    u64 best = ~((u64)0);
+    int lo = left, hi = left;
+    for (int i = left; i <= right; ++i) {
+        if (mini_hash(kappa(fw, rc, k, m, i, mask), magic) == mh) {
+            int d = 2 * i - (k - m);
+            u64 dist = (u64)(d < 0 ? -d : d);
+            if (dist < best) { best = dist; lo = i; hi = i; } else if (dist == best) hi = i;
+        }
+    }
+    pos = (lo == hi || rc >= fw) ? lo : hi;
+    return mv;
+}
+// option B: piscem's sshash dictionary (minimizer → bucket → super-k-mer
+// positions, verified on the text); the unitig, or -1
+FN i64 locate_b(u64 fw, u64 rc, G const u64* mkeys, G const u32* mvals, G const u32* aux,
+                G const u64* words, G const u32* prm, PRIV i64& nk, PRIV i64& cpos, PRIV bool& fw_on) {
+    int k = (int)prm[0], m = (int)prm[5];
+    u32 cap = prm[1], nu = prm[2];
+    G const u32* offs = aux + prm[8];
+    G const u32* keep = aux + prm[9];
+    G const u64* soff = words + prm[10];
+    int p = 0;
+    u64 v = minimizer(fw, rc, k, m, (u64)prm[6] | ((u64)prm[7] << 32), p);
+    u32 s = (u32)(((fmix64(v) >> 32) * (u64)cap) >> 32);
+    u32 b;
+    for (;;) {
+        u64 x = mkeys[s];
+        if (x == v) { b = mvals[s]; break; }
+        if (x == ~((u64)0)) return -1;
+        s = s + 1 == cap ? 0 : s + 1;
+    }
+    for (u32 j = aux[b]; j < aux[b + 1]; ++j) {
+        u64 pos = (u64)offs[j];
+        for (int t = 0; t < 2; ++t) {
+            u64 back = (u64)(t == 0 ? p : k - m - p);
+            if (pos < back) continue;
+            u64 kp = pos - back;
+            u64 stored = word_at(words, kp, k);
+            if (stored == fw) fw_on = true; else if (stored == rc) fw_on = false; else continue;
+            u32 lo = 0, hi = nu;
+            while (hi - lo > 1) {
+                u32 mid = (lo + hi) / 2;
+                if (soff[mid] <= kp) lo = mid; else hi = mid;
+            }
+            nk = (i64)(soff[lo + 1] - soff[lo]) - k + 1;
+            cpos = (i64)(kp - soff[lo]);
+            if (cpos >= nk) continue;
+            if (((keep[lo / 32] >> (lo % 32)) & 1u) == 0) return -1;
+            return (i64)lo;
+        }
+    }
+    return -1;
+}
+// prm: see `KmerTable::device`
 FN void map_mate(u32 i, G const u8* seq, G const u32* off, G const u64* keys, G const u32* vals,
-                 G const u32* kstart, G const u64* useq, G const u32* prm, G u32* hits, G u32* counts) {
+                 G const u32* aux, G const u64* words, G const u32* prm, G u32* hits, G u32* counts) {
     G const u8* r = seq + off[i];
     int k = (int)prm[0];
-    u32 cap = prm[1], nu = prm[2], hcap = prm[3];
+    u32 hcap = prm[3];
+    bool sshash = prm[4] != 0;
     G u32* out = hits + (u64)i * hcap * 3;
     u32 nh = 0;
     int last_pos = -1;
@@ -446,20 +788,17 @@ FN void map_mate(u32 i, G const u8* seq, G const u32* off, G const u64* keys, G 
         }
         if (homo) { advance(it, r); continue; }
         bool fw_on = false;
-        i64 id = lookup(it.fw, it.rc, keys, vals, cap, fw_on);
-        if (id < 0) { advance(it, r); continue; }
-        u32 lo = 0, hi = nu;
-        while (hi - lo > 1) {
-            u32 mid = (lo + hi) / 2;
-            if ((i64)kstart[mid] <= id) lo = mid; else hi = mid;
-        }
-        i64 nk = (i64)(kstart[lo + 1] - kstart[lo]);
-        i64 cpos = id - (i64)kstart[lo];
+        i64 nk = 0, cpos = 0;
+        i64 u = sshash ? locate_b(it.fw, it.rc, keys, vals, aux, words, prm, nk, cpos, fw_on)
+                       : locate_a(it.fw, it.rc, keys, vals, aux, prm, nk, cpos, fw_on);
+        if (u < 0) { advance(it, r); continue; }
+        u32 lo = (u32)u;
+        u64 base = sshash ? words[prm[10] + lo] : (u64)aux[lo] + (u64)lo * (u64)(k - 1);
         int start = it.pos;
         if (start > last_pos) { emit(out, nh, hcap, start, lo, fw_on, cpos); last_pos = start; }
         i64 dir = fw_on ? 1 : -1;
         i64 dist = fw_on ? nk - 1 - cpos : cpos;
-        i64 ccur = id;
+        i64 ccur = cpos;
         int lpos = start;
         i64 lcpos = cpos;
         bool lfw = fw_on, ended = false;
@@ -469,7 +808,7 @@ FN void map_mate(u32 i, G const u8* seq, G const u32* off, G const u64* keys, G 
             if (dist < 0) break;
             ccur += dir * inc;
             if (exhausted(it)) break;
-            u64 want = unitig_kmer(useq, lo, ccur, k);
+            u64 want = word_at(words, base + (u64)ccur, k);
             if (it.fw != want && it.rc != want) break;
             lfw = it.fw == want; lcpos += dir * inc; lpos = it.pos; ended = dist == 0;
         }
@@ -503,13 +842,8 @@ impl KmerGpu {
     pub fn new(table: &KmerTable) -> Result<Self, String> {
         #[cfg(gpu)]
         {
-            let dev = crate::gpu::KmerDevice::new(
-                table.k,
-                &table.keys,
-                &table.vals,
-                &table.kstart,
-                &table.seq,
-            )?;
+            let (keys, vals, aux, words, prm) = table.device();
+            let dev = crate::gpu::KmerDevice::new(keys, vals, &aux, &words, &prm)?;
             Ok(Self { dev })
         }
         #[cfg(not(gpu))]

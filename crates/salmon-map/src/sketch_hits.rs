@@ -45,12 +45,54 @@ pub fn unitig_kmers(
     let kstart = (0..=nu)
         .map(|u| u32::try_from(spss.string_offset(u) - u * k1).unwrap_or(u32::MAX))
         .collect();
-    let keep = move |u: usize| !index.contig_table().contig_entries(u as u64).is_empty();
+    let keep = kept(index);
     let k = index.k();
     let kmer = move |u: usize, j: u32| {
         spss.decode_mmer_at((spss.string_offset(u as u64) + u64::from(j)) as usize, k)
     };
     (kstart, keep, kmer)
+}
+
+/// Whether unitig `u` occurs in a reference (piscem drops hits on the others).
+pub fn kept(index: &ReferenceIndex) -> impl Fn(usize) -> bool + Sync + '_ {
+    move |u: usize| !index.contig_table().contig_entries(u as u64).is_empty()
+}
+
+/// piscem's sshash dictionary, flattened for `KmerTable::build_sshash`.
+pub struct SshashParts<'i> {
+    pub m: usize,
+    /// the dictionary hasher's magic
+    pub magic: u64,
+    /// the SPSS text, 2 bits per base
+    pub spss: &'i [u8],
+    /// each unitig's first base, plus the total
+    pub soff: Vec<u64>,
+    /// bucket `b`'s super-k-mer positions are `offs[bstart[b]..bstart[b + 1]]`
+    pub bstart: Vec<u32>,
+    pub offs: Vec<u32>,
+}
+
+/// `None` when the offsets do not fit `u32`.
+pub fn sshash_parts(index: &ReferenceIndex) -> Option<SshashParts<'_>> {
+    use value_traits::slices::SliceByValue;
+    let dict = index.dict();
+    let (spss, sk) = (dict.spss(), dict.index_ref());
+    let n = sk.offsets.len();
+    let mut bstart = (0..sk.num_buckets())
+        .map(|b| u32::try_from(sk.locate_bucket(b).0).ok())
+        .collect::<Option<Vec<_>>>()?;
+    bstart.push(u32::try_from(n).ok()?);
+    let offs = (0..n)
+        .map(|i| u32::try_from(sk.offsets.index_value(i)).ok())
+        .collect::<Option<_>>()?;
+    Some(SshashParts {
+        m: dict.m(),
+        magic: sshash_lib::hasher::DeterministicHasher::new(dict.seed()).magic(),
+        spss: spss.strings_raw(),
+        soff: (0..spss.offsets_len()).map(|i| spss.offset_at(i)).collect(),
+        bstart,
+        offs,
+    })
 }
 
 /// The hits as piscem's `(read_pos, ProjectedHits)` pairs.

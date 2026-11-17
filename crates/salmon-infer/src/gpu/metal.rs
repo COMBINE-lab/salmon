@@ -361,23 +361,17 @@ unsafe impl Sync for KmerDevice {}
 
 impl KmerDevice {
     pub(crate) fn new(
-        k: u32,
         keys: &[u64],
         vals: &[u32],
         kstart: &[u32],
         useq: &[u64],
+        prm: &[u32],
     ) -> Result<Self, String> {
         autoreleasepool(|_| {
             let dev = MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
             let lib = dev
                 .newLibraryWithSource_options_error(&NSString::from_str(&kmer_src()), None)
                 .map_err(describe)?;
-            let prm = [
-                k,
-                keys.len() as u32,
-                (kstart.len() - 1) as u32,
-                crate::kmers::HITS_CAP as u32,
-            ];
             Ok(Self {
                 queue: dev.newCommandQueue().ok_or("no Metal command queue")?,
                 pso: pipeline(&dev, &lib, "kmer_hits")?,
@@ -385,7 +379,7 @@ impl KmerDevice {
                 vals: buffer(&dev, vals)?,
                 kstart: buffer(&dev, kstart)?,
                 useq: buffer(&dev, useq)?,
-                prm: buffer(&dev, &prm)?,
+                prm: buffer(&dev, prm)?,
                 dev,
             })
         })

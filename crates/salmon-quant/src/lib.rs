@@ -40,7 +40,7 @@ mod processor;
 mod sam;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 
@@ -406,31 +406,65 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
     } else {
         RefseqLoad::None
     };
-    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
-        .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
+    // shared with the thread that builds the GPU k-mer lookup
+    let salmon = std::sync::Arc::new(
+        SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
+            .with_context(|| format!("loading index {}", opts.index_dir.display()))?,
+    );
     let num_refs = salmon.num_refs();
     timer.mark("index_load");
 
     // `--sketch` k-mer lookup on the GPU (same mappings as the CPU `Strict` path).
-    // shortcut: the table is rebuilt every run (see `gpu_kmer_table` timing);
-    // persist it beside the index if startup matters.
-    let kmer_gpu = if opts.sketch
+    // It is built on a thread while the CPU maps the first batches, so its
+    // build (`gpu_kmer_table` in the timing log) does not delay the run.
+    // shortcut: rebuilt every run; persist it beside the index if it ever
+    // outlasts the mapping.
+    let kmer_gpu = std::sync::Arc::new(std::sync::OnceLock::new());
+    if opts.sketch
         && opts.em.gpu
         && salmon.inner().poison_table().is_none()
         && salmon_infer::kmers::KmerGpu::available()
     {
-        let (kstart, keep, kmer) = salmon_map::sketch_hits::unitig_kmers(salmon.inner());
-        let built = salmon_infer::kmers::KmerTable::build(salmon.inner().k(), kstart, keep, kmer)
-            .ok_or_else(|| "the index's k-mers do not fit the table".to_string())
-            .and_then(|table| salmon_infer::kmers::KmerGpu::new(&table));
-        timer.mark("gpu_kmer_table");
-        built
-            .inspect_err(|e| tracing::warn!("GPU k-mer lookup off ({e}); mapping on the CPU"))
-            .ok()
-    } else {
-        None
-    };
-    let kmer_gpu_off = std::sync::atomic::AtomicBool::new(false);
+        let (salmon, slot) = (salmon.clone(), kmer_gpu.clone());
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            let idx = salmon.inner();
+            use salmon_infer::kmers::{KmerGpu, KmerTable};
+            use salmon_map::sketch_hits as sh;
+            // piscem's sshash dictionary by default; the flat k-mer table is
+            // kept behind a switch while the two are compared
+            // shortcut: env switch, drop the loser once measured on real data
+            let table = if std::env::var("SALMON_GPU_LOOKUP").as_deref() == Ok("table") {
+                let (kstart, keep, kmer) = sh::unitig_kmers(idx);
+                KmerTable::build(idx.k(), kstart, keep, kmer)
+            } else {
+                sh::sshash_parts(idx).and_then(|p| {
+                    KmerTable::build_sshash(
+                        idx.k(),
+                        p.m,
+                        p.magic,
+                        p.spss,
+                        p.soff,
+                        sh::kept(idx),
+                        p.bstart,
+                        p.offs,
+                    )
+                })
+            };
+            match table
+                .ok_or_else(|| "the index does not fit the GPU lookup".to_string())
+                .and_then(|table| KmerGpu::new(&table))
+            {
+                Ok(gpu) => {
+                    let _ = slot.set(gpu);
+                    let elapsed_s = t0.elapsed().as_secs_f64();
+                    tracing::info!(target: "salmon::timing", phase = "gpu_kmer_table", elapsed_s, "phase complete");
+                }
+                Err(e) => tracing::warn!("GPU k-mer lookup off ({e}); mapping on the CPU"),
+            }
+        });
+    }
+    let (kmer_gpu_off, kmer_gpu_used) = (AtomicBool::new(false), AtomicBool::new(false));
 
     // The fragment-length prior (mean 250, sd 25 by default). A paired run
     // replaces it at end of pass with the order-independent `DiscreteFld`
@@ -635,9 +669,10 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
             // Strict (every k-mer between two hits is checked) so the GPU
             // k-mer lookup, which reads every k-mer, gives the same mappings.
             skip: SkippingStrategy::Strict,
-            gpu: kmer_gpu.as_ref().map(|gpu| gpu_map::GpuMap {
-                gpu,
+            gpu: Some(gpu_map::GpuMap {
+                gpu: &kmer_gpu,
                 off: &kmer_gpu_off,
+                used: &kmer_gpu_used,
             }),
             expected_format,
             incompat_prior: opts.incompat_prior,

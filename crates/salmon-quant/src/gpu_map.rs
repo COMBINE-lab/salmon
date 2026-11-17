@@ -5,15 +5,18 @@
 //! the CPU instead.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 use salmon_infer::kmers::{Hit, KmerGpu, HITS_CAP};
 
-/// The device table, and the switch that sends every later batch to the CPU
-/// after a GPU failure.
+/// The device lookup once its build thread has set it, the switch that sends
+/// every later batch to the CPU after a GPU failure, and whether a batch ran
+/// on the GPU.
 #[derive(Clone, Copy)]
 pub(crate) struct GpuMap<'a> {
-    pub gpu: &'a KmerGpu,
+    pub gpu: &'a OnceLock<KmerGpu>,
     pub off: &'a AtomicBool,
+    pub used: &'a AtomicBool,
 }
 
 /// One batch's reads and their hits (reused across a worker's batches).
@@ -28,9 +31,9 @@ pub(crate) struct BatchHits {
 impl BatchHits {
     /// Look `reads` up on the GPU; `false` means map this batch on the CPU.
     pub fn lookup<R: AsRef<[u8]>>(&mut self, g: GpuMap, reads: impl Iterator<Item = R>) -> bool {
-        if g.off.load(Ordering::Relaxed) {
+        let Some(gpu) = g.gpu.get().filter(|_| !g.off.load(Ordering::Relaxed)) else {
             return false;
-        }
+        };
         self.seq.clear();
         self.off.clear();
         self.off.push(0);
@@ -39,11 +42,11 @@ impl BatchHits {
             // a batch is a few thousand reads, far below 4 GiB
             self.off.push(self.seq.len() as u32);
         }
-        match g
-            .gpu
-            .hits(&self.seq, &self.off, &mut self.hits, &mut self.counts)
-        {
-            Ok(()) => true,
+        match gpu.hits(&self.seq, &self.off, &mut self.hits, &mut self.counts) {
+            Ok(()) => {
+                g.used.store(true, Ordering::Relaxed);
+                true
+            }
             Err(e) => {
                 if !g.off.swap(true, Ordering::Relaxed) {
                     tracing::warn!("GPU k-mer lookup failed ({e}); mapping the rest on the CPU");

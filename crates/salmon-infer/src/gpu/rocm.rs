@@ -429,30 +429,24 @@ unsafe impl Sync for KmerDevice {}
 
 impl KmerDevice {
     pub(crate) fn new(
-        k: u32,
         keys: &[u64],
         vals: &[u32],
         kstart: &[u32],
         useq: &[u64],
+        prm: &[u32],
     ) -> Result<Self, String> {
         let mut hip = Hip::load()?;
         if hip.devices == 0 {
             return Err("no ROCm device".into());
         }
         hip.load_module(&super::dl::kmer_src())?;
-        let prm = [
-            k,
-            keys.len() as u32,
-            (kstart.len() - 1) as u32,
-            crate::kmers::HITS_CAP as u32,
-        ];
         Ok(Self {
             f: hip.function(c"kmer_hits")?,
             keys: hip.upload(keys)?,
             vals: hip.upload(vals)?,
             kstart: hip.upload(kstart)?,
             useq: hip.upload(useq)?,
-            prm: hip.upload(&prm)?,
+            prm: hip.upload(prm)?,
             hip: std::sync::Mutex::new(hip),
         })
     }

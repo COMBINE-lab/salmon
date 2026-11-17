@@ -6,8 +6,10 @@
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 use piscem_rs::mapping::streaming_query::PiscemStreamingQuery;
 use salmon_index::{build, IndexBuildOptions, SalmonIndex};
-use salmon_infer::kmers::{Hit, KmerTable};
-use salmon_map::sketch_hits::{map_read_pair_hits_into, map_single_read_hits_into, unitig_kmers};
+use salmon_infer::kmers::{Hit, KmerGpu, KmerTable, HITS_CAP};
+use salmon_map::sketch_hits::{
+    kept, map_read_pair_hits_into, map_single_read_hits_into, sshash_parts, unitig_kmers,
+};
 use salmon_map::{
     map_read_pair_sketch_into, map_single_read_sketch_into, RefProvider, SketchScratch,
 };
@@ -120,11 +122,26 @@ fn hits_path_maps_like_piscem_strict() {
 
     let (kstart, keep, kmer) = unitig_kmers(index);
     let table = KmerTable::build(index.k(), kstart, keep, kmer).expect("table");
+    // option B: piscem's own sshash dictionary, minimizer → bucket → positions
+    let p = sshash_parts(index).expect("u32 offsets");
+    let sshash = KmerTable::build_sshash(
+        index.k(),
+        p.m,
+        p.magic,
+        p.spss,
+        p.soff,
+        kept(index),
+        p.bstart,
+        p.offs,
+    )
+    .expect("sshash table");
     let mut hs = HitSearcher::new(index);
     let (mut cpu_s, mut hit_s) = (SketchScratch::new(index.k()), SketchScratch::new(index.k()));
     let (mut want, mut got) = (Vec::new(), Vec::new());
     let (mut h1, mut h2): (Vec<Hit>, Vec<Hit>) = (Vec::new(), Vec::new());
     let mut mapped = 0;
+    // every read, packed as the GPU takes them
+    let (mut seq, mut off) = (Vec::new(), vec![0u32]);
 
     for n in 0..3000 {
         let t = &txs[rng.next(txs.len())];
@@ -144,6 +161,8 @@ fn hits_path_maps_like_piscem_strict() {
 
         // the oracle's raw hits are piscem's Strict raw hits
         for r in [&r1, &r2] {
+            seq.extend_from_slice(r);
+            off.push(seq.len() as u32);
             h1.clear();
             table.hits(r, &mut h1);
             sshash_lib::dispatch_on_k!(index.k(), K => {
@@ -162,6 +181,14 @@ fn hits_path_maps_like_piscem_strict() {
                 })
                 .collect();
             assert_eq!(h1, piscem, "raw hits of {}", String::from_utf8_lossy(r));
+            h1.clear();
+            sshash.hits(r, &mut h1);
+            assert_eq!(
+                h1,
+                piscem,
+                "sshash raw hits of {}",
+                String::from_utf8_lossy(r)
+            );
         }
 
         h1.clear();
@@ -222,4 +249,26 @@ fn hits_path_maps_like_piscem_strict() {
         assert_eq!(got, want, "single {n}");
     }
     assert!(mapped > 1500, "only {mapped} pairs mapped");
+
+    // with a device, the kernel matches the CPU reference in both modes
+    if !KmerGpu::available() {
+        eprintln!("no GPU device; skipping the kernel check");
+        return;
+    }
+    for (name, t) in [("table", &table), ("sshash", &sshash)] {
+        let gpu = KmerGpu::new(t).expect("upload");
+        let (mut h, mut c) = (Vec::new(), Vec::new());
+        gpu.hits(&seq, &off, &mut h, &mut c).expect("kernel");
+        for i in 0..off.len() - 1 {
+            h1.clear();
+            t.hits(&seq[off[i] as usize..off[i + 1] as usize], &mut h1);
+            assert_eq!(c[i] as usize, h1.len(), "{name} read {i} count");
+            let n = h1.len().min(HITS_CAP);
+            assert_eq!(
+                &h[i * HITS_CAP..i * HITS_CAP + n],
+                &h1[..n],
+                "{name} read {i}"
+            );
+        }
+    }
 }
