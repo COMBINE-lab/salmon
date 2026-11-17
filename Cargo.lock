@@ -3154,6 +3154,7 @@ version = "2.11.0"
 dependencies = [
  "criterion 0.8.2",
  "cutile",
+ "libloading",
  "objc2",
  "objc2-foundation",
  "objc2-metal",

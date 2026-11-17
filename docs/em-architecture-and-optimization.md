@@ -579,9 +579,10 @@ to expose grouping differences, and it runs in under a second.
 ## 10. Experimental GPU warm start (`--gpu`)
 
 An opt-in GPU path for the point estimate, off unless salmon is built with
-`--features metal` (macOS, Apple GPUs) or `--features cuda` (Linux, written
+`--features metal` (macOS, Apple GPUs), `--features cuda` (Linux, written
 with NVIDIA's [CUDA Rust](https://github.com/NVIDIA/cuda-rust) Tile track,
-cuTile 0.5). Default builds and releases do not contain it, and nothing in §5
+cuTile 0.5) or `--features rocm` (Linux, AMD GPUs: the same kernels in HIP C++,
+compiled at run time with hiprtc). Default builds and releases do not contain it, and nothing in §5
 changes for them.
 
 ### What it does
@@ -642,11 +643,19 @@ The CUDA backend has not run on NVIDIA hardware. CI only compiles it against
 CUDA 13 headers (`gpu-cuda-check`). Running it needs CUDA 13.3 and compute
 capability ≥ 8.0, because cuTile JIT-compiles through Tile IR. The open items
 before `--gpu` could leave experimental status are timings on the §9 RAD,
-measurements on NVIDIA hardware, and the per-tile longest-row loop of the
-cuTile kernels on skewed classes.
+measurements on NVIDIA and AMD hardware, and the per-tile longest-row loop of
+the cuTile kernels on skewed classes.
+
+The ROCm backend has not run on AMD hardware either. It opens `libamdhip64`
+and `libhiprtc` (ROCm 7; earlier releases export hiprtc from `libamdhip64`) at
+run time, so `--features rocm` builds on any machine without ROCm installed,
+and CI (`gpu-rocm-check`) runs clippy and the GPU tests, which only reach
+their no-device skip there. hiprtc compiles the kernels for the current
+device's architecture with default IEEE math; the module API launches them,
+one thread per class or transcript, 256 per block.
 
 ```bash
-cargo build --release -p salmon-cli --features metal   # or: --features cuda
+cargo build --release -p salmon-cli --features metal   # or: --features cuda / rocm
 cargo test -p salmon-infer --features metal gpu        # GPU tests skip without a device
 salmon quant ... --gpu
 ```

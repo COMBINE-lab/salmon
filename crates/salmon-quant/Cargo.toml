@@ -33,6 +33,7 @@ noodles-bgzf = "0.52"
 # Experimental GPU warm start of the EM (`--gpu`); see salmon-infer.
 metal = ["salmon-infer/metal"]
 cuda = ["salmon-infer/cuda"]
+rocm = ["salmon-infer/rocm"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

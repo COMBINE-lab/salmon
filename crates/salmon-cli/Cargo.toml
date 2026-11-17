@@ -37,6 +37,7 @@ sysalloc = []
 # `cuda` (cuTile Rust) needs CUDA >= 13.0 headers to build and CUDA 13.3 to run.
 metal = ["salmon-quant/metal"]
 cuda = ["salmon-quant/cuda"]
+rocm = ["salmon-quant/rocm"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
