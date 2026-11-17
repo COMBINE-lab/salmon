@@ -517,7 +517,9 @@ struct Placed {
 /// The fields of a record that describe its alignment, for telling whether two
 /// placements projected onto the same genomic one. Everything that is a property
 /// of the placement rather than of the alignment (`NH`, `HI`, `MAPQ`, `AS`, `ZW`,
-/// the secondary bit) is left out.
+/// the secondary bit) is left out. So is `XS`: transcripts of overlapping genes
+/// on opposite strands can imply the same alignment, which is still one
+/// alignment, and like STAR the record carries one `XS`, the primary's.
 #[derive(Clone, PartialEq)]
 struct RecordKey {
     flags: u16,
@@ -527,7 +529,6 @@ struct RecordKey {
     mate_reference_id: Option<usize>,
     mate_position: Option<i32>,
     template_length: i32,
-    transcript_strand: Option<u8>,
 }
 
 impl RecordKey {
@@ -540,7 +541,6 @@ impl RecordKey {
             mate_reference_id: record.mate_reference_id,
             mate_position: record.mate_position,
             template_length: record.template_length,
-            transcript_strand: record.transcript_strand,
         }
     }
 }
