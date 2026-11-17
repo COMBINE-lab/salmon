@@ -1104,7 +1104,7 @@ pub fn find_in_window(
     win.extend(window.iter().map(u8::to_ascii_uppercase));
     if !seeds.ranges(query, win, cfg) {
         let all = (i32::MIN / 4, i32::MAX / 4);
-        return window_dp(query, win, all, i32::MIN, cfg, dp).map(|(score, end_col)| {
+        return window_dp(query, win, all, i32::MIN, cfg, &mut dp.rows).map(|(score, end_col)| {
             WindowAlignment {
                 score,
                 valid: true,
@@ -1137,8 +1137,7 @@ pub fn find_in_window(
             continue;
         }
         let part = &win[lo as usize..hi as usize];
-        if let Some((score, _)) = window_dp(query, part, (d_lo - lo, d_hi - lo), i32::MIN, cfg, dp)
-        {
+        if let Some((score, _)) = dp.run(query, part, (d_lo - lo, d_hi - lo), i32::MIN, cfg) {
             floor = floor.max(score);
         }
     }
@@ -1147,7 +1146,7 @@ pub fn find_in_window(
     // at the leftmost end reaching it, is the full window's.
     let mut best: Option<(i32, usize)> = None;
     for &(lo, hi, diags) in &seeds.ranges {
-        if let Some((score, end)) = window_dp(query, &win[lo..hi], diags, floor, cfg, dp) {
+        if let Some((score, end)) = dp.run(query, &win[lo..hi], diags, floor, cfg) {
             let end = lo + end;
             if best.is_none_or(|(s, e)| score > s || (score == s && end < e)) {
                 best = Some((score, end));
@@ -1322,7 +1321,52 @@ const MAX_HITS_PER_BASE: usize = 4;
 pub struct WindowScratch {
     win: Vec<u8>,
     seeds: Seeds,
-    dp: DpRows,
+    dp: Parts,
+}
+
+impl WindowScratch {
+    /// Forget the searches remembered so far; call when the queries change
+    /// (each fragment), so the memo stays small.
+    pub fn forget(&mut self) {
+        if !self.dp.memo.is_empty() {
+            self.dp.memo.clear();
+        }
+    }
+}
+
+/// [`window_dp`] remembered by its inputs. Isoforms sharing the exon where the
+/// mate lies give different windows but often the same part to search.
+#[derive(Debug, Default)]
+struct Parts {
+    /// keyed by the query length, diagonals and floor, then query and part
+    memo: ahash::AHashMap<Vec<u8>, Option<(i32, usize)>>,
+    key: Vec<u8>,
+    rows: DpRows,
+}
+
+impl Parts {
+    fn run(
+        &mut self,
+        query: &[u8],
+        win: &[u8],
+        diags: (i32, i32),
+        floor: i32,
+        cfg: &AlignConfig,
+    ) -> Option<(i32, usize)> {
+        let k = &mut self.key;
+        k.clear();
+        for x in [query.len() as i32, diags.0, diags.1, floor] {
+            k.extend_from_slice(&x.to_le_bytes());
+        }
+        k.extend_from_slice(query);
+        k.extend_from_slice(win);
+        if let Some(&hit) = self.memo.get(k.as_slice()) {
+            return hit;
+        }
+        let r = window_dp(query, win, diags, floor, cfg, &mut self.rows);
+        self.memo.insert(k.clone(), r);
+        r
+    }
 }
 
 /// DP rows for [`window_dp`].

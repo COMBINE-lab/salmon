@@ -737,6 +737,7 @@ impl RescueScratch {
         if !self.placements.memo.is_empty() {
             self.placements.memo.clear();
         }
+        self.placements.dp.forget();
     }
 }
 
