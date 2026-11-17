@@ -295,3 +295,47 @@ fn skip_quant_does_not_count_wrong_strand_fragments_as_mapped() {
     assert_eq!(full, 200, "only the ISR half maps");
     assert_eq!(num_mapped("skip", true), full, "--skipQuant must agree");
 }
+
+/// `-g` under `--skipQuant` writes no gene table because there are no
+/// abundances. The BAM, RAD, projection and online drivers say so; the default
+/// reads driver returned before reaching that message and dropped `-g`
+/// silently (COMBINE-lab/salmon#1314).
+#[test]
+fn skip_quant_in_default_reads_mode_says_the_gene_map_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fasta, r1, r2) = fixture(dir.path());
+    let index = dir.path().join("idx");
+    assert!(Command::new(SALMON)
+        .args(["index", "-t"])
+        .arg(&fasta)
+        .arg("-i")
+        .arg(&index)
+        .args(["-p", "2"])
+        .status()
+        .unwrap()
+        .success());
+    let gm = dir.path().join("t2g.tsv");
+    std::fs::write(&gm, "txA\tgeneA\ntxB\tgeneB\n").unwrap();
+    let out = dir.path().join("out");
+
+    let o = Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&index)
+        .args(["-l", "A", "-1"])
+        .arg(&r1)
+        .arg("-2")
+        .arg(&r2)
+        .args(["-p", "2", "--skipQuant", "-g"])
+        .arg(&gm)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    assert!(!out.join("quant.genes.sf").exists());
+    assert!(
+        err.contains("gene-level aggregation (-g) skipped"),
+        "-g must not be dropped silently:\n{err}"
+    );
+}

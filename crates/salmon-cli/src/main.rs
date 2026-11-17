@@ -1600,6 +1600,12 @@ fn run_deterministic(
                 rad_path.display()
             );
         }
+        // Same notice as the other drivers give, so -g is not dropped silently (#1314).
+        if gene_map.is_some() {
+            tracing::info!(
+                "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
+            );
+        }
         tracing::info!(
             "--skipQuant: mapping only; the RAD at {} is the output",
             rad_path.display()
