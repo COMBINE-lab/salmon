@@ -139,6 +139,14 @@ impl GcFragModel {
         self.counts_fp.iter().all(|&c| c == 0)
     }
 
+    /// [`inc`](Self::inc) with the weight already converted by
+    /// [`crate::bias_mass_to_fp`].
+    #[inline]
+    fn inc_fp(&mut self, gc_frac: i32, ctx_frac: i32, fp: u64) {
+        let i = self.idx(ctx_frac, gc_frac);
+        self.counts_fp[i] += fp;
+    }
+
     /// Value at a `(context, GC)` cell (a normalized density after `normalize`,
     /// or a clamped ratio for a model produced by [`gc_ratio`]).
     #[inline]
@@ -477,6 +485,7 @@ pub struct GcContext {
     fp_wlen: Vec<i32>,  // 5' window length, indexed by fragStart
     tp_count: Vec<i64>, // 3' window GC count, indexed by fragEnd
     tp_wlen: Vec<i32>,  // 3' window length, indexed by fragEnd
+    ctx_tab: &'static [[i32; MAX_CTX_WLEN + 1]; MAX_CTX_WLEN + 1],
 }
 
 impl GcContext {
@@ -530,6 +539,7 @@ impl GcContext {
             fp_wlen,
             tp_count,
             tp_wlen,
+            ctx_tab: ctx_frac_table(),
         }
     }
 
@@ -553,6 +563,50 @@ impl GcContext {
         let context_frac = lrint(100.0 * count / context_size);
         Some((frag_frac, context_frac))
     }
+
+    /// [`desc`](Self::desc) for a caller that fixes the fragment length
+    /// `e - s + 1` and passes `frag_tab` from [`frag_frac_table`] for it: both
+    /// divisions become lookups, with the very same expressions, so the result
+    /// is bit-identical (pinned by `gc_context_tables_match_desc`).
+    #[inline(always)]
+    pub fn desc_tab(&self, s: i32, e: i32, frag_tab: &[i32]) -> Option<(i32, i32)> {
+        let wlen = (self.fp_wlen[s as usize] + self.tp_wlen[e as usize]) as usize;
+        let count = (self.fp_count[s as usize] + self.tp_count[e as usize]) as usize;
+        if wlen == 0 {
+            return None;
+        }
+        if wlen > MAX_CTX_WLEN || count > MAX_CTX_WLEN {
+            return self.desc(s, e); // outside the window bound: never in practice
+        }
+        let cs = if s > 0 { self.cum[(s - 1) as usize] } else { 0 };
+        let gc = (self.cum[e as usize] - cs) as usize;
+        Some((frag_tab[gc], self.ctx_tab[wlen][count]))
+    }
+}
+
+/// Largest 5'+3' context window [`GcContext`] can produce (5 + 5), with slack.
+const MAX_CTX_WLEN: usize = 15;
+
+/// `lrint(100 * count / wlen)` for every `(wlen, count)` a context can take.
+fn ctx_frac_table() -> &'static [[i32; MAX_CTX_WLEN + 1]; MAX_CTX_WLEN + 1] {
+    static TAB: std::sync::OnceLock<[[i32; MAX_CTX_WLEN + 1]; MAX_CTX_WLEN + 1]> =
+        std::sync::OnceLock::new();
+    TAB.get_or_init(|| {
+        let mut t = [[0i32; MAX_CTX_WLEN + 1]; MAX_CTX_WLEN + 1];
+        for (w, row) in t.iter_mut().enumerate().skip(1) {
+            for (c, v) in row.iter_mut().enumerate() {
+                *v = lrint(100.0 * c as f64 / w as f64);
+            }
+        }
+        t
+    })
+}
+
+/// `lrint(100 * gc / fl)` for `gc` in `0..=fl`: the fragment-GC fraction of a
+/// fragment of length `fl`, for [`GcContext::desc_tab`]. Written into `out`.
+pub fn frag_frac_table(fl: i32, out: &mut Vec<i32>) {
+    out.clear();
+    out.extend((0..=fl).map(|c| lrint(100.0 * c as f64 / fl as f64)));
 }
 
 /// Build the *expected* fragment-GC model (salmon's `transcriptGCDist`): slide
@@ -599,55 +653,58 @@ where
     // `combine_counts`). `seq_of`/`prefix_of` must be `Sync` to share across
     // threads (they are: closures over `&[Vec<_>]`).
     use rayon::prelude::*;
-    let per_tid = |tid: usize| -> Option<GcFragModel> {
+    // Every fragment start sees the same length sequence and the same
+    // `weight * (cond(fl) - prev)` per length, so the fixed-point mass is
+    // computed once per length. The model sums integers, so visiting lengths
+    // in the outer loop (which lets each length's GC fractions be tabulated)
+    // gives exactly the counts of the start-major order salmon uses.
+    let per_tid = |acc: &mut GcFragModel, tab: &mut Vec<i32>, tid: usize| {
         if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
-            return None;
+            return;
         }
         let seq = seq_of(tid);
         let ref_len = seq.len();
         if ref_len <= k {
-            return None;
+            return;
         }
         let cdf_max_arg = (cdf.len() - 1).min(ref_len);
         let cdf_max_val = cdf[cdf_max_arg];
         if cdf_max_val < MIN_CDF_MASS {
-            return None;
+            return;
         }
         let view = view_of(tid);
         let ctx = GcContext::build(&view);
         let weight = alphas[tid] / eff_lens[tid];
         let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
         let sp = if fld_low > 0 { fld_low as i32 - 1 } else { 0 };
-        let mut model = GcFragModel::new(cond_bins, gc_bins);
-        for frag_start in 0..(ref_len - k) {
-            let mut prev = cond(sp);
-            let mut fl = fld_low.max(1) as i32; // a zero-length fragment has no end base
-            while fl <= fld_high as i32 {
-                let frag_end = frag_start as i32 + fl - 1;
-                if (frag_end as usize) < ref_len {
-                    if let Some((ff, cf)) = ctx.desc(frag_start as i32, frag_end) {
-                        model.inc(ff, cf, weight * (cond(fl) - prev));
-                    }
-                    prev = cond(fl);
-                } else {
-                    break;
+        let starts = (ref_len - k) as i32;
+        let mut prev = cond(sp);
+        let mut fl = fld_low.max(1) as i32; // a zero-length fragment has no end base
+                                            // A start reaches length `fl` iff `start + fl - 1 < ref_len`; past the
+                                            // first length no start reaches, none reaches a longer one either.
+        while fl <= fld_high as i32 && fl <= ref_len as i32 {
+            let fp = crate::bias_mass_to_fp(weight * (cond(fl) - prev));
+            prev = cond(fl);
+            frag_frac_table(fl, tab);
+            let end = starts.min(ref_len as i32 - fl + 1);
+            for frag_start in 0..end {
+                if let Some((ff, cf)) = ctx.desc_tab(frag_start, frag_start + fl - 1, tab) {
+                    acc.inc_fp(ff, cf, fp);
                 }
-                fl += stride;
             }
+            fl += stride;
         }
-        Some(model)
     };
     (0..num_targets)
         .into_par_iter()
         .fold(
-            || GcFragModel::new(cond_bins, gc_bins),
-            |mut acc, tid| {
-                if let Some(m) = per_tid(tid) {
-                    acc.combine_counts(&m);
-                }
-                acc
+            || (GcFragModel::new(cond_bins, gc_bins), Vec::new()),
+            |(mut acc, mut tab), tid| {
+                per_tid(&mut acc, &mut tab, tid);
+                (acc, tab)
             },
         )
+        .map(|(acc, _)| acc)
         .reduce(
             || GcFragModel::new(cond_bins, gc_bins),
             |mut a, b| {
@@ -763,6 +820,29 @@ mod tests {
 
     /// Same obligation for the hoisted per-position context cache: it exists only
     /// to be faster, so any disagreement with the direct computation is a bug.
+    #[test]
+    fn gc_context_tables_match_desc() {
+        let bases = *b"ACGTCGATGCGGCCATAT";
+        let seq: Vec<u8> = (0..300)
+            .map(|i| bases[(i * 11 + 5) % bases.len()])
+            .collect();
+        let p = gc_prefix(&seq);
+        let v = GcView::Dense(&p);
+        let ctx = GcContext::build(&v);
+        let n = seq.len() as i32;
+        let mut tab = Vec::new();
+        for fl in 1..=200 {
+            frag_frac_table(fl, &mut tab);
+            for s in 0..=(n - fl) {
+                let e = s + fl - 1;
+                if s + INSIDE_5P > n - 1 {
+                    continue; // outside desc's documented domain
+                }
+                assert_eq!(ctx.desc_tab(s, e, &tab), ctx.desc(s, e), "fl={fl} s={s}");
+            }
+        }
+    }
+
     #[test]
     fn gc_context_matches_gc_desc() {
         // Cached context (GcContext::desc) must be bit-identical to the
