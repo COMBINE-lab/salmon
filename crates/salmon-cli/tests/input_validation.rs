@@ -1303,3 +1303,41 @@ fn the_bias_seed_em_is_not_reported_as_unconverged() {
         "{err}"
     );
 }
+
+/// `-t idx/cleaned_refs.fa -i idx` would truncate its own input, and a build
+/// that fails must not leave a cleaned copy behind.
+#[test]
+fn index_refuses_its_own_cleaned_fasta_and_cleans_up_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = dir.path().join("idx");
+    std::fs::create_dir_all(&idx).unwrap();
+    let cleaned = idx.join("cleaned_refs.fa");
+    std::fs::write(&cleaned, format!(">t\n{}\n", sequence(7, 300))).unwrap();
+    let o = run(&[
+        os("index"),
+        os("-t"),
+        cleaned.as_os_str(),
+        os("-i"),
+        idx.as_os_str(),
+    ]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("cleaned_refs.fa"));
+    assert!(
+        std::fs::read_to_string(&cleaned).unwrap().len() > 300,
+        "input was truncated"
+    );
+
+    // An empty reference fails in preprocessing.
+    let empty = dir.path().join("empty.fa");
+    std::fs::write(&empty, "").unwrap();
+    let out = dir.path().join("idx2");
+    let o = run(&[
+        os("index"),
+        os("-t"),
+        empty.as_os_str(),
+        os("-i"),
+        out.as_os_str(),
+    ]);
+    assert!(!o.status.success());
+    assert!(!out.join("cleaned_refs.fa").exists());
+}

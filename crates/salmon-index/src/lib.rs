@@ -1175,6 +1175,21 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         // FixFasta behavior); decoys keep their non-ACGT bases (e.g. genome N-runs) so
         // Cuttlefish splits the graph on them instead of tiling random replacements.
         let cleaned = intermediate_dir.join("cleaned_refs.fa");
+        // Creating the cleaned file would truncate an input that is that file.
+        let cleaned_abs = std::fs::canonicalize(&intermediate_dir)
+            .map(|d| d.join("cleaned_refs.fa"))
+            .ok();
+        if let Some(t) = opts
+            .transcripts
+            .iter()
+            .find(|t| cleaned_abs.is_some() && std::fs::canonicalize(t).ok() == cleaned_abs)
+        {
+            anyhow::bail!(
+                "-t {} is the index's own intermediate cleaned_refs.fa, which the build \
+                 overwrites; copy it elsewhere first",
+                t.display()
+            );
+        }
         let refseq_staged = opts.output_dir.join(REFSEQ_STAGED_FILE);
         let refseq = RefseqWriter::create(&refseq_staged, opts.k)?;
         let pre = preprocess_fasta(
@@ -1192,6 +1207,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")
         .inspect_err(|_| {
             let _ = std::fs::remove_file(&refseq_staged);
+            let _ = std::fs::remove_file(&cleaned);
         })?;
         // The input is good, so the rebuild is committed: from here the directory
         // holds a mix of old and new files until the final `info.json` is written.
