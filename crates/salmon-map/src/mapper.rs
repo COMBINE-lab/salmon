@@ -22,11 +22,14 @@
 //! The output [`ScoredMapping`]s are the read's contribution to the equivalence
 //! class consumed by the inference step.
 
+use ahash::AHashMap;
 use piscem_rs::index::reference_index::ReferenceIndex;
 use piscem_rs::mapping::hit_searcher::HitSearcher;
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
-use crate::align::{align_chain_view as align_chain, align_in_window, AlignConfig};
+use crate::align::{
+    align_chain_view as align_chain, find_in_window, AlignConfig, WindowAlignment, WindowScratch,
+};
 use crate::collect::{
     best_per_target, collect_read_mems, consensus_filter, MappingCandidate, MemCollectorConfig,
 };
@@ -341,6 +344,9 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
             }
         }
     }
+    if cfg.recover_orphans {
+        scratch.rescue.new_fragment();
+    }
     let mut pre_next = 0;
     for (k, j) in joints.into_iter().enumerate() {
         match j.status {
@@ -437,7 +443,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                     refs,
                     cfg,
                     j.tid,
-                    &mut scratch.revcomp,
+                    &mut scratch.rescue,
                 );
             }
             MateStatus::PairedEndRight => {
@@ -452,7 +458,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                     refs,
                     cfg,
                     j.tid,
-                    &mut scratch.revcomp,
+                    &mut scratch.rescue,
                 );
             }
             MateStatus::SingleEnd => {}
@@ -607,7 +613,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
     refs: &R,
     cfg: &MapConfig,
     tid: u32,
-    revcomp_buf: &mut Vec<u8>,
+    rescue: &mut RescueScratch,
 ) {
     let Some(anchor_aln) = align_chain(anchor_read, refseq, &anchor.chain, &cfg.align) else {
         return;
@@ -619,7 +625,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
 
     if cfg.recover_orphans {
         if let Some((partner_score, partner_start, frag_start, frag_len)) =
-            recover_mate(partner_read, refseq, anchor, cfg, revcomp_buf)
+            recover_mate(partner_read, refseq, anchor, anchor_is_left, cfg, rescue)
         {
             // Which physical mate is which. `anchor_is_left` says the anchor is
             // mate 1; otherwise the *rescued* read is mate 1. The rescue searches
@@ -717,6 +723,57 @@ fn push_orphan_or_recovered<R: RefProvider>(
     });
 }
 
+/// Orphan-recovery buffers, reused across fragments.
+#[derive(Debug, Default)]
+pub(crate) struct RescueScratch {
+    revcomp: Vec<u8>,
+    window: Vec<u8>,
+    placements: Placements,
+}
+
+impl RescueScratch {
+    /// Forget the previous fragment's placements.
+    fn new_fragment(&mut self) {
+        if !self.placements.memo.is_empty() {
+            self.placements.memo.clear();
+        }
+    }
+}
+
+/// The partner placements already searched for in this fragment. A fragment's
+/// anchor often has the same window on many targets (duplicate transcripts,
+/// isoforms sharing the anchor's exons), and the search is the expensive part
+/// of recovery; its result depends only on the query and the window bases.
+#[derive(Debug, Default)]
+struct Placements {
+    /// keyed by one byte naming the query, followed by the window bases
+    memo: AHashMap<Vec<u8>, Option<WindowAlignment>>,
+    key: Vec<u8>,
+    dp: WindowScratch,
+}
+
+impl Placements {
+    /// [`find_in_window`] of `query` in `window`, memoized per fragment;
+    /// `query_id` must name the query uniquely within the fragment.
+    fn find(
+        &mut self,
+        query_id: u8,
+        query: &[u8],
+        window: &[u8],
+        cfg: &AlignConfig,
+    ) -> Option<WindowAlignment> {
+        self.key.clear();
+        self.key.push(query_id);
+        self.key.extend_from_slice(window);
+        if let Some(&hit) = self.memo.get(self.key.as_slice()) {
+            return hit;
+        }
+        let aln = find_in_window(query, window, cfg, &mut self.dp);
+        self.memo.insert(self.key.clone(), aln);
+        aln
+    }
+}
+
 /// Try to place the partner mate within a fragment-length window of the anchor.
 /// Returns `(partner_alignment_score, partner_start, fragment_start,
 /// fragment_length)` on success, the fragment spanning both mates' outermost ends
@@ -726,12 +783,20 @@ fn recover_mate(
     partner_read: &[u8],
     refseq: RefView<'_>,
     anchor: &MappingCandidate,
+    anchor_is_left: bool,
     cfg: &MapConfig,
-    revcomp_buf: &mut Vec<u8>,
+    rescue: &mut RescueScratch,
 ) -> Option<(i32, i32, i32, i32)> {
     let max_frag = cfg.pair.max_fragment_len;
     let reflen = refseq.len() as i32;
-    let mut window = Vec::new();
+    let RescueScratch {
+        revcomp,
+        window,
+        placements,
+    } = rescue;
+    // The query is the partner mate, reverse-complemented when the anchor is
+    // forward; these two bits name it within the fragment.
+    let query_id = (anchor_is_left as u8) << 1 | anchor.is_fw as u8;
     // Projected read extent (may overhang the transcript ends).
     let a_s = anchor.proj_start();
     let a_e = anchor.proj_end();
@@ -745,15 +810,13 @@ fn recover_mate(
         if win_end <= win_start {
             return None;
         }
-        crate::align::revcomp_into(partner_read, revcomp_buf);
-        let aln = align_in_window(
-            revcomp_buf,
-            refseq.slice(win_start as usize, win_end as usize, &mut window),
+        crate::align::revcomp_into(partner_read, revcomp);
+        let aln = placements.find(
+            query_id,
+            revcomp,
+            refseq.slice(win_start as usize, win_end as usize, window),
             &cfg.align,
         )?;
-        if !aln.valid {
-            return None;
-        }
         // partner ends `end_col` bases past the window start -> fragment length
         let partner_end = win_start + aln.end_col as i32;
         if !allow_dovetail && extents_dovetail((a_s, a_e), (partner_end - plen, partner_end)) {
@@ -767,14 +830,12 @@ fn recover_mate(
         if win_end <= win_start {
             return None;
         }
-        let aln = align_in_window(
+        let aln = placements.find(
+            query_id,
             partner_read,
-            refseq.slice(win_start as usize, win_end as usize, &mut window),
+            refseq.slice(win_start as usize, win_end as usize, window),
             &cfg.align,
         )?;
-        if !aln.valid {
-            return None;
-        }
         let partner_end_abs = win_start + aln.end_col as i32;
         let partner_start_abs = partner_end_abs - plen;
         if !allow_dovetail && extents_dovetail((partner_start_abs, partner_end_abs), (a_s, a_e)) {

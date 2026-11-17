@@ -993,15 +993,14 @@ pub struct WindowAlignment {
 }
 
 /// Align `query` as a substring of `window` (free reference gaps at both ends),
-/// used for orphan recovery where the mate's position within a fragment-length
+/// as orphan recovery does, where the mate's position within a fragment-length
 /// window is unknown. The query must align in full; the reference may overhang
 /// on either side for free, and the best reference end column is reported.
 ///
 /// This is a "fitting" affine-gap alignment (global on the query, free ends on
-/// the reference). It's a plain scalar DP — orphan recovery is opt-in
-/// (`recover_orphans`, off by default) and infrequent, so it is not on the hot
-/// path; keeping it scalar avoids any SIMD/platform dependency here. Returns
-/// `None` if either sequence is empty.
+/// the reference), as a plain scalar DP over the whole window. It is the
+/// definition [`find_in_window`], which recovery calls, must agree with.
+/// Returns `None` if either sequence is empty.
 pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option<WindowAlignment> {
     if query.is_empty() || window.is_empty() {
         return None;
@@ -1065,6 +1064,467 @@ pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option
         valid: best > min_accepted_score(n, cfg),
         end_col,
     })
+}
+
+/// [`align_in_window`] for a caller that only wants a *valid* placement: `Some`
+/// with the same score and end column exactly when `align_in_window` reports
+/// `valid`, `None` otherwise. Orphan recovery discards invalid placements, so
+/// this is what it calls.
+///
+/// Exact shortcuts make it cheap, all resting on how much an alignment may
+/// lose against a perfect one and still be accepted:
+///
+/// - A valid alignment leaves enough of the query's q-grams intact, all on
+///   diagonals close to its own (see `Seeds::ranges`). So only the parts of
+///   the window around such q-gram hits are searched, and a window without
+///   enough hits is not searched at all.
+/// - The ungapped (or narrowly banded) alignment on the most hit diagonal is
+///   a real one, so the search need only look for alignments scoring as much.
+/// - The DP skips the cells that cannot reach that score (see `window_dp`).
+pub fn find_in_window(
+    query: &[u8],
+    window: &[u8],
+    cfg: &AlignConfig,
+    scratch: &mut WindowScratch,
+) -> Option<WindowAlignment> {
+    if query.is_empty() || window.is_empty() {
+        return None;
+    }
+    let ma = cfg.match_score as i32;
+    let mp = cfg.mismatch_pen as i32;
+    let go = cfg.gap_open_pen as i32;
+    let ge = cfg.gap_extend_pen as i32;
+    // Both shortcuts need every step to add at most `match_score` and gaps to
+    // cost at least `ge > 0` per base; the DP's gap recurrence needs `go >= ge`.
+    if ma < 0 || mp < 0 || ge <= 0 || go < ge {
+        return align_in_window(query, window, cfg).filter(|a| a.valid);
+    }
+    let WindowScratch { win, seeds, dp } = scratch;
+    win.clear();
+    win.extend(window.iter().map(u8::to_ascii_uppercase));
+    if !seeds.ranges(query, win, cfg) {
+        let all = (i32::MIN / 4, i32::MAX / 4);
+        return window_dp(query, win, all, i32::MIN, cfg, dp).map(|(score, end_col)| {
+            WindowAlignment {
+                score,
+                valid: true,
+                end_col,
+            }
+        });
+    }
+    // First a narrow search around each group's most hit diagonal (widened to
+    // where an alignment overhanging an end of the window must start or end):
+    // what it finds is a real alignment, so the best scores at least as much,
+    // and the parts need only look for alignments reaching that. A typical
+    // placement has few indels, and is found here.
+    let mut floor = i32::MIN;
+    let (n, m) = (query.len() as i32, win.len() as i32);
+    for &d in &seeds.modes {
+        if d >= 0 && d + n <= m {
+            // the ungapped alignment on that diagonal
+            let score: i32 = query
+                .iter()
+                .zip(&win[d as usize..])
+                .map(|(&a, &b)| if a.to_ascii_uppercase() == b { ma } else { -mp })
+                .sum();
+            floor = floor.max(score);
+            continue;
+        }
+        let (d_lo, d_hi) = (d.min(m - n) - FLOOR_BAND, d.max(0) + FLOOR_BAND);
+        let lo = d_lo.max(0);
+        let hi = (n + d_hi).min(m);
+        if lo >= hi {
+            continue;
+        }
+        let part = &win[lo as usize..hi as usize];
+        if let Some((score, _)) = window_dp(query, part, (d_lo - lo, d_hi - lo), i32::MIN, cfg, dp)
+        {
+            floor = floor.max(score);
+        }
+    }
+    // Each part holds every valid alignment whose hits it was built from, with
+    // its exact score, and only real alignments; so the best over the parts,
+    // at the leftmost end reaching it, is the full window's.
+    let mut best: Option<(i32, usize)> = None;
+    for &(lo, hi, diags) in &seeds.ranges {
+        if let Some((score, end)) = window_dp(query, &win[lo..hi], diags, floor, cfg, dp) {
+            let end = lo + end;
+            if best.is_none_or(|(s, e)| score > s || (score == s && end < e)) {
+                best = Some((score, end));
+            }
+        }
+    }
+    best.map(|(score, end_col)| WindowAlignment {
+        score,
+        valid: true,
+        end_col,
+    })
+}
+
+/// The pruned DP behind [`find_in_window`]: the best score of `query` fitted
+/// into `win` (uppercase) with every cell on a diagonal (column - row) in
+/// `diags`, and the leftmost end column reaching it, if that score is above
+/// the acceptance threshold and at least `floor`; `None` when no end is.
+///
+/// Every row adds at most `match_score`, so a cell whose score plus
+/// `match_score` per remaining query base is below that bar cannot be on a
+/// wanted alignment (call it dead). Every cell on the best path to a wanted end is
+/// live, and is computed exactly from its live predecessors, so treating dead
+/// cells as `-inf` changes no wanted end. Each row is computed only over the
+/// columns the previous row's live cells can reach, and the search stops when
+/// a row has none.
+fn window_dp(
+    query: &[u8],
+    win: &[u8],
+    diags: (i32, i32),
+    floor: i32,
+    cfg: &AlignConfig,
+    buf: &mut DpRows,
+) -> Option<(i32, usize)> {
+    let n = query.len();
+    let m = win.len();
+    if m == 0 {
+        return None;
+    }
+    let ma = cfg.match_score as i32;
+    let mp = cfg.mismatch_pen as i32;
+    let go = cfg.gap_open_pen as i32;
+    let ge = cfg.gap_extend_pen as i32;
+    // Far below any real score, and far enough above i32::MIN that the few
+    // penalties subtracted from it before it is overwritten cannot overflow.
+    const NEG: i32 = i32::MIN / 4;
+    // an end is wanted when its score exceeds this
+    let bar = min_accepted_score(n, cfg).max(floor.saturating_sub(1));
+
+    let DpRows {
+        h_prev,
+        ix_prev,
+        h_cur,
+        ix_cur,
+    } = buf;
+    // Row 0: the read may start opposite any reference column for free.
+    h_prev.clear();
+    h_prev.resize(m + 1, 0);
+    ix_prev.clear();
+    ix_prev.resize(m + 1, NEG);
+    h_cur.clear();
+    h_cur.resize(m + 1, NEG);
+    ix_cur.clear();
+    ix_cur.resize(m + 1, NEG);
+
+    // Live columns of the previous row. Outside them, and one column past
+    // either end, the previous row holds `NEG` or a dead cell's score; both are
+    // at most the true score, which is all the argument above needs.
+    let (mut lo, mut hi) = (0usize, m);
+    for i in 1..=n {
+        // A cell in this row is live when its score exceeds this.
+        let live = bar - ma * (n - i) as i32;
+        let qi = query[i - 1].to_ascii_uppercase();
+        // Cells off `diags` are dead too. Both limits only grow from row to
+        // row, so the columns either side of a row stay `NEG` or computed.
+        let first = lo.max(1).max((i as i32 + diags.0).max(0) as usize);
+        let end = ((i as i32 + diags.1).max(0) as usize).min(m);
+        let last = (hi + 1).min(end);
+        if first > last {
+            return None;
+        }
+        h_cur[first - 1] = NEG;
+        ix_cur[first - 1] = NEG;
+        // Everything but a reference gap: the diagonal and a gap consuming a
+        // query base (`ix`), neither of which depends on this row.
+        {
+            let len = last + 1 - first;
+            let h_diag = &h_prev[first - 1..first - 1 + len];
+            let h_up = &h_prev[first..first + len];
+            let ix_up = &ix_prev[first..first + len];
+            let w = &win[first - 1..first - 1 + len];
+            let h_out = &mut h_cur[first..first + len];
+            let ix_out = &mut ix_cur[first..first + len];
+            for k in 0..len {
+                let s = if qi == w[k] { ma } else { -mp };
+                let ix = (h_up[k] - go).max(ix_up[k] - ge);
+                ix_out[k] = ix;
+                h_out[k] = (h_diag[k] + s).max(ix);
+            }
+        }
+        // Then reference gaps, along the row. With `go >= ge` reopening a gap
+        // never beats extending one, so the best gap into column `j` is
+        // `max over k < j of d[k] - go - ge*(j-1-k)`, `d` being the score
+        // before gaps: a running maximum of `d[k] + ge*k`, which keeps the
+        // loop-carried work to one `max` per cell.
+        let mut run = NEG;
+        for (j, h) in (first as i32..).zip(&mut h_cur[first..=last]) {
+            let d = *h;
+            *h = d.max(run - go - ge * (j - 1));
+            run = run.max(d + ge * j);
+        }
+        let row = &h_cur[first..=last];
+        // gaps past the last column only lose score, so a row with no live
+        // cell in it has none at all
+        let new_lo = first + row.iter().position(|&h| h > live)?;
+        let mut new_hi = first + row.iter().rposition(|&h| h > live).unwrap();
+        // Past the previous row's live columns only a reference gap opened in
+        // this row can still be live; it only loses score, so stop once dead.
+        let mut j = last + 1;
+        while j <= end {
+            let iy = run - go - ge * (j as i32 - 1);
+            if iy <= live {
+                break;
+            }
+            h_cur[j] = iy;
+            ix_cur[j] = NEG;
+            new_hi = j;
+            j += 1;
+        }
+        if j <= m {
+            h_cur[j] = NEG;
+            ix_cur[j] = NEG;
+        }
+        lo = new_lo;
+        hi = new_hi;
+        std::mem::swap(h_prev, h_cur);
+        std::mem::swap(ix_prev, ix_cur);
+    }
+
+    // Live cells in the last row are exactly the wanted ends, with their exact
+    // scores; every other end scores at most the bar.
+    let mut best = (NEG, 0usize);
+    for (j, &h) in h_prev.iter().enumerate().take(hi + 1).skip(lo) {
+        if h > best.0 {
+            best = (h, j);
+        }
+    }
+    Some(best)
+}
+
+/// Diagonals either side of a group's most hit one that [`find_in_window`]
+/// searches first.
+const FLOOR_BAND: i32 = 8;
+
+/// 2-bit codes of `ACGT` (upper case only), 4 for any other byte.
+static BASE_CODE: [u8; 256] = {
+    let mut t = [4u8; 256];
+    t[b'A' as usize] = 0;
+    t[b'C' as usize] = 1;
+    t[b'G' as usize] = 2;
+    t[b'T' as usize] = 3;
+    t
+};
+
+/// Length of the q-grams [`Seeds::ranges`] looks up.
+const QGRAM: usize = 7;
+
+/// More q-gram hits than this per window base and [`Seeds::ranges`] gives up.
+const MAX_HITS_PER_BASE: usize = 4;
+
+/// Reusable buffers for [`find_in_window`].
+#[derive(Debug, Default)]
+pub struct WindowScratch {
+    win: Vec<u8>,
+    seeds: Seeds,
+    dp: DpRows,
+}
+
+/// DP rows for [`window_dp`].
+#[derive(Debug, Default)]
+struct DpRows {
+    h_prev: Vec<i32>,
+    ix_prev: Vec<i32>,
+    h_cur: Vec<i32>,
+    ix_cur: Vec<i32>,
+}
+
+/// The q-gram seeding behind [`find_in_window`].
+#[derive(Debug, Default)]
+struct Seeds {
+    /// for each q-gram code, 1 + the last query position holding it, or 0;
+    /// all zero between calls
+    head: Vec<u16>,
+    /// 1 + the previous query position holding the same q-gram, or 0
+    next: Vec<u16>,
+    /// a bit per q-gram code set for the query's, a small (cached) first test
+    /// before `head`; all zero between calls
+    present: Vec<u64>,
+    /// diagonals (window position - query position) of the q-gram hits
+    hits: Vec<i32>,
+    /// the parts of the window to search: `[lo, hi)` column ranges, with the
+    /// diagonals to search within each (relative to `lo`)
+    ranges: Vec<(usize, usize, (i32, i32))>,
+    /// the most hit diagonal of each group of hits searched
+    modes: Vec<i32>,
+}
+
+impl Seeds {
+    /// Fill `self.ranges` with the parts of `win` (uppercase) that hold every
+    /// valid placement of `query`, or return `false` when this cannot narrow
+    /// the search and the whole window must be searched.
+    ///
+    /// An alignment loses `max_loss` points at most against a perfect one, and
+    /// each event in it (mismatch, read insertion, read deletion) destroys a
+    /// bounded number of the query's q-grams per point lost; every q-gram it
+    /// does not destroy is a hit, an exact match on the alignment's own
+    /// diagonal. So a valid alignment has at least `need` hits. Its gaps cost
+    /// at least `ge` per base, so its diagonal moves by at most
+    /// `reach = max_loss / ge` overall: its hits are within `reach` of each
+    /// other, and its cells within `reach` of any of its hits. Grouping hits
+    /// that are within `reach` of the next, an alignment's hits fall in one
+    /// group, which must then have `need` hits, and its cells in the columns
+    /// spanned by that group's diagonals widened by `reach`.
+    ///
+    /// A q-gram with a base other than `ACGT` cannot be looked up, and since
+    /// the DP compares such bases by byte it may still be intact; `need` is
+    /// lowered by their number.
+    fn ranges(&mut self, query: &[u8], win: &[u8], cfg: &AlignConfig) -> bool {
+        let q = QGRAM;
+        let n = query.len();
+        let m = win.len();
+        if n < q || n >= u16::MAX as usize {
+            return false;
+        }
+        let ma = cfg.match_score as i64;
+        let mp = cfg.mismatch_pen as i64;
+        let go = cfg.gap_open_pen as i64;
+        let ge = cfg.gap_extend_pen as i64;
+        let qq = q as i64;
+        // q-grams destroyed per point lost, as `num / den`: a mismatch destroys
+        // `q` for `ma + mp`; a read insertion of `L` bases `L + q - 1` for
+        // `ma*L + go + ge*(L-1)`, a ratio largest at `L = 1` or as `L` grows;
+        // a read deletion `q - 1` for at least `go`.
+        let rates = [(qq, ma + mp), (qq, ma + go), (1, ma + ge), (qq - 1, go)];
+        if rates.iter().any(|&(_, den)| den <= 0) {
+            return false;
+        }
+        let (num, den) =
+            rates.into_iter().fold(
+                (0, 1),
+                |(a, b), (c, d)| {
+                    if c * b > a * d {
+                        (c, d)
+                    } else {
+                        (a, b)
+                    }
+                },
+            );
+        self.ranges.clear();
+        self.modes.clear();
+        let max_loss = ma * n as i64 - min_accepted_score(n, cfg) as i64 - 1;
+        if max_loss < 0 {
+            return true; // not even a perfect alignment is valid
+        }
+        let reach = max_loss / ge;
+
+        let code = |b: u8| {
+            let c = BASE_CODE[b as usize];
+            (c < 4).then_some(c as u32)
+        };
+        let mask = (1u32 << (2 * q)) - 1;
+        self.head.resize(1 << (2 * q), 0);
+        self.present.resize(1 << (2 * q - 6), 0);
+        self.next.clear();
+        self.next.resize(n, 0);
+        // Index the query's q-grams by their start.
+        let mut other = 0i64;
+        let (mut h, mut run) = (0u32, 0usize);
+        for (e, &b) in query.iter().enumerate() {
+            match code(b.to_ascii_uppercase()) {
+                Some(c) => {
+                    h = (h << 2 | c) & mask;
+                    run += 1;
+                }
+                None => run = 0,
+            }
+            if e + 1 < q {
+                continue;
+            }
+            if run >= q {
+                let p = e + 1 - q;
+                self.next[p] = self.head[h as usize];
+                self.head[h as usize] = p as u16 + 1;
+                self.present[(h >> 6) as usize] |= 1 << (h & 63);
+            } else {
+                other += 1;
+            }
+        }
+        let need = (n - q + 1) as i64 - max_loss * num / den - other;
+        let narrow = need > 0;
+        if narrow {
+            // Look the window's q-grams up.
+            self.hits.clear();
+            let (mut h, mut run) = (0u32, 0usize);
+            for (e, &b) in win.iter().enumerate() {
+                match code(b) {
+                    Some(c) => {
+                        h = (h << 2 | c) & mask;
+                        run += 1;
+                    }
+                    None => run = 0,
+                }
+                if run >= q && self.present[(h >> 6) as usize] >> (h & 63) & 1 != 0 {
+                    let t = (e + 1 - q) as i32;
+                    let mut p = self.head[h as usize];
+                    while p != 0 {
+                        self.hits.push(t - (p as i32 - 1));
+                        p = self.next[p as usize - 1];
+                    }
+                }
+            }
+        }
+        // Leave `head` all zero for the next call.
+        let (mut h, mut run) = (0u32, 0usize);
+        for &b in query {
+            match code(b.to_ascii_uppercase()) {
+                Some(c) => {
+                    h = (h << 2 | c) & mask;
+                    run += 1;
+                }
+                None => run = 0,
+            }
+            if run >= q {
+                self.head[h as usize] = 0;
+                self.present[(h >> 6) as usize] = 0;
+            }
+        }
+        // A low-complexity query in a low-complexity window can hit almost
+        // everywhere; then grouping would not narrow the search anyway.
+        if !narrow || self.hits.len() > MAX_HITS_PER_BASE * m {
+            return false;
+        }
+
+        self.hits.sort_unstable();
+        let (reach, need) = (reach as i32, need as usize);
+        let mut start = 0;
+        while start < self.hits.len() {
+            let mut end = start + 1;
+            while end < self.hits.len() && self.hits[end] - self.hits[end - 1] <= reach {
+                end += 1;
+            }
+            if end - start >= need {
+                let group = &self.hits[start..end];
+                let mode = group
+                    .chunk_by(|a, b| a == b)
+                    .max_by_key(|c| c.len())
+                    .map_or(0, |c| c[0]);
+                self.modes.push(mode);
+                let d_lo = self.hits[start] - reach;
+                let d_hi = self.hits[end - 1] + reach;
+                match self.ranges.last_mut() {
+                    Some(last) if d_lo <= last.2 .1 + 1 => last.2 .1 = d_hi,
+                    _ => self.ranges.push((0, 0, (d_lo, d_hi))),
+                }
+            }
+            start = end;
+        }
+        // Columns of the cells on diagonals `[d_lo, d_hi]`: from the free start
+        // opposite column `d_lo` to row n's column `n + d_hi`.
+        self.ranges.retain_mut(|(lo, hi, (d_lo, d_hi))| {
+            *lo = (*d_lo).max(0) as usize;
+            *hi = (n as i64 + *d_hi as i64).clamp(0, m as i64) as usize;
+            *d_lo -= *lo as i32;
+            *d_hi -= *lo as i32;
+            lo < hi
+        });
+        true
+    }
 }
 
 #[cfg(test)]
@@ -1467,6 +1927,127 @@ mod tests {
             !a.valid,
             "unrelated read should not validate (score {})",
             a.score
+        );
+    }
+
+    /// `find_in_window` must report exactly the placements `align_in_window`
+    /// accepts, with the same score and end column, and nothing else: over
+    /// reads placed in, across the ends of, and away from their window, with
+    /// substitutions, indels, `N`s, soft-masking, low complexity and repeats,
+    /// under several scoring schemes (including ones its shortcuts decline).
+    #[test]
+    fn find_in_window_matches_align_in_window() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let mut scratch = WindowScratch::default();
+        let (mut valid, mut total) = (0, 0);
+        for &(ma, mp, go, ge, frac) in &[
+            (2i8, 4i8, 6i8, 2i8, 0.65f32),
+            (2, 4, 6, 2, 0.3),
+            (2, 4, 6, 2, 0.9),
+            (1, 3, 5, 1, 0.65),
+            (2, 2, 3, 1, 0.5),
+            (3, 2, 2, 3, 0.65), // go < ge: falls back to the plain DP
+            (2, 4, 6, 0, 0.65), // ge = 0: likewise
+        ] {
+            let cfg = AlignConfig {
+                match_score: ma,
+                mismatch_pen: mp,
+                gap_open_pen: go,
+                gap_extend_pen: ge,
+                min_score_fraction: frac,
+                ..AlignConfig::default()
+            };
+            for _ in 0..1500 {
+                let wlen = 1 + rnd(400) as usize;
+                let mut window: Vec<u8> = match rnd(6) {
+                    // low complexity: few distinct bases, or a short repeat
+                    0 => (0..wlen).map(|_| b"AAAC"[rnd(4) as usize]).collect(),
+                    1 => {
+                        let unit = gen_seq(1 + rnd(12) as usize, rnd(1 << 30));
+                        unit.iter().cycle().take(wlen).copied().collect()
+                    }
+                    _ => gen_seq(wlen, rnd(1 << 30)),
+                };
+                if rnd(5) == 0 {
+                    let at = rnd(wlen as u64) as usize;
+                    window[at] = b'N';
+                }
+                let qlen = 1 + rnd(160) as usize;
+                // where the read comes from: inside the window, overhanging
+                // either end, or unrelated
+                let mut read: Vec<u8> = if rnd(6) == 0 {
+                    gen_seq(qlen, rnd(1 << 30))
+                } else {
+                    let start = rnd(wlen as u64 + qlen as u64) as i64 - qlen as i64 / 2;
+                    (0..qlen as i64)
+                        .map(|k| {
+                            let p = start + k;
+                            if p >= 0 && (p as usize) < wlen {
+                                window[p as usize]
+                            } else {
+                                b"ACGT"[rnd(4) as usize]
+                            }
+                        })
+                        .collect()
+                };
+                for _ in 0..rnd(8) {
+                    if read.is_empty() {
+                        break;
+                    }
+                    let at = rnd(read.len() as u64) as usize;
+                    match rnd(4) {
+                        0 => read[at] = b"ACGTN"[rnd(5) as usize],
+                        1 => {
+                            for _ in 0..1 + rnd(6) {
+                                read.insert(at, b"ACGT"[rnd(4) as usize]);
+                            }
+                        }
+                        2 => {
+                            let k = (1 + rnd(6) as usize).min(read.len() - at);
+                            read.drain(at..at + k);
+                        }
+                        _ => read[at] = read[at].to_ascii_lowercase(),
+                    }
+                }
+                let want = align_in_window(&read, &window, &cfg);
+                let got = find_in_window(&read, &window, &cfg, &mut scratch);
+                total += 1;
+                match (want, got) {
+                    (Some(w), Some(g)) if w.valid => {
+                        valid += 1;
+                        assert_eq!(
+                            (w.score, w.end_col),
+                            (g.score, g.end_col),
+                            "read {:?} window {:?}",
+                            String::from_utf8_lossy(&read),
+                            String::from_utf8_lossy(&window)
+                        );
+                        assert!(g.valid);
+                    }
+                    (w, None) => assert!(
+                        !w.is_some_and(|w| w.valid),
+                        "missed: read {:?} window {:?}",
+                        String::from_utf8_lossy(&read),
+                        String::from_utf8_lossy(&window)
+                    ),
+                    (w, Some(g)) => panic!(
+                        "invalid placement reported: {w:?} vs {g:?}, read {:?} window {:?}",
+                        String::from_utf8_lossy(&read),
+                        String::from_utf8_lossy(&window)
+                    ),
+                }
+            }
+        }
+        // the cases must exercise both outcomes
+        assert!(
+            valid > total / 5 && valid < total * 4 / 5,
+            "{valid} of {total} valid"
         );
     }
 
