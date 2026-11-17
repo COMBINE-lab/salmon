@@ -240,6 +240,33 @@ pub(crate) fn extents_admissible(fw: (i32, i32), rc: (i32, i32), cfg: &PairingCo
         && (cfg.allow_dovetail || extents_overhang(fw, rc) <= cfg.dovetail_tolerance)
 }
 
+/// The read-through bases of facing mates with these extents, as `(left,
+/// right)` clips of each mate's query in reference-forward order: the forward
+/// mate's bases past the reverse mate's end (its 5' end) are clipped on the
+/// right, the reverse mate's bases before the forward mate's start on the left.
+/// Both are `(0, 0)` for a cleanly nested pair. Returns `(fw clip, rc clip)`.
+pub(crate) fn extents_clips(fw: (i32, i32), rc: (i32, i32)) -> ((i32, i32), (i32, i32)) {
+    ((0, (fw.1 - rc.1).max(0)), ((fw.0 - rc.0).max(0), 0))
+}
+
+/// [`extents_clips`] of a concordant pair's candidates, as `(l clip, r clip)`:
+/// selective alignment scores a dovetailed pair over its insert bases only.
+pub(crate) fn pair_clips(l: &MappingCandidate, r: &MappingCandidate) -> ((i32, i32), (i32, i32)) {
+    if l.is_fw == r.is_fw {
+        return ((0, 0), (0, 0));
+    }
+    let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
+    let (fc, rcc) = extents_clips(
+        (fw.proj_start(), fw.proj_end()),
+        (rc.proj_start(), rc.proj_end()),
+    );
+    if l.is_fw {
+        (fc, rcc)
+    } else {
+        (rcc, fc)
+    }
+}
+
 /// [`extents_admissible`] for a pair's candidates (opposite strands).
 fn pair_admissible(l: &MappingCandidate, r: &MappingCandidate, cfg: &PairingConfig) -> bool {
     let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
@@ -824,6 +851,24 @@ mod tests {
                 assert_eq!(pair.fragment_len, want, "{fw:?} {rc:?} fw_left={fw_left}");
             }
         }
+    }
+
+    #[test]
+    /// The bases a mate has past the other mate's 5' end are clipped from its
+    /// query, in reference-forward order: the forward mate's on the right, the
+    /// reverse mate's on the left; none for a nested pair.
+    fn read_through_clips() {
+        // fw [150,250), rc [118,218): fw reads 32 past rc's 5' end (218), rc 32
+        // before fw's 5' end (150).
+        assert_eq!(extents_clips((150, 250), (118, 218)), ((0, 32), (32, 0)));
+        // only the forward mate reads through
+        assert_eq!(extents_clips((100, 200), (120, 190)), ((0, 10), (0, 0)));
+        // nested
+        assert_eq!(extents_clips((100, 150), (300, 350)), ((0, 0), (0, 0)));
+        // per candidate, whichever read is forward
+        let (f, r) = (cand(0, true, 150, 100), cand(0, false, 118, 100));
+        assert_eq!(pair_clips(&f, &r), ((0, 32), (32, 0)));
+        assert_eq!(pair_clips(&r, &f), ((32, 0), (0, 32)));
     }
 
     #[test]

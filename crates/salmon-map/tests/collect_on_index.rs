@@ -314,6 +314,9 @@ fn orphan_recovery_refuses_a_dovetailed_mate() {
     let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &tolerant);
     assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
     assert_eq!((m[0].ref_pos, m[0].fragment_len), (200, 80), "{m:?}");
+    // The anchor's 20 bases past the rescued mate's 5' end are not scored: its
+    // score is a perfect 80-base alignment.
+    assert_eq!(m[0].r1_score, perfect_score(80, &tolerant.align), "{m:?}");
 
     // A reverse anchor whose rescued forward mate starts after the anchor does.
     let r1 = break_kmers(&transcript[220..280], 25);
@@ -471,11 +474,40 @@ fn short_insert_read_through_pairs_by_default() {
             (200, 80, 200, 279),
             "{pair:?}"
         );
+        // Scored over the insert only: two perfect 80-base alignments.
+        assert_eq!(pair.score, 2 * perfect_score(80, &def.align), "{pair:?}");
         let m = map_read_pair(idx.inner(), &mut hs, &refs, a, b, &strict);
         assert!(
             m.iter().all(|m| m.status != MateStatus::PairedEndPaired),
             "{m:?}"
         );
+    }
+}
+
+#[test]
+/// With 30 adapter bases on each 110-base mate of an 80-base insert, the full
+/// reads fail the minimum score (the adapter costs more than a third of a
+/// read), so without clipping the read-through the pair cannot form even
+/// within the tolerance. Scored over the insert bases, against the threshold
+/// for those bases, it pairs as [200, 280) with a perfect score.
+fn long_read_through_is_scored_on_the_insert() {
+    let transcript = gen_seq(600, 0xADA9);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let refs = IdxRefs(&idx);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut r1 = transcript[200..280].to_vec();
+    r1.extend_from_slice(&gen_seq(30, 0x2222));
+    let mut r2 = revcomp(&transcript[200..280]);
+    r2.extend_from_slice(&gen_seq(30, 0x3333));
+    let cfg = MapConfig::default();
+    for (a, b) in [(&r1, &r2), (&r2, &r1)] {
+        let m = map_read_pair(idx.inner(), &mut hs, &refs, a, b, &cfg);
+        let pair = m
+            .iter()
+            .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+            .unwrap_or_else(|| panic!("no pair: {m:?}"));
+        assert_eq!((pair.ref_pos, pair.fragment_len), (200, 80), "{pair:?}");
+        assert_eq!(pair.score, 2 * perfect_score(80, &cfg.align), "{pair:?}");
     }
 }
 

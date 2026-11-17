@@ -56,7 +56,8 @@ pub mod score;
 pub mod sketch;
 
 pub use align::{
-    align_chain, align_chain_view, align_in_window, perfect_score, AlignConfig, Alignment,
+    align_chain, align_chain_clipped_view, align_chain_view, align_in_window, perfect_score,
+    AlignConfig, Alignment,
 };
 pub use chain::{chain_mems, ChainConfig, MemChain};
 pub use collect::{
