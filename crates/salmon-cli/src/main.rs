@@ -867,13 +867,13 @@ struct QuantArgs {
     #[arg(long = "softclipOverhangs")]
     softclip_overhangs: bool,
     /// Per-target pre-merge chain sub-optimality threshold: keep chains scoring
-    /// `>= best_chain_score * thresh` (selective-alignment mode). Range [0,1].
+    /// `>= best_chain_score * thresh` (selective-alignment mode). Between 0 and 1.
     /// Rust default 0.8 (salmon's default is 0.75).
     #[arg(long = "preMergeChainSubThresh", value_parser = parse_unit_f32)]
     pre_merge_chain_sub_thresh: Option<f32>,
     /// Post-merge concordant chain-pair sub-optimality threshold: after pairing,
     /// keep pairs whose read-coverage is `>= best_pair_coverage * thresh`
-    /// (paired-end, selective-alignment mode). Range [0,1]. Default 0.0 (off);
+    /// (paired-end, selective-alignment mode). Between 0 and 1. Default 0.0 (off);
     /// salmon's default is 0.9, thresholded on chain score rather than coverage.
     #[arg(long = "postMergeChainSubThresh", value_parser = parse_unit_f32)]
     post_merge_chain_sub_thresh: Option<f32>,
