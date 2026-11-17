@@ -834,6 +834,44 @@ mod tests {
         assert!(compatible_single(u, true, MateStatus::SingleEnd));
         assert!(compatible_single(u, false, MateStatus::SingleEnd));
     }
+
+    /// An orphan keeps the strand its own mate promises: in ISR read 1 is
+    /// antisense and read 2 sense, so the two orphan arms are mirror images.
+    /// Swapping them would drop every right orphan of a dUTP library.
+    #[test]
+    fn orphan_compatibility_follows_the_mate() {
+        use MateStatus::{PairedEndLeft as L, PairedEndRight as R};
+        // (format, status, forward, compatible)
+        let table = [
+            ("ISF", L, true, true),
+            ("ISF", L, false, false),
+            ("ISF", R, true, false),
+            ("ISF", R, false, true),
+            ("ISR", L, true, false),
+            ("ISR", L, false, true),
+            ("ISR", R, true, true),
+            ("ISR", R, false, false),
+            ("IU", L, true, true),
+            ("IU", L, false, true),
+            ("IU", R, true, true),
+            ("IU", R, false, true),
+            // Same-strand protocols: both mates share the strand.
+            ("MSF", L, true, true),
+            ("MSF", L, false, false),
+            ("MSF", R, true, true),
+            ("MSF", R, false, false),
+            ("MSR", L, true, false),
+            ("MSR", R, false, true),
+        ];
+        for (fmt, status, fw, want) in table {
+            let f = LibraryFormat::parse(fmt).unwrap();
+            assert_eq!(
+                compatible_single(f, fw, status),
+                want,
+                "{fmt} {status:?} forward={fw}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
