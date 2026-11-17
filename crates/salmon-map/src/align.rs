@@ -1251,13 +1251,7 @@ fn window_dp(
         // `max over k < j of d[k] - go - ge*(j-1-k)`, `d` being the score
         // before gaps: a running maximum of `d[k] + ge*k`, which keeps the
         // loop-carried work to one `max` per cell.
-        let (mut run, j0) = gap_scan4(&mut h_cur[first..=last], first as i32, go, ge);
-        // the columns the chunks left over
-        for (j, h) in (j0..).zip(&mut h_cur[j0 as usize..=last]) {
-            let d = *h;
-            *h = d.max(run - go - ge * (j - 1));
-            run = run.max(d + ge * j);
-        }
+        let run = gap_pass(&mut h_cur[first..=last], first as i32, go, ge);
         let row = &h_cur[first..=last];
         // gaps past the last column only lose score, so a row with no live
         // cell in it has none at all
@@ -1297,12 +1291,37 @@ fn window_dp(
     Some(best)
 }
 
-/// The reference-gap pass of [`window_dp`] over the whole chunks of four
-/// columns of `row` (the first being column `first`), four columns at a time:
-/// prefix maxima of `d[k] + ge*k` within a chunk, then the carry from the
-/// chunks before. Returns the running maximum and the first column left to
-/// the scalar loop. Integer `max` and `add` are exact, so the result is the
-/// scalar loop's.
+/// The reference-gap pass of [`window_dp`] over `row`, whose first cell is
+/// column `first`: each cell's score before gaps `d` becomes the larger of it
+/// and the best gap into the cell, `max over k < j of d[k] - go - ge*(j-1-k)`.
+/// Returns the running maximum of `d[k] + ge*k` over the row, for the gaps
+/// past it. Whole chunks of four columns go through [`gap_scan4`] where the
+/// target has it, the rest through [`gap_pass_scalar`].
+fn gap_pass(row: &mut [i32], first: i32, go: i32, ge: i32) -> i32 {
+    let (run, rest) = gap_scan4(row, first, go, ge);
+    gap_pass_scalar(&mut row[(rest - first) as usize..], rest, go, ge, run)
+}
+
+/// [`gap_pass`] one column at a time, carrying `run` in from the columns
+/// before `row`: the reference the vector versions must match.
+fn gap_pass_scalar(row: &mut [i32], first: i32, go: i32, ge: i32, mut run: i32) -> i32 {
+    for (j, h) in (first..).zip(row) {
+        let d = *h;
+        *h = d.max(run - go - ge * (j - 1));
+        run = run.max(d + ge * j);
+    }
+    run
+}
+
+// The vector versions of the pass take four columns at a time: prefix maxima
+// of `e = d[k] + ge*k` within the chunk by two maxes with `e` shifted one and
+// two lanes (shifting in `NEG`), then one max with the carry from the chunks
+// before. Lane `l` of a chunk at column `j0` is column `j0 + l`. Each returns
+// the running maximum and the first column it left to the scalar pass.
+// Integer `max`, `add` and `sub` are exact, so the scores are the scalar
+// pass's.
+
+/// [`gap_pass`]'s whole chunks of four columns, with SSE4.1.
 #[cfg(all(target_arch = "x86_64", target_feature = "sse4.1"))]
 #[allow(unsafe_code)] // SSE4.1 intrinsics; see the SAFETY note
 fn gap_scan4(row: &mut [i32], first: i32, go: i32, ge: i32) -> (i32, i32) {
@@ -1320,9 +1339,12 @@ fn gap_scan4(row: &mut [i32], first: i32, go: i32, ge: i32) -> (i32, i32) {
         for c in row.as_chunks_mut::<4>().0 {
             let d = _mm_loadu_si128(c.as_ptr() as *const __m128i);
             let e = _mm_add_epi32(d, jv);
+            // [NEG, e0, e1, e2] and [NEG, NEG, p0, p1]
             let p = _mm_max_epi32(e, _mm_alignr_epi8(e, negv, 12));
             let p = _mm_max_epi32(p, _mm_alignr_epi8(p, negv, 8));
+            // the maximum over the columns before each lane: [run, p0, p1, p2]
             let before = _mm_max_epi32(_mm_alignr_epi8(p, runv, 12), runv);
+            // before - go - ge*(j - 1) = before - (ge*j + go - ge)
             let h = _mm_max_epi32(d, _mm_sub_epi32(before, _mm_add_epi32(jv, open)));
             _mm_storeu_si128(c.as_mut_ptr() as *mut __m128i, h);
             runv = _mm_max_epi32(runv, _mm_shuffle_epi32(p, 0xFF));
@@ -1333,8 +1355,48 @@ fn gap_scan4(row: &mut [i32], first: i32, go: i32, ge: i32) -> (i32, i32) {
     }
 }
 
-/// Without SSE4.1 the scalar loop in [`window_dp`] does all of the row.
-#[cfg(not(all(target_arch = "x86_64", target_feature = "sse4.1")))]
+/// [`gap_pass`]'s whole chunks of four columns, with NEON (baseline on
+/// aarch64): the SSE4.1 version lane for lane.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[allow(unsafe_code)] // NEON intrinsics; see the SAFETY note
+fn gap_scan4(row: &mut [i32], first: i32, go: i32, ge: i32) -> (i32, i32) {
+    use std::arch::aarch64::*;
+    const NEG: i32 = i32::MIN / 4;
+    let mut j0 = first;
+    // SAFETY: NEON is enabled at compile time, and every load and store is
+    // one of exactly the four `i32`s of `c`.
+    unsafe {
+        let negv = vdupq_n_s32(NEG);
+        let mut runv = negv;
+        let lanes = [ge * j0, ge * (j0 + 1), ge * (j0 + 2), ge * (j0 + 3)];
+        let mut jv = vld1q_s32(lanes.as_ptr());
+        let step = vdupq_n_s32(4 * ge);
+        let open = vdupq_n_s32(go - ge);
+        for c in row.as_chunks_mut::<4>().0 {
+            let d = vld1q_s32(c.as_ptr());
+            let e = vaddq_s32(d, jv);
+            // `vextq_s32(a, b, n)` is lanes `n..4` of `a` then `0..n` of `b`:
+            // [NEG, e0, e1, e2] and [NEG, NEG, p0, p1]
+            let p = vmaxq_s32(e, vextq_s32::<3>(negv, e));
+            let p = vmaxq_s32(p, vextq_s32::<2>(negv, p));
+            // the maximum over the columns before each lane: [run, p0, p1, p2]
+            let before = vmaxq_s32(vextq_s32::<3>(runv, p), runv);
+            // before - go - ge*(j - 1) = before - (ge*j + go - ge)
+            let h = vmaxq_s32(d, vsubq_s32(before, vaddq_s32(jv, open)));
+            vst1q_s32(c.as_mut_ptr(), h);
+            runv = vmaxq_s32(runv, vdupq_laneq_s32::<3>(p));
+            jv = vaddq_s32(jv, step);
+            j0 += 4;
+        }
+        (vgetq_lane_s32::<0>(runv), j0)
+    }
+}
+
+/// Without SSE4.1 or NEON the scalar pass does all of the row.
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "sse4.1"),
+    all(target_arch = "aarch64", target_feature = "neon")
+)))]
 fn gap_scan4(_row: &mut [i32], first: i32, _go: i32, _ge: i32) -> (i32, i32) {
     (i32::MIN / 4, first)
 }
@@ -2015,6 +2077,66 @@ mod tests {
             "unrelated read should not validate (score {})",
             a.score
         );
+    }
+
+    /// The vector reference-gap pass (SSE4.1 or NEON, where the target has
+    /// one) must give the scalar pass's scores and running maximum on every
+    /// row shape: no whole chunk, chunks with tails of 0-3 columns, maxima
+    /// carried across chunks, `NEG` cells and both gap penalties.
+    #[test]
+    fn gap_pass_matches_scalar() {
+        const NEG: i32 = i32::MIN / 4;
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut rnd = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let (mut vector, mut chunked) = (0, 0);
+        for &(go, ge) in &[(6, 2), (5, 1), (2, 2), (3, 1), (30, 7), (6, 0)] {
+            for _ in 0..20_000 {
+                let len = rnd(41) as usize;
+                let first = 1 + rnd(1100) as i32;
+                let row: Vec<i32> = (0..len)
+                    .map(|_| match rnd(8) {
+                        // dead cells, as the DP leaves them
+                        0 => NEG - rnd(40) as i32,
+                        // a spike whose gap carries into later chunks
+                        1 => 200 + rnd(400) as i32,
+                        _ => rnd(600) as i32 - 400,
+                    })
+                    .collect();
+                let mut want = row.clone();
+                let want_run = gap_pass_scalar(&mut want, first, go, ge, NEG);
+                let mut got = row.clone();
+                let got_run = gap_pass(&mut got, first, go, ge);
+                assert_eq!(
+                    (got, got_run),
+                    (want, want_run),
+                    "row {row:?} first {first} go {go} ge {ge}"
+                );
+                // and the vector part on its own against the scalar pass over
+                // the same columns
+                let mut part = row.clone();
+                let (run, rest) = gap_scan4(&mut part, first, go, ge);
+                let done = (rest - first) as usize;
+                let mut want = row[..done].to_vec();
+                assert_eq!(run, gap_pass_scalar(&mut want, first, go, ge, NEG));
+                assert_eq!(part[..done], want[..]);
+                assert_eq!(part[done..], row[done..]);
+                if done > 0 {
+                    vector += 1;
+                    chunked += (done > 4) as usize;
+                }
+            }
+        }
+        if cfg!(any(
+            all(target_arch = "x86_64", target_feature = "sse4.1"),
+            all(target_arch = "aarch64", target_feature = "neon")
+        )) {
+            assert!(vector > 50_000 && chunked > 40_000, "{vector} {chunked}");
+        }
     }
 
     /// `find_in_window` must report exactly the placements `align_in_window`
