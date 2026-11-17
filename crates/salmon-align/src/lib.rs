@@ -1017,7 +1017,18 @@ fn open_sam_reader(path: &Path) -> Result<sam::io::Reader<Box<dyn BufRead + Send
 }
 
 /// Read just the header from a SAM/BAM input (chosen by extension).
+///
+/// This is the first of several opens on every alignment path (header, `-l A`
+/// peek, record pass(es)), so it also refuses a pipe: the first open would
+/// drain it and the next would wait forever for a writer that has gone.
 fn read_alignment_header(path: &Path) -> Result<Header> {
+    let meta = std::fs::metadata(path).with_context(|| format!("opening {}", path.display()))?;
+    anyhow::ensure!(
+        meta.is_file(),
+        "alignment input {} is not a regular file (a pipe or process substitution?); \
+         salmon reads alignments more than once, so write them to a file first",
+        path.display()
+    );
     if is_sam_path(path) {
         open_sam_reader(path)?
             .read_header()
