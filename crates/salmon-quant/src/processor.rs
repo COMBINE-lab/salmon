@@ -197,6 +197,12 @@ pub(crate) struct Shared<'a> {
     pub bam: Option<&'a crate::bam::BamOutput>,
     /// when set, write per-fragment mappings to a RAD file (`--writeRad`)
     pub rad: Option<&'a salmon_rad::RadOutputWriter>,
+    /// run-wide mapping-output settings: the read group to tag records with, and
+    /// whether to realize a base-level CIGAR for each placement
+    pub record_options: &'a crate::mapping_record::RecordOptions<'a>,
+    /// also emit a `FLAG 0x4` record for every fragment that did not map
+    /// (`--sampleUnaligned`), so the mapping output covers the whole library
+    pub write_unaligned: bool,
     /// `--deterministic` mode: collect an order-independent fragment-length
     /// distribution (+ library-format tally) from the proper pairs
     /// during the mapping pass, instead of training the online (log-space) FLD or
@@ -392,6 +398,9 @@ pub(crate) struct QuantProcessor<'a> {
     pub unmapped: String,
     /// per-thread SAM record buffer (flushed to the shared writer per batch)
     pub sam_buf: String,
+    /// per-thread buffers for deriving record fields (realized CIGARs, MD
+    /// strings, the aligner workspace); allocated once per worker, not per record
+    pub emit_scratch: crate::mapping_record::EmitScratch,
     /// per-thread raw BAM record chunk; allocated only for `--writeBam`. Holds
     /// its own borrow of the writer, so "have a chunk ⇒ have somewhere to send
     /// it" is enforced by the type rather than re-checked at each use.
@@ -430,6 +439,7 @@ impl<'a> QuantProcessor<'a> {
             posbias,
             unmapped: String::new(),
             sam_buf: String::new(),
+            emit_scratch: crate::mapping_record::EmitScratch::default(),
             bam_scratch: shared.bam.map(|output| output.scratch()),
             rad_buf: shared.rad.map(|rad| {
                 salmon_rad::FragmentChunkBuf::with_capacity_codec(64 * 1024, rad.codec())
@@ -1240,6 +1250,30 @@ fn accumulate_vm_stats(maps_empty: bool, counters: &mut Counters) {
     }
 }
 
+/// What a fragment writes to the mapping output: its quantified placements, and
+/// under `--spliced` its genome decoy placements too. A genome decoy is a
+/// chromosome, so those are already genome alignments: the only ones a read
+/// from an intron or between genes has, and a read's other loci when it also
+/// sits on a paralog the annotation does not describe. The record writer keeps
+/// what STAR would report of them. They are never quantified.
+fn written_placements<'p>(
+    sh: &Shared<'_>,
+    placements: &'p [ScoredMapping],
+    decoys: &'p [ScoredMapping],
+) -> std::borrow::Cow<'p, [ScoredMapping]> {
+    use std::borrow::Cow;
+    if decoys.is_empty()
+        || sh.record_options.projector.is_none()
+        || placements.len() + decoys.len() > sh.max_read_occ
+    {
+        Cow::Borrowed(placements)
+    } else if placements.is_empty() {
+        Cow::Borrowed(decoys)
+    } else {
+        Cow::Owned([placements, decoys].concat())
+    }
+}
+
 /// Merge this thread's observed bias models (sequence and GC) into the shared
 /// accumulators.
 /// The open `unmapped_names.txt`, shared by every worker.
@@ -1357,6 +1391,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             posbias,
             unmapped,
             sam_buf,
+            emit_scratch,
             bam_scratch,
             rad_buf,
         } = self;
@@ -1449,24 +1484,56 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if !sh.sketch {
                 accumulate_vm_stats(placements.is_empty(), counters);
             }
-            if sh.sam.is_some() && !placements.is_empty() {
-                crate::sam::write_fragment(
-                    sam_buf,
-                    sh.salmon,
-                    r1.id(),
-                    s1.as_ref(),
-                    Some((r2.id(), s2.as_ref())),
-                    &placements,
-                );
+            // Only assembled when there is somewhere for it to go: a run without
+            // mapping output should not pay for reading the mate's id and
+            // qualities on every fragment.
+            let written = written_placements(&sh, &placements, &scratch.map.decoys);
+            let mate = (sh.sam.is_some() || bam_scratch.is_some())
+                .then(|| (r2.id(), s2.as_ref(), r2.qual()));
+            if sh.sam.is_some() {
+                if !written.is_empty() {
+                    crate::sam::write_fragment(
+                        sam_buf,
+                        sh.salmon,
+                        r1.id(),
+                        s1.as_ref(),
+                        r1.qual(),
+                        mate,
+                        &written,
+                        sh.record_options,
+                        emit_scratch,
+                    );
+                } else if sh.write_unaligned {
+                    crate::sam::write_unmapped_fragment(
+                        sam_buf,
+                        sh.salmon,
+                        r1.id(),
+                        s1.as_ref(),
+                        r1.qual(),
+                        mate,
+                        sh.record_options,
+                    );
+                }
             }
             if let Some(scratch) = bam_scratch.as_mut() {
-                if !placements.is_empty() {
+                if !written.is_empty() {
                     scratch.write_fragment(
                         sh.salmon,
                         r1.id(),
                         s1.as_ref(),
-                        Some((r2.id(), s2.as_ref())),
-                        &placements,
+                        r1.qual(),
+                        mate,
+                        &written,
+                        sh.record_options,
+                        emit_scratch,
+                    )?;
+                } else if sh.write_unaligned {
+                    scratch.write_unmapped_fragment(
+                        r1.id(),
+                        s1.as_ref(),
+                        r1.qual(),
+                        mate,
+                        sh.record_options,
                     )?;
                 }
             }
@@ -1544,6 +1611,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             posbias,
             unmapped,
             sam_buf,
+            emit_scratch,
             bam_scratch,
             rad_buf,
         } = self;
@@ -1609,19 +1677,50 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if !sh.sketch {
                 accumulate_vm_stats(placements.is_empty(), counters);
             }
-            if sh.sam.is_some() && !placements.is_empty() {
+            let written = written_placements(&sh, &placements, &scratch.map.decoys);
+            if sh.sam.is_some() && !written.is_empty() {
                 crate::sam::write_fragment(
                     sam_buf,
                     sh.salmon,
                     rec.id(),
                     s.as_ref(),
+                    rec.qual(),
                     None,
-                    &placements,
+                    &written,
+                    sh.record_options,
+                    emit_scratch,
+                );
+            } else if sh.sam.is_some() && sh.write_unaligned {
+                crate::sam::write_unmapped_fragment(
+                    sam_buf,
+                    sh.salmon,
+                    rec.id(),
+                    s.as_ref(),
+                    rec.qual(),
+                    None,
+                    sh.record_options,
                 );
             }
             if let Some(scratch) = bam_scratch.as_mut() {
-                if !placements.is_empty() {
-                    scratch.write_fragment(sh.salmon, rec.id(), s.as_ref(), None, &placements)?;
+                if !written.is_empty() {
+                    scratch.write_fragment(
+                        sh.salmon,
+                        rec.id(),
+                        s.as_ref(),
+                        rec.qual(),
+                        None,
+                        &written,
+                        sh.record_options,
+                        emit_scratch,
+                    )?;
+                } else if sh.write_unaligned {
+                    scratch.write_unmapped_fragment(
+                        rec.id(),
+                        s.as_ref(),
+                        rec.qual(),
+                        None,
+                        sh.record_options,
+                    )?;
                 }
             }
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {

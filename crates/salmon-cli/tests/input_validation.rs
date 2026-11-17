@@ -692,6 +692,40 @@ fn annotation_requires_alignment_input() {
 /// `--errorModel` and `--noErrorModel` are direct opposites; passing both was
 /// resolved by silent precedence, after which salmon advised passing
 /// `--errorModel` — already on the command line.
+/// `--spliced` is the one FASTQ-input mode that reads `--annotation`, so the
+/// refusal above must not catch it.
+#[test]
+fn spliced_mapping_output_accepts_annotation_without_alignments() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let gtf = dir.path().join("a.gtf");
+    std::fs::write(&gtf, "").unwrap();
+    let genome = dir.path().join("g.fa");
+    std::fs::write(&genome, ">chr1\nACGT\n").unwrap();
+    let o = Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&fx.index)
+        .args(["-l", "IU", "-1"])
+        .arg(&fx.r1)
+        .arg("-2")
+        .arg(&fx.r2)
+        .args(["-p", "2", "--spliced", "--writeBam"])
+        .arg(dir.path().join("m.bam"))
+        .arg("--annotation")
+        .arg(&gtf)
+        .arg("--genome")
+        .arg(&genome)
+        .arg("-o")
+        .arg(dir.path().join("q"))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        !err.contains("selects genome-projection mode") && !err.contains("required arguments"),
+        "--spliced must reach the annotation, not be refused for lacking -a:\n{err}"
+    );
+}
+
 #[test]
 fn error_model_flags_conflict() {
     let dir = tempfile::tempdir().unwrap();

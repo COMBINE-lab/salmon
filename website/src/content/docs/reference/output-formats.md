@@ -484,32 +484,124 @@ formats cannot drift apart.
 Both options apply to the read-mapping path only. In alignment mode (`-a`) and
 RAD-input mode (`--rad`) they are accepted but ignored, with a warning.
 
-### The pseudoalignment output contract
+### What a record contains
 
-This output is a **diagnostic view of salmon's mappings**, not a
-general-purpose aligner output, and several fields are deliberately nominal —
-for brevity, and because the mapping path computes scores without base-level
-alignments (score-only dynamic programming, no traceback) and does not compute
-them just because output was requested:
+The header declares `@HD VN:1.6 SO:unsorted GO:query`, one `@SQ` per reference
+with its length, an `M5` checksum of its bases and a `UR` pointing at the index,
+then `@PG` and a `@CO` restating the ordering guarantee below. `--rgLine` adds an
+`@RG` line, and every record then carries `RG:Z`.
 
-- **`CIGAR`** is synthesized from the read length (`<readLen>M`, plus a clip at
-  a transcript end). It records *where* the mapping is, not a base-level
-  alignment; indels are not represented, and no `NM`/`MD` accompany it.
-- **`AS`** is the score salmon's mapper assigned to the placement — the same
-  number quantification used — not a score recomputed from the record's own
-  CIGAR. It is comparable across records within one run, not across aligners.
-  **In sketch mode (`--sketch`) there is no such score**: pseudoalignment maps
-  by k-mer/equivalence-class compatibility without computing a per-placement
-  alignment score, so `AS` is reported as `0` and every reported mapping is a
-  co-equal best mapping for the read as assessed by the algorithm. A meaningful
-  `AS` appears only under selective alignment (the default), which computes a
-  banded alignment score per candidate.
-- **`MAPQ`** reflects only the placement count, not alignment confidence — see
-  below.
+Each record carries:
 
-Treat the records as positions + pairing + the quantifier's scores. If you need
-true base-level alignments, run a general-purpose aligner; a possible opt-in
-"realized alignment" output mode is under discussion (see #1141).
+| Field | Value |
+|-------|-------|
+| `MAPQ` | Derived from the number of placements, on STAR's scale: 255 for a uniquely placed fragment, 3 for two placements, 1 for three or four, 0 beyond. `-q 255` therefore means "uniquely placed", as it does for STAR output. |
+| `CIGAR` | A base-level alignment with real `I` and `D` operations, and `S` where a read overhangs a transcript end. The placement is re-aligned with traceback when the record is written, which is work a run without mapping output never does. |
+| `SEQ` / `QUAL` | The read's bases and its Phred+33 qualities, reverse-complemented together on the reverse strand. Qualities are not optional and there is no flag to enable them; `QUAL` is `*` only when the input carried none, as for a FASTA. |
+| `NM` / `MD` | Edit distance and the reference bases at each mismatch, matching what `samtools calmd` recomputes from the input FASTA. Indexing has to replace non-ACGT bases with ACGT, since the k-mer structure cannot hold them, but the build records where it did so and the record reports the `N` that was there rather than the substitute. `@SQ M5` is computed the same way, so the header names the reference the user supplied. |
+| `NH` / `HI` | How many placements this fragment has, and which one this record is. |
+| `AS` | The selective-alignment score. Under `--spliced`, STAR's score for the fragment's genomic alignment, the same on both mates (see below). |
+| `XT` | `T` for a transcript placement, `D` for a decoy. Always `T` without `--spliced`: a fragment whose best placement is a decoy is dropped by scoring before any record is written. `--spliced` writes those (see below). |
+| `ZW` | The placement's equivalence-class weight. |
+| `MC` / `MQ` | The mate's CIGAR and mapping quality, so a mate-aware tool does not have to sort the file to find them. |
+
+In sketch mode (`--sketch`) there is no per-placement alignment score:
+pseudoalignment maps by k-mer/equivalence-class compatibility without computing
+one, so `AS` is reported as `0` and every reported mapping is a co-equal best
+mapping for the read as assessed by the algorithm. A meaningful `AS` appears
+only under selective alignment (the default), which computes a banded alignment
+score per candidate.
+
+`--sampleUnaligned` additionally writes a `FLAG 0x4` record for every fragment
+that did not map, with its bases and qualities intact and no reference,
+position, CIGAR or placement tags. The output then covers the whole library, and
+`samtools fastq` can round-trip the input back out of it.
+
+### Spliced genome output
+
+A transcript has no introns, so by default a read spanning an exon junction is
+contiguous and its CIGAR never contains an `N`. `--spliced` re-expresses the
+records in genome coordinates instead: each alignment is cut at the exon
+boundaries the annotation declares and the gaps reappear as `N` operations, the
+way a spliced genome aligner writes them.
+
+It needs `--annotation <gtf|gff>` for the exon structures and `--genome <fasta>`
+for the chromosome lengths `@SQ` has to declare, which an annotation never
+states. A FASTA index (`.fai`) is used when one is present, so the usual case
+costs one small file read.
+
+`@SQ` then names chromosomes rather than transcripts, and records gain `XS:A`,
+the transcript's genomic strand, which StringTie and Cufflinks need to read an
+intron the right way round. A transcript on the minus strand runs against the
+genomic axis, so its alignments are turned around: the CIGAR reverses, the
+position becomes the alignment's leftmost genomic base, and the strand bits and
+stored bases flip to match. `M5` is omitted, because the references are then
+chromosomes salmon never loaded and a guessed checksum is worse than none.
+
+A decoy whose name is a genome sequence (the chromosomes of a gentrome index)
+is already in genome coordinates, so `--spliced` writes genome decoy
+placements too, `XT:A:D`: those of a fragment a decoy dominated, which
+quantification drops, and those the weight rule would have kept beside a
+transcript placement, which are the read's other loci on the genome. The BAM
+then holds the library's intronic and intergenic reads, and a read that also
+sits on a paralog the annotation does not describe is a multimapper, as it is
+to a genome aligner. None of these are quantified. Placements on any other
+reference the annotation does not describe (another decoy, or a transcript
+absent from the GTF) are dropped rather than half-projected.
+
+The records are the ones STAR would write for those alignments, because the
+tools that read genome BAMs were tuned on STAR's:
+
+- **Ends are local.** An alignment ends where it scores best, so a mismatch
+  among a read's last bases (a library artifact on its first base is common) is
+  soft-clipped rather than counted as an edit, as STAR does. `--softclip` gives
+  the same ends without `--spliced`.
+- **`AS` is STAR's score**: matched bases less mismatches, 2 + 2 per base for
+  each indel, 2 per annotated junction (`sjdbScore`), and STAR's genomic-length
+  penalty, over both mates. On a mouse library it reproduces STAR's `AS` for
+  99.9% of pairs.
+- **Only alignments within 1 of the best `AS` are written**
+  (`outFilterMultimapScoreRange`), the best one primary, and none that scores
+  below 0.66 of the fragment's read length, both mates counted
+  (`outFilterScoreMinOverLread`, `outFilterMatchNminOverLread`). That last rule
+  is why, as in STAR, one mate of a pair is never written on its own.
+- **One record per alignment.** Two transcripts of one gene often imply the same
+  genomic alignment, and transcripts that differ just past a read's end imply
+  nearly the same one. An alignment is written only if it does not repeat a
+  better one: all its aligned bases aligned by it too (STAR's own test), the same
+  genome span end to end (the same alignment with an indel placed elsewhere), or
+  every read base placed the same way except the last three at either end. `NH`,
+  `HI` and `MAPQ` count what is written. Otherwise a read with one place on the
+  genome looks like a multimapper to every genome-coordinate tool (RSeQC drops
+  reads below `MAPQ` 30, Qualimap skips `NH > 1`). Nothing is decided between
+  transcripts: which transcript a read came from is `quant.sf`'s question, not
+  the BAM's.
+
+Only the records change: mapping, quantification and `quant.sf` are the same
+with or without `--spliced`.
+
+Measured against STAR 2.7.11b with nf-core/rnaseq's settings on one mouse
+library (3.9M pairs, the same trimmed reads, `samtools markdup`, RustQC), 90% of
+primary alignments are identical to STAR's, and nearly all the rest are
+multimappers whose primary differs. Strandedness, TIN, duplication (dupRadar),
+5'–3' bias, and the exonic, intronic and intergenic fractions agree to within a
+few percent; uniquely placed reads are 1% fewer, spliced reads 1% more, and the
+mismatch rate is 0.0017 against STAR's 0.0021. Some differences remain by
+construction:
+
+- **No novel junctions.** Every `N` comes from the annotation, so splice-junction
+  QC (RSeQC `junction_annotation`, `junction_saturation`) finds none.
+- **Mates salmon cannot find.** STAR places a mate from shorter seeds than
+  salmon's k-mers, so about 1% of fragments STAR writes as pairs have one mate
+  only in salmon, and are not written. `--recoverOrphans` searches for the mate
+  and closes most of that gap (uniquely placed reads within 0.3% of STAR's),
+  at a cost in run time. The pairs it recovers are also quantified, so
+  `quant.sf` changes with it.
+- **Ties.** Where alignments score alike, which one is primary, and whether an
+  alternative STAR's seed search never tries is written, can differ (a few
+  percent of multimappers). The choice is the same from run to run.
+- **Without a gentrome index** intronic and intergenic reads are not in the
+  output at all, so those fractions are near zero whatever the library.
 
 ### `MAPQ`
 
@@ -529,6 +621,10 @@ is what STAR reports, so `MAPQ` follows STAR's mapping:
 Matching STAR matters because the tools downstream of a salmon BAM are tuned to
 it: `samtools view -q 255` means "uniquely placed" to all of them. Before this,
 every record carried a constant `1`, so that filter discarded the entire file.
+
+The header says `SO:unsorted GO:query` because that is exactly what salmon
+produces, and tools that only need records grouped by read name can therefore
+read the output directly, without a `samtools collate` first.
 
 ### Compression threads
 
