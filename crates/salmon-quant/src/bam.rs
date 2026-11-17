@@ -315,10 +315,13 @@ impl Drop for BamOutput {
 
 /// Where to write `path` so a failed run never leaves a truncated file there:
 /// `<path>.partial`, renamed into place on success. `None` (write in place) for
-/// an existing non-regular target such as `/dev/stdout` or a FIFO, which a
-/// rename would replace instead of feeding.
+/// an existing target that is not a plain file: a FIFO, a device, or a symlink
+/// such as `/dev/stdout`. A rename would replace those instead of feeding them,
+/// and `/dev/stdout` redirected to a file resolves to a regular file whose
+/// `.partial` sibling would land in `/dev`. So the link itself is checked, not
+/// what it points to.
 pub(crate) fn staging_path(path: &Path) -> Option<PathBuf> {
-    if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| !m.is_file()) {
         return None;
     }
     let mut partial = path.as_os_str().to_owned();
@@ -556,6 +559,15 @@ mod tests {
             Some(dir.path().join("m.bam.partial"))
         );
         assert_eq!(super::staging_path(std::path::Path::new("/dev/null")), None);
+        // A symlink to a regular file (what `/dev/stdout` is when stdout is
+        // redirected to a file) is written through, not staged next to the link.
+        #[cfg(unix)]
+        {
+            std::fs::write(&out, b"").unwrap();
+            let link = dir.path().join("link.bam");
+            std::os::unix::fs::symlink(&out, &link).unwrap();
+            assert_eq!(super::staging_path(&link), None);
+        }
     }
 
     use super::*;
