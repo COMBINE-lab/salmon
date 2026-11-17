@@ -35,8 +35,15 @@ pub struct PairingConfig {
     pub max_fragment_len: i32,
     /// emit single-mate (orphan) mappings when no concordant pair exists
     pub allow_orphans: bool,
-    /// permit dovetailed pairs (mates extending past each other)
+    /// permit dovetailed pairs (mates extending past each other) at any overhang
     pub allow_dovetail: bool,
+    /// Largest overhang (bases a mate has past the other mate's 5' end; see
+    /// `extents_overhang`) at which an inward dovetail still pairs when
+    /// `allow_dovetail` is off. Short inserts read through into adapter, and
+    /// trimming leaves a few adapter bases, so a small overhang is ordinary;
+    /// piscem's merge (and so `--sketch`) tolerates up to 31. `0` rejects every
+    /// dovetail (salmon <= 2.11).
+    pub dovetail_tolerance: i32,
     /// Orphan chain sub-optimality threshold (salmon's `orphanChainSubThresh`,
     /// default there 0.95): when `> 0`, keep an orphan mapping only if its chain
     /// read-coverage is `>= orphan_chain_sub_thresh * (best orphan chain coverage)`.
@@ -64,12 +71,16 @@ pub struct PairingConfig {
     pub orphans_require_unmapped_mate: bool,
 }
 
+/// Default [`PairingConfig::dovetail_tolerance`].
+pub const DEFAULT_DOVETAIL_TOLERANCE: i32 = 32;
+
 impl Default for PairingConfig {
     fn default() -> Self {
         Self {
             max_fragment_len: 1000,
             allow_orphans: true,
             allow_dovetail: false,
+            dovetail_tolerance: DEFAULT_DOVETAIL_TOLERANCE,
             orphan_chain_sub_thresh: 0.0,
             post_merge_chain_sub_thresh: 0.0,
             orphans_require_unmapped_mate: false,
@@ -165,10 +176,11 @@ fn is_dovetailed(l: &MappingCandidate, r: &MappingCandidate) -> bool {
         return false;
     }
     let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
-    extents_dovetail(
+    let (f, c) = (
         (fw.proj_start(), fw.proj_end()),
         (rc.proj_start(), rc.proj_end()),
-    )
+    );
+    extents_outward(f, c) || extents_overhang(f, c) > 0
 }
 
 /// Fragment `(start, length)` of an opposite-strand pair from the forward and
@@ -199,13 +211,6 @@ pub(crate) fn pair_fragment(l: &MappingCandidate, r: &MappingCandidate) -> (i32,
     )
 }
 
-/// [`is_dovetailed`] over `(start, end)` extents, for a mate that has no candidate
-/// (one rescued by orphan recovery). The forward mate should nest upstream of the
-/// reverse mate; an overhang on either side is a dovetail.
-pub(crate) fn extents_dovetail(fw: (i32, i32), rc: (i32, i32)) -> bool {
-    fw.0 > rc.0 || fw.1 > rc.1
-}
-
 /// Whether opposite-strand mates with these `(start, end)` extents face away
 /// from each other: the forward mate's 5' end (its start) is at or past the
 /// reverse mate's 5' end (its end), so no insert lies between them.
@@ -213,24 +218,35 @@ pub(crate) fn extents_outward(fw: (i32, i32), rc: (i32, i32)) -> bool {
     fw.0 >= rc.1
 }
 
+/// How far facing mates overhang each other: the larger of the forward mate's
+/// end past the reverse mate's end and the reverse mate's start before the
+/// forward mate's start (0 for a cleanly nested pair). Those bases lie past
+/// the other read's 5' end, i.e. are adapter read-through, and are not part of
+/// the fragment `[fw.start, rc.end)`.
+pub(crate) fn extents_overhang(fw: (i32, i32), rc: (i32, i32)) -> i32 {
+    (fw.1 - rc.1).max(fw.0 - rc.0).max(0)
+}
+
 /// Whether opposite-strand mates with these extents may form a concordant pair:
-/// never when they face away from each other (outward), and only when cleanly
-/// nested unless dovetails are allowed. `--allowDovetail` admits inward
+/// never when they face away from each other (outward); an inward dovetail when
+/// its overhang ([`extents_overhang`]) is at most `cfg.dovetail_tolerance`, or
+/// at any overhang under `cfg.allow_dovetail`. `--allowDovetail` admits inward
 /// dovetails only; an outward pair is not a dovetail of an inward library, and
 /// forming it let the deterministic path (whose RAD re-derives orientation as
 /// inward) count it with its outer span while `--online` dropped it as
 /// incompatible.
-pub(crate) fn extents_admissible(fw: (i32, i32), rc: (i32, i32), allow_dovetail: bool) -> bool {
-    !extents_outward(fw, rc) && (allow_dovetail || !extents_dovetail(fw, rc))
+pub(crate) fn extents_admissible(fw: (i32, i32), rc: (i32, i32), cfg: &PairingConfig) -> bool {
+    !extents_outward(fw, rc)
+        && (cfg.allow_dovetail || extents_overhang(fw, rc) <= cfg.dovetail_tolerance)
 }
 
 /// [`extents_admissible`] for a pair's candidates (opposite strands).
-fn pair_admissible(l: &MappingCandidate, r: &MappingCandidate, allow_dovetail: bool) -> bool {
+fn pair_admissible(l: &MappingCandidate, r: &MappingCandidate, cfg: &PairingConfig) -> bool {
     let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
     extents_admissible(
         (fw.proj_start(), fw.proj_end()),
         (rc.proj_start(), rc.proj_end()),
-        allow_dovetail,
+        cfg,
     )
 }
 
@@ -346,7 +362,7 @@ pub fn join_reads_and_filter(
                     if frag_len <= 0 || frag_len > cfg.max_fragment_len {
                         continue;
                     }
-                    if !pair_admissible(l, r, cfg.allow_dovetail) {
+                    if !pair_admissible(l, r, cfg) {
                         // An otherwise-valid concordant pair, dropped only because
                         // the mates dovetail (or face away from each other) — flag
                         // it for the num_dovetail count.
@@ -387,7 +403,7 @@ pub fn join_reads_and_filter(
                             continue;
                         }
                         let format = observed_format(l, r);
-                        if !pair_admissible(l, r, cfg.allow_dovetail) {
+                        if !pair_admissible(l, r, cfg) {
                             continue;
                         }
                         joints.push(JointMapping {
@@ -811,6 +827,64 @@ mod tests {
     }
 
     #[test]
+    /// By default an inward dovetail pairs when its overhang is at most
+    /// `DEFAULT_DOVETAIL_TOLERANCE` (32) bases, measured on either side, and its
+    /// fragment is the 5'-to-5' span; one base more falls back to orphans.
+    /// Tolerance 0 restores the strict rule.
+    fn small_inward_dovetail_pairs_by_default() {
+        let def = PairingConfig::default();
+        assert_eq!(def.dovetail_tolerance, 32);
+        let strict = PairingConfig {
+            dovetail_tolerance: 0,
+            ..Default::default()
+        };
+        // (fw (start, len), rc (start, len), overhang, 5'-to-5' fragment length)
+        for (fw, rc, over, frag) in [
+            // read-through: fw [150,250), rc [118,218): rc starts 32 before fw
+            // and fw ends 32 past rc -> [150,218)
+            ((150, 100), (118, 100), 32, 68),
+            ((150, 100), (117, 100), 33, 67),
+            // forward mate past the reverse mate's 5' end only: [100,200)+[120,190)
+            ((100, 100), (120, 70), 10, 90),
+            // reverse mate past the forward mate's 5' end only: [100,180)+[68,200)
+            ((100, 80), (68, 132), 32, 100),
+            ((100, 80), (67, 133), 33, 100),
+            // one base
+            ((100, 50), (99, 50), 1, 49),
+        ] {
+            let ext = |c: (i32, i32)| (c.0, c.0 + c.1);
+            assert_eq!(extents_overhang(ext(fw), ext(rc)), over, "{fw:?} {rc:?}");
+            for fw_left in [true, false] {
+                for (cfg, want_pair) in [(&def, over <= 32), (&strict, false)] {
+                    let f = vec![cand(0, true, fw.0, fw.1)];
+                    let r = vec![cand(0, false, rc.0, rc.1)];
+                    let (l, rr) = if fw_left { (f, r) } else { (r, f) };
+                    let j = join_reads_and_filter(l, rr, cfg);
+                    let pair = j.iter().find(|m| m.status == MateStatus::PairedEndPaired);
+                    assert_eq!(
+                        pair.is_some(),
+                        want_pair,
+                        "{fw:?} {rc:?} tol {}",
+                        cfg.dovetail_tolerance
+                    );
+                    if let Some(p) = pair {
+                        assert_eq!(p.fragment_len, frag, "{fw:?} {rc:?}");
+                    } else {
+                        assert!(dovetail_rejected(), "{fw:?} {rc:?}");
+                    }
+                }
+            }
+        }
+        // A clean nested pair is unaffected by the tolerance.
+        let j = join_reads_and_filter(
+            vec![cand(0, true, 100, 50)],
+            vec![cand(0, false, 300, 50)],
+            &strict,
+        );
+        assert_eq!(j[0].fragment_len, 250);
+    }
+
+    #[test]
     /// Outward-facing pairs never form, with or without `--allowDovetail`: an
     /// outward pair is not a dovetail of an inward library.
     fn outward_pair_never_forms() {
@@ -852,7 +926,7 @@ mod tests {
         assert!(dovetail_rejected());
         // Mates that abut back to back (fw starts where rc ends) are outward too.
         assert!(extents_outward((236, 286), (176, 236)));
-        assert!(!extents_admissible((236, 286), (176, 236), true));
+        assert!(!extents_admissible((236, 286), (176, 236), &cfg));
     }
 
     #[test]

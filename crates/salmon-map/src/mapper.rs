@@ -738,7 +738,6 @@ fn recover_mate(
     let a_s = anchor.proj_start();
     let a_e = anchor.proj_end();
     let plen = partner_read.len() as i32;
-    let allow_dovetail = cfg.pair.allow_dovetail;
 
     let (score, p_s, p_e) = if anchor.is_fw {
         // The partner lies downstream and maps to the reverse strand.
@@ -758,11 +757,7 @@ fn recover_mate(
         }
         // partner ends `end_col` bases past the window start -> fragment length
         let partner_end = win_start + aln.end_col as i32;
-        if !extents_admissible(
-            (a_s, a_e),
-            (partner_end - plen, partner_end),
-            allow_dovetail,
-        ) {
+        if !extents_admissible((a_s, a_e), (partner_end - plen, partner_end), &cfg.pair) {
             return None;
         }
         (aln.score, partner_end - plen, partner_end)
@@ -783,11 +778,7 @@ fn recover_mate(
         }
         let partner_end_abs = win_start + aln.end_col as i32;
         let partner_start_abs = partner_end_abs - plen;
-        if !extents_admissible(
-            (partner_start_abs, partner_end_abs),
-            (a_s, a_e),
-            allow_dovetail,
-        ) {
+        if !extents_admissible((partner_start_abs, partner_end_abs), (a_s, a_e), &cfg.pair) {
             return None;
         }
         (aln.score, partner_start_abs, partner_end_abs)
