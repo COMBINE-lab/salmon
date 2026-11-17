@@ -45,7 +45,7 @@ pub use genome_project::{project_genome_bam_to_rad, GenomeProjectOptions, Projec
 pub use rad::quantify_rad;
 
 use std::collections::HashMap;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -992,52 +992,122 @@ fn kind_to_op(k: Kind) -> AlnOp {
     }
 }
 
-/// Does this path name a SAM file rather than a BAM, whatever it is compressed
-/// with?
+/// Bytes read from the front of an alignment input to tell BAM from SAM: at
+/// least one whole BGZF block (64 KiB at most), so a BAM's first block always
+/// decompresses from them.
+const SNIFF_BYTES: u64 = 1 << 16;
+
+type SamReader = sam::io::Reader<Box<dyn BufRead + Send>>;
+type BamReader = bam::io::Reader<noodles_bgzf::io::MultithreadedReader<Box<dyn Read + Send>>>;
+
+/// The records of an alignment input whose header has been read, plus any
+/// records [`AlignmentRecords::peek_is_paired`] read ahead (replayed first).
 ///
-/// SAM-vs-BAM is a name question, and compression is a content question, so any
-/// compression suffix is stripped before asking: `aln.sam.zst` is a SAM file
-/// that happens to be zstd, and routing it to the BAM reader produced a report
-/// about an invalid BGZF header for a file that was never BGZF.
-fn is_sam_path(p: &Path) -> bool {
-    let s = p.to_string_lossy().to_ascii_lowercase();
-    salmon_core::compress::strip_compression_extension(&s).ends_with(".sam")
+/// Every alignment path makes one pass over the records, and the input is
+/// opened exactly once, by [`open_alignment_input`]. So the input can be a
+/// pipe: a FIFO, `-a <(samtools view -b ...)`, or `-a /dev/stdin`.
+pub(crate) enum AlignmentRecords {
+    Sam(SamReader, Vec<std::io::Result<sam::Record>>),
+    Bam(BamReader, Vec<std::io::Result<bam::Record>>),
 }
 
-/// Open a SAM file (transparently decompressing it) as a noodles reader over a
-/// boxed `BufRead`, so every input shares one concrete type.
-///
-/// Compression is detected from content, so the stream is decoded correctly
-/// however it was compressed. Which files reach here at all is a separate,
-/// name-based question, answered by [`is_sam_path`].
-fn open_sam_reader(path: &Path) -> Result<sam::io::Reader<Box<dyn BufRead + Send>>> {
-    let inner = salmon_core::compress::open_maybe_compressed(path)
-        .with_context(|| format!("opening {}", path.display()))?;
-    Ok(sam::io::Reader::new(inner))
+/// Bind `$recs` to the records of an [`AlignmentRecords`] (read-ahead records
+/// first) as an `Iterator<Item = io::Result<R>>` and evaluate `$body`, once per
+/// record type: the passes are generic over SAM and BAM records.
+macro_rules! with_alignment_records {
+    ($input:expr, $recs:ident => $body:expr) => {
+        match $input {
+            $crate::AlignmentRecords::Sam(mut reader, ahead) => {
+                let $recs = ahead.into_iter().chain(reader.records());
+                $body
+            }
+            $crate::AlignmentRecords::Bam(mut reader, ahead) => {
+                let $recs = ahead.into_iter().chain(reader.records());
+                $body
+            }
+        }
+    };
 }
+pub(crate) use with_alignment_records;
 
-/// Read just the header from a SAM/BAM input (chosen by extension).
+/// Open an alignment input once and read its header.
 ///
-/// This is the first of several opens on every alignment path (header, `-l A`
-/// peek, record pass(es)), so it also refuses a pipe: the first open would
-/// drain it and the next would wait forever for a writer that has gone.
-fn read_alignment_header(path: &Path) -> Result<Header> {
-    let meta = std::fs::metadata(path).with_context(|| format!("opening {}", path.display()))?;
+/// SAM or BAM is decided by content, not by name: a BGZF stream whose data
+/// starts with `BAM\1` is BAM; anything else is SAM, decompressed by content
+/// (plain, gzip/BGZF, bzip2, xz, zstd). A name says nothing for `/dev/stdin` or
+/// `/dev/fd/63`, and a pipe cannot be reopened after a wrong guess.
+fn open_alignment_input(path: &Path) -> Result<(Header, AlignmentRecords)> {
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("opening alignment input {}", path.display()))?;
+    let mut head = Vec::new();
+    (&mut file)
+        .take(SNIFF_BYTES)
+        .read_to_end(&mut head)
+        .with_context(|| format!("reading alignment input {}", path.display()))?;
     anyhow::ensure!(
-        meta.is_file(),
-        "alignment input {} is not a regular file (a pipe or process substitution?); \
-         salmon reads alignments more than once, so write them to a file first",
+        !head.is_empty(),
+        "alignment input {} is empty",
         path.display()
     );
-    if is_sam_path(path) {
-        open_sam_reader(path)?
-            .read_header()
-            .context("reading SAM header")
+    let mut magic = [0u8; 4];
+    let is_bam = noodles_bgzf::io::Reader::new(&head[..])
+        .read_exact(&mut magic)
+        .is_ok()
+        && &magic == b"BAM\x01";
+    if is_bam {
+        let stream: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(head).chain(file));
+        // BGZF decompression on a small worker pool; framing/parsing stays serial
+        // on the reader thread, but the decompression overlaps it.
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(1, 4);
+        let workers = std::num::NonZeroUsize::new(workers).unwrap();
+        let decoder = noodles_bgzf::io::MultithreadedReader::with_worker_count(workers, stream);
+        let mut reader = bam::io::Reader::from(decoder);
+        let header = reader.read_header().context("reading BAM header")?;
+        Ok((header, AlignmentRecords::Bam(reader, Vec::new())))
     } else {
-        let mut reader = bam::io::Reader::new(
-            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?,
-        );
-        reader.read_header().context("reading BAM header")
+        let inner = salmon_core::compress::maybe_decompress_stream(head, Box::new(file))
+            .with_context(|| format!("reading alignment input {}", path.display()))?;
+        let inner: Box<dyn BufRead + Send> = Box::new(std::io::BufReader::new(inner));
+        let mut reader = sam::io::Reader::new(inner);
+        let header = reader.read_header().context("reading SAM header")?;
+        Ok((header, AlignmentRecords::Sam(reader, Vec::new())))
+    }
+}
+
+impl AlignmentRecords {
+    /// Whether the first record belongs to a paired-end template (C++ salmon's
+    /// `peekBAMIsPaired`): under `-l A` the user has not said, and the
+    /// library-type detector needs to know which formats are candidates. `None`
+    /// for an input with no records. The records read to answer are kept and
+    /// replayed by the pass, so this costs no second open.
+    fn peek_is_paired(&mut self) -> Option<bool> {
+        fn first_flag<R: sam::alignment::Record>(
+            records: impl Iterator<Item = std::io::Result<R>>,
+            ahead: &mut Vec<std::io::Result<R>>,
+        ) -> Option<bool> {
+            for rec in records {
+                // A read error ends the peek; the pass reports it.
+                let paired = match &rec {
+                    Ok(r) => r.flags().ok().map(|f| f.is_segmented()),
+                    Err(_) => {
+                        ahead.push(rec);
+                        return None;
+                    }
+                };
+                ahead.push(rec);
+                if paired.is_some() {
+                    return paired;
+                }
+            }
+            None
+        }
+        match self {
+            Self::Sam(reader, ahead) => first_flag(reader.records(), ahead),
+            Self::Bam(reader, ahead) => first_flag(reader.records(), ahead),
+        }
     }
 }
 
@@ -1462,71 +1532,15 @@ where
     })
 }
 
-/// Dispatch the online pass over a SAM/BAM file (chosen by extension). BAM is
-/// decoded on a small BGZF worker pool (the framing/parse stays serial on the
-/// reader thread, but the decompression overlaps it).
-/// Whether the file's first record belongs to a paired-end template (C++
-/// salmon's `peekBAMIsPaired`): under `-l A` the user has not said, and the
-/// library-type detector needs to know which formats are candidates. `None`
-/// for a file with no records.
-fn peek_alignment_is_paired(path: &Path) -> Result<Option<bool>> {
-    fn first_flag<R: sam::alignment::Record, E>(
-        records: impl Iterator<Item = std::result::Result<R, E>>,
-    ) -> Option<bool>
-    where
-        E: std::fmt::Debug,
-    {
-        for rec in records.flatten() {
-            if let Ok(flags) = rec.flags() {
-                return Some(flags.is_segmented());
-            }
-        }
-        None
-    }
-    if is_sam_path(path) {
-        let mut reader = open_sam_reader(path)?;
-        let _header = reader.read_header().context("reading SAM header")?;
-        Ok(first_flag(reader.records()))
-    } else {
-        let file =
-            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        let mut reader = bam::io::Reader::new(file);
-        let _header = reader.read_header().context("reading BAM header")?;
-        Ok(first_flag(reader.records()))
-    }
-}
-
 /// Whether a RAD writer's library is paired: under `-l A` the input decides,
 /// otherwise a single-end `-l` says no and anything else says yes.
-pub(crate) fn rad_library_is_paired(path: &Path, lib_type: &str) -> Result<bool> {
+pub(crate) fn rad_library_is_paired(records: &mut AlignmentRecords, lib_type: &str) -> bool {
     let peeked = if LibraryFormat::is_auto(lib_type) {
-        peek_alignment_is_paired(path)?
+        records.peek_is_paired()
     } else {
         None
     };
-    Ok(peeked.unwrap_or(!matches!(lib_type, "U" | "SF" | "SR" | "S")))
-}
-
-fn stream_online_pass(bam_path: &Path, cfg: &PassCfg, acc: &mut PassAccum) -> Result<()> {
-    if is_sam_path(bam_path) {
-        let mut reader = open_sam_reader(bam_path)?;
-        let header = reader.read_header().context("reading SAM header")?;
-        run_online_pass(reader.records(), &header, cfg, acc)
-    } else {
-        let file = std::fs::File::open(bam_path)
-            .with_context(|| format!("opening {}", bam_path.display()))?;
-        let workers = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .clamp(1, 4);
-        let workers = std::num::NonZeroUsize::new(workers).unwrap();
-        {
-            let decoder = noodles_bgzf::io::MultithreadedReader::with_worker_count(workers, file);
-            let mut reader = bam::io::Reader::from(decoder);
-            let header = reader.read_header().context("reading BAM header")?;
-            run_online_pass(reader.records(), &header, cfg, acc)
-        }
-    }
+    peeked.unwrap_or(!matches!(lib_type, "U" | "SF" | "SR" | "S"))
 }
 
 /// Read-only shared state for processing one fragment. Held by `&` so a whole
@@ -2463,7 +2477,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let start_time = opts.external_start_time.clone().unwrap_or_else(asctime_now);
     let run_timer = std::time::Instant::now();
     let mut timer = PhaseTimer::new();
-    let header = read_alignment_header(&opts.bam)?;
+    let (header, mut records) = open_alignment_input(&opts.bam)?;
 
     // Reject coordinate-sorted input up front (header-only check, no per-record cost):
     // alignment-mode requires all records of a read/pair to be adjacent (grouped by
@@ -2575,7 +2589,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // record's flags, C++'s `peekBAMIsPaired`.
     let auto_detect = LibraryFormat::is_auto(&opts.lib_type);
     let peeked_paired = if auto_detect {
-        peek_alignment_is_paired(&opts.bam)?
+        records.peek_is_paired()
     } else {
         None
     };
@@ -2660,7 +2674,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             num_frags_incompat: 0,
             lib_format_counts: [0; salmon_core::NUM_LIB_FORMATS],
         };
-        stream_online_pass(&opts.bam, &cfg, &mut acc)?;
+        with_alignment_records!(records, recs => run_online_pass(recs, &header, &cfg, &mut acc))?;
         (
             acc.seq_obs,
             acc.gc_obs,
