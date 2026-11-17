@@ -108,3 +108,46 @@ jobs:
             -a sample_data/sample_alignments.bam \
             -o target/sample_quant_alignment
           test -s target/sample_quant_alignment/quant.sf
+
+  # The experimental GPU warm start (`--gpu`) lives behind off-by-default
+  # features that `build-test` never compiles. These jobs keep both backends
+  # building and lint-clean; neither runner has a usable GPU, so the GPU tests
+  # (which skip without a device) are run by hand on real hardware.
+  gpu-metal:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (metal)
+        run: cargo clippy -p salmon-infer --features metal --all-targets -- -D warnings
+      - name: Build CLI (metal)
+        run: cargo build -p salmon-cli --features metal
+
+  gpu-cuda-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CUDA_HOME: /usr/local/cuda-13.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install CUDA 13 headers (no driver, no GPU)
+        # cuda-bindings bindgens cuda.h and curand.h at build time and loads
+        # libcuda only at run time, so headers are all a compile check needs.
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-driver-dev-13-0 cuda-cudart-dev-13-0 libcurand-dev-13-0
+      - name: Clippy (cuda)
+        run: cargo clippy -p salmon-infer --features cuda --all-targets -- -D warnings
