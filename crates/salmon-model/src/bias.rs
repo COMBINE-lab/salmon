@@ -51,6 +51,19 @@ const POS_SMOOTH_FRAC: f64 = 0.1;
 /// This is the standard fix for a ratio of two noisy estimates: adding the same
 /// constant to numerator and denominator leaves well-measured ratios essentially
 /// unchanged while pulling ill-measured ones toward the neutral value.
+///
+/// Each end's factor is the **square root** of its smoothed ratio, so a
+/// fragment's positional weight `posFW[start]·posRC[end]` is the geometric mean
+/// of the two ends' ratios, not their product. The 5' model (fragment starts)
+/// and the 3' model (fragment ends) are fit separately, each as a marginal
+/// obs/exp ratio, so each one already measures the whole positional effect on a
+/// fragment. On a transcript much longer than a fragment, start and end sit at
+/// almost the same fractional position, so the two ratios are two estimates of
+/// the same number `r`. Their product is `r²`: the effect counted twice. The
+/// product model then predicts a start histogram `exp·r²`, not the `exp·r` it
+/// was fit to, and it inflates every effective length by `E[r²] = 1 + Var(r)`
+/// (m500k, longest length class: 1.28× even with correctly placed knots). The
+/// geometric mean reproduces both observed marginals and averages to 1.
 pub fn positional_factor(obs: &[f64], exp: &[f64]) -> Vec<f64> {
     let mut out = Vec::new();
     positional_factor_into(obs, exp, &mut out);
@@ -73,7 +86,11 @@ pub fn positional_factor_into(obs: &[f64], exp: &[f64], out: &mut Vec<f64>) {
     // of the arbitrary units the densities happen to be in.
     let mean_exp: f64 = exp.iter().sum::<f64>() / n as f64;
     let c = (POS_SMOOTH_FRAC * mean_exp).max(f64::MIN_POSITIVE);
-    out.extend(obs.iter().zip(exp).map(|(&o, &e)| (o + c) / (e + c)));
+    out.extend(
+        obs.iter()
+            .zip(exp)
+            .map(|(&o, &e)| ((o + c) / (e + c)).sqrt()),
+    );
 }
 
 /// The enabled bias terms for one transcript's effective-length correction.
@@ -515,11 +532,16 @@ mod tests {
         );
     }
 
-    /// The positional factor is `obs/exp` of two distributions over the same
+    /// The positional ratio is `obs/exp` of two distributions over the same
     /// bins, so along a long transcript (where the expected start density is
-    /// flat) it must average to 1: it moves mass along the transcript, it does
-    /// not create any. A bump in the middle bins made it average 1.26 when the
-    /// spline knots sat at the Cufflinks positions instead of the bin centres.
+    /// flat) the weight a fragment gets from both ends must average to 1: it
+    /// moves mass along the transcript, it does not create any. On a long
+    /// transcript a fragment's start and end share one fractional position, so
+    /// that weight is `factor(p)²` when both ends see the same model. A bump in
+    /// the middle bins made the old ratio average 1.26 when the spline knots sat
+    /// at the Cufflinks positions instead of the bin centres, and the old
+    /// product of the two end ratios (no square root) averaged 1.26 even with
+    /// correct knots.
     #[test]
     fn positional_factor_averages_to_one_on_a_flat_expected_density() {
         let len = 20_000;
@@ -537,8 +559,8 @@ mod tests {
         obs.project_weights(&mut o);
         exp.project_weights(&mut e);
         let f = positional_factor(&o, &e);
-        let mean = f.iter().sum::<f64>() / len as f64;
-        assert!((mean - 1.0).abs() < 0.01, "mean positional factor {mean}");
+        let mean = f.iter().map(|x| x * x).sum::<f64>() / len as f64;
+        assert!((mean - 1.0).abs() < 0.01, "mean fragment weight {mean}");
     }
 
     /// A transcript shorter than every fragment length has nothing to convolve,
