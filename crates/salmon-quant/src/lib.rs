@@ -737,7 +737,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
             pre_burnin: opts.num_pre_aux_model_samples,
-            skip: SkippingStrategy::Permissive,
+            // Strict (every k-mer between two hits is checked) so the GPU
+            // k-mer lookup, which reads every k-mer, gives the same mappings.
+            skip: SkippingStrategy::Strict,
             range_factorization_bins: opts.range_factorization_bins,
             expected_format,
             incompat_prior: opts.incompat_prior,
