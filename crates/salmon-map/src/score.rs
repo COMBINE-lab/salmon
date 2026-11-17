@@ -261,8 +261,10 @@ fn dedup_by_table(raw: &mut Vec<RawMapping>, scratch: &mut DedupScratch) {
 /// `raw` is consumed in place and left empty on every return path, so the caller
 /// can refill the same buffer for the next fragment.
 ///
-/// `decoys` (cleared first) receives a decoy-dominated fragment's best-scoring
-/// decoy placements, which `out` never holds.
+/// `decoys` (cleared first) receives the decoy placements genome-coordinate
+/// output writes and quantification never sees: a decoy-dominated fragment's
+/// best ones, or else those the weight rule would have kept as transcripts,
+/// which on a gentrome are the read's other genomic loci.
 pub fn finalize_mappings_counted_into(
     out: &mut Vec<ScoredMapping>,
     raw: &mut Vec<RawMapping>,
@@ -329,7 +331,14 @@ pub fn finalize_mappings_counted_into(
         }
     }
     let mut num_below = 0u32;
-    for m in best_per_tid.drain(..).filter(|m| !m.is_decoy) {
+    for m in best_per_tid.drain(..) {
+        if m.is_decoy {
+            let weight = (-cfg.score_exp * (best_valid - m.score) as f64).exp();
+            if weight >= cfg.min_aln_prob {
+                decoys.push(scored(&m, weight.min(1.0)));
+            }
+            continue;
+        }
         let weight = if cfg.hard_filter {
             if m.score == best_valid {
                 1.0

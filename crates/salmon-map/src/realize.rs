@@ -234,6 +234,141 @@ pub fn realize(
     realized
 }
 
+/// Soft-clip each end of the alignment back to where it scores best, the way a
+/// local aligner such as STAR ends its alignments: a mismatch among a read's
+/// last few bases (often a library artifact on its first base) costs more than
+/// the matches past it earn, so those bases are clipped instead of counted as
+/// edits. Asked for by `--softclip`; the interior of the alignment is unchanged.
+/// Runs before `MD` and `NM` are filled.
+fn clip_low_scoring_ends(
+    query: &[u8],
+    ref_seq: &[u8],
+    cfg: &AlignConfig,
+    out: &mut RealizedAlignment,
+) {
+    use CigarOpKind::{Match, SoftClip};
+    let (match_score, mismatch) = (cfg.match_score as i32, -(cfg.mismatch_pen as i32));
+    let gap = |len: u32| -(cfg.gap_open_pen as i32 + cfg.gap_extend_pen as i32 * len as i32);
+    // ksw2's DNA5 scoring: `N` against `N` is neutral, against a base a mismatch.
+    let base = |q: usize, t: usize| match (query.get(q), ref_seq.get(t)) {
+        (Some(&r), Some(&f)) if bases_match(r, f) => match_score,
+        (Some(&r), Some(&f)) if dna5(r) == 4 && dna5(f) == 4 => 0,
+        _ => mismatch,
+    };
+    let clip_len =
+        |op: Option<&CigarOp>| op.filter(|op| op.kind == SoftClip).map_or(0, |op| op.len);
+    let (lead, trail) = (clip_len(out.ops.first()), clip_len(out.ops.last()));
+    let aligned = || out.ops.iter().filter(|op| op.kind != SoftClip);
+    // Columns are aligned bases and whole gaps. Scanning in from each end, the
+    // cut is after the prefix whose score is lowest, when that is below zero.
+    let (mut q, mut t) = (lead as usize, out.ref_start as usize);
+    let (mut columns, mut sum, mut left, mut left_score) = (0u32, 0i32, 0u32, 0i32);
+    for op in aligned() {
+        let steps = if op.kind == Match { op.len } else { 1 };
+        for _ in 0..steps {
+            if op.kind == Match {
+                sum += base(q, t);
+                q += 1;
+                t += 1;
+            } else {
+                sum += gap(op.len);
+                if op.kind.consumes_read() {
+                    q += op.len as usize;
+                } else {
+                    t += op.len as usize;
+                }
+            }
+            columns += 1;
+            if sum < left_score {
+                (left, left_score) = (columns, sum);
+            }
+        }
+    }
+    let (mut seen, mut right, mut right_score) = (0u32, 0u32, 0i32);
+    sum = 0;
+    'scan: for op in aligned().rev() {
+        let steps = if op.kind == Match { op.len } else { 1 };
+        for _ in 0..steps {
+            if columns - seen <= left {
+                break 'scan;
+            }
+            if op.kind == Match {
+                q -= 1;
+                t -= 1;
+                sum += base(q, t);
+            } else {
+                sum += gap(op.len);
+                if op.kind.consumes_read() {
+                    q -= op.len as usize;
+                } else {
+                    t -= op.len as usize;
+                }
+            }
+            seen += 1;
+            if sum < right_score {
+                (right, right_score) = (seen, sum);
+            }
+        }
+    }
+    if left == 0 && right == 0 {
+        return;
+    }
+    // Rebuild without the first `left` and last `right` columns.
+    let keep = left..columns - right;
+    let mut ops = Vec::with_capacity(out.ops.len() + 2);
+    let (mut front, mut back, mut skipped) = (lead, trail, 0i32);
+    let mut column = 0u32;
+    for op in aligned() {
+        let width = if op.kind == Match { op.len } else { 1 };
+        let span = column..column + width;
+        column += width;
+        let kept = span.start.max(keep.start)..span.end.min(keep.end);
+        let kept_len = kept.end.saturating_sub(kept.start);
+        let (before, after) = if op.kind == Match {
+            (
+                kept.start.min(span.end) - span.start,
+                span.end - kept.end.max(span.start),
+            )
+        } else if kept_len == 0 {
+            if span.end <= keep.start {
+                (width, 0)
+            } else {
+                (0, width)
+            }
+        } else {
+            (0, 0)
+        };
+        let len_of = |columns: u32| {
+            if op.kind == Match {
+                columns
+            } else {
+                op.len * columns
+            }
+        };
+        if op.kind.consumes_read() {
+            front += len_of(before);
+            back += len_of(after);
+        }
+        if op.kind.consumes_reference() {
+            skipped += len_of(before) as i32;
+        }
+        if kept_len > 0 {
+            push_op(&mut ops, op.kind, len_of(kept_len));
+        }
+    }
+    if !ops.iter().any(|op| op.kind == Match) {
+        return;
+    }
+    out.ops.clear();
+    push_op(&mut out.ops, SoftClip, front);
+    for op in ops {
+        push_op(&mut out.ops, op.kind, op.len);
+    }
+    push_op(&mut out.ops, SoftClip, back);
+    out.ref_start += skipped;
+    out.score -= left_score + right_score;
+}
+
 /// Mismatches when the read is laid down ungapped at `pos`, or `None` when it
 /// would not fit inside the reference there.
 fn ungapped_mismatches(query: &[u8], ref_seq: &[u8], pos: i32) -> Option<i32> {
@@ -526,11 +661,15 @@ fn finish_ungapped(
     window_start: i32,
     query_len: i32,
     score: i32,
+    cfg: &AlignConfig,
     out: &mut RealizedAlignment,
 ) {
     out.ref_start = window_start;
     out.score = score;
     push_op(&mut out.ops, CigarOpKind::Match, query_len as u32);
+    if cfg.softclip {
+        clip_low_scoring_ends(query, ref_seq, cfg, out);
+    }
     fill_md_and_edit_distance(query, ref_seq, &[], out);
 }
 
@@ -592,7 +731,15 @@ fn realize_oriented(
     });
     if let (Some(mismatches), Some(ungapped_score)) = (ungapped_mismatch_count, ungapped) {
         if ungapped_is_optimal(mismatches, cfg) {
-            finish_ungapped(query, ref_seq, window_start, query_len, ungapped_score, out);
+            finish_ungapped(
+                query,
+                ref_seq,
+                window_start,
+                query_len,
+                ungapped_score,
+                cfg,
+                out,
+            );
             return true;
         }
     }
@@ -647,7 +794,15 @@ fn realize_oriented(
             && query_end_target == query_len - 1
             && query_end_score == ungapped_score
         {
-            finish_ungapped(query, ref_seq, window_start, query_len, ungapped_score, out);
+            finish_ungapped(
+                query,
+                ref_seq,
+                window_start,
+                query_len,
+                ungapped_score,
+                cfg,
+                out,
+            );
             return true;
         }
     }
@@ -732,6 +887,9 @@ fn realize_oriented(
     // record: it claims reference bases outside the read's span. Trim them and
     // move the start position accordingly.
     trim_edge_deletions(out);
+    if cfg.softclip {
+        clip_low_scoring_ends(query, ref_seq, cfg, out);
+    }
     fill_md_and_edit_distance(query, ref_seq, ambiguous, out);
     true
 }
@@ -900,6 +1058,55 @@ mod tests {
             .iter()
             .map(|op| format!("{}{}", op.len, op.kind.letter()))
             .collect()
+    }
+
+    /// `--softclip` ends an alignment where it scores best: a mismatch on the
+    /// first base, or two bases from the end, is clipped rather than counted, and
+    /// one far enough in to be paid for by the matches past it stays.
+    #[test]
+    fn softclip_clips_ends_that_cost_more_than_they_earn() {
+        let reference = nonrepeating(200);
+        let cfg = AlignConfig {
+            softclip: true,
+            ..config()
+        };
+        let realize_with = |read: &[u8], cfg: &AlignConfig| {
+            let mut out = RealizedAlignment::default();
+            assert!(realize(
+                read,
+                true,
+                &reference,
+                &[],
+                50,
+                cfg,
+                &mut RealizeScratch::default(),
+                &mut out
+            ));
+            out
+        };
+        let substitute = |read: &mut Vec<u8>, at: usize| {
+            read[at] = if read[at] == b'A' { b'C' } else { b'A' };
+        };
+        let mut read = reference[50..124].to_vec();
+        substitute(&mut read, 0);
+        substitute(&mut read, 72);
+        substitute(&mut read, 40);
+
+        let end_to_end = realize_with(&read, &config());
+        assert_eq!(cigar_string(&end_to_end), "74M");
+        assert_eq!(end_to_end.edit_distance, 3);
+
+        let local = realize_with(&read, &cfg);
+        assert_eq!(cigar_string(&local), "1S71M2S");
+        assert_eq!(local.ref_start, 51);
+        assert_eq!(local.edit_distance, 1, "the interior mismatch stays");
+        assert_eq!(local.md, format!("39{}31", reference[90] as char));
+        assert_eq!(local.score, 70 * 2 - 4);
+
+        // Three bases from the end the mismatch is paid for exactly, and kept.
+        let mut read = reference[50..124].to_vec();
+        substitute(&mut read, 71);
+        assert_eq!(cigar_string(&realize_with(&read, &cfg)), "74M");
     }
 
     /// A read that matches the reference exactly is one `M` run, no edits, and an

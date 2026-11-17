@@ -1250,23 +1250,27 @@ fn accumulate_vm_stats(maps_empty: bool, counters: &mut Counters) {
     }
 }
 
-/// What a fragment writes to the mapping output: its quantified placements, or,
-/// under `--spliced`, the placements of a fragment a genome decoy dominated. A
-/// genome decoy is a chromosome, so those are already genome alignments, and
-/// leaving them out would hide every intronic and intergenic read from
-/// genome-coordinate QC. They are never quantified.
+/// What a fragment writes to the mapping output: its quantified placements, and
+/// under `--spliced` its genome decoy placements too. A genome decoy is a
+/// chromosome, so those are already genome alignments: the only ones a read
+/// from an intron or between genes has, and a read's other loci when it also
+/// sits on a paralog the annotation does not describe. The record writer keeps
+/// what STAR would report of them. They are never quantified.
 fn written_placements<'p>(
     sh: &Shared<'_>,
     placements: &'p [ScoredMapping],
     decoys: &'p [ScoredMapping],
-) -> &'p [ScoredMapping] {
-    if placements.is_empty()
-        && sh.record_options.projector.is_some()
-        && decoys.len() <= sh.max_read_occ
+) -> std::borrow::Cow<'p, [ScoredMapping]> {
+    use std::borrow::Cow;
+    if decoys.is_empty()
+        || sh.record_options.projector.is_none()
+        || placements.len() + decoys.len() > sh.max_read_occ
     {
-        decoys
+        Cow::Borrowed(placements)
+    } else if placements.is_empty() {
+        Cow::Borrowed(decoys)
     } else {
-        placements
+        Cow::Owned([placements, decoys].concat())
     }
 }
 
@@ -1495,7 +1499,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         s1.as_ref(),
                         r1.qual(),
                         mate,
-                        written,
+                        &written,
                         sh.record_options,
                         emit_scratch,
                     );
@@ -1519,7 +1523,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         s1.as_ref(),
                         r1.qual(),
                         mate,
-                        written,
+                        &written,
                         sh.record_options,
                         emit_scratch,
                     )?;
@@ -1682,7 +1686,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     s.as_ref(),
                     rec.qual(),
                     None,
-                    written,
+                    &written,
                     sh.record_options,
                     emit_scratch,
                 );
@@ -1705,7 +1709,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         s.as_ref(),
                         rec.qual(),
                         None,
-                        written,
+                        &written,
                         sh.record_options,
                         emit_scratch,
                     )?;

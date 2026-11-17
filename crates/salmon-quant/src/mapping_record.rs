@@ -531,6 +531,75 @@ struct RecordKey {
     template_length: i32,
 }
 
+/// Read bases at either end whose placement does not make two alignments
+/// different ones: an isoform can hang them across a junction where another
+/// aligns them straight on, and a genome aligner reports one of the two.
+const LOOSE_END: i32 = 3;
+
+/// Whether placement `a` repeats placement `b` rather than being another
+/// alignment of the fragment: every mate of `a` has a counterpart in `b`, on
+/// the same reference and strand, that aligns all of its bases (STAR's test
+/// for a duplicate), spans the same genome bases end to end (the same alignment
+/// with its gaps placed elsewhere), or places every read base the same way
+/// except the last [`LOOSE_END`] at either end.
+fn repeats(a: &[RecordKey], b: &[RecordKey]) -> bool {
+    /// `(read start, genome start, length)` of each aligned block.
+    fn blocks(key: &RecordKey) -> Vec<(i32, i32, i32)> {
+        let (mut read, mut genome) = (0i32, key.position);
+        let mut out = Vec::with_capacity(key.cigar.len());
+        for op in &key.cigar {
+            let len = op.len as i32;
+            if op.kind == CigarOpKind::Match {
+                out.push((read, genome, len));
+            }
+            if op.kind.consumes_read() {
+                read += len;
+            }
+            if op.kind.consumes_reference() {
+                genome += len;
+            }
+        }
+        out
+    }
+    /// The blocks cut to read bases `[from, to)`.
+    fn core(blocks: &[(i32, i32, i32)], from: i32, to: i32) -> Vec<(i32, i32, i32)> {
+        blocks
+            .iter()
+            .filter_map(|&(r, g, len)| {
+                let (start, end) = (r.max(from), (r + len).min(to));
+                (start < end).then_some((start, g + start - r, end - start))
+            })
+            .collect()
+    }
+    let mate = |key: &RecordKey| key.flags & (IS_RC | READ1 | READ2);
+    a.iter().all(|x| {
+        let bx = blocks(x);
+        b.iter().any(|y| {
+            if x.reference_id != y.reference_id || mate(x) != mate(y) {
+                return false;
+            }
+            let by = blocks(y);
+            let contained = bx.iter().all(|&(r, g, len)| {
+                by.iter()
+                    .any(|&(rb, gb, lenb)| g - r == gb - rb && rb <= r && r + len <= rb + lenb)
+            });
+            let span = |b: &[(i32, i32, i32)]| {
+                b.first()
+                    .zip(b.last())
+                    .map(|(first, last)| (first.1, last.1 + last.2))
+            };
+            let read_len: i32 = x
+                .cigar
+                .iter()
+                .filter(|op| op.kind.consumes_read())
+                .map(|op| op.len as i32)
+                .sum();
+            let (from, to) = (LOOSE_END, read_len - LOOSE_END);
+            contained || span(&bx) == span(&by) || core(&bx, from, to) == core(&by, from, to)
+        })
+    })
+}
+
 impl RecordKey {
     fn of(record: &AlignmentRecord<'_>) -> Self {
         Self {
@@ -694,6 +763,47 @@ fn projected_template_length(scratch: &EmitScratch, first: &Placed, second: &Pla
     }
 }
 
+/// STAR's score for one genomic alignment of a fragment, which STAR writes as
+/// `AS` and ranks a read's alignments by: matched bases less mismatches, 2 + 2
+/// per base for each indel, its `sjdbScore` (2) per annotated junction (every
+/// junction here is one), and its `scoreGenomicLengthLog2scale` penalty on the
+/// genomic span. On a mouse library it gives STAR's own `AS` for 99.9% of pairs.
+///
+/// `None` when STAR would not report the alignment at all: its score or its
+/// matched bases fall below 0.66 of the fragment's read length, both mates
+/// counted (`outFilterScoreMinOverLread`, `outFilterMatchNminOverLread`). That
+/// is what keeps STAR from ever reporting one mate of a pair on its own.
+fn star_score(mates: &[(i32, &[CigarOp], Option<u32>)], read_length: usize) -> Option<i32> {
+    let (mut score, mut matched, mut start, mut end) = (0i32, 0i32, i32::MAX, i32::MIN);
+    for &(position, cigar, edit_distance) in mates {
+        let mut gaps = 0;
+        for op in cigar {
+            let len = op.len as i32;
+            match op.kind {
+                CigarOpKind::Match => {
+                    score += len;
+                    matched += len;
+                }
+                CigarOpKind::Insertion | CigarOpKind::Deletion => {
+                    gaps += op.len;
+                    score -= 2 + 2 * len;
+                }
+                CigarOpKind::Skip => score += 2,
+                CigarOpKind::SoftClip => {}
+            }
+        }
+        let mismatches = edit_distance.unwrap_or(0).saturating_sub(gaps) as i32;
+        score -= 2 * mismatches;
+        matched -= mismatches;
+        start = start.min(position);
+        end = end.max(position + salmon_map::realize::reference_span(cigar));
+    }
+    let span = f64::from((end - start).max(1));
+    let score = score + ((span.log2() * -0.25 - 0.5).ceil() as i32).min(0);
+    let bar = (0.66 * read_length as f64) as i32;
+    (score >= bar && matched >= bar).then_some(score)
+}
+
 /// The CIGAR and `MD` a [`Placed`] refers to, borrowed out of the scratch.
 fn borrow_cigar<'s>(scratch: &'s EmitScratch, placed: &Placed) -> (&'s [CigarOp], Option<&'s str>) {
     if let Some(projection) = placed.projection {
@@ -760,6 +870,13 @@ pub fn emit_fragment_records(
     // with `NH`, `HI` and `MAPQ` counting those. Nothing is chosen between
     // transcripts: the records would be identical, and the transcript they differ
     // by has no field in a genome-coordinate record.
+    //
+    // Of those, it then writes what STAR would: the alignments scoring within 1
+    // of the best by STAR's score (its `outFilterMultimapScoreRange`), the best
+    // one primary, and none that only repeats a better one (see [`repeats`]).
+    // salmon keeps lower-scoring placements for the EM to
+    // weigh, but to a genome tool an isoform that puts a read's last two bases in
+    // an intron is a second locus, and the read would stop counting as unique.
     // shortcut: the first pass realizes multi-placement fragments twice; keep the
     // projected placements per fragment if `--spliced` throughput matters.
     let dedupe = options.projector.is_some() && maps.len() > 1;
@@ -770,6 +887,8 @@ pub fn emit_fragment_records(
     };
     // Each placement's `HI`, 0 when it writes nothing (only set when deduping).
     let mut rank: Vec<usize> = Vec::new();
+    // Each placement's STAR score, from its records' `AS` (only set when deduping).
+    let mut scores: Vec<i32> = vec![i32::MIN; if dedupe { maps.len() } else { 0 }];
     let mut nh = maps.len();
 
     for dry_run in [true, false] {
@@ -777,23 +896,30 @@ pub fn emit_fragment_records(
             continue;
         }
         if !dry_run && dedupe {
-            let mut distinct = 0;
-            rank = (0..keys.len())
-                .map(|i| {
-                    if keys[i].is_empty() || keys[..i].contains(&keys[i]) {
-                        0
-                    } else {
-                        distinct += 1;
-                        distinct
-                    }
-                })
+            let mut kept: Vec<usize> = (0..keys.len())
+                .filter(|&i| !keys[i].is_empty() && !keys[..i].contains(&keys[i]))
                 .collect();
-            nh = distinct;
+            let best = kept.iter().map(|&i| scores[i]).max().unwrap_or(0);
+            kept.retain(|&i| scores[i] >= best - 1);
+            kept.sort_by_key(|&i| std::cmp::Reverse(scores[i]));
+            let mut loci: Vec<usize> = Vec::with_capacity(kept.len());
+            for i in kept {
+                if !loci.iter().any(|&j| repeats(&keys[i], &keys[j])) {
+                    loci.push(i);
+                }
+            }
+            let kept = loci;
+            rank = vec![0; keys.len()];
+            for (hi, &i) in kept.iter().enumerate() {
+                rank[i] = hi + 1;
+            }
+            nh = kept.len();
         }
         let mapq = mapping_quality(nh);
         let mut emit = |index: usize, record: &AlignmentRecord<'_>| {
             if dry_run {
                 keys[index].push(RecordKey::of(record));
+                scores[index] = record.alignment_score;
                 return Ok(());
             }
             emitted += 1;
@@ -911,6 +1037,20 @@ pub fn emit_fragment_records(
                     let reference = placed_reference(&p1, tid);
                     let (cigar1, md1) = borrow_cigar(scratch, &p1);
                     let (cigar2, md2) = borrow_cigar(scratch, &p2);
+                    // In genome coordinates `AS` is STAR's, one score for the pair.
+                    let star = match options.projector {
+                        Some(_) => match star_score(
+                            &[
+                                (p1.position, cigar1, p1.edit_distance),
+                                (p2.position, cigar2, p2.edit_distance),
+                            ],
+                            r1_seq.len() + r2_seq.len(),
+                        ) {
+                            None => continue,
+                            score => score,
+                        },
+                        None => None,
+                    };
                     emit(
                         index,
                         &AlignmentRecord {
@@ -929,7 +1069,7 @@ pub fn emit_fragment_records(
                             nh,
                             hi,
                             xt,
-                            alignment_score: p1.score.unwrap_or(mapping.r1_score),
+                            alignment_score: star.unwrap_or(p1.score.unwrap_or(mapping.r1_score)),
                             weight,
                             edit_distance: p1.edit_distance,
                             md: md1,
@@ -957,7 +1097,8 @@ pub fn emit_fragment_records(
                             nh,
                             hi,
                             xt,
-                            alignment_score: p2.score.unwrap_or(mapping.score - mapping.r1_score),
+                            alignment_score: star
+                                .unwrap_or(p2.score.unwrap_or(mapping.score - mapping.r1_score)),
                             weight,
                             edit_distance: p2.edit_distance,
                             md: md2,
@@ -989,6 +1130,16 @@ pub fn emit_fragment_records(
                     let forward = mapping.is_fw != flipped;
                     let reference = placed_reference(&p, tid);
                     let (cigar, md) = borrow_cigar(scratch, &p);
+                    let star = match options.projector {
+                        Some(_) => match star_score(
+                            &[(p.position, cigar, p.edit_distance)],
+                            r1_seq.len() + r2_seq.len(),
+                        ) {
+                            None => continue,
+                            score => score,
+                        },
+                        None => None,
+                    };
                     emit(
                         index,
                         &AlignmentRecord {
@@ -1007,7 +1158,7 @@ pub fn emit_fragment_records(
                             nh,
                             hi,
                             xt,
-                            alignment_score: p.score.unwrap_or(mapping.r1_score),
+                            alignment_score: star.unwrap_or(p.score.unwrap_or(mapping.r1_score)),
                             weight,
                             edit_distance: p.edit_distance,
                             md,
@@ -1056,10 +1207,20 @@ pub fn emit_fragment_records(
                     }
                     let forward = forward != p.projection.is_some_and(|p| p.flipped);
                     let reference = placed_reference(&p, tid);
+                    let (cigar, md) = borrow_cigar(scratch, &p);
+                    let star = match options.projector {
+                        Some(_) => match star_score(
+                            &[(p.position, cigar, p.edit_distance)],
+                            r1_seq.len() + r2_seq.len(),
+                        ) {
+                            None => continue,
+                            score => score,
+                        },
+                        None => None,
+                    };
                     if hi == 1 && !dry_run {
                         orphan_mate = Some((reference, p.position, !forward, left));
                     }
-                    let (cigar, md) = borrow_cigar(scratch, &p);
                     emit(
                         index,
                         &AlignmentRecord {
@@ -1085,7 +1246,7 @@ pub fn emit_fragment_records(
                             nh,
                             hi,
                             xt,
-                            alignment_score: p.score.unwrap_or(score),
+                            alignment_score: star.unwrap_or(p.score.unwrap_or(score)),
                             weight,
                             edit_distance: p.edit_distance,
                             md,
@@ -1255,6 +1416,88 @@ mod tests {
                 "{spec:?} should be rejected"
             );
         }
+    }
+
+    /// A SAM CIGAR string as operations.
+    fn cigar(text: &str) -> Vec<CigarOp> {
+        let mut ops = Vec::new();
+        let mut len = 0;
+        for c in text.chars() {
+            if let Some(digit) = c.to_digit(10) {
+                len = len * 10 + digit;
+                continue;
+            }
+            let kind = match c {
+                'M' => CigarOpKind::Match,
+                'I' => CigarOpKind::Insertion,
+                'D' => CigarOpKind::Deletion,
+                'N' => CigarOpKind::Skip,
+                'S' => CigarOpKind::SoftClip,
+                other => panic!("CIGAR op {other}"),
+            };
+            ops.push(CigarOp::new(kind, len));
+            len = 0;
+        }
+        ops
+    }
+
+    /// Pairs from a STAR BAM of a mouse library: the score recomputed from their
+    /// CIGARs and `NM` is the `AS` STAR wrote, and STAR's 0.66 bar turns away a
+    /// mate on its own.
+    #[test]
+    fn star_score_is_the_score_star_writes() {
+        let one_mismatch = [
+            (3084203, &cigar("1S73M")[..], Some(0)),
+            (3084249, &cigar("74M")[..], Some(1)),
+        ];
+        assert_eq!(star_score(&one_mismatch, 148), Some(143));
+        let one_junction = [
+            (3311605, &cigar("1S31M339N42M")[..], Some(0)),
+            (3312033, &cigar("74M")[..], Some(0)),
+        ];
+        assert_eq!(star_score(&one_junction, 148), Some(147));
+        assert_eq!(star_score(&one_junction[..1], 148), None, "an orphan mate");
+        assert_eq!(
+            star_score(&one_junction[..1], 74),
+            Some(73),
+            "a single-end read"
+        );
+    }
+
+    /// What counts as a second alignment, on alternatives a transcriptome gives
+    /// a mouse read that STAR wrote once.
+    #[test]
+    fn an_alignment_repeating_a_better_one_is_not_another() {
+        let key = |flags: u16, position: i32, text: &str| RecordKey {
+            flags,
+            reference_id: Some(0),
+            position,
+            cigar: cigar(text),
+            mate_reference_id: None,
+            mate_position: None,
+            template_length: 0,
+        };
+        let r1 = |position, text| key(READ1, position, text);
+        let r2 = |position, text| key(READ2 | IS_RC, position, text);
+        // The same insertion, placed at two points of a repeat.
+        let shifted = [r1(148536499, "1S73M"), r2(148536542, "34M2I38M")];
+        let best = [r1(148536499, "1S73M"), r2(148536542, "18M2I54M")];
+        assert!(repeats(&shifted, &best));
+        // An isoform hanging the read's second base across a junction, where the
+        // other aligns it straight on.
+        let hanging = [r1(18121700, "1S1M4133N71M2828N1M")];
+        assert!(repeats(&[r1(18125832, "73M2828N1M")], &hanging));
+        // A clipped copy of the same alignment.
+        assert!(repeats(&[r1(100, "70M4S")], &[r1(100, "74M")]));
+        // Mate 2 somewhere else is another alignment of the pair: STAR reports it.
+        let elsewhere = [r1(32198920, "1S73M"), r2(32202067, "74M")];
+        let here = [r1(32198920, "1S73M"), r2(32199833, "74M")];
+        assert!(!repeats(&elsewhere, &here));
+        // So is the other strand.
+        assert!(!repeats(
+            &[key(READ1 | IS_RC, 100, "74M")],
+            &[r1(100, "74M")]
+        ));
     }
 
     /// MAPQ has to distinguish a uniquely placed fragment from an ambiguous one;

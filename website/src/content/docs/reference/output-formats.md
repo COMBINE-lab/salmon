@@ -500,7 +500,7 @@ Each record carries:
 | `SEQ` / `QUAL` | The read's bases and its Phred+33 qualities, reverse-complemented together on the reverse strand. Qualities are not optional and there is no flag to enable them; `QUAL` is `*` only when the input carried none, as for a FASTA. |
 | `NM` / `MD` | Edit distance and the reference bases at each mismatch, matching what `samtools calmd` recomputes from the input FASTA. Indexing has to replace non-ACGT bases with ACGT, since the k-mer structure cannot hold them, but the build records where it did so and the record reports the `N` that was there rather than the substitute. `@SQ M5` is computed the same way, so the header names the reference the user supplied. |
 | `NH` / `HI` | How many placements this fragment has, and which one this record is. |
-| `AS` | The selective-alignment score. |
+| `AS` | The selective-alignment score. Under `--spliced`, STAR's score for the fragment's genomic alignment, the same on both mates (see below). |
 | `XT` | `T` for a transcript placement, `D` for a decoy. Always `T` without `--spliced`: a fragment whose best placement is a decoy is dropped by scoring before any record is written. `--spliced` writes those (see below). |
 | `ZW` | The placement's equivalence-class weight. |
 | `MC` / `MQ` | The mate's CIGAR and mapping quality, so a mate-aware tool does not have to sort the file to find them. |
@@ -539,28 +539,67 @@ stored bases flip to match. `M5` is omitted, because the references are then
 chromosomes salmon never loaded and a guessed checksum is worse than none.
 
 A decoy whose name is a genome sequence (the chromosomes of a gentrome index)
-is already in genome coordinates. When such a decoy dominates a fragment,
-quantification drops it as usual, but `--spliced` writes its best decoy
-placements, `XT:A:D`, so the BAM still holds the library's intronic and
-intergenic reads. Placements on any other reference the annotation does not
-describe (another decoy, or a transcript absent from the GTF) are dropped rather
-than half-projected. Two
-transcripts of one gene often imply the same genomic alignment; that alignment is
-written once, and `NH`, `HI` and `MAPQ` count distinct genomic alignments rather
-than transcripts. Otherwise a read with one place on the genome would look like a
-multimapper to every genome-coordinate tool (RSeQC drops reads below `MAPQ` 30,
-Qualimap skips `NH > 1`). Nothing is decided between the transcripts: their
-records would be identical, and which transcript a read came from is
-`quant.sf`'s question, not the BAM's.
+is already in genome coordinates, so `--spliced` writes genome decoy
+placements too, `XT:A:D`: those of a fragment a decoy dominated, which
+quantification drops, and those the weight rule would have kept beside a
+transcript placement, which are the read's other loci on the genome. The BAM
+then holds the library's intronic and intergenic reads, and a read that also
+sits on a paralog the annotation does not describe is a multimapper, as it is
+to a genome aligner. None of these are quantified. Placements on any other
+reference the annotation does not describe (another decoy, or a transcript
+absent from the GTF) are dropped rather than half-projected.
 
-Every `N` comes from the annotation, so splice-junction QC on this output
-(RSeQC `junction_annotation`, `junction_saturation`) finds no novel junctions by
-construction. Reads from introns or between genes reach the output only through
-a genome decoy: without a gentrome index, intronic and intergenic fractions
-computed from it (Qualimap `rnaseq`, RSeQC `read_distribution`) are near zero
-whatever the library, and say nothing about pre-mRNA or genomic DNA content.
-Library-level QC (strandedness, insert size, duplication, TIN, 5'–3' bias) is
-unaffected.
+The records are the ones STAR would write for those alignments, because the
+tools that read genome BAMs were tuned on STAR's:
+
+- **Ends are local.** An alignment ends where it scores best, so a mismatch
+  among a read's last bases (a library artifact on its first base is common) is
+  soft-clipped rather than counted as an edit, as STAR does. `--softclip` gives
+  the same ends without `--spliced`.
+- **`AS` is STAR's score**: matched bases less mismatches, 2 + 2 per base for
+  each indel, 2 per annotated junction (`sjdbScore`), and STAR's genomic-length
+  penalty, over both mates. On a mouse library it reproduces STAR's `AS` for
+  99.9% of pairs.
+- **Only alignments within 1 of the best `AS` are written**
+  (`outFilterMultimapScoreRange`), the best one primary, and none that scores
+  below 0.66 of the fragment's read length, both mates counted
+  (`outFilterScoreMinOverLread`, `outFilterMatchNminOverLread`). That last rule
+  is why, as in STAR, one mate of a pair is never written on its own.
+- **One record per alignment.** Two transcripts of one gene often imply the same
+  genomic alignment, and transcripts that differ just past a read's end imply
+  nearly the same one. An alignment is written only if it does not repeat a
+  better one: all its aligned bases aligned by it too (STAR's own test), the same
+  genome span end to end (the same alignment with an indel placed elsewhere), or
+  every read base placed the same way except the last three at either end. `NH`,
+  `HI` and `MAPQ` count what is written. Otherwise a read with one place on the
+  genome looks like a multimapper to every genome-coordinate tool (RSeQC drops
+  reads below `MAPQ` 30, Qualimap skips `NH > 1`). Nothing is decided between
+  transcripts: which transcript a read came from is `quant.sf`'s question, not
+  the BAM's.
+
+Only the records change: mapping, quantification and `quant.sf` are the same
+with or without `--spliced`.
+
+Measured against STAR 2.7.11b with nf-core/rnaseq's settings on one mouse
+library (3.9M pairs, the same trimmed reads, `samtools markdup`, RustQC), 90% of
+primary alignments are identical to STAR's, and nearly all the rest are
+multimappers whose primary differs. Strandedness, TIN, duplication (dupRadar),
+5'–3' bias, and the exonic, intronic and intergenic fractions agree to within a
+few percent; uniquely placed reads are 1% fewer, spliced reads 1% more, and the
+mismatch rate is 0.0017 against STAR's 0.0021. Some differences remain by
+construction:
+
+- **No novel junctions.** Every `N` comes from the annotation, so splice-junction
+  QC (RSeQC `junction_annotation`, `junction_saturation`) finds none.
+- **Mates salmon cannot find.** STAR places a mate from shorter seeds than
+  salmon's k-mers, so about 1% of fragments STAR writes as pairs have one mate
+  only in salmon, and are not written. `--recoverOrphans` searches for the mate
+  and closes most of that gap, at a large cost in run time.
+- **Ties.** Where alignments score alike, which one is primary, and whether an
+  alternative STAR's seed search never tries is written, can differ (a few
+  percent of multimappers).
+- **Without a gentrome index** intronic and intergenic reads are not in the
+  output at all, so those fractions are near zero whatever the library.
 
 ### `MAPQ`
 

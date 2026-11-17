@@ -554,9 +554,17 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .unwrap_or_else(|_| opts.index_dir.clone())
             .display()
     );
+    // Genome-coordinate output is read by tools built around a local genome
+    // aligner, so under `--spliced` an alignment ends where it scores best, as
+    // STAR's do, instead of counting a bad last base as an edit. Only the written
+    // records change: mapping, and so `quant.sf`, keep their own `--softclip`.
+    let record_align = salmon_map::align::AlignConfig {
+        softclip: opts.map_config.align.softclip || projector.is_some(),
+        ..opts.map_config.align.clone()
+    };
     let record_options = mapping_record::RecordOptions {
         read_group: opts.read_group.as_ref(),
-        align_config: writes_records.then_some(&opts.map_config.align),
+        align_config: writes_records.then_some(&record_align),
         projector: projector.as_ref(),
         // The index directory is the honest answer to "where did these bases
         // come from": it is what the run was pointed at, and what someone

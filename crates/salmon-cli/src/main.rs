@@ -861,7 +861,9 @@ struct QuantArgs {
     #[arg(long = "allowDecoyOrphans")]
     allow_decoy_orphans: bool,
     /// Allow soft-clipping of read ends during selective alignment: unaligned
-    /// read-end bases are clipped rather than penalized. (salmon's --softclip)
+    /// read-end bases are clipped rather than penalized. Mapping output then
+    /// ends each alignment where it scores best, as --spliced always does.
+    /// (salmon's --softclip)
     #[arg(long = "softclip")]
     softclip: bool,
     /// Allow soft-clipping only of read bases that overhang a transcript end
@@ -973,8 +975,10 @@ struct QuantArgs {
     write_qualities: bool,
     /// Report mapping output in genome coordinates instead of transcript ones,
     /// with N operations at exon junctions the way a spliced genome aligner
-    /// writes them. Needs --annotation for the exon structures and --genome for
-    /// the chromosome lengths the header must declare.
+    /// writes them, and the records STAR would write for those alignments (its
+    /// AS, local ends, its multimapper and read-length rules), for genome QC.
+    /// Quantification is unchanged. Needs --annotation for the exon structures
+    /// and --genome for the chromosome lengths the header must declare.
     #[arg(long = "spliced")]
     spliced: bool,
     /// Read group to declare in the mapping output's header, as tab-separated
