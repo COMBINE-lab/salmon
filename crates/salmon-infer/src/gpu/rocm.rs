@@ -435,6 +435,9 @@ impl KmerDevice {
         useq: &[u64],
         prm: &[u32],
     ) -> Result<Self, String> {
+        if keys.is_empty() {
+            return Err("this backend takes the minimizer table built on the CPU".into());
+        }
         let mut hip = Hip::load()?;
         if hip.devices == 0 {
             return Err("no ROCm device".into());

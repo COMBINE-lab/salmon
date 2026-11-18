@@ -430,10 +430,6 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
         std::thread::spawn(move || {
             let t0 = std::time::Instant::now();
             gpu_map::urgent();
-            // opening the device takes tens of ms: off the mapping's path
-            if !salmon_infer::kmers::KmerGpu::available() {
-                return;
-            }
             let idx = salmon.inner();
             use salmon_infer::kmers::{KmerGpu, KmerTable};
             use salmon_map::sketch_hits as sh;
@@ -455,24 +451,35 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
                             sh::kept(idx),
                             p.bstart,
                             p.offs,
+                            // its minimizer table is built on the device where it can be
+                            !KmerGpu::builds_table(),
                         )
                     })
                 }
             };
             // its own pool, so its threads can take the build's priority; as
             // many threads as the global pool, which `-p` sized
-            let table = match rayon::ThreadPoolBuilder::new()
+            // opening the device takes ~50 ms: beside the CPU half of the build
+            let both = || rayon::join(build, KmerGpu::available);
+            let (table, available) = match rayon::ThreadPoolBuilder::new()
                 .num_threads(rayon::current_num_threads())
                 .start_handler(|_| gpu_map::urgent())
                 .build()
             {
-                Ok(pool) => pool.install(build),
-                Err(_) => build(),
+                Ok(pool) => pool.install(both),
+                Err(_) => both(),
             };
+            if !available {
+                return;
+            }
             match table
                 .ok_or_else(|| "the index does not fit the GPU lookup".to_string())
-                .and_then(|table| KmerGpu::new(&table, skip == SkippingStrategy::Permissive))
-            {
+                .and_then(|table| {
+                    let gpu = KmerGpu::new(&table, skip == SkippingStrategy::Permissive)?;
+                    // here, not on the first mapping batches
+                    gpu.warm_up(&table);
+                    Ok(gpu)
+                }) {
                 Ok(gpu) => {
                     let _ = slot.set(gpu);
                     let elapsed_s = t0.elapsed().as_secs_f64();
