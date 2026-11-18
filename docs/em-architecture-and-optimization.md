@@ -873,8 +873,11 @@ on these problems the EM warm start also runs on the GPU.
 ![Wall time and mapping time against read pairs](benchmarks/gpu-sketch-geuvadis/gpu-sketch-geuvadis.png)
 
 The figure ([data](benchmarks/gpu-sketch-geuvadis/gpu-sketch-geuvadis.csv))
-follows kallisto-GPU's Figure 1: subsamples of ERR188044 (first 2, 5, 10 and
-20M pairs, recompressed with pigz) and the two full samples. Both curves still
+follows kallisto-GPU's Figure 1. Panels A and B use one sample, ERR188044, and
+its subsamples (first 2, 5, 10 and 20M pairs, recompressed with pigz); dots are
+runs, lines join the fastest run per size. Panel C compares the two full
+samples. ERR188428 is faster despite more pairs because fewer of its reads map
+(77% against 93%), so it is kept off the curve. Both curves still
 grow with the input, the GPU one more slowly: about 0.4 s per million pairs on
 the GPU path, where kallisto-GPU reports about 0.05 s. On ERR188044, the time
 outside the mapping phase is mostly the second (RAD) pass, 3.9 s, and the EM
