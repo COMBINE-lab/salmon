@@ -841,6 +841,54 @@ The changes were:
   encoder instead of before it, so every field went through the compressor
   separately.
 
-These numbers come from synthetic data only, not from a
-human sample. The CUDA and ROCm lookups are compiled by NVRTC and hiprtc from
-the same C source as the Metal one, and have not run on hardware.
+### GEUVADIS (real human data)
+
+Two GEUVADIS samples (2×76 bp lymphoblastoid RNA-seq, gzip FASTQ from ENA)
+against GENCODE v50 (654,828 transcripts, `salmon index --gencode`), on the same
+M4 Max with `-p 16 --dumpEq`. Each figure is the fastest of 3 alternated runs;
+the machine's load average ranged from 20 to 110, most of it from these runs'
+own threads. "GPU memory" is the Metal device's allocation once the lookup is
+built (`device_mb` in the `gpu_kmer_table` log line). On Apple silicon it is
+unified memory and is also counted in the process RSS, so the two do not add.
+
+The index takes 10.9–12.9 s to build (4 builds), peaks at 5.3 GB of RSS and is
+1.9 GB on disk.
+
+| Sample | Mode | Run | Mapping | CPU RAM (peak RSS) | GPU memory | Mapped |
+|---|---|---:|---:|---:|---:|---:|
+| ERR188044, 36.3M pairs | `--sketch`, GPU | 29.1 s | 15.7 s | 2.5 GB | 785 MB | 92.8% |
+| | `--sketch`, CPU | 32.8 s | 20.9 s | 1.8 GB | | 92.8% |
+| | selective alignment, GPU EM | 75.5 s | 55.4 s | 2.9 GB | | 94.4% |
+| | selective alignment, CPU | 81.2 s | 60.4 s | 2.4 GB | | 94.4% |
+| ERR188428, 39.7M pairs | `--sketch`, GPU | 24.7 s | 11.3 s | 2.4 GB | 785 MB | 77.2% |
+| | `--sketch`, CPU | 29.0 s | 18.4 s | 1.6 GB | | 77.2% |
+| | selective alignment, GPU EM | 56.9 s | 41.4 s | 2.4 GB | | 76.1% |
+| | selective alignment, CPU | 54.5 s | 41.0 s | 2.0 GB | | 76.1% |
+
+The decompressed equivalence classes are identical between the GPU and CPU
+runs of every row pair. `quant.sf` differs to the EM tolerance (L1/total
+4.5e-4 with `--sketch`, 5.4e-4 with selective alignment on ERR188044), because
+on these problems the EM warm start also runs on the GPU.
+
+![Wall time and mapping time against read pairs](benchmarks/gpu-sketch-geuvadis/gpu-sketch-geuvadis.png)
+
+The figure ([data](benchmarks/gpu-sketch-geuvadis/gpu-sketch-geuvadis.csv))
+follows kallisto-GPU's Figure 1: subsamples of ERR188044 (first 2, 5, 10 and
+20M pairs, recompressed with pigz) and the two full samples. Both curves still
+grow with the input, the GPU one more slowly: about 0.4 s per million pairs on
+the GPU path, where kallisto-GPU reports about 0.05 s. On ERR188044, the time
+outside the mapping phase is mostly the second (RAD) pass, 3.9 s, and the EM
+with the `--dumpEq` write, 10–12 s on either path. Two slowly mixing
+components take up to 13,800 iterations there, and the GPU warm start's 3,800
+M-steps make that phase slower than on the CPU.
+
+**Heavy buckets.** The first GPU run on this data did not finish in 10
+minutes. The kernel scanned every super-k-mer of the minimizer's bucket, while
+sshash looks buckets above 64 super-k-mers up in its skew index. In the
+GENCODE index, 3,436 such buckets (0.012%) took 6.3% of the lookups of 200k
+real reads and 94.5% of the positions scanned, about 2,000 per lookup and up
+to 18,597. A read that reaches one now goes to the CPU like a read past
+`HITS_CAP`: about 2% of reads, which keeps the mappings unchanged.
+
+The CUDA and ROCm lookups are compiled by NVRTC and hiprtc from the same C
+source as the Metal one, and have not run on hardware.
