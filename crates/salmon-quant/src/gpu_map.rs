@@ -6,14 +6,17 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
-use salmon_infer::kmers::{Hit, KmerGpu, HITS_CAP};
+use salmon_infer::kmers::{Hit, KmerGpu, Sel, HITS_CAP, SEL_CAP, SEL_CPU, SEL_OVER};
+use salmon_map::sketch_hits::Selected;
 
 /// The device lookup, and each unitig's first base in piscem's SPSS plus the
 /// total, which the replay reads instead of sshash's Elias-Fano select (empty
-/// for the flat k-mer table).
+/// for the flat k-mer table), and whether the device also selects each
+/// read's targets.
 pub(crate) struct GpuLookup {
     pub gpu: KmerGpu,
     pub unitig_base: Vec<u32>,
+    pub select: bool,
 }
 
 /// The device lookup once its build thread has set it, the switch that sends
@@ -58,6 +61,10 @@ pub(crate) struct BatchHits {
     off: Vec<u32>,
     hits: Vec<Hit>,
     counts: Vec<u32>,
+    sel: Vec<Sel>,
+    nsel: Vec<u32>,
+    /// `sel`/`nsel` belong to this batch
+    selected: bool,
 }
 
 impl BatchHits {
@@ -74,10 +81,21 @@ impl BatchHits {
             // a batch is a few thousand reads, far below 4 GiB
             self.off.push(self.seq.len() as u32);
         }
-        match gpu
-            .gpu
-            .hits(&self.seq, &self.off, &mut self.hits, &mut self.counts)
-        {
+        self.selected = gpu.select;
+        let run = if gpu.select {
+            gpu.gpu.hits_select(
+                &self.seq,
+                &self.off,
+                &mut self.hits,
+                &mut self.counts,
+                &mut self.sel,
+                &mut self.nsel,
+            )
+        } else {
+            gpu.gpu
+                .hits(&self.seq, &self.off, &mut self.hits, &mut self.counts)
+        };
+        match run {
             Ok(()) => {
                 g.used.store(true, Ordering::Relaxed);
                 true
@@ -96,5 +114,18 @@ impl BatchHits {
     pub fn read(&self, i: usize) -> Option<&[Hit]> {
         let n = self.counts[i] as usize;
         (n <= HITS_CAP).then(|| &self.hits[i * HITS_CAP..i * HITS_CAP + n])
+    }
+
+    /// Read `i`'s targets as the device selected them, `None` when the
+    /// replay (or the CPU) must map it.
+    pub fn selected(&self, i: usize) -> Option<Selected<'_>> {
+        let n = *self.nsel.get(i).filter(|_| self.selected)?;
+        (n != SEL_CPU).then(|| {
+            let s = &self.sel[i * SEL_CAP..];
+            (
+                self.counts[i] > 0,
+                (n != SEL_OVER).then(|| &s[..n as usize]),
+            )
+        })
     }
 }

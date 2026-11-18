@@ -32,6 +32,164 @@ pub const HITS_CAP: usize = 32;
 /// One raw hit: `[read_pos, unitig << 1 | fw_on_unitig, kmer_pos_in_unitig]`.
 pub type Hit = [u32; 3];
 
+/// Targets the GPU selection keeps per read; a read with more is redone by
+/// the CPU unless it has more than `max_read_occ` ([`SEL_OVER`]).
+pub const SEL_CAP: usize = 128;
+/// [`select_ref`]: replay this read's selection on the CPU.
+pub const SEL_CPU: u32 = u32::MAX;
+/// [`select_ref`]: more targets than `max_read_occ`, so the read is unmapped.
+pub const SEL_OVER: u32 = u32::MAX - 1;
+/// One accepted target: `[tid << 1 | is_fw, approx_pos, num_hits]`.
+pub type Sel = [u32; 3];
+// Metal's `kmer_select` hardcodes the output cap
+const _: () = assert!(SEL_CAP == 128);
+
+/// piscem's contig table unpacked for the GPU selection: unitig `u`'s
+/// occurrences are `ent[off[u]..off[u + 1]]`, ascending by transcript, each
+/// `tid << (ref_len_bits + 1) | pos << 1 | fw_on_transcript`.
+pub struct Occurrences {
+    pub off: Vec<u32>,
+    pub ent: Vec<u64>,
+    pub ref_len_bits: u32,
+}
+
+/// piscem `map_read`'s target selection on one read's raw hits `hits` (in
+/// read order; read length `rl`), from unitig `u`'s length `ulen(u)`: the
+/// number of targets written to `out`, or [`SEL_CPU`] when piscem would
+/// take a path this does not port (a hit on more than `max_occ` occurrences,
+/// that is an ambiguous class or the occurrence-recovery retry; more than
+/// [`SEL_CAP`] targets), or [`SEL_OVER`]. The CPU reference of Metal's
+/// `kmer_select` kernel.
+///
+/// piscem walks the hits keeping the targets every hit so far reached in one
+/// orientation; that is a property of each target alone, so this takes the
+/// first hit's targets one at a time and follows each through the other
+/// hits' (sorted) lists with one cursor per hit, applying the same
+/// `add_fw`/`add_rc` updates in the same order.
+#[allow(clippy::too_many_arguments)]
+pub fn select_ref(
+    occ: &Occurrences,
+    ulen: impl Fn(u32) -> u32,
+    k: u32,
+    hits: &[Hit],
+    rl: u32,
+    max_occ: u32,
+    max_read_occ: u32,
+    out: &mut Vec<Sel>,
+) -> u32 {
+    out.clear();
+    let n = hits.len();
+    if n == 0 {
+        return 0;
+    }
+    let shift = occ.ref_len_bits + 1;
+    let pmask = (1u64 << occ.ref_len_bits) - 1;
+    let tid = |e: u64| (e >> shift) as u32;
+    let range = |h: &Hit| {
+        let u = (h[1] >> 1) as usize;
+        occ.off[u] as usize..occ.off[u + 1] as usize
+    };
+    if hits.iter().any(|h| range(h).len() > max_occ as usize) {
+        return SEL_CPU;
+    }
+    let mut cur: Vec<usize> = hits.iter().map(|h| range(h).start).collect();
+    let (rl, k) = (rl as i32, k as i32);
+    // piscem's `SketchHitInfoSimple` without the scores (each one per hit)
+    #[derive(Default)]
+    struct T {
+        lf: i32,
+        lr: i32,
+        af: i32,
+        ar: i32,
+        fh: u32,
+        rh: u32,
+    }
+    let apply = |t: &mut T, h: &Hit, e: u64| {
+        let (u, ori, cpos, rp) = (h[1] >> 1, h[1] & 1 == 1, h[2], h[0] as i32);
+        let cfw = e & 1 == 1;
+        let bp = ((e >> 1) & pmask) as u32;
+        let rpos = if cfw {
+            bp.wrapping_add(cpos)
+        } else {
+            bp.wrapping_add(ulen(u)).wrapping_sub(cpos + k as u32)
+        } as i32;
+        if cfw == ori {
+            if rp > t.lf {
+                if t.lf == -1 {
+                    t.af = rpos.wrapping_sub(rp);
+                }
+                t.lf = rp;
+                t.fh += 1;
+            }
+        } else if rp > t.lr {
+            t.ar = rpos.wrapping_sub(rl - (rp + k));
+            t.rh += 1;
+            t.lr = rp;
+        }
+    };
+    let mut count = 0u32;
+    let mut push = |s: Sel, count: &mut u32| {
+        if (*count as usize) < SEL_CAP {
+            out.push(s);
+        }
+        *count += 1;
+    };
+    let end0 = range(&hits[0]).end;
+    while cur[0] < end0 {
+        let t = tid(occ.ent[cur[0]]);
+        let mut st = T {
+            lf: -1,
+            lr: -1,
+            af: -1,
+            ar: -1,
+            ..T::default()
+        };
+        while cur[0] < end0 && tid(occ.ent[cur[0]]) == t {
+            apply(&mut st, &hits[0], occ.ent[cur[0]]);
+            cur[0] += 1;
+        }
+        let mut alive = st.fh.max(st.rh) > 0;
+        for j in 1..n {
+            if !alive {
+                break;
+            }
+            let end = range(&hits[j]).end;
+            while cur[j] < end && tid(occ.ent[cur[j]]) < t {
+                cur[j] += 1;
+            }
+            while cur[j] < end && tid(occ.ent[cur[j]]) == t {
+                if st.fh.max(st.rh) >= j as u32 {
+                    apply(&mut st, &hits[j], occ.ent[cur[j]]);
+                }
+                cur[j] += 1;
+            }
+            alive = st.fh.max(st.rh) > j as u32;
+        }
+        if !alive {
+            continue;
+        }
+        // piscem `push_if_accepted`, with every hit valid
+        let fw = [t << 1 | 1, st.af as u32, st.fh];
+        let rc = [t << 1, st.ar as u32, st.rh];
+        match st.fh.cmp(&st.rh) {
+            std::cmp::Ordering::Greater if st.fh >= n as u32 => push(fw, &mut count),
+            std::cmp::Ordering::Less if st.rh >= n as u32 => push(rc, &mut count),
+            std::cmp::Ordering::Equal if st.fh >= n as u32 => {
+                push(fw, &mut count);
+                push(rc, &mut count);
+            }
+            _ => {}
+        }
+    }
+    if count > max_read_occ {
+        SEL_OVER
+    } else if count as usize > SEL_CAP {
+        SEL_CPU
+    } else {
+        count
+    }
+}
+
 const EMPTY: u64 = u64::MAX;
 
 /// Canonical k-mer → `kmer_id << 1 | canonical_is_unitig_fw`, where
@@ -1240,6 +1398,71 @@ impl KmerGpu {
         }
     }
 
+    /// Upload piscem's occurrence lists for [`Self::hits_select`]. `max_occ` is
+    /// piscem's first-pass occurrence limit (`max_hit_occ - 1`). `Err` on a
+    /// backend without the selection kernel.
+    pub fn set_occurrences(
+        &mut self,
+        occ: &Occurrences,
+        max_occ: u32,
+        max_read_occ: u32,
+    ) -> Result<(), String> {
+        #[cfg(gpu)]
+        {
+            self.dev.set_occurrences(
+                &occ.off,
+                &occ.ent,
+                &[occ.ref_len_bits, max_occ, max_read_occ],
+            )
+        }
+        #[cfg(not(gpu))]
+        {
+            let _ = (occ, max_occ, max_read_occ);
+            Err("this build has no GPU backend".into())
+        }
+    }
+
+    /// [`Self::hits`], then each read's targets as [`select_ref`] finds them
+    /// from those hits: read `i`'s are `sel[i * SEL_CAP..][..nsel[i]]` unless
+    /// `nsel[i]` is [`SEL_CPU`] or [`SEL_OVER`]. Needs
+    /// [`Self::set_occurrences`].
+    pub fn hits_select(
+        &self,
+        seq: &[u8],
+        off: &[u32],
+        hits: &mut Vec<Hit>,
+        counts: &mut Vec<u32>,
+        sel: &mut Vec<Sel>,
+        nsel: &mut Vec<u32>,
+    ) -> Result<(), String> {
+        let n = off.len().saturating_sub(1);
+        // no clear: past each read's count is never read
+        hits.resize(n * HITS_CAP, [0; 3]);
+        counts.clear();
+        counts.resize(n, 0);
+        sel.resize(n * SEL_CAP, [0; 3]);
+        nsel.clear();
+        nsel.resize(n, 0);
+        if n == 0 {
+            return Ok(());
+        }
+        #[cfg(gpu)]
+        {
+            self.dev.run(
+                seq,
+                off,
+                hits.as_flattened_mut(),
+                counts,
+                Some((sel.as_flattened_mut(), nsel)),
+            )
+        }
+        #[cfg(not(gpu))]
+        {
+            let _ = seq;
+            Err("this build has no GPU backend".into())
+        }
+    }
+
     /// Bytes the device holds now, on the backends that report it (Metal).
     pub fn device_bytes(&self) -> Option<u64> {
         #[cfg(gpu)]
@@ -1263,7 +1486,7 @@ impl KmerGpu {
         counts: &mut Vec<u32>,
     ) -> Result<(), String> {
         let n = off.len().saturating_sub(1);
-        hits.clear();
+        // no clear: past each read's count is never read
         hits.resize(n * HITS_CAP, [0; 3]);
         counts.clear();
         counts.resize(n, 0);
@@ -1272,7 +1495,8 @@ impl KmerGpu {
         }
         #[cfg(gpu)]
         {
-            self.dev.hits(seq, off, hits.as_flattened_mut(), counts)
+            self.dev
+                .run(seq, off, hits.as_flattened_mut(), counts, None)
         }
         #[cfg(not(gpu))]
         {

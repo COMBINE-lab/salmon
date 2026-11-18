@@ -6,9 +6,12 @@
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 use piscem_rs::mapping::streaming_query::PiscemStreamingQuery;
 use salmon_index::{build, IndexBuildOptions, SalmonIndex};
-use salmon_infer::kmers::{Hit, KmerGpu, KmerTable, HITS_CAP};
+use salmon_infer::kmers::{
+    select_ref, Hit, KmerGpu, KmerTable, Occurrences, Sel, HITS_CAP, SEL_CAP, SEL_CPU, SEL_OVER,
+};
 use salmon_map::sketch_hits::{
-    kept, map_read_pair_hits_into, map_single_read_hits_into, sshash_parts, unitig_kmers,
+    kept, map_read_pair_hits_into, map_read_pair_selected_into, map_single_read_hits_into,
+    occurrences, sshash_parts, unitig_kmers,
 };
 use salmon_map::{
     map_read_pair_sketch_into, map_single_read_sketch_into, RefProvider, SketchScratch,
@@ -37,6 +40,11 @@ impl Lcg {
     fn seq(&mut self, n: usize) -> Vec<u8> {
         (0..n).map(|_| b"ACGT"[self.next(4)]).collect()
     }
+}
+
+/// A mate's `select_ref` result as `map_read_pair_selected_into` takes it.
+fn as_sel<'a>(c: u32, s: &'a [Sel], h: &[Hit]) -> (bool, Option<&'a [Sel]>) {
+    (!h.is_empty(), (c != SEL_OVER).then_some(s))
 }
 
 fn revcomp(s: &[u8]) -> Vec<u8> {
@@ -137,6 +145,16 @@ fn hits_path_maps_like_piscem_strict() {
         true,
     )
     .expect("sshash table");
+    let (ooff, oent, ref_len_bits) = occurrences(index).expect("sorted occurrence lists");
+    let occ = Occurrences {
+        off: ooff,
+        ent: oent,
+        ref_len_bits,
+    };
+    let ulen = |u: u32| unitig_base[u as usize + 1] - unitig_base[u as usize];
+    let k32 = index.k() as u32;
+    let (mut s1, mut s2): (Vec<Sel>, Vec<Sel>) = (Vec::new(), Vec::new());
+    let (mut selected, mut sel_cpu) = (0usize, 0usize);
     let mut hs = HitSearcher::new(index);
     let (mut cpu_s, mut hit_s) = (SketchScratch::new(index.k()), SketchScratch::new(index.k()));
     let (mut want, mut got) = (Vec::new(), Vec::new());
@@ -227,6 +245,30 @@ fn hits_path_maps_like_piscem_strict() {
                 &unitig_base,
             ));
             assert_eq!(got, want, "{strat:?} pair {n}");
+
+            // and from the targets the GPU's selection would find
+            let (max_occ, mro) = (max_hit as u32 - 1, max_read as u32);
+            let n1 = select_ref(&occ, ulen, k32, &h1, r1.len() as u32, max_occ, mro, &mut s1);
+            let n2 = select_ref(&occ, ulen, k32, &h2, r2.len() as u32, max_occ, mro, &mut s2);
+            if n1 == SEL_CPU || n2 == SEL_CPU {
+                sel_cpu += 1;
+            } else {
+                map_read_pair_selected_into(
+                    &mut got,
+                    index.k(),
+                    &mut hit_s,
+                    (r1.len(), as_sel(n1, &s1, &h1)),
+                    (r2.len(), as_sel(n2, &s2, &h2)),
+                    false,
+                    false,
+                    max_hit,
+                    max_read,
+                    &refs,
+                    false,
+                );
+                assert_eq!(got, want, "{strat:?} pair {n} from selected targets");
+                selected += 1;
+            }
             mapped += (perm && !want.is_empty()) as usize;
 
             map_single_read_sketch_into(
@@ -246,6 +288,11 @@ fn hits_path_maps_like_piscem_strict() {
         }
     }
     assert!(mapped > 1500, "only {mapped} pairs mapped");
+    // most pairs take the selection; the small caps send some to the CPU
+    assert!(
+        selected > 2 * sel_cpu && sel_cpu > 0,
+        "{selected} selected, {sel_cpu} on the CPU"
+    );
     // the skips of `Permissive` are exercised, not only its `Strict` fallbacks
     assert!(
         differ > 500,
@@ -286,7 +333,7 @@ fn hits_path_maps_like_piscem_strict() {
     );
     for (name, t, cpu) in runs {
         for perm in [false, true] {
-            let gpu = KmerGpu::new(t, perm).expect("upload");
+            let mut gpu = KmerGpu::new(t, perm).expect("upload");
             gpu.warm_up(t);
             let (mut h, mut c) = (Vec::new(), Vec::new());
             gpu.hits(&seq, &off, &mut h, &mut c).expect("kernel");
@@ -315,6 +362,40 @@ fn hits_path_maps_like_piscem_strict() {
                 on_cpu * 20 < off.len(),
                 "{name}: {on_cpu} reads sent to the CPU"
             );
+            // the selection kernel matches `select_ref` on the kernel's hits
+            for (max_occ, mro) in [(255, 2500), (2, 4), (255, 1)] {
+                gpu.set_occurrences(&occ, max_occ, mro)
+                    .expect("occurrences");
+                let (mut sel, mut nsel) = (Vec::new(), Vec::new());
+                gpu.hits_select(&seq, &off, &mut h, &mut c, &mut sel, &mut nsel)
+                    .expect("selection kernel");
+                let mut seen = [0usize; 3];
+                for i in 0..off.len() - 1 {
+                    if c[i] as usize > HITS_CAP {
+                        assert_eq!(nsel[i], SEL_CPU, "{name} read {i}");
+                        continue;
+                    }
+                    let hi = &h[i * HITS_CAP..i * HITS_CAP + c[i] as usize];
+                    let rl = off[i + 1] - off[i];
+                    let want = select_ref(&occ, ulen, k32, hi, rl, max_occ, mro, &mut s1);
+                    assert_eq!(nsel[i], want, "{name} permissive {perm} read {i} status");
+                    seen[match want {
+                        SEL_CPU => 0,
+                        SEL_OVER => 1,
+                        _ => 2,
+                    }] += 1;
+                    if (want as usize) <= SEL_CAP {
+                        assert_eq!(
+                            &sel[i * SEL_CAP..i * SEL_CAP + want as usize],
+                            &s1[..],
+                            "{name} permissive {perm} read {i} targets"
+                        );
+                    }
+                }
+                eprintln!(
+                    "{name} perm {perm} caps ({max_occ}, {mro}): [cpu, over, selected] = {seen:?}"
+                );
+            }
         }
     }
 }

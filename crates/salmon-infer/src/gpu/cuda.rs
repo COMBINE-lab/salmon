@@ -454,6 +454,34 @@ impl KmerDevice {
         None
     }
 
+    /// See `KmerGpu::set_occurrences`.
+    // shortcut: the selection kernel is Metal only (it sums over SIMD
+    // groups); here every read replays its selection on the CPU. Port it once
+    // a device can test it.
+    pub(crate) fn set_occurrences(
+        &mut self,
+        _off: &[u32],
+        _ent: &[u64],
+        _prm: &[u32; 3],
+    ) -> Result<(), String> {
+        Err("the GPU target selection is not wired on this backend".into())
+    }
+
+    /// See `KmerGpu::hits`; `sel` is never set here (no `set_occurrences`).
+    pub(crate) fn run(
+        &self,
+        seq: &[u8],
+        off: &[u32],
+        hits: &mut [u32],
+        counts: &mut [u32],
+        sel: Option<(&mut [u32], &mut [u32])>,
+    ) -> Result<(), String> {
+        if sel.is_some() {
+            return Err("no occurrence lists on the device".into());
+        }
+        self.hits(seq, off, hits, counts)
+    }
+
     /// See `KmerGpu::hits`; `hits` and `counts` are already sized. Each call
     /// has its own stream and buffers, so mapping threads overlap.
     pub(crate) fn hits(
