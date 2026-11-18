@@ -777,13 +777,35 @@ falls back to the `Strict` walk (`walk_safely_until`). The walk follows the
 read along the unitig while each next read k-mer is the next unitig k-mer. As
 in piscem, both compare the read with the unitig's own bases, which also go to
 the device at 2 bits per base. The kernel implements `Strict` too
-(`KmerGpu::new(table, false)`), which the tests check. Back on the CPU,
-`salmon_map::sketch_hits` replays piscem's target selection on those hits. The
-strategy only changes how raw hits are collected, not this selection. The
-replay covers live targets, occurrence recovery, ambiguous equivalence classes
-and the `--maxReadOcc` cut, and is followed by the usual pairing. A fragment
-therefore gets exactly the mappings of the CPU path. Two kinds of read are
-mapped on the CPU instead:
+(`KmerGpu::new(table, false)`), which the tests check.
+
+On Metal, a second kernel (`kmer_select`) then runs piscem's target selection
+on those hits. When every hit is on at most `max_hit_occ - 1` occurrences, the
+targets piscem keeps are the intersection of the hits' occurrence lists,
+filtered by orientation and hit order. The kernel computes them with one SIMD
+group per read. Each lane takes a target of the shortest list, binary-searches
+it in the other hits' lists, applies the entries in hit order (piscem's
+`SketchHitInfoSimple`) and keeps the target under `push_if_accepted`'s rule.
+A prefix sum over the lanes then writes the survivors in target order. The
+device holds the occurrence lists, piscem's `contig_entries` unpacked to one
+64-bit word each: about 0.4 GB for GENCODE v50. The CPU then only pairs the
+mates. A first version ran one thread per read with a k-way merge. It took
+longer than the CPU replay it replaced: a batch waits for its slowest read,
+and the merge walked up to 32 × 999 entries in sequence.
+
+Other reads go back to the CPU, where `salmon_map::sketch_hits` replays the
+selection on the GPU's raw hits, then pairs the mates as usual. The replay
+covers live targets, occurrence recovery, ambiguous equivalence classes and
+the `--maxReadOcc` cut. These reads are:
+
+- a read with a hit on more occurrences (an ambiguous class or piscem's
+  occurrence-recovery retry);
+- a read with more than 128 targets;
+- every read on CUDA and ROCm, which have no selection kernel yet.
+
+The strategy only changes how raw hits are collected, not the selection. A
+fragment therefore gets exactly the mappings of the CPU path. Two kinds of
+read are mapped entirely on the CPU:
 
 - a read with more than 32 raw hits;
 - an index with a poison table, where the replay declines.
@@ -796,8 +818,10 @@ on the runs below. Two tests check this without a GPU:
 - `crates/salmon-map/tests/sketch_hits_parity.rs`: piscem's raw hits and
   mappings against the CPU reference `KmerTable::hits`, for both strategies
   and both lookups. `Permissive` gives different raw hits from `Strict` on
-  about a third of its reads. With a device, the test also checks the kernel
-  against that reference;
+  about a third of its reads. It also checks piscem's mappings against those
+  paired from `kmers::select_ref`, the CPU reference of the selection. With a
+  device, it checks both kernels against their references, the selection
+  under several occurrence and `--maxReadOcc` caps;
 - `kmers::tests::gpu_hits_match_the_cpu_reference`: the GPU kernel against
   that reference.
 
@@ -845,23 +869,26 @@ The changes were:
 
 Two GEUVADIS samples (2×76 bp lymphoblastoid RNA-seq, gzip FASTQ from ENA)
 against GENCODE v50 (654,828 transcripts, `salmon index --gencode`), on the same
-M4 Max with `-p 16 --dumpEq`. Each figure is the fastest of 3 alternated runs;
-the machine's load average ranged from 20 to 110, most of it from these runs'
-own threads. "GPU memory" is the Metal device's allocation once the lookup is
+M4 Max with `-p 16 --dumpEq`. Each figure is the fastest of 3 alternated runs.
+The `--sketch` rows were measured with the GPU target selection, under a load
+average of 13–22. The selective-alignment rows are from the round before it,
+under 20–110; most of that load came from these runs' own threads. "GPU memory" is the Metal device's allocation once the lookup is
 built (`device_mb` in the `gpu_kmer_table` log line). On Apple silicon it is
 unified memory and is also counted in the process RSS, so the two do not add.
+The selection's occurrence lists add 0.4 GB to the device and 1 GB to the
+peak RSS, which also holds them on the host while they are built.
 
 The index takes 10.9–12.9 s to build (4 builds), peaks at 5.3 GB of RSS and is
 1.9 GB on disk.
 
 | Sample | Mode | Run | Mapping | CPU RAM (peak RSS) | GPU memory | Mapped |
 |---|---|---:|---:|---:|---:|---:|
-| ERR188044, 36.3M pairs | `--sketch`, GPU | 29.1 s | 15.7 s | 2.5 GB | 785 MB | 92.8% |
-| | `--sketch`, CPU | 32.8 s | 20.9 s | 1.8 GB | | 92.8% |
+| ERR188044, 36.3M pairs | `--sketch`, GPU | 22.0 s | 10.2 s | 3.5 GB | 1,181 MB | 92.8% |
+| | `--sketch`, CPU | 32.7 s | 21.1 s | 2.2 GB | | 92.8% |
 | | selective alignment, GPU EM | 75.5 s | 55.4 s | 2.9 GB | | 94.4% |
 | | selective alignment, CPU | 81.2 s | 60.4 s | 2.4 GB | | 94.4% |
-| ERR188428, 39.7M pairs | `--sketch`, GPU | 24.7 s | 11.3 s | 2.4 GB | 785 MB | 77.2% |
-| | `--sketch`, CPU | 29.0 s | 18.4 s | 1.6 GB | | 77.2% |
+| ERR188428, 39.7M pairs | `--sketch`, GPU | 22.8 s | 11.1 s | 3.4 GB | 1,181 MB | 77.2% |
+| | `--sketch`, CPU | 25.5 s | 16.3 s | 1.9 GB | | 77.2% |
 | | selective alignment, GPU EM | 56.9 s | 41.4 s | 2.4 GB | | 76.1% |
 | | selective alignment, CPU | 54.5 s | 41.0 s | 2.0 GB | | 76.1% |
 
@@ -878,12 +905,33 @@ its subsamples (first 2, 5, 10 and 20M pairs, recompressed with pigz); dots are
 runs, lines join the fastest run per size. Panel C compares the two full
 samples. ERR188428 is faster despite more pairs because fewer of its reads map
 (77% against 93%), so it is kept off the curve. Both curves still
-grow with the input, the GPU one more slowly: about 0.4 s per million pairs on
-the GPU path, where kallisto-GPU reports about 0.05 s. On ERR188044, the time
-outside the mapping phase is mostly the second (RAD) pass, 3.9 s, and the EM
-with the `--dumpEq` write, 10–12 s on either path. Two slowly mixing
-components take up to 13,800 iterations there, and the GPU warm start's 3,800
-M-steps make that phase slower than on the CPU.
+grow with the input, the GPU one more slowly. The mapping phase grows by about
+0.28 s per million pairs on the GPU path (0.43 s before the GPU selection) and
+0.58 s on the CPU; kallisto-GPU reports about 0.05 s. On ERR188044, the time
+outside the mapping phase is the second (RAD) pass, 3.5 s, and the EM with the
+`--dumpEq` write, 7.4 s on either path (10–12 s before SQUAREM ran per
+component and the dump was compressed in parallel).
+
+**Where the mapping phase's time goes.** Under `RUST_LOG=salmon::timing=debug`,
+each mapping thread charges its time to stages, and the run logs the sums in
+thread-seconds (`map stage`). On ERR188044 (16 threads):
+
+| Stage (thread-s) | GPU, CPU replay (before) | GPU, GPU selection | CPU (`--no-gpu`) |
+|---|---:|---:|---:|
+| GPU call (`gpu_lookup`) | 23.7 | 31.9 | |
+| replay of the selection on the CPU (`gpu_replay`) | 99.8 | 1.9 | |
+| pairing of device-selected targets (`gpu_selected`) | | 15.5 | |
+| CPU mapping (`cpu_map`) | 48.0 | 47.6 | 282.0 |
+| batch flush, record, RAD write | 22.5 | 20.0 | 26.2 |
+| outside the stages (reading, decompression, waiting) | 30.0 | 44.4 | 27.8 |
+| mapping phase, wall | 14.1 s | 10.1 s | 21.2 s |
+
+The GPU's `cpu_map` is the 1.46M fragments (4%) with a read in a heavy bucket
+or past `HITS_CAP`: about 32 µs each, against 1.4 µs over the GPU path. Each
+input file is inflated by one thread at a time under paraseq's reader lock,
+and the time outside the stages includes the wait for it. The parallel decoder
+(`--decoder parallel`, two decode threads and 14 mapping threads) is still
+slower here: 14.3–14.9 s of mapping against 9.9 s.
 
 **Heavy buckets.** The first GPU run on this data did not finish in 10
 minutes. The kernel scanned every super-k-mer of the minimizer's bucket, while
