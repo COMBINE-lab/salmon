@@ -3140,6 +3140,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "ksw2rs",
  "piscem-rs",
+ "rayon",
  "salmon-core",
  "salmon-index",
  "salmon-infer",

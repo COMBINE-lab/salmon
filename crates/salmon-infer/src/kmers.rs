@@ -55,6 +55,14 @@ pub struct KmerTable {
 /// table (an MPHF plus its presence check answers the same), and a heavy
 /// bucket is scanned instead of going through the skew index (k-mers are
 /// unique, so the scan finds the same one).
+///
+/// A table entry is `fp << 32 | bucket`, `fp` being the low half of the
+/// minimizer's `fmix64` (whose high half picks the slot), so a probe reads one
+/// word. The first entry with the query's `fp` along its probe sequence is the
+/// query's own: the build refuses a table where another key's entry with the
+/// same `fp` comes first. A minimizer absent from the dictionary may match an
+/// `fp`, but no k-mer of the bucket it reaches can then match the read k-mer
+/// (a dictionary k-mer's minimizer is a key), so the lookup still misses.
 struct Sshash {
     m: u32,
     /// sshash's `DeterministicHasher` magic: `hash(v) = v * MIX ^ magic`
@@ -63,8 +71,8 @@ struct Sshash {
     soff: Vec<u64>,
     /// bit `u` set: unitig `u` occurs in a reference (else its hits are dropped)
     keep: Vec<u32>,
-    mkeys: Vec<u64>,
-    mvals: Vec<u32>,
+    /// `fp << 32 | bucket` entries, [`EMPTY`] where free
+    table: Vec<u64>,
     /// bucket `b`'s positions are `offs[bstart[b]..bstart[b + 1]]`
     bstart: Vec<u32>,
     /// super-k-mer minimizer positions in the SPSS text
@@ -134,7 +142,14 @@ fn fmix64(mut h: u64) -> u64 {
 
 #[inline]
 fn slot(key: u64, cap: u32) -> u32 {
-    (((fmix64(key) >> 32) * u64::from(cap)) >> 32) as u32
+    slot_fp(key, cap).0
+}
+
+/// The home slot of `key` and its fingerprint (see [`Sshash`]).
+#[inline]
+fn slot_fp(key: u64, cap: u32) -> (u32, u32) {
+    let h = fmix64(key);
+    ((((h >> 32) * u64::from(cap)) >> 32) as u32, h as u32)
 }
 
 /// Reverse complement of a `k`-mer word (piscem's `reverse_complement_word`).
@@ -244,11 +259,13 @@ impl KmerTable {
         }
         // one spare word, so a k-mer read never runs off the end
         let mut seq = vec![0u64; spss.len().div_ceil(8) + 2];
-        for (w, chunk) in seq.iter_mut().zip(spss.chunks(8)) {
-            let mut b = [0u8; 8];
-            b[..chunk.len()].copy_from_slice(chunk);
-            *w = u64::from_le_bytes(b);
-        }
+        seq.par_iter_mut()
+            .zip(spss.par_chunks(8))
+            .for_each(|(w, chunk)| {
+                let mut b = [0u8; 8];
+                b[..chunk.len()].copy_from_slice(chunk);
+                *w = u64::from_le_bytes(b);
+            });
         let nu = soff.len() - 1;
         let mut bits = vec![0u32; nu.div_ceil(32).max(1)];
         let kept: Vec<bool> = (0..nu).into_par_iter().map(&keep).collect();
@@ -257,29 +274,33 @@ impl KmerTable {
         }
         let nb = bstart.len() - 1;
         let cap = u32::try_from((2 * nb).max(1)).ok()?;
-        let mkeys: Vec<AtomicU64> = (0..cap).map(|_| AtomicU64::new(EMPTY)).collect();
-        let mvals: Vec<AtomicU32> = (0..cap).map(|_| AtomicU32::new(0)).collect();
+        let table: Vec<AtomicU64> = (0..cap)
+            .into_par_iter()
+            .map(|_| AtomicU64::new(EMPTY))
+            .collect();
+        // `b < nb < cap`, so no entry equals EMPTY
         let unique = (0..nb).into_par_iter().all(|b| {
             if bstart[b] == bstart[b + 1] {
                 return true;
             }
             let mmer = word_at(&seq, u64::from(offs[bstart[b] as usize]), m);
-            let key = mmer.min(revcomp(mmer, m));
-            let mut s = slot(key, cap);
+            let (mut s, fp) = slot_fp(mmer.min(revcomp(mmer, m)), cap);
+            let entry = u64::from(fp) << 32 | b as u64;
             loop {
-                match mkeys[s as usize].compare_exchange(
+                match table[s as usize].compare_exchange(
                     EMPTY,
-                    key,
+                    entry,
                     Ordering::Relaxed,
                     Ordering::Relaxed,
                 ) {
-                    Ok(_) => break,
-                    Err(other) if other == key => return false,
+                    Ok(_) => return true,
+                    // a duplicate key, or another key's `fp` ahead of this
+                    // one's (insertion fills the first free slot, so every
+                    // entry ahead on this probe sequence is already here)
+                    Err(other) if (other >> 32) as u32 == fp => return false,
                     Err(_) => s = if s + 1 == cap { 0 } else { s + 1 },
                 }
             }
-            mvals[s as usize].store(b as u32, Ordering::Relaxed);
-            true
         });
         unique.then(|| Self {
             k,
@@ -292,8 +313,7 @@ impl KmerTable {
                 magic,
                 soff,
                 keep: bits,
-                mkeys: mkeys.into_iter().map(AtomicU64::into_inner).collect(),
-                mvals: mvals.into_iter().map(AtomicU32::into_inner).collect(),
+                table: table.into_iter().map(AtomicU64::into_inner).collect(),
                 bstart,
                 offs,
             }),
@@ -320,12 +340,12 @@ impl KmerTable {
         };
         let k = self.k;
         let (v, p) = minimizer(fw, rc, k, s.m, s.magic);
-        let cap = s.mkeys.len() as u32;
-        let mut slot_ = slot(v, cap);
+        let cap = s.table.len() as u32;
+        let (mut slot_, fp) = slot_fp(v, cap);
         let b = loop {
-            match s.mkeys[slot_ as usize] {
-                x if x == v => break s.mvals[slot_ as usize] as usize,
+            match s.table[slot_ as usize] {
                 EMPTY => return None,
+                x if (x >> 32) as u32 == fp => break x as u32 as usize,
                 _ => slot_ = if slot_ + 1 == cap { 0 } else { slot_ + 1 },
             }
         };
@@ -422,7 +442,7 @@ impl KmerTable {
         let words = [&self.seq[..], &s.soff].concat();
         let prm = [
             self.k,
-            s.mkeys.len() as u32,
+            s.table.len() as u32,
             s.soff.len() as u32 - 1,
             hcap,
             1,
@@ -433,7 +453,8 @@ impl KmerTable {
             (s.bstart.len() + s.offs.len()) as u32,
             self.seq.len() as u32,
         ];
-        (&s.mkeys, &s.mvals, Cow::Owned(aux), Cow::Owned(words), prm)
+        // `vals` is unused here; one word, as CUDA refuses an empty upload
+        (&s.table, &[0], Cow::Owned(aux), Cow::Owned(words), prm)
     }
 
     /// The raw hits of `read`, appended to `out`: the CPU reference of the GPU
@@ -728,7 +749,7 @@ FN u64 minimizer(u64 fw, u64 rc, int k, int m, u64 magic, PRIV int& pos) {
 }
 // option B: piscem's sshash dictionary (minimizer → bucket → super-k-mer
 // positions, verified on the text); the unitig, or -1
-FN i64 locate_b(u64 fw, u64 rc, G const u64* mkeys, G const u32* mvals, G const u32* aux,
+FN i64 locate_b(u64 fw, u64 rc, G const u64* table, G const u32* aux,
                 G const u64* words, G const u32* prm, PRIV i64& nk, PRIV i64& cpos, PRIV bool& fw_on) {
     int k = (int)prm[0], m = (int)prm[5];
     u32 cap = prm[1], nu = prm[2];
@@ -737,12 +758,13 @@ FN i64 locate_b(u64 fw, u64 rc, G const u64* mkeys, G const u32* mvals, G const 
     G const u64* soff = words + prm[10];
     int p = 0;
     u64 v = minimizer(fw, rc, k, m, (u64)prm[6] | ((u64)prm[7] << 32), p);
-    u32 s = (u32)(((fmix64(v) >> 32) * (u64)cap) >> 32);
+    u64 h = fmix64(v);
+    u32 s = (u32)(((h >> 32) * (u64)cap) >> 32), fp = (u32)h;
     u32 b;
     for (;;) {
-        u64 x = mkeys[s];
-        if (x == v) { b = mvals[s]; break; }
+        u64 x = table[s];
         if (x == ~((u64)0)) return -1;
+        if ((u32)(x >> 32) == fp) { b = (u32)x; break; }
         s = s + 1 == cap ? 0 : s + 1;
     }
     for (u32 j = aux[b]; j < aux[b + 1]; ++j) {
@@ -789,7 +811,7 @@ FN void map_mate(u32 i, G const u8* seq, G const u32* off, G const u64* keys, G 
         if (homo) { advance(it, r); continue; }
         bool fw_on = false;
         i64 nk = 0, cpos = 0;
-        i64 u = sshash ? locate_b(it.fw, it.rc, keys, vals, aux, words, prm, nk, cpos, fw_on)
+        i64 u = sshash ? locate_b(it.fw, it.rc, keys, aux, words, prm, nk, cpos, fw_on)
                        : locate_a(it.fw, it.rc, keys, vals, aux, prm, nk, cpos, fw_on);
         if (u < 0) { advance(it, r); continue; }
         u32 lo = (u32)u;
