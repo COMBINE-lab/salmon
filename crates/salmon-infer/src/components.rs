@@ -56,6 +56,7 @@
 //! which is all they depend on, whenever it re-checks them.
 
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use crate::packed::{PackedEqClasses, DIGAMMA_MIN, MIN_EQ_CLASS_WEIGHT};
 use crate::EmStop;
@@ -352,11 +353,22 @@ impl<'p> ComponentPlan<'p> {
     /// with component-local labels: `f(class within the component, labels,
     /// weights)`. The same labels and weights, in the same order, as the
     /// component's own incidences when it is whole.
-    fn source_classes(&self, c: usize, mut f: impl FnMut(usize, &[u32], &[f64])) {
+    fn source_classes(&self, c: usize, f: impl FnMut(usize, &[u32], &[f64])) {
+        let n = self.comp_cls[c + 1] - self.comp_cls[c];
+        self.source_classes_in(c, 0..n, f);
+    }
+
+    /// [`Self::source_classes`] over the component's classes `ks` only.
+    fn source_classes_in(
+        &self,
+        c: usize,
+        ks: std::ops::Range<usize>,
+        mut f: impl FnMut(usize, &[u32], &[f64]),
+    ) {
         let t0 = self.comp_txp[c] as u32;
         let c0 = self.comp_cls[c];
         let mut local = Vec::new();
-        for j in c0..self.comp_cls[c + 1] {
+        for j in c0 + ks.start..c0 + ks.end {
             let (tids, ws) = self.src.class(self.cls_orig[j] as usize);
             local.clear();
             local.extend(tids.iter().map(|&t| self.dense_of[t as usize] - t0));
@@ -1181,6 +1193,8 @@ const FREEZE_MIN_INCIDENCES: usize = 1 << 12;
 /// the first of these, doubling up to the second.
 const FREEZE_CHECK: u32 = 64;
 const FREEZE_CHECK_MAX: u32 = 512;
+/// Classes per task in [`settle_dead`].
+const SETTLE_CHUNK: usize = 4096;
 
 /// A term at most this fraction of its class's denominator is dead. A class
 /// holds at most a few hundred terms and the unit roundoff is 1.1e-16, so all
@@ -1351,39 +1365,71 @@ fn settle_dead(
     }
     let counts = &plan.counts[plan.comp_cls[c]..plan.comp_cls[c + 1]];
     let nt = plan.comp_txp[c + 1] - plan.comp_txp[c];
+    let et: &[f64] = s.et;
+    // Classes are read in parallel chunks; a dead transcript's terms are then
+    // added up serially in class order, so `acc` is the same as a serial pass.
+    let chunks: Vec<std::ops::Range<usize>> = (0..counts.len())
+        .step_by(SETTLE_CHUNK)
+        .map(|k0| k0..(k0 + SETTLE_CHUNK).min(counts.len()))
+        .collect();
+    let negligible: Vec<AtomicBool> = (0..nt).map(|_| AtomicBool::new(true)).collect();
+    let terms: Vec<Vec<(u32, f64)>> = chunks
+        .par_iter()
+        .map(|ks| {
+            let mut out = Vec::new();
+            plan.source_classes_in(c, ks.clone(), |k, tids, ws| {
+                let denom = class_denom::<true, false>(tids, ws, et);
+                let live_denom = denom > MIN_EQ_CLASS_WEIGHT;
+                let inv = counts[k] / denom;
+                for (&t, &w) in tids.iter().zip(ws) {
+                    let term = et[t as usize] * w;
+                    if term > FREEZE_EPS * denom && negligible[t as usize].load(Relaxed) {
+                        negligible[t as usize].store(false, Relaxed);
+                    }
+                    if dead[t as usize] && live_denom {
+                        out.push((t, term * inv));
+                    }
+                }
+            });
+            out
+        })
+        .collect();
     let mut acc = vec![0.0f64; nt];
-    let mut negligible = vec![true; nt];
-    plan.source_classes(c, |k, tids, ws| {
-        let denom = class_denom::<true, false>(tids, ws, s.et);
-        let live_denom = denom > MIN_EQ_CLASS_WEIGHT;
-        let inv = counts[k] / denom;
-        for (&t, &w) in tids.iter().zip(ws) {
-            let t = t as usize;
-            let term = s.et[t] * w;
-            if term > FREEZE_EPS * denom {
-                negligible[t] = false;
-            }
-            if dead[t] && live_denom {
-                acc[t] += term * inv;
-            }
-        }
-    });
+    for &(t, x) in terms.iter().flatten() {
+        acc[t as usize] += x;
+    }
     let mut now_dead = vec![false; nt];
     for t in 0..nt {
         if dead[t] {
             s.alpha[t] = acc[t];
         }
-        now_dead[t] = negligible[t] && s.alpha[t] + s.prior[t] == s.prior[t];
+        now_dead[t] = negligible[t].load(Relaxed) && s.alpha[t] + s.prior[t] == s.prior[t];
     }
     // A class is never left without a live member. Its largest term cannot be
     // negligible next to their sum, so this only catches all-zero weights.
-    plan.source_classes(c, |_, tids, _| {
-        if tids.iter().all(|&t| now_dead[t as usize]) {
-            for &t in tids {
-                now_dead[t as usize] = false;
+    // Reviving only makes fewer classes all-dead, so the classes all-dead
+    // before any revival, rechecked in order, revive as a serial pass would.
+    let all_dead: Vec<Vec<usize>> = chunks
+        .par_iter()
+        .map(|ks| {
+            let mut out = Vec::new();
+            plan.source_classes_in(c, ks.clone(), |k, tids, _| {
+                if tids.iter().all(|&t| now_dead[t as usize]) {
+                    out.push(k);
+                }
+            });
+            out
+        })
+        .collect();
+    for &k in all_dead.iter().flatten() {
+        plan.source_classes_in(c, k..k + 1, |_, tids, _| {
+            if tids.iter().all(|&t| now_dead[t as usize]) {
+                for &t in tids {
+                    now_dead[t as usize] = false;
+                }
             }
-        }
-    });
+        });
+    }
     now_dead
 }
 
