@@ -6,7 +6,7 @@ A cleanup, pairing and speed release:
 - **`-a` reads SAM or BAM from a pipe**: a FIFO, `<(...)` or `/dev/stdin`.
 - **Selective alignment pairs small dovetails by default.** Mates of a short insert that read past each other into adapter are paired when the overhang is at most 32 bases. The adapter bases are clipped and score nothing.
 - **`--posBias` no longer gives effective lengths longer than the transcript.** On 500k muscle pairs, 23,206 transcripts had one, up to 1.99×.
-- **Faster inferential replicates and bias correction.** The Gibbs posterior phase runs in parallel, `bootstraps.gz` is compressed on every core, and `--gcBias` and `--seqBias` are 14% and 6% faster. Peak memory of a reads run is 10–19% lower at 8 threads and more.
+- **Faster inferential replicates and bias correction.** The Gibbs posterior phase runs in parallel, `bootstraps.gz` is compressed on every core, and `--gcBias` and `--seqBias` are 14% and 6% faster. Peak memory of a paired-end reads run at `-p 16` is up to 13% lower than in 2.11.0.
 - **Fixes from an audit of 2.11.0 (#1314)**, mostly in alignment mode (`-a`), `--skipQuant`, Gibbs sampling and output files.
 
 **What changes in results.** Runs with default options change in these places:
@@ -249,7 +249,41 @@ A hidden expert flag: the largest overhang, in bases, at which inward mates that
 
 ## Speed and memory
 
-Each figure compares the code before and after the change, on real reads unless marked. Unless noted, `quant.sf` is byte-identical before and after.
+### Compared with 2.11.0
+
+Release binaries built from the v2.11.0 tag and from 2.12.0, on x86 (AMD EPYC), 16 pinned cores unless marked. Wall times are medians of three runs for the first two rows and the decoy row, and single runs otherwise.
+
+| Run | Wall (s) | Peak memory (GB) | Mapped | Reads moved |
+|---|---|---|---|---|
+| full muscle, `ISR` | 8.37 → 8.18 | 1.95 → 1.73 | +116 | 9,589 |
+| GEUVADIS 10M pairs, `IU` | 9.45 → 9.44 | 1.10 → 0.97 | +1,517 | 4,586 |
+| muscle 500k pairs, `-p 1` | 12.90 → 12.69 | 1.33 → 1.27 | +12 | 1,211 |
+| muscle 500k pairs, `--recoverOrphans` | 58.67 → 1.46 | 1.92 → 1.78 | +198 | 4,662 |
+| GEUVADIS, `--sketch` | 4.02 → 4.01 | 0.76 → 0.71 | 0 | 5,072 |
+| GEUVADIS, decoy-aware GRCh38 index | 15.20 → 15.63 | 7.25 → 7.15 | +1,478 | 8,517 |
+| GEUVADIS, `--seqBias --gcBias --posBias` | 24.27 → 20.70 | 1.49 → 1.37 | +1,517 | 223,463 |
+| GEUVADIS read 1, single-end `-l A` | 6.92 → 6.28 | 0.86 → 0.89 | 0 | 0 |
+| GEUVADIS, `--numBootstraps 30` | 22.90 → 21.20 | 1.52 → 1.47 | +1,517 | 4,586 |
+| GEUVADIS, `--numGibbsSamples 100` | 40.56 → 17.38 | 1.11 → 0.97 | +1,517 | 4,586 |
+| GEUVADIS `-a` (bowtie2 BAM) | see below | 0.45 → 0.43 | 0 | 0 |
+
+- **`-a`** is identical in output. Its wall time is limited by reading the 2.3 GB BAM and varies by up to 2× between identical runs. With the BAM in memory, CPU time is 59–64 s for 2.11.0 and 55–58 s for 2.12.0 over four runs each.
+- **The decoy-aware index is 3% slower**, from pairing small dovetails (see [Costs](#costs)). With `--dovetailTolerance 0` it takes 15.3 s.
+- **Peak memory** differences under 5% (single-end, bootstraps, decoy) are within run-to-run noise.
+- **Reads moved** with all three bias flags come almost all from the `--posBias` effective-length change (#1352).
+
+Accuracy against simulated truth, on TPM against true molar abundance, 2.11.0 → 2.12.0. Spearman and MARD are over transcripts with at least 100 true fragments:
+
+| Simulation | Spearman | MARD |
+|---|---|---|
+| easy | 0.99262 → 0.99262 | 0.0764 → 0.0764 |
+| hard | 0.98770 → 0.98784 | 0.0845 → 0.0844 |
+| realistic GC, `--gcBias` | 0.95510 → 0.95510 | 0.2951 → 0.2952 |
+| 3′ positional, `--posBias` | 0.87989 → 0.88468 | 0.4735 → 0.4682 |
+
+Mapped counts on all four simulations are unchanged.
+
+**Per change.** Each figure in the sections below compares the code before and after the change, on real reads unless marked. Unless noted, `quant.sf` is byte-identical before and after.
 
 ### `--recoverOrphans`
 
@@ -306,7 +340,7 @@ Two more commits cut the overhead further. With the flag, a run now takes this m
 
 ### Costs
 
-Pairing small dovetails (#1357) costs, at `-p 16`: GEUVADIS 10M pairs 9.29 → 9.42 s (+1.4%, all in the EM, whose slowest component needs 7,650 iterations instead of 6,968; mapping is flat), and full muscle 8.11 → 8.16 s (+0.7%, mapping the 42,902 new pairs).
+Pairing small dovetails (#1357) costs, at `-p 16`: GEUVADIS 10M pairs 9.29 → 9.42 s (+1.4%, all in the EM, whose slowest component needs 7,650 iterations instead of 6,968; mapping is flat), and full muscle 8.11 → 8.16 s (+0.7%, mapping the 42,902 new pairs). On the decoy-aware GRCh38 index, 10M GEUVADIS pairs go from 15.2 s to 15.6 s (+3%); with `--dovetailTolerance 0`, 2.12.0 takes 15.3 s.
 
 ## Fixes
 
