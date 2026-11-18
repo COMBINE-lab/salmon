@@ -930,6 +930,17 @@ the workers decompressed the chunks), and the EM with the `--dumpEq` write:
 3.8 s on the GPU path (7.5 s before the sliced kernel layout) and 7.3–7.8 s on
 the CPU path.
 
+**The CPU EM.** The giant component of ERR188044 takes about 3,800 M-steps.
+Every 64 to 512 of them, `settle_dead` re-reads the whole component from the
+source classes to recover the frozen transcripts' abundances and pick the
+next ones to freeze. It ran on one thread, about 82 ms per check and 0.8 s
+of the component's 6.5 s at `-p 16`. It now reads the classes in parallel
+chunks of 4,096. The per-class denominators and the negligibility flags do
+not depend on the order. A frozen transcript's terms are collected per
+chunk and added up serially in class order, so its abundance is the same
+sum as before. The component drops from 6.4–6.7 s to 5.5–5.8 s, with an
+identical `quant.sf`.
+
 **The RAD pass.** libradicl's producer decompresses every lz4 chunk itself
 before it queues it. On the 6.3 GB intermediate RAD of ERR188044 that kept the
 producer busy 75% of the pass, and the 16 workers waited on it about half the
