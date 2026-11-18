@@ -427,6 +427,8 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
     let kmer_gpu = std::sync::Arc::new(std::sync::OnceLock::new());
     if opts.sketch && opts.em.gpu && salmon.inner().poison_table().is_none() {
         let (salmon, slot) = (salmon.clone(), kmer_gpu.clone());
+        let max_hit_occ = opts.map_config.collect.max_hit_occ;
+        let max_read_occ = opts.max_read_occ.min(u32::MAX as usize) as u32;
         std::thread::spawn(move || {
             let t0 = std::time::Instant::now();
             gpu_map::urgent();
@@ -478,16 +480,33 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
             match table
                 .ok_or_else(|| "the index does not fit the GPU lookup".to_string())
                 .and_then(|(table, unitig_base)| {
-                    let gpu = KmerGpu::new(&table, skip == SkippingStrategy::Permissive)?;
+                    let mut gpu = KmerGpu::new(&table, skip == SkippingStrategy::Permissive)?;
                     // here, not on the first mapping batches
                     gpu.warm_up(&table);
-                    Ok(gpu_map::GpuLookup { gpu, unitig_base })
+                    // the target selection too, on the backends that have it
+                    let select = sh::occurrences(idx).is_some_and(|(off, ent, ref_len_bits)| {
+                        let occ = salmon_infer::kmers::Occurrences {
+                            off,
+                            ent,
+                            ref_len_bits,
+                        };
+                        let max_occ = max_hit_occ.saturating_sub(1).min(u32::MAX as usize);
+                        gpu.set_occurrences(&occ, max_occ as u32, max_read_occ)
+                            .map_err(|e| tracing::debug!("GPU target selection off ({e})"))
+                            .is_ok()
+                    });
+                    Ok(gpu_map::GpuLookup {
+                        gpu,
+                        unitig_base,
+                        select,
+                    })
                 }) {
                 Ok(gpu) => {
                     let device_mb = gpu.gpu.device_bytes().map_or(-1.0, |b| b as f64 / 1e6);
+                    let select = gpu.select;
                     let _ = slot.set(gpu);
                     let elapsed_s = t0.elapsed().as_secs_f64();
-                    tracing::info!(target: "salmon::timing", phase = "gpu_kmer_table", elapsed_s, device_mb, "phase complete");
+                    tracing::info!(target: "salmon::timing", phase = "gpu_kmer_table", elapsed_s, device_mb, select, "phase complete");
                 }
                 Err(e) => tracing::warn!("GPU k-mer lookup off ({e}); mapping on the CPU"),
             }
@@ -1118,6 +1137,7 @@ fn log_map_stages(wall_s: f64, threads: usize) {
         outside_s = wall_s * threads as f64 - sum,
         frags_gpu = stage::FRAGS_GPU.swap(0, Ordering::Relaxed),
         frags_cpu_in_gpu_batch = stage::FRAGS_CPU_IN_GPU_BATCH.swap(0, Ordering::Relaxed),
+        frags_selected = stage::FRAGS_SELECTED.swap(0, Ordering::Relaxed),
         "map stages (outside = reading, decompression, waiting)"
     );
 }

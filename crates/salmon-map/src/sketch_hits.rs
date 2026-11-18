@@ -105,6 +105,39 @@ pub fn sshash_parts(index: &ReferenceIndex) -> Option<SshashParts<'_>> {
     })
 }
 
+/// piscem's contig table unpacked for the GPU target selection
+/// (`salmon_infer::kmers::Occurrences`): unitig `u`'s occurrences are
+/// `ent[off[u]..off[u + 1]]`, packed as piscem packs them, and the width of
+/// their position field. `None` when the entries pass `u32` offsets or a list
+/// is not ascending by transcript, which the selection's merge relies on (and
+/// every index piscem builds satisfies).
+#[allow(clippy::type_complexity)]
+pub fn occurrences(index: &ReferenceIndex) -> Option<(Vec<u32>, Vec<u64>, u32)> {
+    use rayon::prelude::*;
+    let ct = index.contig_table();
+    let enc = ct.encoding();
+    let nu = ct.num_contigs();
+    let mut off = Vec::with_capacity(nu + 1);
+    off.push(0u32);
+    for n in (0..nu)
+        .into_par_iter()
+        .map(|u| ct.contig_entries(u as u64).len())
+        .collect::<Vec<_>>()
+    {
+        off.push(off.last()?.checked_add(u32::try_from(n).ok()?)?);
+    }
+    let ent: Vec<u64> = (0..nu)
+        .into_par_iter()
+        .flat_map_iter(|u| ct.contig_entries(u as u64).iter())
+        .collect();
+    let sorted = off.par_windows(2).all(|w| {
+        ent[w[0] as usize..w[1] as usize]
+            .windows(2)
+            .all(|e| enc.transcript_id(e[0]) <= enc.transcript_id(e[1]))
+    });
+    (sorted && enc.ref_len_bits < 32).then_some((off, ent, enc.ref_len_bits as u32))
+}
+
 /// The hits as piscem's `(read_pos, ProjectedHits)` pairs. `unitig_base`,
 /// when not empty, is each unitig's first base in the SPSS plus the total
 /// ([`SshashParts::soff`] as `u32`), read instead of sshash's Elias-Fano
@@ -398,6 +431,82 @@ pub fn map_single_read_hits_into(
     result.clear();
     push_single(result, &cache.accepted_hits, read_len as i32);
     true
+}
+
+/// One mate's target selection made elsewhere (the GPU's `select_mate`):
+/// whether it had raw hits, and its accepted targets `[tid << 1 | is_fw,
+/// approx_pos, num_hits]` or `None` for more than `max_read_occ`.
+pub type Selected<'a> = (bool, Option<&'a [[u32; 3]]>);
+
+/// Fill `cache` as [`select`] leaves it, from `sel`.
+fn take_selected(cache: &mut Cache, (has_hits, sel): Selected) {
+    cache.clear();
+    cache.has_matching_kmers = has_hits;
+    match sel {
+        None => {}
+        Some(sel) => {
+            cache
+                .accepted_hits
+                .extend(sel.iter().map(|&[tf, pos, nh]| SimpleHit {
+                    is_fw: tf & 1 == 1,
+                    mate_is_fw: false,
+                    pos: pos as i32,
+                    score: nh as f32,
+                    num_hits: nh,
+                    tid: tf >> 1,
+                    ..SimpleHit::default()
+                }));
+            if !sel.is_empty() {
+                cache.map_type = MappingType::SingleMapped;
+            }
+        }
+    }
+}
+
+/// [`map_read_pair_hits_into`] from each mate's selected targets instead of
+/// its raw hits: the pairing and conversion only.
+#[allow(clippy::too_many_arguments)]
+pub fn map_read_pair_selected_into<R: RefProvider>(
+    result: &mut Vec<ScoredMapping>,
+    k: usize,
+    scratch: &mut SketchScratch,
+    (l1, s1): (usize, Selected),
+    (l2, s2): (usize, Selected),
+    strict_orphan: bool,
+    allow_dovetail: bool,
+    max_hit_occ: usize,
+    max_read_occ: usize,
+    refs: &R,
+    allow_decoy_orphans: bool,
+) {
+    result.clear();
+    if l1 < k && l2 < k {
+        return;
+    }
+    prepare_pair(
+        scratch,
+        l1,
+        l2,
+        strict_orphan,
+        allow_dovetail,
+        max_hit_occ,
+        max_read_occ,
+    );
+    for (len, sel, cache) in [(l1, s1, &mut scratch.left), (l2, s2, &mut scratch.right)] {
+        if len < k {
+            cache.clear();
+        } else {
+            take_selected(cache, sel);
+        }
+    }
+    finish_pair(
+        result,
+        scratch,
+        l1 as i32,
+        l2 as i32,
+        refs,
+        allow_decoy_orphans,
+    );
 }
 
 /// [`crate::map_read_pair_sketch_into`] from each mate's raw hits (found with

@@ -668,7 +668,7 @@ pub(crate) mod stage {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::Instant;
 
-    pub const NAMES: [&str; 7] = [
+    pub const NAMES: [&str; 8] = [
         "gpu_lookup",
         "gpu_replay",
         "cpu_map",
@@ -676,6 +676,7 @@ pub(crate) mod stage {
         "rad_write",
         "record",
         "batch_flush",
+        "gpu_selected",
     ];
     pub const GPU_LOOKUP: usize = 0;
     pub const GPU_REPLAY: usize = 1;
@@ -684,22 +685,27 @@ pub(crate) mod stage {
     pub const RAD: usize = 4;
     pub const RECORD: usize = 5;
     pub const FLUSH: usize = 6;
+    /// pairing from the device-selected targets (the rest of the GPU path's
+    /// mapping is `GPU_REPLAY`)
+    pub const GPU_SELECTED: usize = 7;
     pub static ON: AtomicBool = AtomicBool::new(false);
-    pub static NS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
+    pub static NS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
     /// fragments mapped from the GPU hits, and on the CPU in a GPU batch
     pub static FRAGS_GPU: AtomicU64 = AtomicU64::new(0);
     pub static FRAGS_CPU_IN_GPU_BATCH: AtomicU64 = AtomicU64::new(0);
+    /// of `FRAGS_GPU`, those mapped from the device-selected targets
+    pub static FRAGS_SELECTED: AtomicU64 = AtomicU64::new(0);
 
     /// A lap clock: `mark(s)` charges the time since the last mark to stage `s`.
     pub struct Lap {
         t: Option<Instant>,
-        ns: [u64; 7],
+        ns: [u64; 8],
     }
     impl Lap {
         pub fn new() -> Self {
             Lap {
                 t: ON.load(Ordering::Relaxed).then(Instant::now),
-                ns: [0; 7],
+                ns: [0; 8],
             }
         }
         #[inline]
@@ -770,7 +776,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             });
         lap.mark(stage::GPU_LOOKUP);
         let unitig_base = sh.gpu.map_or(&[][..], |g| g.unitig_base());
-        let (mut n_gpu, mut n_cpu) = (0u64, 0u64);
+        let (mut n_gpu, mut n_cpu, mut n_sel) = (0u64, 0u64, 0u64);
         for (i, (r1, r2)) in pairs.into_iter().enumerate() {
             // Per fragment, not per batch: a batch runs far longer than one
             // broker sampling window, so a per-batch counter would leave whole
@@ -779,28 +785,52 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             busy.tick();
             let s1 = r1.seq();
             let s2 = r2.seq();
-            let from_gpu = on_gpu
-                && match (gpu_hits.read(2 * i), gpu_hits.read(2 * i + 1)) {
-                    (Some(h1), Some(h2)) => salmon_map::sketch_hits::map_read_pair_hits_into(
-                        &mut placements,
-                        idx,
-                        sketch_scratch.as_mut().unwrap(),
-                        (s1.len(), h1),
-                        (s2.len(), h2),
-                        sh.sketch_strict_orphan,
-                        sh.map_cfg.pair.allow_dovetail,
-                        sh.map_cfg.collect.max_hit_occ,
-                        sh.max_read_occ,
-                        sh.salmon,
-                        sh.map_cfg.score.allow_decoy_orphans,
-                        unitig_base,
-                    ),
-                    _ => false,
-                };
+            let selected = on_gpu
+                .then(|| gpu_hits.selected(2 * i).zip(gpu_hits.selected(2 * i + 1)))
+                .flatten();
+            if let Some((t1, t2)) = selected {
+                salmon_map::sketch_hits::map_read_pair_selected_into(
+                    &mut placements,
+                    idx.k(),
+                    sketch_scratch.as_mut().unwrap(),
+                    (s1.len(), t1),
+                    (s2.len(), t2),
+                    sh.sketch_strict_orphan,
+                    sh.map_cfg.pair.allow_dovetail,
+                    sh.map_cfg.collect.max_hit_occ,
+                    sh.max_read_occ,
+                    sh.salmon,
+                    sh.map_cfg.score.allow_decoy_orphans,
+                );
+            }
+            let from_gpu = selected.is_some()
+                || on_gpu
+                    && match (gpu_hits.read(2 * i), gpu_hits.read(2 * i + 1)) {
+                        (Some(h1), Some(h2)) => salmon_map::sketch_hits::map_read_pair_hits_into(
+                            &mut placements,
+                            idx,
+                            sketch_scratch.as_mut().unwrap(),
+                            (s1.len(), h1),
+                            (s2.len(), h2),
+                            sh.sketch_strict_orphan,
+                            sh.map_cfg.pair.allow_dovetail,
+                            sh.map_cfg.collect.max_hit_occ,
+                            sh.max_read_occ,
+                            sh.salmon,
+                            sh.map_cfg.score.allow_decoy_orphans,
+                            unitig_base,
+                        ),
+                        _ => false,
+                    };
             if from_gpu {
-                // mapped from the GPU raw hits
+                // mapped from the GPU's targets or raw hits
                 n_gpu += 1;
-                lap.mark(stage::GPU_REPLAY);
+                n_sel += selected.is_some() as u64;
+                lap.mark(if selected.is_some() {
+                    stage::GPU_SELECTED
+                } else {
+                    stage::GPU_REPLAY
+                });
             } else if sh.sketch {
                 n_cpu += on_gpu as u64;
                 map_read_pair_sketch_into(
@@ -899,6 +929,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         if stage::ON.load(Ordering::Relaxed) {
             stage::FRAGS_GPU.fetch_add(n_gpu, Ordering::Relaxed);
             stage::FRAGS_CPU_IN_GPU_BATCH.fetch_add(n_cpu, Ordering::Relaxed);
+            stage::FRAGS_SELECTED.fetch_add(n_sel, Ordering::Relaxed);
         }
         Ok(())
     }

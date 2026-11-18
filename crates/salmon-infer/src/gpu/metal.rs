@@ -17,6 +17,7 @@ use objc2_metal::{
 };
 
 use super::Problem;
+use crate::kmers::{HITS_CAP, SEL_CAP};
 
 /// The kernels of `gpu/mod.rs`. Buffer indices are the argument order
 /// [`Device::run`] binds; the element count is always the last argument.
@@ -158,6 +159,12 @@ fn buffer<T: Copy>(dev: &ProtocolObject<dyn MTLDevice>, data: &[T]) -> Result<Bu
     made.ok_or_else(|| "Metal buffer allocation failed".to_string())
 }
 
+/// A shared buffer of `len` `u32`s the GPU fills (nothing copied in).
+fn out_buffer(dev: &ProtocolObject<dyn MTLDevice>, len: usize) -> Result<Buf, String> {
+    dev.newBufferWithLength_options((len * 4).max(4), MTLResourceOptions::StorageModeShared)
+        .ok_or_else(|| "Metal buffer allocation failed".to_string())
+}
+
 fn pipeline(
     dev: &ProtocolObject<dyn MTLDevice>,
     lib: &ProtocolObject<dyn MTLLibrary>,
@@ -173,6 +180,18 @@ fn pipeline(
 /// Bind `bufs` to indices `0..`, the element count `n` after them, and launch
 /// one thread per element.
 fn dispatch(enc: &ProtocolObject<dyn MTLComputeCommandEncoder>, pso: &Pso, bufs: &[&Buf], n: u32) {
+    dispatch_lanes(enc, pso, bufs, n, 1);
+}
+
+/// [`dispatch`] with `lanes` threads per item, in threadgroups of a multiple
+/// of `lanes` (a power of two up to 32).
+fn dispatch_lanes(
+    enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+    pso: &Pso,
+    bufs: &[&Buf],
+    n: u32,
+    lanes: usize,
+) {
     if n == 0 {
         return;
     }
@@ -187,10 +206,10 @@ fn dispatch(enc: &ProtocolObject<dyn MTLComputeCommandEncoder>, pso: &Pso, bufs:
     unsafe {
         enc.setBytes_length_atIndex(NonNull::from(&count).cast(), 4, bufs.len());
     }
-    let width = pso.maxTotalThreadsPerThreadgroup().min(256);
+    let width = pso.maxTotalThreadsPerThreadgroup().min(256) & !(lanes - 1);
     enc.dispatchThreads_threadsPerThreadgroup(
         MTLSize {
-            width: n as usize,
+            width: n as usize * lanes,
             height: 1,
             depth: 1,
         },
@@ -337,6 +356,102 @@ kernel void kmer_hits(device const u8* seq [[buffer(0)]],
     if (i >= n) return;
     map_mate(i, seq, off, keys, vals, kstart, useq, prm, hits, counts);
 }
+// `select_ref` (`kmers.rs`), after `kmer_hits`: one SIMD group per read. Each
+// lane takes a target of the read's shortest occurrence list, binary-searches
+// every hit's list for it (a hit on the previous hit's unitig reuses its
+// entries) and applies them in hit order; a prefix sum over the lanes writes
+// the survivors in target order. `occ_off`/`occ_ent` are `Occurrences`, `sp`:
+// ref_len_bits, max_occ, max_read_occ.
+#define SEL_CAP 128u
+#define SEL_CPU 0xFFFFFFFFu
+#define SEL_OVER 0xFFFFFFFEu
+struct Tgt { int lf; int lr; int af; int ar; u32 fh; u32 rh; };
+static inline void sel_apply(thread Tgt& t, device const u32* h, u64 e, u64 pmask, u32 ulen, int rl, int k) {
+    bool ori = (h[1] & 1u) != 0u, cfw = (e & 1) != 0;
+    u32 cpos = h[2], bp = (u32)((e >> 1) & pmask);
+    int rp = (int)h[0];
+    int rpos = (int)(cfw ? bp + cpos : bp + ulen - (cpos + (u32)k));
+    if (cfw == ori) {
+        if (rp > t.lf) { if (t.lf == -1) t.af = rpos - rp; t.lf = rp; t.fh += 1; }
+    } else if (rp > t.lr) {
+        t.ar = rpos - (rl - (rp + k)); t.rh += 1; t.lr = rp;
+    }
+}
+kernel void kmer_select(device const u32* off [[buffer(0)]],
+                        device const u32* hits [[buffer(1)]],
+                        device const u32* counts [[buffer(2)]],
+                        device const u64* keys [[buffer(3)]],
+                        device const u32* vals [[buffer(4)]],
+                        device const u32* kstart [[buffer(5)]],
+                        device const u64* useq [[buffer(6)]],
+                        device const u32* prm [[buffer(7)]],
+                        device const u32* occ_off [[buffer(8)]],
+                        device const u64* occ_ent [[buffer(9)]],
+                        device const u32* sp [[buffer(10)]],
+                        device u32* sel [[buffer(11)]],
+                        device u32* nsel [[buffer(12)]],
+                        constant uint& nr [[buffer(13)]],
+                        uint gid [[thread_position_in_grid]]) {
+    // the dispatch is 32 threads per read in threadgroups of a multiple of 32
+    u32 i = gid >> 5, lane = gid & 31u;
+    if (i >= nr) return;
+    u32 n = counts[i], hcap = prm[3];
+    if (n > hcap || n == 0) { if (lane == 0u) nsel[i] = n == 0u ? 0u : SEL_CPU; return; }
+    device const u32* h = hits + (u64)i * hcap * 3;
+    u32 shift = sp[0] + 1, max_occ = sp[1], max_read_occ = sp[2];
+    u64 pmask = (((u64)1) << sp[0]) - 1;
+    int k = (int)prm[0], rl = (int)(off[i + 1] - off[i]);
+    u32 d = 0u, dlen = 0xFFFFFFFFu;
+    for (u32 j = 0; j < n; ++j) {
+        u32 u = h[3 * j + 1] >> 1, len = occ_off[u + 1] - occ_off[u];
+        if (len > max_occ) { if (lane == 0u) nsel[i] = SEL_CPU; return; }
+        if (len < dlen) { dlen = len; d = j; }
+    }
+    u32 ud = h[3 * d + 1] >> 1, s0 = occ_off[ud], e0 = occ_off[ud + 1];
+    device u32* out = sel + (u64)i * SEL_CAP * 3;
+    u32 cnt = 0u;
+    for (u32 base = s0; base < e0 && cnt <= max_read_occ; base += 32u) {
+        u32 c = base + lane, nout = 0u, t = 0u;
+        Tgt st; st.lf = -1; st.lr = -1; st.af = -1; st.ar = -1; st.fh = 0u; st.rh = 0u;
+        if (c < e0) t = (u32)(occ_ent[c] >> shift);
+        if (c < e0 && (c == s0 || (u32)(occ_ent[c - 1] >> shift) != t)) {
+            u32 pu2 = 0xFFFFFFFFu, a = 0u, b = 0u, len = 0u;
+            bool alive = true;
+            for (u32 j = 0; j < n && alive; ++j) {
+                u32 u = h[3 * j + 1] >> 1;
+                if (u != pu2) {
+                    u32 lo = occ_off[u], hi = occ_off[u + 1], end = hi;
+                    while (lo < hi) {
+                        u32 mid = (lo + hi) >> 1;
+                        if ((u32)(occ_ent[mid] >> shift) < t) lo = mid + 1; else hi = mid;
+                    }
+                    a = lo; b = lo;
+                    while (b < end && (u32)(occ_ent[b] >> shift) == t) b += 1;
+                    len = (u32)(unitig_base(u + 1, keys, vals, kstart, useq, prm) - unitig_base(u, keys, vals, kstart, useq, prm));
+                    pu2 = u;
+                }
+                for (u32 e = a; e < b; ++e)
+                    if ((st.fh > st.rh ? st.fh : st.rh) >= j) sel_apply(st, h + 3 * j, occ_ent[e], pmask, len, rl, k);
+                alive = (st.fh > st.rh ? st.fh : st.rh) > j;
+            }
+            // piscem `push_if_accepted`, with every hit valid
+            if (alive) nout = st.fh > st.rh ? (st.fh >= n ? 1u : 0u)
+                            : st.fh < st.rh ? (st.rh >= n ? 1u : 0u)
+                            : (st.fh >= n ? 2u : 0u);
+        }
+        u32 pos = cnt + simd_prefix_exclusive_sum(nout);
+        bool fw_first = st.fh >= st.rh;
+        for (u32 q = 0; q < nout; ++q, ++pos) {
+            if (pos >= SEL_CAP) break;
+            bool fw = (q == 0u) == fw_first;
+            out[3 * pos] = t << 1 | (fw ? 1u : 0u);
+            out[3 * pos + 1] = (u32)(fw ? st.af : st.ar);
+            out[3 * pos + 2] = fw ? st.fh : st.rh;
+        }
+        cnt += simd_sum(nout);
+    }
+    if (lane == 0u) nsel[i] = cnt > max_read_occ ? SEL_OVER : (cnt > SEL_CAP ? SEL_CPU : cnt);
+}
 // the sshash lookup's minimizer table (`KmerTable::build_sshash`): bucket `b`
 // claims a slot with a CAS on its fingerprint word (never all ones), then
 // writes its id; `bad` when another minimizer's equal fingerprint is ahead
@@ -422,6 +537,9 @@ pub(crate) struct KmerDevice {
     dev: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     pso: Pso,
+    sel_pso: Pso,
+    /// `set_occurrences`: the occurrence offsets, entries and parameters
+    occ: Option<[Buf; 3]>,
     keys: Buf,
     vals: Buf,
     kstart: Buf,
@@ -462,6 +580,8 @@ impl KmerDevice {
             Ok(Self {
                 queue,
                 pso: pipeline(&dev, &lib, "kmer_hits")?,
+                sel_pso: pipeline(&dev, &lib, "kmer_select")?,
+                occ: None,
                 keys,
                 vals: buffer(&dev, vals)?,
                 kstart,
@@ -477,20 +597,43 @@ impl KmerDevice {
         Some(self.dev.currentAllocatedSize() as u64)
     }
 
-    /// See `KmerGpu::hits`; `hits` and `counts` are already sized.
-    pub(crate) fn hits(
+    /// See `KmerGpu::set_occurrences`.
+    pub(crate) fn set_occurrences(
+        &mut self,
+        off: &[u32],
+        ent: &[u64],
+        prm: &[u32; 3],
+    ) -> Result<(), String> {
+        // `kmer_select` takes each SIMD group as one read's 32 lanes
+        if self.sel_pso.threadExecutionWidth() != 32 {
+            return Err("the selection kernel needs 32-wide SIMD groups".into());
+        }
+        autoreleasepool(|_| {
+            self.occ = Some([
+                buffer(&self.dev, off)?,
+                buffer(&self.dev, ent)?,
+                buffer(&self.dev, prm)?,
+            ]);
+            Ok(())
+        })
+    }
+
+    /// See `KmerGpu::hits` and `KmerGpu::hits_select` (`sel`); every output
+    /// is already sized.
+    pub(crate) fn run(
         &self,
         seq: &[u8],
         off: &[u32],
         hits: &mut [u32],
         counts: &mut [u32],
+        mut sel: Option<(&mut [u32], &mut [u32])>,
     ) -> Result<(), String> {
         autoreleasepool(|_| {
             let n = counts.len() as u32;
             let seq_b = buffer(&self.dev, seq)?;
             let off_b = buffer(&self.dev, off)?;
-            let hits_b = buffer(&self.dev, &*hits)?;
-            let counts_b = buffer(&self.dev, &*counts)?;
+            let hits_b = out_buffer(&self.dev, hits.len())?;
+            let counts_b = out_buffer(&self.dev, counts.len())?;
             let cb = self
                 .queue
                 .commandBuffer()
@@ -510,6 +653,34 @@ impl KmerDevice {
                 &counts_b,
             ];
             dispatch(&enc, &self.pso, &bufs, n);
+            // the default (serial) encoder runs this after the lookup
+            let sel_bufs = match (&sel, &self.occ) {
+                (Some((s, ns)), Some([occ_off, occ_ent, sp])) => {
+                    let (s_b, ns_b) = (
+                        out_buffer(&self.dev, s.len())?,
+                        out_buffer(&self.dev, ns.len())?,
+                    );
+                    let bufs = [
+                        &off_b,
+                        &hits_b,
+                        &counts_b,
+                        &self.keys,
+                        &self.vals,
+                        &self.kstart,
+                        &self.useq,
+                        &self.prm,
+                        occ_off,
+                        occ_ent,
+                        sp,
+                        &s_b,
+                        &ns_b,
+                    ];
+                    dispatch_lanes(&enc, &self.sel_pso, &bufs, n, 32);
+                    Some((s_b, ns_b))
+                }
+                (Some(_), None) => return Err("no occurrence lists on the device".into()),
+                _ => None,
+            };
             enc.endEncoding();
             cb.commit();
             cb.waitUntilCompleted();
@@ -519,16 +690,32 @@ impl KmerDevice {
                     .map(describe)
                     .unwrap_or_else(|| "Metal command buffer failed".to_string()));
             }
-            let copy = |b: &Buf, out: &mut [u32]| {
-                // SAFETY: a shared-storage buffer made from `out`, so of its
-                // length, and the GPU work on it has completed.
-                let src = unsafe {
-                    std::slice::from_raw_parts(b.contents().as_ptr().cast::<u32>(), out.len())
-                };
-                out.copy_from_slice(src);
+            // SAFETY: a shared-storage buffer of `out`'s length (`out_buffer`),
+            // and the GPU work on it has completed.
+            let src = |b: &Buf, out: &[u32]| unsafe {
+                std::slice::from_raw_parts(b.contents().as_ptr().cast::<u32>(), out.len())
             };
-            copy(&hits_b, hits);
-            copy(&counts_b, counts);
+            // each read's written prefix only (`w` u32s per entry, `cap`
+            // entries per read): the rest of a row is never read
+            let rows = |b: &Buf, out: &mut [u32], cap: usize, w: usize, len: &[u32]| {
+                let src = src(b, out);
+                for (i, &c) in len.iter().enumerate() {
+                    let r = i * cap * w..i * cap * w + (c as usize).min(cap) * w;
+                    out[r.clone()].copy_from_slice(&src[r]);
+                }
+            };
+            counts.copy_from_slice(src(&counts_b, counts));
+            rows(&hits_b, hits, HITS_CAP, 3, counts);
+            if let (Some((s, ns)), Some((s_b, ns_b))) = (sel.as_mut(), sel_bufs) {
+                ns.copy_from_slice(src(&ns_b, ns));
+                // `SEL_CPU`/`SEL_OVER` exceed the cap: nothing to copy
+                let ns: &[u32] = ns;
+                let keep: Vec<u32> = ns
+                    .iter()
+                    .map(|&c| if c as usize > SEL_CAP { 0 } else { c })
+                    .collect();
+                rows(&s_b, s, SEL_CAP, 3, &keep);
+            }
             Ok(())
         })
     }
