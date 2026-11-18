@@ -1338,6 +1338,67 @@ fn merge_bias(proc: &QuantProcessor) {
     }
 }
 
+/// Thread time of each stage of the paired mapping loop, summed over workers,
+/// for the `salmon::timing` debug breakdown. Off (no clock reads) unless
+/// `ON` is set before mapping.
+pub(crate) mod stage {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Instant;
+
+    pub const NAMES: [&str; 7] = [
+        "gpu_lookup",
+        "gpu_replay",
+        "cpu_map",
+        "post",
+        "rad_write",
+        "record",
+        "batch_flush",
+    ];
+    pub const GPU_LOOKUP: usize = 0;
+    pub const GPU_REPLAY: usize = 1;
+    pub const CPU_MAP: usize = 2;
+    pub const POST: usize = 3;
+    pub const RAD: usize = 4;
+    pub const RECORD: usize = 5;
+    pub const FLUSH: usize = 6;
+    pub static ON: AtomicBool = AtomicBool::new(false);
+    pub static NS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
+    /// fragments mapped from the GPU hits, and on the CPU in a GPU batch
+    pub static FRAGS_GPU: AtomicU64 = AtomicU64::new(0);
+    pub static FRAGS_CPU_IN_GPU_BATCH: AtomicU64 = AtomicU64::new(0);
+
+    /// A lap clock: `mark(s)` charges the time since the last mark to stage `s`.
+    pub struct Lap {
+        t: Option<Instant>,
+        ns: [u64; 7],
+    }
+    impl Lap {
+        pub fn new() -> Self {
+            Lap {
+                t: ON.load(Ordering::Relaxed).then(Instant::now),
+                ns: [0; 7],
+            }
+        }
+        #[inline]
+        pub fn mark(&mut self, s: usize) {
+            if let Some(t) = &mut self.t {
+                let now = Instant::now();
+                self.ns[s] += (now - *t).as_nanos() as u64;
+                *t = now;
+            }
+        }
+    }
+    impl Drop for Lap {
+        fn drop(&mut self) {
+            if self.t.is_some() {
+                for (a, n) in NS.iter().zip(self.ns) {
+                    a.fetch_add(n, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+}
+
 // The paired-end entry point. `PairedParallelProcessor` is paraseq's interface
 // for "given a batch of mate pairs, do something with them"; paraseq owns the
 // reading and the threading, this owns the per-fragment work.
@@ -1351,6 +1412,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // several of them mutably at once, which the borrow checker only permits
         // on distinct fields, not through repeated `self.` accesses.
         let mut busy = self.shared.busy.timer();
+        let mut lap = stage::Lap::new();
         let QuantProcessor {
             shared,
             counters,
@@ -1401,6 +1463,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             && sh.gpu.is_some_and(|g| {
                 gpu_hits.lookup(g, pairs.iter().flat_map(|(a, b)| [a.seq(), b.seq()]))
             });
+        lap.mark(stage::GPU_LOOKUP);
+        let (mut n_gpu, mut n_cpu) = (0u64, 0u64);
         for (i, (r1, r2)) in pairs.into_iter().enumerate() {
             // Per fragment, not per batch: a batch runs far longer than one
             // broker sampling window, so a per-batch counter would leave whole
@@ -1428,7 +1492,10 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 };
             if from_gpu {
                 // mapped from the GPU raw hits
+                n_gpu += 1;
+                lap.mark(stage::GPU_REPLAY);
             } else if sh.sketch {
+                n_cpu += on_gpu as u64;
                 map_read_pair_sketch_into(
                     &mut placements,
                     idx,
@@ -1455,6 +1522,9 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.map_cfg,
                     &mut scratch.map,
                 );
+            }
+            if !from_gpu {
+                lap.mark(stage::CPU_MAP);
             }
             // Sketch mappings carry no per-hit decoy flag and bypass the
             // selective-alignment finalize, so decoys would otherwise leak into
@@ -1500,6 +1570,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     )?;
                 }
             }
+            lap.mark(stage::POST);
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !placements.is_empty() {
                     let rec = build_rad_record(&placements);
@@ -1510,6 +1581,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     })?;
                 }
             }
+            lap.mark(stage::RAD);
             if let Some(acc) = sh.discrete_fld {
                 record_discrete(&sh, &placements, acc, counters);
             } else {
@@ -1526,11 +1598,17 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     posbias.as_mut(),
                 );
             }
+            lap.mark(stage::RECORD);
+        }
+        if stage::ON.load(Ordering::Relaxed) {
+            stage::FRAGS_GPU.fetch_add(n_gpu, Ordering::Relaxed);
+            stage::FRAGS_CPU_IN_GPU_BATCH.fetch_add(n_cpu, Ordering::Relaxed);
         }
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        let mut lap = stage::Lap::new();
         // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
         // next batch's per-fragment reads are stable (see `record`). No-op once the
         // final FLD cache is taken; amortized over the whole batch.
@@ -1540,6 +1618,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         flush_sam(self)?;
         flush_bam(self)?;
         flush_rad(self)?;
+        lap.mark(stage::FLUSH);
         Ok(())
     }
 

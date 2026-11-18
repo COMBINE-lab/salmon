@@ -2324,6 +2324,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             opts.dump_eq_weights,
         )
         .context("writing eq_classes.txt.gz")?;
+        timer.mark("dump_eq");
     }
 
     // Deterministic EM from a uniform start. With a fixed FLD the collapsed
