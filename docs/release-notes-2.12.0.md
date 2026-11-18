@@ -52,15 +52,19 @@ If you are moving from `--online` to the default, these differences may show up:
   - If you know the library's fragment-length distribution, pass
     `--fldMean`/`--fldSD` and it is used exactly as given.
   - On a simulation whose true distribution equals the default prior, the
-    widening costs a little accuracy: Spearman 0.817 against 0.827 for
-    `--online`. Passing the true mean and SD matches `--online` (0.827).
+    widening costs some accuracy: TPM Spearman 0.868 against 0.873 for
+    `--online`. Passing the true mean and SD matches `--online` (0.873).
 
-Paired-end accuracy against simulated truth is unchanged from `--online`, to
-the fourth decimal and in no consistent direction. This holds for selective
-alignment, `--sketch`, a high-multimapping set and `--seqBias --gcBias
---posBias`. It also holds on simulations with real GC and 3′ positional bias:
-with the matching correction, the default and `--online` agree to within 0.001
-Spearman. The default uses less CPU in every measured cell and less wall
+Paired-end accuracy against simulated truth, scored on TPM against true molar
+abundance, is unchanged from `--online`: Spearman agrees to within 0.0002 and
+MARD on well-expressed transcripts to within 0.003, in no consistent direction.
+This holds for selective alignment, `--sketch`, a high-multimapping set and
+`--seqBias --gcBias --posBias`. On simulations with real GC and 3′ positional
+bias, with the matching correction, Spearman agrees to within 0.002. On the GC
+simulation with realistic abundances, MARD on well-expressed transcripts is a
+little higher than `--online`'s (0.295 against 0.289 with `--gcBias`, from
+0.369 with no correction), so the default keeps about 92% of the improvement.
+The default uses less CPU in every measured cell and less wall
 time in all but one: with reads-mode bias correction it takes about 5% more
 wall time at `-p 16`, which is the rough seed EM it runs before baking the RAD.
 Measured on 4.65M simulated pairs at `-p 16`.
