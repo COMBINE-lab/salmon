@@ -74,8 +74,10 @@ struct Sshash {
     soff: Vec<u64>,
     /// bit `u` set: unitig `u` occurs in a reference (else its hits are dropped)
     keep: Vec<u32>,
-    /// `fp << 32 | bucket` entries, [`EMPTY`] where free
+    /// `fp << 32 | bucket` entries, [`EMPTY`] where free; empty when the
+    /// device builds it (`cap` entries)
     table: Vec<u64>,
+    cap: u32,
     /// bucket `b`'s positions are `offs[bstart[b]..bstart[b + 1]]`
     bstart: Vec<u32>,
     /// super-k-mer minimizer positions in the SPSS text
@@ -152,7 +154,9 @@ fn slot(key: u64, cap: u32) -> u32 {
 #[inline]
 fn slot_fp(key: u64, cap: u32) -> (u32, u32) {
     let h = fmix64(key);
-    ((((h >> 32) * u64::from(cap)) >> 32) as u32, h as u32)
+    // never all ones: the device build claims a slot with a CAS on it
+    let fp = (h as u32).min(u32::MAX - 1);
+    ((((h >> 32) * u64::from(cap)) >> 32) as u32, fp)
 }
 
 /// Reverse complement of a `k`-mer word (piscem's `reverse_complement_word`).
@@ -242,6 +246,10 @@ impl KmerTable {
     /// occurs in a reference, `magic` the dictionary hasher's, and bucket `b`
     /// holds the super-k-mer positions `offs[bstart[b]..bstart[b + 1]]`.
     ///
+    /// `cpu_table`: build the minimizer → bucket table here, as [`Self::hits`]
+    /// needs; without it [`KmerGpu::new`] builds it on the device (when
+    /// [`KmerGpu::builds_table`]), and the result is only for the GPU.
+    ///
     /// `None` when `k` is even or above 31, the text does not fit `u32`
     /// positions, or two buckets share a minimizer (never in sshash).
     #[allow(clippy::too_many_arguments)]
@@ -254,6 +262,7 @@ impl KmerTable {
         keep: impl Fn(usize) -> bool + Sync,
         bstart: Vec<u32>,
         offs: Vec<u32>,
+        cpu_table: bool,
     ) -> Option<Self> {
         let k = u32::try_from(k).ok().filter(|&k| k % 2 == 1 && k <= 31)?;
         let m = u32::try_from(m).ok().filter(|&m| m >= 1 && m <= k)?;
@@ -277,6 +286,12 @@ impl KmerTable {
         }
         let nb = bstart.len() - 1;
         let cap = u32::try_from((2 * nb).max(1)).ok()?;
+        if !cpu_table {
+            let table = Vec::new();
+            return Some(Self::sshash_table(
+                k, m, magic, seq, soff, bits, table, cap, bstart, offs,
+            ));
+        }
         let table: Vec<AtomicU64> = (0..cap)
             .into_par_iter()
             .map(|_| AtomicU64::new(EMPTY))
@@ -305,7 +320,24 @@ impl KmerTable {
                 }
             }
         });
-        unique.then(|| Self {
+        let table = table.into_iter().map(AtomicU64::into_inner).collect();
+        unique.then(|| Self::sshash_table(k, m, magic, seq, soff, bits, table, cap, bstart, offs))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sshash_table(
+        k: u32,
+        m: u32,
+        magic: u64,
+        seq: Vec<u64>,
+        soff: Vec<u64>,
+        keep: Vec<u32>,
+        table: Vec<u64>,
+        cap: u32,
+        bstart: Vec<u32>,
+        offs: Vec<u32>,
+    ) -> Self {
+        Self {
             k,
             keys: Vec::new(),
             vals: Vec::new(),
@@ -315,12 +347,13 @@ impl KmerTable {
                 m,
                 magic,
                 soff,
-                keep: bits,
-                table: table.into_iter().map(AtomicU64::into_inner).collect(),
+                keep,
+                table,
+                cap,
                 bstart,
                 offs,
             }),
-        })
+        }
     }
 
     /// Unitig `u`'s first base in `seq`.
@@ -343,7 +376,12 @@ impl KmerTable {
         };
         let k = self.k;
         let (v, p) = minimizer(fw, rc, k, s.m, s.magic);
-        let cap = s.table.len() as u32;
+        assert_eq!(
+            s.table.len(),
+            s.cap as usize,
+            "the CPU lookup needs `cpu_table`"
+        );
+        let cap = s.cap;
         let (mut slot_, fp) = slot_fp(v, cap);
         let b = loop {
             match s.table[slot_ as usize] {
@@ -450,7 +488,7 @@ impl KmerTable {
         let words = [&self.seq[..], &s.soff].concat();
         let prm = [
             self.k,
-            s.table.len() as u32,
+            s.cap,
             s.soff.len() as u32 - 1,
             hcap,
             1,
@@ -938,7 +976,7 @@ FN i64 locate_b(u64 fw, u64 rc, G const u64* table, G const u32* aux,
     int p = 0;
     u64 v = minimizer(fw, rc, k, m, (u64)prm[6] | ((u64)prm[7] << 32), p);
     u64 h = fmix64(v);
-    u32 s = (u32)(((h >> 32) * (u64)cap) >> 32), fp = (u32)h;
+    u32 s = (u32)(((h >> 32) * (u64)cap) >> 32), fp = (u32)h < 0xFFFFFFFFu ? (u32)h : 0xFFFFFFFEu;
     u32 b;
     for (;;) {
         u64 x = table[s];
@@ -1134,6 +1172,12 @@ impl KmerGpu {
         }
     }
 
+    /// Whether this backend builds the sshash lookup's minimizer table on the
+    /// device (`KmerTable::build_sshash` with `cpu_table` off): Metal.
+    pub fn builds_table() -> bool {
+        cfg!(gpu = "metal")
+    }
+
     /// Upload `table`, for piscem's `Permissive` (`permissive`) or `Strict`
     /// skipping; `Err` without a backend or device.
     pub fn new(table: &KmerTable, permissive: bool) -> Result<Self, String> {
@@ -1147,6 +1191,44 @@ impl KmerGpu {
         {
             let _ = (table, permissive);
             Err("this build has no GPU backend".into())
+        }
+    }
+
+    /// Run the kernel until the device is up to speed: its first calls take
+    /// up to ten times longer (clocks ramping up, buffers first touched).
+    /// The reads are cut from `table`'s unitig text.
+    pub fn warm_up(&self, table: &KmerTable) {
+        const LEN: u64 = 100;
+        let bases = (table.seq.len() as u64).saturating_sub(2) * 32;
+        if bases <= LEN {
+            return;
+        }
+        let (mut seq, mut off) = (Vec::new(), vec![0u32]);
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..8192 {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let p = (x >> 11) % (bases - LEN);
+            seq.extend(
+                (p..p + LEN).map(|b| {
+                    b"ACTG"[(table.seq[(b / 32) as usize] >> (2 * (b % 32)) & 3) as usize]
+                }),
+            );
+            off.push(seq.len() as u32);
+        }
+        let (mut h, mut c) = (Vec::new(), Vec::new());
+        let mut best = f64::MAX;
+        for i in 0..40 {
+            let t = std::time::Instant::now();
+            if self.hits(&seq, &off, &mut h, &mut c).is_err() {
+                return;
+            }
+            let dt = t.elapsed().as_secs_f64();
+            best = best.min(dt);
+            if i >= 8 && dt < 1.25 * best {
+                return;
+            }
         }
     }
 

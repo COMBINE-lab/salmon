@@ -9,10 +9,10 @@ use std::ptr::NonNull;
 
 use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::{NSError, NSString};
+use objc2_foundation::{NSError, NSRange, NSString};
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue,
-    MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
+    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
+    MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
     MTLCreateSystemDefaultDevice, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
 };
 
@@ -337,8 +337,84 @@ kernel void kmer_hits(device const u8* seq [[buffer(0)]],
     if (i >= n) return;
     map_mate(i, seq, off, keys, vals, kstart, useq, prm, hits, counts);
 }
+// the sshash lookup's minimizer table (`KmerTable::build_sshash`): bucket `b`
+// claims a slot with a CAS on its fingerprint word (never all ones), then
+// writes its id; `bad` when another minimizer's equal fingerprint is ahead
+kernel void kmer_table(device const u32* aux [[buffer(0)]],
+                       device const u64* words [[buffer(1)]],
+                       device const u32* prm [[buffer(2)]],
+                       device u32* table [[buffer(3)]],
+                       device atomic_uint* bad [[buffer(4)]],
+                       constant uint& n [[buffer(5)]],
+                       uint b [[thread_position_in_grid]]) {
+    if (b >= n || aux[b] == aux[b + 1]) return;
+    int m = (int)prm[5];
+    u32 cap = prm[1];
+    u64 v = word_at(words, (u64)aux[prm[8] + aux[b]], m), r = 0, x = v;
+    for (int j = 0; j < m; ++j) { r = (r << 2) | ((x & 3) ^ 2); x >>= 2; }
+    u64 h = fmix64(v < r ? v : r);
+    u32 s = (u32)(((h >> 32) * (u64)cap) >> 32), fp = (u32)h < 0xFFFFFFFFu ? (u32)h : 0xFFFFFFFEu;
+    device atomic_uint* t = (device atomic_uint*)table;
+    for (;;) {
+        uint seen = 0xFFFFFFFFu;
+        if (atomic_compare_exchange_weak_explicit(&t[2 * s + 1], &seen, fp,
+                                                  memory_order_relaxed, memory_order_relaxed)) {
+            table[2 * s] = b;
+            return;
+        }
+        if (seen == 0xFFFFFFFFu) continue;
+        if (seen == fp) { atomic_store_explicit(bad, 1u, memory_order_relaxed); return; }
+        s = s + 1 == cap ? 0 : s + 1;
+    }
+}
 "#;
     format!("{prelude}{}{entry}", crate::kmers::KMER_BODY)
+}
+
+/// The sshash lookup's minimizer table, built on the device from the bucket
+/// positions (`aux`) and the text (`words`): `prm[1]` slots for the
+/// `prm[8] - 1` buckets.
+fn build_table(
+    dev: &ProtocolObject<dyn MTLDevice>,
+    queue: &ProtocolObject<dyn MTLCommandQueue>,
+    lib: &ProtocolObject<dyn MTLLibrary>,
+    aux_b: &Buf,
+    words_b: &Buf,
+    prm_b: &Buf,
+    prm: &[u32],
+) -> Result<Buf, String> {
+    let (cap, nb) = (prm[1] as usize, prm[8] - 1);
+    let table = dev
+        .newBufferWithLength_options(cap * 8, MTLResourceOptions::StorageModeShared)
+        .ok_or("Metal buffer allocation failed")?;
+    let bad = buffer(dev, &[0u32])?;
+    let cb = queue.commandBuffer().ok_or("no Metal command buffer")?;
+    let blit = cb.blitCommandEncoder().ok_or("no Metal blit encoder")?;
+    blit.fillBuffer_range_value(&table, NSRange::new(0, cap * 8), 0xFF);
+    blit.endEncoding();
+    let enc = cb
+        .computeCommandEncoder()
+        .ok_or("no Metal compute encoder")?;
+    dispatch(
+        &enc,
+        &pipeline(dev, lib, "kmer_table")?,
+        &[aux_b, words_b, prm_b, &table, &bad],
+        nb,
+    );
+    enc.endEncoding();
+    cb.commit();
+    cb.waitUntilCompleted();
+    if cb.status() != MTLCommandBufferStatus::Completed {
+        return Err(cb
+            .error()
+            .map(describe)
+            .unwrap_or_else(|| "Metal command buffer failed".to_string()));
+    }
+    // SAFETY: a 4-byte shared-storage buffer, and the GPU work on it has completed.
+    if unsafe { *bad.contents().as_ptr().cast::<u32>() } != 0 {
+        return Err("two minimizers share a table fingerprint".into());
+    }
+    Ok(table)
 }
 
 /// The k-mer table on the device, shared by every mapping thread.
@@ -372,14 +448,25 @@ impl KmerDevice {
             let lib = dev
                 .newLibraryWithSource_options_error(&NSString::from_str(&kmer_src()), None)
                 .map_err(describe)?;
+            let queue = dev.newCommandQueue().ok_or("no Metal command queue")?;
+            let (kstart, useq, prm_b) = (
+                buffer(&dev, kstart)?,
+                buffer(&dev, useq)?,
+                buffer(&dev, prm)?,
+            );
+            let keys = if keys.is_empty() {
+                build_table(&dev, &queue, &lib, &kstart, &useq, &prm_b, prm)?
+            } else {
+                buffer(&dev, keys)?
+            };
             Ok(Self {
-                queue: dev.newCommandQueue().ok_or("no Metal command queue")?,
+                queue,
                 pso: pipeline(&dev, &lib, "kmer_hits")?,
-                keys: buffer(&dev, keys)?,
+                keys,
                 vals: buffer(&dev, vals)?,
-                kstart: buffer(&dev, kstart)?,
-                useq: buffer(&dev, useq)?,
-                prm: buffer(&dev, prm)?,
+                kstart,
+                useq,
+                prm: prm_b,
                 dev,
             })
         })

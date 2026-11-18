@@ -133,6 +133,7 @@ fn hits_path_maps_like_piscem_strict() {
         kept(index),
         p.bstart,
         p.offs,
+        true,
     )
     .expect("sshash table");
     let mut hs = HitSearcher::new(index);
@@ -256,14 +257,38 @@ fn hits_path_maps_like_piscem_strict() {
         eprintln!("no GPU device; skipping the kernel check");
         return;
     }
-    for (name, t) in [("table", &table), ("sshash", &sshash)] {
+    // and so does the minimizer table built on the device, where it is
+    let on_device = KmerGpu::builds_table().then(|| {
+        let p = sshash_parts(index).expect("u32 offsets");
+        let (k, spss) = (index.k(), p.spss);
+        KmerTable::build_sshash(
+            k,
+            p.m,
+            p.magic,
+            spss,
+            p.soff,
+            kept(index),
+            p.bstart,
+            p.offs,
+            false,
+        )
+        .expect("sshash parts")
+    });
+    let mut runs = vec![("table", &table, &table), ("sshash", &sshash, &sshash)];
+    runs.extend(
+        on_device
+            .iter()
+            .map(|d| ("sshash, device-built table", d, &sshash)),
+    );
+    for (name, t, cpu) in runs {
         for perm in [false, true] {
             let gpu = KmerGpu::new(t, perm).expect("upload");
+            gpu.warm_up(t);
             let (mut h, mut c) = (Vec::new(), Vec::new());
             gpu.hits(&seq, &off, &mut h, &mut c).expect("kernel");
             for i in 0..off.len() - 1 {
                 h1.clear();
-                t.hits(&seq[off[i] as usize..off[i + 1] as usize], perm, &mut h1);
+                cpu.hits(&seq[off[i] as usize..off[i + 1] as usize], perm, &mut h1);
                 assert_eq!(
                     c[i] as usize,
                     h1.len(),
