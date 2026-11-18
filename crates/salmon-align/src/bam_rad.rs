@@ -494,9 +494,13 @@ fn tally_fld_naive(data: &GroupData, fld: &DiscreteFld, naive: Option<&NaiveEqBu
         data.infos.len() == 1,
         data.infos
             .iter()
-            .filter(|i| i.paired && i.frag_len > 0)
-            .map(|i| PairObs {
-                len: i.frag_len as usize,
+            .filter_map(|i| {
+                // the length the RAD record stores (see `clip_pair_start`)
+                let len = salmon_rad::clip_pair_start(i.pos, i.frag_len).1;
+                (i.paired && len > 0).then_some((i, len))
+            })
+            .map(|(i, len)| PairObs {
+                len: len as usize,
                 tid: i.tid,
                 is_fw: i.is_fw,
                 mate_fw: i.mate_fw,

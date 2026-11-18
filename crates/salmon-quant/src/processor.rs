@@ -742,9 +742,9 @@ fn record_discrete(
     }
     // Each concordant fragment adds its shortest implied length to the FLD (see
     // `DiscreteFld::add_fragment`); a unique one's observed format also feeds
-    // order-independent `-l A` detection. Uses the raw mapping (like the RAD
-    // records written this pass, and like the reader's `derive_fld`), so a baked
-    // FLD matches a re-derived one. Orientation comes from the mate strands
+    // order-independent `-l A` detection. Uses the length the RAD record stores
+    // (`clip_pair_start`, as the reader's `derive_fld` sees it), so a baked FLD
+    // matches a re-derived one. Orientation comes from the mate strands
     // rather than `m.format`, exactly as `build_rad_record` derives the RAD hit,
     // for the same reason. Tallied per worker and merged at thread end.
     let fld = counters.fld.get_or_insert_with(|| acc.local());
@@ -752,9 +752,12 @@ fn record_discrete(
         placements.len() == 1,
         placements
             .iter()
-            .filter(|m| m.status == MateStatus::PairedEndPaired && m.fragment_len > 0)
-            .map(|m| PairObs {
-                len: m.fragment_len as usize,
+            .filter_map(|m| {
+                let len = salmon_rad::clip_pair_start(m.ref_pos, m.fragment_len).1;
+                (m.status == MateStatus::PairedEndPaired && len > 0).then_some((m, len))
+            })
+            .map(|(m, len)| PairObs {
+                len: len as usize,
                 tid: m.tid,
                 is_fw: m.is_fw,
                 mate_fw: m.r2_fw,
