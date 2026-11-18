@@ -7,7 +7,8 @@ use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 use piscem_rs::mapping::streaming_query::PiscemStreamingQuery;
 use salmon_index::{build, IndexBuildOptions, SalmonIndex};
 use salmon_infer::kmers::{
-    select_ref, Hit, KmerGpu, KmerTable, Occurrences, Sel, HITS_CAP, SEL_CAP, SEL_CPU, SEL_OVER,
+    select_ref, Hit, KmerGpu, KmerTable, Occurrences, Sel, HEAVY_BUCKET, HITS_CAP, SEL_CAP,
+    SEL_CPU, SEL_OVER,
 };
 use salmon_map::sketch_hits::{
     kept, map_read_pair_hits_into, map_read_pair_selected_into, map_single_read_hits_into,
@@ -143,6 +144,7 @@ fn hits_path_maps_like_piscem_strict() {
         p.bstart,
         p.offs,
         true,
+        HEAVY_BUCKET,
     )
     .expect("sshash table");
     let (ooff, oent, ref_len_bits) = occurrences(index).expect("sorted occurrence lists");
@@ -322,10 +324,32 @@ fn hits_path_maps_like_piscem_strict() {
             p.bstart,
             p.offs,
             false,
+            HEAVY_BUCKET,
         )
         .expect("sshash parts")
     });
-    let mut runs = vec![("table", &table, &table), ("sshash", &sshash, &sshash)];
+    // every bucket heavy: each lookup goes through the heavy-bucket table
+    let all_heavy = {
+        let p = sshash_parts(index).expect("u32 offsets");
+        KmerTable::build_sshash(
+            index.k(),
+            p.m,
+            p.magic,
+            p.spss,
+            p.soff,
+            kept(index),
+            p.bstart,
+            p.offs,
+            true,
+            0,
+        )
+        .expect("sshash parts")
+    };
+    let mut runs = vec![
+        ("table", &table, &table),
+        ("sshash", &sshash, &sshash),
+        ("sshash, every bucket heavy", &all_heavy, &sshash),
+    ];
     runs.extend(
         on_device
             .iter()
@@ -341,7 +365,7 @@ fn hits_path_maps_like_piscem_strict() {
             for i in 0..off.len() - 1 {
                 h1.clear();
                 cpu.hits(&seq[off[i] as usize..off[i + 1] as usize], perm, &mut h1);
-                // past `HITS_CAP` or in a heavy bucket: the CPU maps it
+                // past `HITS_CAP`: the CPU maps it
                 if c[i] as usize > HITS_CAP && h1.len() <= HITS_CAP {
                     on_cpu += 1;
                     continue;

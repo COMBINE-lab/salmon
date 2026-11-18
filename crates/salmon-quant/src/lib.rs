@@ -457,6 +457,7 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
                             p.offs,
                             // its minimizer table is built on the device where it can be
                             !KmerGpu::builds_table(),
+                            salmon_infer::kmers::HEAVY_BUCKET,
                         )
                         .map(|t| (t, unitig_base))
                     })
