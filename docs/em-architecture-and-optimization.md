@@ -589,15 +589,40 @@ stays opt-in because it needs the CUDA headers to build.
 
 - the build has a backend for this platform;
 - that backend finds a device;
-- the problem has at least 250,000 class–transcript incidences;
+- the CPU would iterate at least 250,000 class–transcript incidences as a
+  whole (see below);
 - `--no-gpu` is not given.
 
-Otherwise the run is CPU-only and §5 holds unchanged. The size floor is the
-crossover measured on the machine below: with fewer incidences, the GPU's fixed
-setup of 25–50 ms costs more than its faster M-steps save (EM gains from about
-150k, VBEM from about 500k). A CPU-only build is `cargo build -p salmon-cli
---no-default-features`. Library callers keep `EmOptions::gpu = false` unless
-they set it.
+Otherwise the run is CPU-only and §5 holds unchanged. A CPU-only build is
+`cargo build -p salmon-cli --no-default-features`. Library callers keep
+`EmOptions::gpu = false` unless they set it.
+
+The floor counts the work the GPU would take over, not the problem size. The
+default (unaccelerated) CPU engine works by connected component: each
+component runs until it converges on its own, and components under 65,536
+incidences run side by side. Only larger ones are stepped one at a time, in
+parallel. The GPU iterates every transcript until the slowest one converges:
+600–1,000 M-steps, about 0.1 s even on a small problem. It therefore only pays
+off on those large components, and the floor counts their incidences
+(`ComponentPlan::large_incidences`). With SQUAREM or DAAREM, which iterate the
+whole vector, it counts every incidence. The ignored test
+`gpu::tests::crossover` times these layouts on the machine below (default
+VBEM, best of 3, classes drawn within "genes", a quarter single-transcript).
+The GPU column was measured with the warm start always on, before this rule:
+
+| classes drawn within | incidences | CPU only | GPU warm start, always |
+|---|---:|---:|---:|
+| 40-transcript genes (as in a transcriptome) | 2.1M | 0.17 s | 0.28 s |
+| components of ~18k incidences | 0.59M | 0.06 s | 0.11 s |
+| components of ~49k incidences | 2.3M | 0.25 s | 0.29 s |
+| components of ~73k incidences | 2.3M | 0.51 s | 0.24 s |
+| one component | 0.59M | 0.20 s | 0.08 s |
+| one component | 2.3M | 0.63 s | 0.23 s |
+
+The first three rows now stay on the CPU. Before this rule the floor was 250,000
+incidences in all, which sent the 363k-incidence problem of the `--sketch` runs
+below (69,116 components, none large) to the GPU: 0.10–0.12 s there against
+0.04–0.05 s on the CPU.
 
 Because the GPU is used by default, the same command can give slightly
 different counts on a machine with a supported GPU and on one without.
@@ -704,19 +729,37 @@ piscem's own lookup, the sshash dictionary, flattened for the GPU:
 
 sshash's minimal perfect hash (minimizer → bucket) is replaced by an exact
 open-addressing table over the buckets' minimizers, which gives the same
-answer. A heavy bucket is scanned instead of going through the skew index;
+answer. Each entry is one 64-bit word: a 32-bit fingerprint of the minimizer
+(the half of its hash that does not pick the slot) and the bucket id, so a
+probe reads one word. The first entry on a probe sequence that carries the
+query's fingerprint is the query's own: the build refuses a table where
+another minimizer's entry with the same fingerprint comes first (about one
+chance in 600 for this index; the lookup then stays on the CPU). A minimizer
+that is not in the dictionary can match a fingerprint, but none of the
+k-mers of the bucket it reaches can equal the read k-mer, so the lookup still
+misses. A heavy bucket is scanned instead of going through the skew index;
 k-mers are unique, so the scan finds the same k-mer. The device holds the SPSS
-text, the bucket offsets and the bucket table: about 5 bytes per k-mer, or
-0.5 GB for the 106M k-mers of the index below. The bucket table accounts for
-most of it.
+text, the bucket offsets and the bucket table: about 3.7 bytes per k-mer, or
+0.4 GB for the 106M k-mers of the index below (15M buckets; the table is
+0.24 GB of it).
 
 The structures are copied from the loaded index on a background thread
-(`gpu_kmer_table` in the timing log, about 0.35–0.55 s here). The CPU maps
-the first batches in the meantime, so the build no longer delays the run. The
-earlier lookup, a flat table from every canonical k-mer to its unitig
+(`gpu_kmer_table` in the timing log, about 0.2–0.5 s here). The CPU maps the
+first batches in the meantime, so the build does not delay the run. Three
+things keep it short, because at 2M pairs the reads run out about when it
+ends:
+
+- the Metal device is opened on that thread, not before mapping starts (about
+  50 ms);
+- sshash's compressed bucket and offset arrays are read in parallel;
+- on macOS its threads run at the `USER_INTERACTIVE` QoS class. The 16
+  mapping threads, and on a busy machine other processes, otherwise get the
+  cores first, and the build then took up to twice as long.
+
+The earlier lookup, a flat table from every canonical k-mer to its unitig
 position, stays behind `SALMON_GPU_LOOKUP=table` while the two are compared.
-That table takes about 24 bytes per k-mer on the device, against 5, and
-about 1.1 s to build, against 0.35–0.55 s. It maps no faster.
+That table takes about 24 bytes per k-mer on the device, against 3.7, and
+about 1.1 s to build. It maps no faster.
 
 Each batch of reads then makes one GPU call, with one thread per read. The
 thread runs piscem's `SkippingStrategy::Strict` hit collection
@@ -736,8 +779,8 @@ the usual pairing. A fragment therefore gets exactly the mappings of the CPU
 
 `--sketch` now uses `Strict` on the CPU as well, so `--no-gpu` changes timing
 and not mappings. The equivalence classes are identical with and without a
-GPU; the counts still differ to the EM tolerance when the EM is also
-warm-started on the GPU. Two tests check this without a GPU:
+GPU; the counts differ to the EM tolerance only when the EM is also
+warm-started on the GPU, which the rule above skips on the runs below. Two tests check this without a GPU:
 
 - `crates/salmon-map/tests/sketch_hits_parity.rs`: piscem's raw hits and
   mappings against the CPU reference `KmerTable::hits`, for both lookups.
@@ -746,27 +789,37 @@ warm-started on the GPU. Two tests check this without a GPU:
   that reference.
 
 Measured on the M4 Max with 16 threads, against 191k synthetic transcripts
-(208 Mb). Each figure is the fastest of 3 alternated runs; "run" is the whole
-`salmon quant`, whose GPU variant also warm-starts the EM on the GPU. Other
-processes kept the load average between 28 and 73 during these runs, so the
-figures are noisy and the CPU ones in particular are pessimistic.
-"Mapping" includes the background build on the GPU rows. The
-equivalence classes are byte-identical across all rows.
+(208 Mb), with `salmon quant -l A --sketch -p 16 --dumpEq`. Each figure is
+the fastest of alternated GPU and `--no-gpu` runs: 5 pairs at 2M, 3 at 10M.
+"Run" is the whole `salmon quant`; "mapping" includes the background build on
+the GPU rows. The load average from other processes was 11–14. The
+equivalence classes and `quant.sf` are byte-identical between the GPU and CPU
+runs, since the EM stays on the CPU here (rule above).
 
 | `--sketch`, 16 threads | GPU build | mapping | run |
 |---|---:|---:|---:|
-| 2M pairs, Metal, sshash lookup, built in the background | 0.35 s | 0.53 s | 1.40 s |
-| 2M pairs, Metal, k-mer table, built before mapping | 1.11 s | 0.31 s | 3.40 s |
-| 2M pairs, CPU `Strict` (`--no-gpu`) | | 0.50 s | 1.23 s |
-| 10M pairs, Metal, sshash lookup, built in the background | 0.31 s | 1.26 s | 2.51 s |
-| 10M pairs, Metal, k-mer table, built before mapping | 1.09 s | 2.12 s | 5.13 s |
-| 10M pairs, CPU `Strict` (`--no-gpu`) | | 2.86 s | 3.88 s |
+| 2M pairs, Metal | 0.23 s | 0.33 s | 0.66 s |
+| 2M pairs, CPU `Strict` (`--no-gpu`) | | 0.39 s | 0.71 s |
+| 10M pairs, Metal | 0.28 s | 0.93 s | 1.50 s |
+| 10M pairs, CPU `Strict` (`--no-gpu`) | | 1.88 s | 2.45 s |
 
-At 10M pairs the whole GPU run is about 1.5 times faster than the CPU.
-At 2M pairs the build barely finishes before the reads run out, and the run
-is still about 0.17 s slower. Most of that gap is the EM warm start: on this
-problem it takes 0.20–0.26 s on the GPU against 0.05–0.17 s on the CPU,
-measured alone. These
-numbers come from synthetic data only, not from a
+At 10M pairs the whole GPU run is 1.6 times faster than the CPU; at 2M pairs
+it is 7% faster. The 2M margin depends on how fast the build gets the cores:
+across those 5 pairs the medians are 0.71 s (GPU) and 0.72 s (CPU), and the
+one run whose build took 0.44 s was 0.09 s slower than its CPU pair.
+Under a load average of 25–40, 12 alternated pairs at 2M gave medians of
+1.34 s (GPU) and 1.54 s (CPU), and 6 pairs at 10M 1.67 s and 2.69 s.
+
+Before the changes of this round, the same runs took 1.40 s (GPU) against
+1.23 s (CPU) at 2M and 2.51 s against 3.88 s at 10M, under a load of 28–73.
+The changes were:
+
+- the EM warm start rule above (0.06–0.3 s at both sizes);
+- the build changes above;
+- `--dumpEq` writing 0.35 s faster on both paths: it buffered after the gzip
+  encoder instead of before it, so every field went through the compressor
+  separately.
+
+These numbers come from synthetic data only, not from a
 human sample. The CUDA and ROCm lookups are compiled by NVRTC and hiprtc from
 the same C source as the Metal one, and have not run on hardware.
