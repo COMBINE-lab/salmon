@@ -1473,6 +1473,11 @@ impl KmerGpu {
 
     /// Whether this backend builds the sshash lookup's minimizer table on the
     /// device (`KmerTable::build_sshash` with `cpu_table` off): Metal.
+    /// Whether this build has a GPU backend at all; no device is opened.
+    pub fn compiled() -> bool {
+        cfg!(gpu)
+    }
+
     pub fn builds_table() -> bool {
         cfg!(gpu = "metal")
     }

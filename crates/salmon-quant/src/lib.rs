@@ -425,7 +425,11 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
     // shortcut: rebuilt every run; persist it beside the index if it ever
     // outlasts the mapping.
     let kmer_gpu = std::sync::Arc::new(std::sync::OnceLock::new());
-    if opts.sketch && opts.em.gpu && salmon.inner().poison_table().is_none() {
+    let gpu_lookup = opts.sketch
+        && opts.em.gpu
+        && salmon_infer::kmers::KmerGpu::compiled()
+        && salmon.inner().poison_table().is_none();
+    if gpu_lookup {
         let (salmon, slot) = (salmon.clone(), kmer_gpu.clone());
         let max_hit_occ = opts.map_config.collect.max_hit_occ;
         let max_read_occ = opts.max_read_occ.min(u32::MAX as usize) as u32;
@@ -705,6 +709,10 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
                 opts.is_paired(),
                 opts.thread_policy.as_deref(),
             )?,
+            // shortcut: decided before the device opens, so a build with a GPU
+            // backend but no usable device still reads ahead; harmless but
+            // two threads over `-p`
+            gpu_lookup,
         )?;
 
         let shared = Shared {
