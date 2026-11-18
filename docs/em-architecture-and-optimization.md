@@ -927,7 +927,8 @@ thread-seconds (`map stage`). On ERR188044 (16 threads):
 | mapping phase, wall | 14.1 s | 10.1 s | 21.2 s |
 
 The GPU's `cpu_map` is the 1.46M fragments (4%) with a read in a heavy bucket
-or past `HITS_CAP`: about 32 µs each, against 1.4 µs over the GPU path. Each
+or past `HITS_CAP`: about 32 µs each, against 1.4 µs over the GPU path. The
+heavy-bucket table below takes it down to 0.65M fragments. Each
 input file is inflated by one thread at a time under paraseq's reader lock,
 and the time outside the stages includes the wait for it. The parallel decoder
 (`--decoder parallel`, two decode threads and 14 mapping threads) is still
@@ -938,8 +939,25 @@ minutes. The kernel scanned every super-k-mer of the minimizer's bucket, while
 sshash looks buckets above 64 super-k-mers up in its skew index. In the
 GENCODE index, 3,436 such buckets (0.012%) took 6.3% of the lookups of 200k
 real reads and 94.5% of the positions scanned, about 2,000 per lookup and up
-to 18,597. A read that reaches one now goes to the CPU like a read past
-`HITS_CAP`: about 2% of reads, which keeps the mappings unchanged.
+to 18,597. A read that reached one then went to the CPU like a read past
+`HITS_CAP`: about 2% of reads.
+
+The device now looks those k-mers up in a second table instead
+(`heavy_table`). It holds the answer of the bucket scan for every k-mer the
+scan can find. The scan finds a k-mer at `pos - back`, where `pos` is a
+position of its minimizer's bucket and `back` is one of the two loci of the
+read k-mer's minimizer. sshash's tie rule makes those loci depend on the
+read's orientation, so the build checks each candidate both ways and stores
+the canonical k-mer with its text position and one flag per orientation.
+`sketch_hits_parity` checks it with every bucket sent through the table.
+
+For GENCODE v50 it holds 2.3M k-mers, takes 73 MB on the device and builds in
+about 60 ms. The CPU then maps 0.65M fragments instead of 1.46M, and the
+`cpu_map` stage drops from about 47 to 35 thread-s. At `-p 16` this changes
+no wall time, since the mapping threads already wait on decompression: 2M
+and 10M subsamples were equal in order-swapped A/B runs. At `-p 8`, where
+the CPU is short, the mapping phase on ERR188044 drops from 15.0–15.1 s to
+13.9–14.1 s.
 
 The CUDA and ROCm lookups are compiled by NVRTC and hiprtc from the same C
 source as the Metal one, and have not run on hardware.

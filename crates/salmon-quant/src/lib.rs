@@ -499,6 +499,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                             p.offs,
                             // its minimizer table is built on the device where it can be
                             !KmerGpu::builds_table(),
+                            salmon_infer::kmers::HEAVY_BUCKET,
                         )
                         .map(|t| (t, unitig_base))
                     })

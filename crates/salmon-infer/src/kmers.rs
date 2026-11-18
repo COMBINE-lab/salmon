@@ -240,6 +240,99 @@ struct Sshash {
     bstart: Vec<u32>,
     /// super-k-mer minimizer positions in the SPSS text
     offs: Vec<u32>,
+    /// buckets above `heavy` positions are looked up in `htab` instead
+    heavy: u32,
+    /// [`heavy_table`]: `[key, value]` pairs, `hcap` of them
+    htab: Vec<u64>,
+    hcap: u32,
+}
+
+/// Buckets above this many super-k-mers go to sshash's skew index; the GPU
+/// looks their k-mers up in a table instead of scanning them.
+pub const HEAVY_BUCKET: usize = 64;
+
+/// What [`KmerTable::locate`]'s scan of a bucket above `heavy` positions
+/// answers, for each k-mer it can find there, so the GPU need not scan it:
+/// `(pairs, capacity)`, an open-addressing table of `[key, value]` pairs with
+/// key the canonical k-mer ([`EMPTY`] when free) and value its text position
+/// `kp`, then bit 32 when the canonical k-mer is the text's, bits 33 and 34
+/// when a read k-mer equal to the canonical one, or to its reverse
+/// complement, is found. The scan finds a k-mer at `kp = pos - back` for a
+/// position `pos` of its minimizer's bucket and `back` either of the two
+/// loci of the read k-mer's minimizer, which depend on the read's
+/// orientation (sshash's tie rule), so each candidate is checked both ways.
+/// k-mers are unique in the dictionary, so a found k-mer has one `kp`.
+#[allow(clippy::too_many_arguments)]
+fn heavy_table(
+    k: u32,
+    m: u32,
+    magic: u64,
+    seq: &[u64],
+    soff: &[u64],
+    bstart: &[u32],
+    offs: &[u32],
+    heavy: u32,
+) -> (Vec<u64>, u32) {
+    let nb = bstart.len() - 1;
+    let ent: Vec<(u64, u64)> = (0..nb)
+        .into_par_iter()
+        .filter(|&b| bstart[b + 1] - bstart[b] > heavy)
+        .flat_map_iter(|b| {
+            let ps = &offs[bstart[b] as usize..bstart[b + 1] as usize];
+            let mm = word_at(seq, u64::from(ps[0]), m);
+            let mm = mm.min(revcomp(mm, m));
+            ps.iter().flat_map(move |&pos| {
+                let pos = u64::from(pos);
+                let u = soff.partition_point(|&o| o <= pos) - 1;
+                (0..=k - m).filter_map(move |back| {
+                    let kp = pos.checked_sub(u64::from(back))?;
+                    // the scan skips a match running into the next unitig;
+                    // one starting before `pos`'s unitig runs into it
+                    if kp < soff[u] || kp + u64::from(k) > soff[u + 1] {
+                        return None;
+                    }
+                    let x = word_at(seq, kp, k);
+                    let r = revcomp(x, k);
+                    let found = |fw: u64, rc: u64| {
+                        let (v, p) = minimizer(fw, rc, k, m, magic);
+                        v == mm && (back == p || back == k - m - p)
+                    };
+                    let (fx, fr) = (found(x, r), found(r, x));
+                    let (key, text, fc, fo) = if x < r {
+                        (x, true, fx, fr)
+                    } else {
+                        (r, false, fr, fx)
+                    };
+                    (fc || fo).then(|| {
+                        (
+                            key,
+                            kp | u64::from(text) << 32 | u64::from(fc) << 33 | u64::from(fo) << 34,
+                        )
+                    })
+                })
+            })
+        })
+        .collect();
+    // a k-mer met from several positions of its bucket has the same `kp`:
+    // its flags are or-ed into one entry
+    let cap = u32::try_from((2 * ent.len()).max(1)).expect("heavy-bucket table under 2^32");
+    let tab: Vec<AtomicU64> = (0..2 * cap as usize)
+        .into_par_iter()
+        .map(|i| AtomicU64::new(if i % 2 == 0 { EMPTY } else { 0 }))
+        .collect();
+    ent.par_iter().for_each(|&(key, val)| {
+        let mut s = slot(key, cap) as usize;
+        loop {
+            match tab[2 * s].compare_exchange(EMPTY, key, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(x) if x == key => break,
+                Err(_) => s = if s + 1 == cap as usize { 0 } else { s + 1 },
+            }
+        }
+        tab[2 * s + 1].fetch_or(val, Ordering::Relaxed);
+    });
+    let tab = tab.into_iter().map(AtomicU64::into_inner).collect();
+    (tab, cap)
 }
 
 const MIX: u64 = 0x517c_c1b7_2722_0a95;
@@ -421,8 +514,10 @@ impl KmerTable {
         bstart: Vec<u32>,
         offs: Vec<u32>,
         cpu_table: bool,
+        heavy: usize,
     ) -> Option<Self> {
         let k = u32::try_from(k).ok().filter(|&k| k % 2 == 1 && k <= 31)?;
+        let heavy = u32::try_from(heavy).unwrap_or(u32::MAX);
         let m = u32::try_from(m).ok().filter(|&m| m >= 1 && m <= k)?;
         if *soff.last()? >= 1 << 32 {
             return None;
@@ -444,10 +539,12 @@ impl KmerTable {
         }
         let nb = bstart.len() - 1;
         let cap = u32::try_from((2 * nb).max(1)).ok()?;
+        let (htab, hcap) = heavy_table(k, m, magic, &seq, &soff, &bstart, &offs, heavy);
+        let heavy = (heavy, htab, hcap);
         if !cpu_table {
             let table = Vec::new();
             return Some(Self::sshash_table(
-                k, m, magic, seq, soff, bits, table, cap, bstart, offs,
+                k, m, magic, seq, soff, bits, table, cap, bstart, offs, heavy,
             ));
         }
         let table: Vec<AtomicU64> = (0..cap)
@@ -479,7 +576,11 @@ impl KmerTable {
             }
         });
         let table = table.into_iter().map(AtomicU64::into_inner).collect();
-        unique.then(|| Self::sshash_table(k, m, magic, seq, soff, bits, table, cap, bstart, offs))
+        unique.then(|| {
+            Self::sshash_table(
+                k, m, magic, seq, soff, bits, table, cap, bstart, offs, heavy,
+            )
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -494,6 +595,7 @@ impl KmerTable {
         cap: u32,
         bstart: Vec<u32>,
         offs: Vec<u32>,
+        (heavy, htab, hcap): (u32, Vec<u64>, u32),
     ) -> Self {
         Self {
             k,
@@ -510,6 +612,9 @@ impl KmerTable {
                 cap,
                 bstart,
                 offs,
+                heavy,
+                htab,
+                hcap,
             }),
         }
     }
@@ -608,14 +713,15 @@ impl KmerTable {
 
     /// The kernel's buffers `(keys, vals, aux, words, prm)`. Option A: the
     /// table, `aux = kstart`, `words = seq`. Option B: the minimizer table,
-    /// `aux = bstart ‖ offs ‖ keep`, `words = seq ‖ soff`. `prm`: k, table
-    /// capacity, unitigs, hits per read, option B, m, magic (low, high),
-    /// where `offs`, `keep` and `soff` start, and `Permissive` skipping.
+    /// `aux = bstart ‖ offs ‖ keep`, `words = seq ‖ soff ‖ htab`. `prm`: k,
+    /// table capacity, unitigs, hits per read, option B, m, magic (low,
+    /// high), where `offs`, `keep` and `soff` start, `Permissive` skipping,
+    /// then the heavy-bucket size, where `htab` starts and its capacity.
     #[cfg_attr(not(gpu), allow(dead_code))]
     fn device(
         &self,
         permissive: bool,
-    ) -> (&[u64], &[u32], Cow<'_, [u32]>, Cow<'_, [u64]>, [u32; 12]) {
+    ) -> (&[u64], &[u32], Cow<'_, [u32]>, Cow<'_, [u64]>, [u32; 15]) {
         let hcap = HITS_CAP as u32;
         let perm = u32::from(permissive);
         let Some(s) = &self.sshash else {
@@ -633,6 +739,9 @@ impl KmerTable {
                 0,
                 0,
                 perm,
+                0,
+                0,
+                0,
             ];
             return (
                 &self.keys,
@@ -643,7 +752,7 @@ impl KmerTable {
             );
         };
         let aux = [&s.bstart[..], &s.offs, &s.keep].concat();
-        let words = [&self.seq[..], &s.soff].concat();
+        let words = [&self.seq[..], &s.soff, &s.htab].concat();
         let prm = [
             self.k,
             s.cap,
@@ -657,6 +766,9 @@ impl KmerTable {
             (s.bstart.len() + s.offs.len()) as u32,
             self.seq.len() as u32,
             perm,
+            s.heavy,
+            (self.seq.len() + s.soff.len()) as u32,
+            s.hcap,
         ];
         // `vals` is unused here; one word, as CUDA refuses an empty upload
         (&s.table, &[0], Cow::Owned(aux), Cow::Owned(words), prm)
@@ -1124,8 +1236,20 @@ FN u64 minimizer(u64 fw, u64 rc, int k, int m, u64 magic, PRIV int& pos) {
 }
 // option B: piscem's sshash dictionary (minimizer → bucket → super-k-mer
 // positions, verified on the text); the unitig, or -1
-// sshash's skew index takes buckets above 2^6 super-k-mers
-#define HEAVY_BUCKET 64u
+// text position `kp`'s unitig (its k-mer count and position in `nk`/`cpos`),
+// -1 when no reference contains it, -3 when the k-mer runs into the next one
+FN i64 place(u64 kp, int k, u32 nu, G const u64* soff, G const u32* keep, PRIV i64& nk, PRIV i64& cpos) {
+    u32 lo = 0, hi = nu;
+    while (hi - lo > 1) {
+        u32 mid = (lo + hi) / 2;
+        if (soff[mid] <= kp) lo = mid; else hi = mid;
+    }
+    nk = (i64)(soff[lo + 1] - soff[lo]) - k + 1;
+    cpos = (i64)(kp - soff[lo]);
+    if (cpos >= nk) return -3;
+    if (((keep[lo / 32] >> (lo % 32)) & 1u) == 0) return -1;
+    return (i64)lo;
+}
 FN i64 locate_b(u64 fw, u64 rc, G const u64* table, G const u32* aux,
                 G const u64* words, G const u32* prm, PRIV i64& nk, PRIV i64& cpos, PRIV bool& fw_on) {
     int k = (int)prm[0], m = (int)prm[5];
@@ -1146,8 +1270,26 @@ FN i64 locate_b(u64 fw, u64 rc, G const u64* table, G const u32* aux,
     }
     // sshash looks a heavy bucket up in its skew index; scanning it here
     // stalls the whole SIMD group (2k positions on average for a human
-    // transcriptome), so its read goes to the CPU (`map_mate`)
-    if (aux[b + 1] - aux[b] > HEAVY_BUCKET) return -2;
+    // transcriptome), so its k-mers are in a table of the scan's answers
+    // (`heavy_table`)
+    if (aux[b + 1] - aux[b] > prm[12]) {
+        G const u64* ht = words + prm[13];
+        u32 hc = prm[14];
+        u64 key = fw < rc ? fw : rc;
+        u32 hs = (u32)(((fmix64(key) >> 32) * (u64)hc) >> 32);
+        for (;;) {
+            u64 x = ht[2 * hs];
+            if (x == ~((u64)0)) return -1;
+            if (x == key) break;
+            hs = hs + 1 == hc ? 0 : hs + 1;
+        }
+        u64 val = ht[2 * hs + 1];
+        bool canon = fw == key, text = ((val >> 32) & 1) != 0;
+        if (((val >> (canon ? 33 : 34)) & 1) == 0) return -1;
+        fw_on = canon == text;
+        i64 u = place(val & 0xFFFFFFFFUL, k, nu, soff, keep, nk, cpos);
+        return u < 0 ? -1 : u;
+    }
     for (u32 j = aux[b]; j < aux[b + 1]; ++j) {
         u64 pos = (u64)offs[j];
         for (int t = 0; t < 2; ++t) {
@@ -1156,16 +1298,9 @@ FN i64 locate_b(u64 fw, u64 rc, G const u64* table, G const u32* aux,
             u64 kp = pos - back;
             u64 stored = word_at(words, kp, k);
             if (stored == fw) fw_on = true; else if (stored == rc) fw_on = false; else continue;
-            u32 lo = 0, hi = nu;
-            while (hi - lo > 1) {
-                u32 mid = (lo + hi) / 2;
-                if (soff[mid] <= kp) lo = mid; else hi = mid;
-            }
-            nk = (i64)(soff[lo + 1] - soff[lo]) - k + 1;
-            cpos = (i64)(kp - soff[lo]);
-            if (cpos >= nk) continue;
-            if (((keep[lo / 32] >> (lo % 32)) & 1u) == 0) return -1;
-            return (i64)lo;
+            i64 u = place(kp, k, nu, soff, keep, nk, cpos);
+            if (u == -3) continue;
+            return u;
         }
     }
     return -1;
@@ -1222,8 +1357,6 @@ FN void map_mate(u32 i, G const u8* seq, G const u32* off, CTX, G u32* hits, G u
         i64 nk = 0, cpos = 0;
         u64 qf = phase == 2 ? mid.fw : it.fw, qr = phase == 2 ? mid.rc : it.rc;
         i64 u = locate(qf, qr, CTXA, nk, cpos, fw_on);
-        // past `HITS_CAP`: the CPU maps this read
-        if (u == -2) { counts[i] = hcap + 1; return; }
         if (phase == 1) {
             u2 = u; c2 = cpos; f2 = fw_on;
             if (u == (i64)au && f2 == afw && (afw ? c2 > acpos : c2 < acpos)) {
@@ -1701,7 +1834,7 @@ mod tests {
             for (i, r) in reads.iter().enumerate() {
                 let mut w = Vec::new();
                 t.hits(r, perm, &mut w);
-                // past `HITS_CAP` or in a heavy bucket: the CPU maps it
+                // past `HITS_CAP`: the CPU maps it
                 if c[i] as usize > HITS_CAP && w.len() <= HITS_CAP {
                     on_cpu += 1;
                     continue;
