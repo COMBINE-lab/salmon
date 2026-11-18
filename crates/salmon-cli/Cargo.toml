@@ -37,6 +37,9 @@ sysalloc = []
 [dev-dependencies]
 tempfile = { workspace = true }
 flate2 = { workspace = true }
+# BAM fixtures for the alignment-input tests (the versions salmon-align reads with).
+noodles-bam = "0.98"
+noodles-sam = "0.93"
 # meta_info.json assertions in the metadata-truth tests: parse the field set
 # rather than substring-matching it, so a renamed field fails loudly.
 

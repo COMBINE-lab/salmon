@@ -2623,6 +2623,8 @@ dependencies = [
  "flate2",
  "indicatif",
  "mimalloc",
+ "noodles-bam",
+ "noodles-sam",
  "piscem-rs",
  "rayon",
  "salmon-align",

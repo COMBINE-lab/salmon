@@ -37,7 +37,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use crossbeam_channel::bounded;
-use noodles_bam as bam;
 use noodles_sam as sam;
 use noodles_sam::alignment::record::data::field::{Tag, Value};
 use noodles_sam::Header;
@@ -57,7 +56,7 @@ use salmon_rad::{
     ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile, SalmonBulkRecord,
 };
 
-use crate::{coordinate_sorted_unusable, is_sam_path, open_sam_reader, read_alignment_header};
+use crate::{coordinate_sorted_unusable, open_alignment_input};
 
 const CHUNK_FLUSH_BYTES: usize = 64 * 1024;
 const MINIBATCH: usize = 1000;
@@ -98,7 +97,7 @@ pub fn project_genome_bam_to_rad(
     opts: &GenomeProjectOptions,
     rad_path: &Path,
 ) -> Result<ProjectionArtifacts> {
-    let header = read_alignment_header(&opts.bam)?;
+    let (header, mut records) = open_alignment_input(&opts.bam)?;
     if coordinate_sorted_unusable(&header) {
         bail!(
             "genome alignment input looks coordinate-sorted; projection needs read-name-grouped \
@@ -144,7 +143,7 @@ pub fn project_genome_bam_to_rad(
         None
     };
 
-    let is_paired = crate::rad_library_is_paired(&opts.bam, &opts.lib_type)?;
+    let is_paired = crate::rad_library_is_paired(&mut records, &opts.lib_type);
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut writer = RadOutputWriter::create(
         rad_path,
@@ -180,16 +179,19 @@ pub fn project_genome_bam_to_rad(
     let tx_is_minus: Vec<bool> = txs.iter().map(|t| t.strand == '-').collect();
 
     let nthreads = rayon::current_num_threads().max(1);
-    let (num_processed, num_mapped) = stream_project_pass(
-        &opts.bam,
-        nthreads,
-        &g2t,
-        &cfg,
-        &writer,
-        &fld,
-        naive.as_ref(),
-        &tx_is_minus,
-    )?;
+    let (num_processed, num_mapped) = crate::with_alignment_records!(records, recs => {
+        run_project_pass(
+            recs,
+            &header,
+            nthreads,
+            &g2t,
+            &cfg,
+            &writer,
+            &fld,
+            naive.as_ref(),
+            &tx_is_minus,
+        )
+    })?;
 
     // ---- single-pass bake -------------------------------------------------
     let (frag_dist, det_fmt) = fld.finish(opts.fld_mean, opts.fld_sd);
@@ -636,60 +638,6 @@ fn build_projected_record(
         (single_tid, fld_pairs, single_end_fw),
         naive_sig,
     ))
-}
-
-/// Dispatch the projection pass over SAM or BAM (chosen by extension).
-#[allow(clippy::too_many_arguments)]
-fn stream_project_pass(
-    bam_path: &Path,
-    nthreads: usize,
-    g2t: &G2TTree,
-    cfg: &ProjectionConfig,
-    writer: &RadOutputWriter,
-    fld: &DiscreteFld,
-    naive: Option<&NaiveEqBuilder>,
-    tx_is_minus: &[bool],
-) -> Result<(u64, u64)> {
-    if is_sam_path(bam_path) {
-        let mut reader = open_sam_reader(bam_path)?;
-        let header = reader.read_header().context("reading SAM header")?;
-        run_project_pass(
-            reader.records(),
-            &header,
-            nthreads,
-            g2t,
-            cfg,
-            writer,
-            fld,
-            naive,
-            tx_is_minus,
-        )
-    } else {
-        let file = std::fs::File::open(bam_path)
-            .with_context(|| format!("opening {}", bam_path.display()))?;
-        let bgzf_workers = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .clamp(1, 4);
-        let bgzf_workers = std::num::NonZeroUsize::new(bgzf_workers).unwrap();
-        {
-            let decoder =
-                noodles_bgzf::io::MultithreadedReader::with_worker_count(bgzf_workers, file);
-            let mut reader = bam::io::Reader::from(decoder);
-            let header = reader.read_header().context("reading BAM header")?;
-            run_project_pass(
-                reader.records(),
-                &header,
-                nthreads,
-                g2t,
-                cfg,
-                writer,
-                fld,
-                naive,
-                tx_is_minus,
-            )
-        }
-    }
 }
 
 /// Reader thread groups records by canonical name; workers project each group via

@@ -61,12 +61,33 @@ pub fn open_maybe_compressed_raw(path: &Path) -> io::Result<Box<dyn Read + Send>
     }
 }
 
+/// As [`open_maybe_compressed_raw`], for a stream that is already open and
+/// whose first bytes, `head`, have already been read from it. A pipe cannot be
+/// reopened to read them again, so they are replayed in front of `rest`.
+pub fn maybe_decompress_stream(
+    head: Vec<u8>,
+    rest: Box<dyn Read + Send>,
+) -> io::Result<Box<dyn Read + Send>> {
+    // Too short to be compressed: plain text by construction (and niffler would
+    // swallow the bytes it read before saying so).
+    let too_short = head.len() < 5;
+    let stream: Box<dyn Read + Send> = Box::new(io::Cursor::new(head).chain(rest));
+    if too_short {
+        return Ok(stream);
+    }
+    match niffler::send::get_reader(stream) {
+        Ok((reader, _format)) => Ok(reader),
+        Err(niffler::Error::IOError(e)) => Err(e),
+        Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string())),
+    }
+}
+
 /// Strip one trailing compression extension from a file name, if present.
 ///
 /// This module decides *compression* from content, never from the name — but a
 /// caller may still have a name-based question to ask about what is underneath,
-/// such as whether an alignment file is SAM or BAM. `reads.sam.zst` is a SAM
-/// file, and asking "does this end in `.sam`" of the whole name answers no.
+/// such as whether a gene map is a GTF. `genes.gtf.gz` is a GTF file, and
+/// asking "does this end in `.gtf`" of the whole name answers no.
 ///
 /// So this is not name-based compression detection creeping back in: it removes
 /// compression noise from a name so a *different* question can be asked of what
@@ -165,7 +186,7 @@ mod tests {
     }
 
     /// Stripping a compression suffix lets a name-based format question see the
-    /// name underneath, which is how `foo.sam.zst` is recognised as SAM.
+    /// name underneath, as `foo.sam.zst` underneath is `foo.sam`.
     #[test]
     fn strips_one_compression_extension() {
         for (input, want) in [
