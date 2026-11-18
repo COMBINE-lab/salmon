@@ -496,8 +496,11 @@ impl RadHit {
     /// `pos` must follow the convention documented on [`RadHit::pos`]: the
     /// fragment's leftmost base for a pair, the read's leftmost base (NOT its 5'
     /// end) for an orphan / single-end hit. It is clamped to `>= 0` (a
-    /// soft-clipped alignment can compute a negative start). `mate_fw` is meaningful only for proper pairs, and is
-    /// forced to `false` otherwise so the encoded bit is deterministic.
+    /// soft-clipped alignment can compute a negative start); a proper pair's
+    /// length is shortened by the same amount (see [`clip_pair_start`]), so
+    /// `pos + frag_len - 1` stays the fragment's last base. `mate_fw` is
+    /// meaningful only for proper pairs, and is forced to `false` otherwise so
+    /// the encoded bit is deterministic.
     pub fn for_placement(
         tid: u32,
         is_fw: bool,
@@ -508,11 +511,16 @@ impl RadHit {
         read_len: i32,
         score: i32,
     ) -> Self {
+        let (pos, fragment_len) = if paired {
+            clip_pair_start(pos, fragment_len)
+        } else {
+            (pos.max(0), fragment_len)
+        };
         RadHit {
             tid,
             is_fw,
             mate_fw: paired && mate_fw,
-            pos: pos.max(0) as u32,
+            pos: pos as u32,
             frag_len: if paired {
                 // Saturate rather than wrap: an absurd fragment length must not
                 // silently become a small one.
@@ -524,6 +532,25 @@ impl RadHit {
             },
             score,
         }
+    }
+}
+
+/// A proper pair's extent on the transcript, `(start, length)`, for a fragment
+/// whose projection may begin before the transcript (a soft-clipped or
+/// overhanging mate). The start is clipped to 0 and the length shortened by the
+/// same amount, so the fragment still ends at its last base: a reader takes the
+/// reverse mate's 5' end as `start + length - 1`. piscem's writer and salmon's
+/// sketch path clip the same way.
+///
+/// Every producer writes a pair through this, and every FLD built while writing
+/// uses the clipped length too, so a baked FLD equals one re-derived from the
+/// RAD.
+#[inline]
+pub fn clip_pair_start(pos: i32, fragment_len: i32) -> (i32, i32) {
+    if pos < 0 {
+        (0, (fragment_len + pos).max(0))
+    } else {
+        (pos, fragment_len)
     }
 }
 
@@ -614,6 +641,15 @@ mod tests {
         }
     }
 
+    /// The clip keeps the fragment's last base and never yields a negative length.
+    #[test]
+    fn clip_pair_start_keeps_the_end() {
+        assert_eq!(clip_pair_start(10, 200), (10, 200));
+        assert_eq!(clip_pair_start(0, 200), (0, 200));
+        assert_eq!(clip_pair_start(-7, 200), (0, 193));
+        assert_eq!(clip_pair_start(-300, 200), (0, 0));
+    }
+
     /// When a fragment's hits disagree, the summary tag must report the most
     /// complete mapping seen, not the first or the last.
     #[test]
@@ -635,7 +671,9 @@ mod tests {
     /// since a reader decodes these bytes with no way to detect a wrong rule.
     #[test]
     fn for_placement_frag_len_convention() {
-        // Proper pair: real fragment length, mate strand kept, pos clamped >= 0.
+        // Proper pair: real fragment length, mate strand kept. A start before
+        // the transcript is clipped to 0 and the length shortened to match, so
+        // the last base (244) is unchanged.
         let p = RadHit::for_placement(5, true, true, -2, true, 247, 100, -3);
         assert_eq!(
             p,
@@ -644,9 +682,13 @@ mod tests {
                 is_fw: true,
                 mate_fw: true,
                 pos: 0,
-                frag_len: 247,
+                frag_len: 245,
                 score: -3
             }
+        );
+        assert_eq!(
+            RadHit::for_placement(5, true, true, 3, true, 247, 100, -3).frag_len,
+            247
         );
         // Orphan / single-end: the slot carries the mate read length (clamped
         // below the unpaired sentinel), and mate_fw is forced false.
@@ -662,6 +704,10 @@ mod tests {
                 score: 7
             }
         );
+        // An orphan's start is clamped, but its slot is the read length, which
+        // is not shortened.
+        let o = RadHit::for_placement(5, true, false, -4, false, 0, 100, 7);
+        assert_eq!((o.pos, o.frag_len), (0, 100));
         // Clamps: fragment length saturates at u16::MAX; orphan read length at MAX-1.
         assert_eq!(
             RadHit::for_placement(0, true, false, 0, true, 1 << 20, 0, 0).frag_len,
