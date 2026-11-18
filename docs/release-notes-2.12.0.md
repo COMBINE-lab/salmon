@@ -268,7 +268,7 @@ Release binaries built from the v2.11.0 tag and from 2.12.0, on x86 (AMD EPYC), 
 | GEUVADIS `-a` (bowtie2 BAM) | see below | 0.45 → 0.43 | 0 | 0 |
 
 - **`-a`** is identical in output. Its wall time is limited by reading the 2.3 GB BAM and varies by up to 2× between identical runs. With the BAM in memory, CPU time is 59–64 s for 2.11.0 and 55–58 s for 2.12.0 over four runs each.
-- **The decoy-aware index is 3% slower**, from pairing small dovetails (see [Costs](#costs)). With `--dovetailTolerance 0` it takes 15.3 s.
+- **The decoy-aware index is 2–3% slower; mapping time is unchanged.** About 0.15 s is the EM: the newly paired dovetails make its slowest connected component take 3,520 iterations instead of 3,248 (see [Costs](#costs)). About 0.09 s is reading the intermediate RAD, which has four times as many chunks now that reads are mapped in batches of 4,096 (#1346).
 - **Peak memory** differences under 5% (single-end, bootstraps, decoy) are within run-to-run noise.
 - **Reads moved** with all three bias flags come almost all from the `--posBias` effective-length change (#1352).
 
@@ -340,7 +340,7 @@ Two more commits cut the overhead further. With the flag, a run now takes this m
 
 ### Costs
 
-Pairing small dovetails (#1357) costs, at `-p 16`: GEUVADIS 10M pairs 9.29 → 9.42 s (+1.4%, all in the EM, whose slowest component needs 7,650 iterations instead of 6,968; mapping is flat), and full muscle 8.11 → 8.16 s (+0.7%, mapping the 42,902 new pairs). On the decoy-aware GRCh38 index, 10M GEUVADIS pairs go from 15.2 s to 15.6 s (+3%); with `--dovetailTolerance 0`, 2.12.0 takes 15.3 s.
+Pairing small dovetails (#1357) costs, at `-p 16`: GEUVADIS 10M pairs 9.29 → 9.42 s (+1.4%, all in the EM, whose slowest component needs 7,650 iterations instead of 6,968; mapping is flat), and full muscle 8.11 → 8.16 s (+0.7%, mapping the 42,902 new pairs). On the decoy-aware GRCh38 index, the EM's slowest component needs 3,520 iterations instead of 3,248, which costs about 0.15 s.
 
 ## Fixes
 
