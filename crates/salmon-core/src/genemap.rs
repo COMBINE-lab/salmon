@@ -281,7 +281,7 @@ pub fn matches_ignoring_tx_version(names: &[String], gene_map: &HashMap<String, 
 /// Ensembl/GENCODE/RefSeq identifier schemes.
 ///
 /// `unmatched_out`, when given, receives the unmatched transcript names as JSON
-/// (see [`write_unmatched_list`]) in `names` order, and is removed when nothing
+/// (see `write_unmatched_list`) in `names` order, and is removed when nothing
 /// is unmatched so a stale list from an earlier run cannot be mistaken for a
 /// current one. The returned
 /// [`GeneQuantSummary`] is what the caller should report — in particular

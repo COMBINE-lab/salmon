@@ -185,8 +185,8 @@ pub struct MapScratch {
 /// So reuse is what matters most, and the parameter is worth the ~10% over TLS
 /// given `QuantProcessor` already owns a scratch struct to put it in.
 ///
-/// Empty until a fragment exceeds [`DEDUP_HASH_THRESHOLD`], so a run that never
-/// sees one never allocates.
+/// Empty until a fragment exceeds `DEDUP_HASH_THRESHOLD` (112) raw mappings,
+/// so a run that never sees one never allocates.
 #[derive(Default)]
 pub struct DedupScratch {
     table: hashbrown::HashTable<RawMapping>,

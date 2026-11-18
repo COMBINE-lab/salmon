@@ -266,7 +266,7 @@ pub struct AlignQuantOptions {
     pub extra_diagnostics: Vec<salmon_core::Diagnostic>,
     /// `--dumpBiasModels` (hidden): write the observed+expected seq/GC/pos
     /// bias models to `bias_models.txt` for debugging / C++-parity comparison.
-    /// Written by the shared output writer from the pass's [`BiasDump`], so it
+    /// Written by the shared output writer from the pass's [`BiasDump`](salmon_model::dumps::BiasDump), so it
     /// works on every path that runs bias correction (#1140: it used to exist
     /// only on the deprecated one-pass reads path).
     pub dump_bias_models: bool,

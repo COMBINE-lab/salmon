@@ -66,6 +66,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Docs
+        # Broken intra-doc links; once is enough, so only on one runner.
+        if: matrix.target_id == 'linux-x86_64'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+
       - name: Build (release, portable floor)
         # .cargo/config.toml pins the x86-64-v2 / NEON SIMD floor; ksw2rs picks
         # AVX2/SSE4.1/NEON at runtime.
