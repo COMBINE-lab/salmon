@@ -465,36 +465,49 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // shortcut: rebuilt every run; persist it beside the index if it ever
     // outlasts the mapping.
     let kmer_gpu = std::sync::Arc::new(std::sync::OnceLock::new());
-    if opts.sketch
-        && opts.em.gpu
-        && salmon.inner().poison_table().is_none()
-        && salmon_infer::kmers::KmerGpu::available()
-    {
+    if opts.sketch && opts.em.gpu && salmon.inner().poison_table().is_none() {
         let (salmon, slot) = (salmon.clone(), kmer_gpu.clone());
         std::thread::spawn(move || {
             let t0 = std::time::Instant::now();
+            gpu_map::urgent();
+            // opening the device takes tens of ms: off the mapping's path
+            if !salmon_infer::kmers::KmerGpu::available() {
+                return;
+            }
             let idx = salmon.inner();
             use salmon_infer::kmers::{KmerGpu, KmerTable};
             use salmon_map::sketch_hits as sh;
             // piscem's sshash dictionary by default; the flat k-mer table is
             // kept behind a switch while the two are compared
             // shortcut: env switch, drop the loser once measured on real data
-            let table = if std::env::var("SALMON_GPU_LOOKUP").as_deref() == Ok("table") {
-                let (kstart, keep, kmer) = sh::unitig_kmers(idx);
-                KmerTable::build(idx.k(), kstart, keep, kmer)
-            } else {
-                sh::sshash_parts(idx).and_then(|p| {
-                    KmerTable::build_sshash(
-                        idx.k(),
-                        p.m,
-                        p.magic,
-                        p.spss,
-                        p.soff,
-                        sh::kept(idx),
-                        p.bstart,
-                        p.offs,
-                    )
-                })
+            let build = || {
+                if std::env::var("SALMON_GPU_LOOKUP").as_deref() == Ok("table") {
+                    let (kstart, keep, kmer) = sh::unitig_kmers(idx);
+                    KmerTable::build(idx.k(), kstart, keep, kmer)
+                } else {
+                    sh::sshash_parts(idx).and_then(|p| {
+                        KmerTable::build_sshash(
+                            idx.k(),
+                            p.m,
+                            p.magic,
+                            p.spss,
+                            p.soff,
+                            sh::kept(idx),
+                            p.bstart,
+                            p.offs,
+                        )
+                    })
+                }
+            };
+            // its own pool, so its threads can take the build's priority; as
+            // many threads as the global pool, which `-p` sized
+            let table = match rayon::ThreadPoolBuilder::new()
+                .num_threads(rayon::current_num_threads())
+                .start_handler(|_| gpu_map::urgent())
+                .build()
+            {
+                Ok(pool) => pool.install(build),
+                Err(_) => build(),
             };
             match table
                 .ok_or_else(|| "the index does not fit the GPU lookup".to_string())

@@ -19,6 +19,24 @@ pub(crate) struct GpuMap<'a> {
     pub used: &'a AtomicBool,
 }
 
+/// Raise the calling thread's scheduling class for the GPU lookup's build:
+/// the device waits on it while the mapping threads (and on a busy machine
+/// other processes) compete for the cores, and finishing it sooner moves
+/// more batches to the GPU. macOS QoS only; elsewhere a no-op.
+#[allow(unsafe_code)]
+pub(crate) fn urgent() {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn pthread_set_qos_class_self_np(qos: u32, relpri: i32) -> i32;
+        }
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        // SAFETY: changes only the calling thread's QoS class; a failure
+        // leaves it at the default.
+        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+    }
+}
+
 /// One batch's reads and their hits (reused across a worker's batches).
 #[derive(Default)]
 pub(crate) struct BatchHits {

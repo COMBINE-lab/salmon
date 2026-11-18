@@ -77,19 +77,28 @@ pub fn sshash_parts(index: &ReferenceIndex) -> Option<SshashParts<'_>> {
     use value_traits::slices::SliceByValue;
     let dict = index.dict();
     let (spss, sk) = (dict.spss(), dict.index_ref());
+    use rayon::prelude::*;
     let n = sk.offsets.len();
+    // random access into sshash's compressed arrays: parallel, as this runs
+    // while the CPU maps the first batches
+    let ef = &sk.num_super_kmers_before_bucket;
     let mut bstart = (0..sk.num_buckets())
-        .map(|b| u32::try_from(sk.locate_bucket(b).0).ok())
+        .into_par_iter()
+        .map(|b| u32::try_from(ef.access(b) as usize + b).ok())
         .collect::<Option<Vec<_>>>()?;
     bstart.push(u32::try_from(n).ok()?);
     let offs = (0..n)
+        .into_par_iter()
         .map(|i| u32::try_from(sk.offsets.index_value(i)).ok())
         .collect::<Option<_>>()?;
     Some(SshashParts {
         m: dict.m(),
         magic: sshash_lib::hasher::DeterministicHasher::new(dict.seed()).magic(),
         spss: spss.strings_raw(),
-        soff: (0..spss.offsets_len()).map(|i| spss.offset_at(i)).collect(),
+        soff: (0..spss.offsets_len())
+            .into_par_iter()
+            .map(|i| spss.offset_at(i))
+            .collect(),
         bstart,
         offs,
     })

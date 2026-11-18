@@ -14,6 +14,7 @@ piscem-rs = { workspace = true }
 sshash-lib = "0.8"
 # reads sshash's bucket offsets (`BitFieldVec::index_value`) for the GPU lookup
 value-traits = "0.3"
+rayon = { workspace = true }
 ahash = { workspace = true }
 hashbrown = { workspace = true }
 # ksw2 (the alignment backend): a native-Rust ksw_extz2_sse port with runtime
