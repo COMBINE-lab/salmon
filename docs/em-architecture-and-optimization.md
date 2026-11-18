@@ -928,11 +928,23 @@ thread-seconds (`map stage`). On ERR188044 (16 threads):
 
 The GPU's `cpu_map` is the 1.46M fragments (4%) with a read in a heavy bucket
 or past `HITS_CAP`: about 32 µs each, against 1.4 µs over the GPU path. The
-heavy-bucket table below takes it down to 0.65M fragments. Each
-input file is inflated by one thread at a time under paraseq's reader lock,
-and the time outside the stages includes the wait for it. The parallel decoder
-(`--decoder parallel`, two decode threads and 14 mapping threads) is still
-slower here: 14.3–14.9 s of mapping against 9.9 s.
+heavy-bucket table below takes it down to 0.65M fragments.
+
+**Decompression.** The input sets the floor of the mapping phase. Inflating
+both ERR188044 files at once, one thread each, takes 6.9–7.1 s (8.0 GB per
+file), and reading and parsing them with paraseq and 16 threads, without
+mapping, 7.9 s. The parallel decoder (`--decoder parallel`, two decode
+threads and 14 mapping threads) is slower here: 14.3–14.9 s of mapping
+against 9.9 s, so each file keeps one inflating thread.
+
+paraseq inflates a file only inside `fill`, on the mapping thread that holds
+its reader. While every thread maps or waits on the GPU, nobody inflates.
+With the GPU lookup on, each serially decoded file is now read on a thread of
+its own, up to four 4 MiB chunks ahead of the mapping threads
+(`decode::read_ahead`). On ERR188044, in 8 order-swapped pairs, the mapping
+phase goes from 8.8–9.3 s (median 9.2 s) to 8.3–9.1 s (median 8.5 s), and the
+run from a median of 20.6 s to 20.0 s. The CPU path keeps reading inside `fill`: its 16 mapping threads
+already fill the cores, and the extra threads only compete with them.
 
 **Heavy buckets.** The first GPU run on this data did not finish in 10
 minutes. The kernel scanned every super-k-mer of the minimizer's bucket, while

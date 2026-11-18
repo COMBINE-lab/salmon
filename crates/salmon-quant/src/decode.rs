@@ -226,6 +226,7 @@ pub fn plan(
     budget: usize,
     pref: piscem_rs::io::calibrate::DecoderPreference,
     policy: EngagementPolicy,
+    ahead: bool,
 ) -> Result<MappingPlan> {
     let decision = piscem_rs::io::calibrate::choose_decoder(groups, budget, pref, policy);
     let num_files: usize = groups.iter().map(|g| g.len()).sum();
@@ -266,7 +267,17 @@ pub fn plan(
         // piscem measured 4096 and 16384 as one throughput plateau; the smaller
         // end holds a quarter of the in-flight records (and their RAD chunk)
         // per mapping thread, which was most of the per-thread peak RSS.
-        let mut reader = paraseq::fastx::Reader::new_with_batch_size(opened.reader, 4096)
+        // A serially decoded stream inflates only inside `fill`, on whichever
+        // mapping thread holds the reader; while every thread maps or waits on
+        // the GPU, nobody inflates. A thread of its own keeps it inflating.
+        // Only with the GPU lookup: on the CPU path the mapping threads keep
+        // every core busy, and the extra threads only compete with them.
+        let source = if ahead && opened.handle.is_none() {
+            read_ahead(opened.reader)
+        } else {
+            opened.reader
+        };
+        let mut reader = paraseq::fastx::Reader::new_with_batch_size(source, 4096)
             .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?;
         // A truncated or malformed record then names its file: with paired or
         // several inputs, the error alone would not say which one. A stream's
@@ -351,8 +362,75 @@ pub fn plan(
     })
 }
 
+/// Reads `inner` on a thread of its own, a few MiB ahead of the consumer.
+fn read_ahead(mut inner: Box<dyn std::io::Read + Send>) -> Box<dyn std::io::Read + Send> {
+    const CHUNK: usize = 4 << 20;
+    let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(4);
+    std::thread::spawn(move || loop {
+        let mut buf = vec![0u8; CHUNK];
+        let mut n = 0;
+        while n < CHUNK {
+            match inner.read(&mut buf[n..]) {
+                Ok(0) => break,
+                Ok(k) => n += k,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+            }
+        }
+        buf.truncate(n);
+        // A closed receiver (the run stopped early) ends the thread too.
+        if n == 0 || tx.send(Ok(buf)).is_err() {
+            return;
+        }
+    });
+    Box::new(ReadAhead {
+        rx,
+        cur: Vec::new(),
+        pos: 0,
+    })
+}
+
+struct ReadAhead {
+    rx: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    cur: Vec<u8>,
+    pos: usize,
+}
+
+impl std::io::Read for ReadAhead {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        while self.pos == self.cur.len() {
+            match self.rx.recv() {
+                Ok(chunk) => {
+                    self.cur = chunk?;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = out.len().min(self.cur.len() - self.pos);
+        out[..n].copy_from_slice(&self.cur[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn read_ahead_is_lossless() {
+        let data: Vec<u8> = (0..10_000_003u32).map(|i| (i * 7 + i / 3) as u8).collect();
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(
+            &mut super::read_ahead(Box::new(std::io::Cursor::new(data.clone()))),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out, data);
+    }
+
     use super::*;
 
     fn t(sketch: bool, det: bool) -> usize {
