@@ -16,7 +16,7 @@
 //! something that fits neither.
 //!
 //! After [`finalize`](SimplePosBias::finalize) the (normalized) bin masses are
-//! fit with a cubic spline over the non-uniform Cufflinks position knots, and
+//! fit with a cubic spline through the bin centres, and
 //! [`project_weights`](SimplePosBias::project_weights) evaluates that spline at
 //! each transcript position. The observed/expected per-position ratio gives the
 //! positional bias factor used in the effective-length convolution.
@@ -29,18 +29,6 @@ use crate::spline::Spline;
 pub const NUM_POS_BINS: usize = 20;
 /// salmon's number of transcript length classes (`numBiasBins`).
 pub const NUM_LENGTH_CLASSES: usize = 5;
-
-/// Cufflinks fractional position knots used as the spline x-coordinates
-/// (`SimplePosBias::positionBins_`).
-///
-/// Note they are *not* evenly spaced: dense near both ends (0.02, 0.04, …) and
-/// sparse through the middle (0.3, 0.4, 0.5). That is where the interesting
-/// structure lives — the body of a transcript is close to flat, the ends are
-/// not — so the resolution is spent where it buys something.
-const POSITION_BINS: [f64; NUM_POS_BINS] = [
-    0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.92, 0.94,
-    0.96, 0.98, 1.0,
-];
 
 /// A single positional-bias distribution (20 bins).
 #[derive(Debug, Clone)]
@@ -144,7 +132,7 @@ impl SimplePosBias {
     }
 
     /// Convert log masses to linear, normalize, and fit the spline over the
-    /// Cufflinks position knots (duplicating the endpoints as natural knots).
+    /// bin centres (duplicating the endpoint values as knots at 0 and 1).
     pub fn finalize(&mut self) {
         // Idempotent: several call sites may finalize the same model.
         if self.finalized {
@@ -183,12 +171,23 @@ impl SimplePosBias {
         }
         spline_mass[n + 1] = stop_knot;
 
-        // Spline x-coordinates: 0.0, the Cufflinks knots shifted back by 0.01 to
-        // sit at bin *centres* rather than upper edges, then 1.0.
+        // Spline x-coordinates: 0.0, the centre of each bin, then 1.0. The knot
+        // for bin `i` must sit where that bin's mass was collected. `add_mass`
+        // bins uniformly (bin `i` holds fractional positions `[i/n, (i+1)/n)`),
+        // so its centre is `(i + 0.5)/n`.
+        //
+        // salmon (C++) placed the knots at the non-uniform Cufflinks positions
+        // (0.02, 0.04, …, 0.3, 0.4, …, 0.98, 1.0, minus 0.01) while still binning
+        // uniformly, so each bin's value was drawn at the wrong place: bin 5
+        // (positions 0.25–0.30) at 0.14, bin 14 (0.70–0.75) at 0.89. The middle
+        // bins were stretched over twice their width and the end bins squeezed
+        // into less than half of theirs. The obs/exp ratio then no longer
+        // averaged to 1 along a transcript. On m500k (`--posBias`) that alone
+        // raised the mean 5' factor of the longest length class to 1.28.
         let mut spline_bins = vec![0.0f64; n + 2];
         spline_bins[0] = 0.0;
         for i in 0..n {
-            spline_bins[i + 1] = POSITION_BINS[i] - 0.01;
+            spline_bins[i + 1] = (i as f64 + 0.5) / n as f64;
         }
         spline_bins[n + 1] = 1.0;
 
