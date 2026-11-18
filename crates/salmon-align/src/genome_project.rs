@@ -37,7 +37,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use crossbeam_channel::bounded;
-use noodles_bam as bam;
 use noodles_sam as sam;
 use noodles_sam::alignment::record::data::field::{Tag, Value};
 use noodles_sam::Header;
@@ -57,7 +56,7 @@ use salmon_rad::{
     ChunkCodec, FragmentChunkBuf, RadHit, RadOutputWriter, RadProfile, SalmonBulkRecord,
 };
 
-use crate::{coordinate_sorted_unusable, is_sam_path, open_sam_reader, read_alignment_header};
+use crate::{coordinate_sorted_unusable, open_alignment_input};
 
 const CHUNK_FLUSH_BYTES: usize = 64 * 1024;
 const MINIBATCH: usize = 1000;
@@ -98,7 +97,7 @@ pub fn project_genome_bam_to_rad(
     opts: &GenomeProjectOptions,
     rad_path: &Path,
 ) -> Result<ProjectionArtifacts> {
-    let header = read_alignment_header(&opts.bam)?;
+    let (header, mut records) = open_alignment_input(&opts.bam)?;
     if coordinate_sorted_unusable(&header) {
         bail!(
             "genome alignment input looks coordinate-sorted; projection needs read-name-grouped \
@@ -144,7 +143,7 @@ pub fn project_genome_bam_to_rad(
         None
     };
 
-    let is_paired = crate::rad_library_is_paired(&opts.bam, &opts.lib_type)?;
+    let is_paired = crate::rad_library_is_paired(&mut records, &opts.lib_type);
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut writer = RadOutputWriter::create(
         rad_path,
@@ -180,16 +179,19 @@ pub fn project_genome_bam_to_rad(
     let tx_is_minus: Vec<bool> = txs.iter().map(|t| t.strand == '-').collect();
 
     let nthreads = rayon::current_num_threads().max(1);
-    let (num_processed, num_mapped) = stream_project_pass(
-        &opts.bam,
-        nthreads,
-        &g2t,
-        &cfg,
-        &writer,
-        &fld,
-        naive.as_ref(),
-        &tx_is_minus,
-    )?;
+    let (num_processed, num_mapped) = crate::with_alignment_records!(records, recs => {
+        run_project_pass(
+            recs,
+            &header,
+            nthreads,
+            &g2t,
+            &cfg,
+            &writer,
+            &fld,
+            naive.as_ref(),
+            &tx_is_minus,
+        )
+    })?;
 
     // ---- single-pass bake -------------------------------------------------
     let (frag_dist, det_fmt) = fld.finish(opts.fld_mean, opts.fld_sd);
@@ -423,6 +425,64 @@ fn record_to_genomic_alignment<R: sam::alignment::Record>(
     })
 }
 
+/// Whether two genomic records are the two mates of one alignment: each points
+/// at the other's start (as bramble pairs them) and, when both carry an `HI`
+/// tag, the tags agree. Aligners such as STAR report several pairings of one
+/// read at the same positions, which only `HI` tells apart.
+fn are_mates(a: &GenomicAlignment, b: &GenomicAlignment) -> bool {
+    a.is_first_in_pair != b.is_first_in_pair
+        && a.mate_ref_id == Some(b.ref_id)
+        && b.mate_ref_id == Some(a.ref_id)
+        && a.mate_ref_start == Some(b.ref_start)
+        && b.mate_ref_start == Some(a.ref_start)
+        && (a.hit_index <= 0 || b.hit_index <= 0 || a.hit_index == b.hit_index)
+}
+
+/// The read1 and read2 placements to report for a proper pair on one
+/// transcript: the best-scoring pair whose genomic records are mates of each
+/// other ([`are_mates`]), so the score, position and fragment length all come
+/// from one alignment of the fragment. `entries` must be in canonical order;
+/// ties keep the first pair in that order. Without such a pair, the first read1
+/// and the first read2 placement.
+fn pick_mate_pair<'a>(
+    entries: &[&'a ProjectedAlignment],
+    gas: &[GenomicAlignment],
+    score: impl Fn(&ProjectedAlignment) -> i32,
+) -> (&'a ProjectedAlignment, &'a ProjectedAlignment) {
+    let is_read1 =
+        |e: &ProjectedAlignment| gas.get(e.input_index).is_none_or(|g| g.is_first_in_pair);
+    let paired = |e: &&&ProjectedAlignment| e.same_transcript_as_mate && e.insert_size != 0;
+    let mut best: Option<(i32, &ProjectedAlignment, &ProjectedAlignment)> = None;
+    for &a in entries.iter().filter(paired).filter(|e| is_read1(e)) {
+        for &b in entries.iter().filter(paired).filter(|e| !is_read1(e)) {
+            let (Some(ga), Some(gb)) = (gas.get(a.input_index), gas.get(b.input_index)) else {
+                continue;
+            };
+            if !are_mates(ga, gb) {
+                continue;
+            }
+            let s = score(a) + score(b);
+            if best.is_none_or(|(bs, _, _)| s > bs) {
+                best = Some((s, a, b));
+            }
+        }
+    }
+    if let Some((_, a, b)) = best {
+        return (a, b);
+    }
+    let r1 = entries
+        .iter()
+        .copied()
+        .find(|e| is_read1(e))
+        .unwrap_or(entries[0]);
+    let r2 = entries
+        .iter()
+        .copied()
+        .find(|e| !is_read1(e))
+        .unwrap_or(entries[1]);
+    (r1, r2)
+}
+
 /// Collapse one read group's projected alignments into a salmon RAD record.
 /// Returns the record, the fragment's proper-pair placements for the FLD (with
 /// whether it maps to exactly one transcript), and the naive-eq signature.
@@ -443,6 +503,18 @@ fn build_projected_record(
     let mut by_tid: BTreeMap<u32, Vec<&ProjectedAlignment>> = BTreeMap::new();
     for p in proj {
         by_tid.entry(p.transcript_id).or_default().push(p);
+    }
+    // Canonical order within a transcript (input record, then placement), so the
+    // record does not depend on the order bramble lists its output in.
+    for entries in by_tid.values_mut() {
+        entries.sort_by_key(|e| {
+            (
+                e.input_index,
+                e.transcript_start,
+                e.transcript_end,
+                e.insert_size,
+            )
+        });
     }
     let is_proper = |entries: &[&ProjectedAlignment]| {
         entries.len() >= 2
@@ -496,27 +568,17 @@ fn build_projected_record(
 
     for (&tid, entries) in &by_tid {
         if is_proper(entries) {
-            let r1 = entries
-                .iter()
-                .copied()
-                .find(|e| is_read1(e))
-                .unwrap_or(entries[0]);
-            let r2 = entries
-                .iter()
-                .copied()
-                .find(|e| !is_read1(e))
-                .unwrap_or(entries[1]);
+            let (r1, r2) = pick_mate_pair(entries, gas, placement_score);
             let pos = r1
                 .transcript_start
                 .min(r2.transcript_start)
                 .saturating_sub(1) as i32;
             let is_fw = genomic_fw(r1);
             let mate_fw = genomic_fw(r2);
-            let frag_len = entries
-                .iter()
-                .map(|e| e.insert_size.unsigned_abs())
-                .max()
-                .unwrap_or(0) as i32;
+            let frag_len = r1
+                .insert_size
+                .unsigned_abs()
+                .max(r2.insert_size.unsigned_abs()) as i32;
             let score = placement_score(r1) + placement_score(r2);
             hits.push(RadHit::for_placement(
                 tid, is_fw, mate_fw, pos, true, frag_len, 0, score,
@@ -576,60 +638,6 @@ fn build_projected_record(
         (single_tid, fld_pairs, single_end_fw),
         naive_sig,
     ))
-}
-
-/// Dispatch the projection pass over SAM or BAM (chosen by extension).
-#[allow(clippy::too_many_arguments)]
-fn stream_project_pass(
-    bam_path: &Path,
-    nthreads: usize,
-    g2t: &G2TTree,
-    cfg: &ProjectionConfig,
-    writer: &RadOutputWriter,
-    fld: &DiscreteFld,
-    naive: Option<&NaiveEqBuilder>,
-    tx_is_minus: &[bool],
-) -> Result<(u64, u64)> {
-    if is_sam_path(bam_path) {
-        let mut reader = open_sam_reader(bam_path)?;
-        let header = reader.read_header().context("reading SAM header")?;
-        run_project_pass(
-            reader.records(),
-            &header,
-            nthreads,
-            g2t,
-            cfg,
-            writer,
-            fld,
-            naive,
-            tx_is_minus,
-        )
-    } else {
-        let file = std::fs::File::open(bam_path)
-            .with_context(|| format!("opening {}", bam_path.display()))?;
-        let bgzf_workers = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .clamp(1, 4);
-        let bgzf_workers = std::num::NonZeroUsize::new(bgzf_workers).unwrap();
-        {
-            let decoder =
-                noodles_bgzf::io::MultithreadedReader::with_worker_count(bgzf_workers, file);
-            let mut reader = bam::io::Reader::from(decoder);
-            let header = reader.read_header().context("reading BAM header")?;
-            run_project_pass(
-                reader.records(),
-                &header,
-                nthreads,
-                g2t,
-                cfg,
-                writer,
-                fld,
-                naive,
-                tx_is_minus,
-            )
-        }
-    }
 }
 
 /// Reader thread groups records by canonical name; workers project each group via
@@ -760,4 +768,185 @@ where
         }
         Ok((num_processed, num_mapped))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One genomic record of read `end` (1 or 2) at `start`, mate at `mate`.
+    fn ga(end: u8, start: i64, mate: i64, hi: i32, reverse: bool) -> GenomicAlignment {
+        GenomicAlignment {
+            query_name: "r".to_string(),
+            ref_id: 0,
+            ref_start: start,
+            is_reverse: reverse,
+            cigar: vec![(100, 0)],
+            sequence: None,
+            is_paired: true,
+            is_first_in_pair: end == 1,
+            xs_strand: None,
+            ts_strand: None,
+            hit_index: hi,
+            mate_ref_id: Some(0),
+            mate_ref_start: Some(mate),
+            mate_is_unmapped: false,
+            read_len: 100,
+        }
+    }
+
+    /// A placement of record `input_index` on transcript `tid` at `start`.
+    fn pa(input_index: usize, tid: u32, start: u32, insert_size: i32) -> ProjectedAlignment {
+        ProjectedAlignment {
+            transcript_id: tid,
+            transcript_start: start,
+            transcript_end: start + 99,
+            aligned_len: 100,
+            query_aligned_len: 100,
+            is_reverse: false,
+            similarity_score: 1.0,
+            nh: 1,
+            hi: 1,
+            is_primary: false,
+            same_transcript_as_mate: insert_size != 0,
+            insert_size,
+            input_index,
+        }
+    }
+
+    fn record(
+        gas: &[GenomicAlignment],
+        gn_as: &[i32],
+        proj: &[ProjectedAlignment],
+    ) -> (u8, Vec<RadHit>) {
+        let (rec, _, _) = build_projected_record(gas, gn_as, proj, &[false, false]).unwrap();
+        (rec.frag_type, rec.hits)
+    }
+
+    /// Two alignments of one fragment at the same genomic positions, told apart
+    /// only by HI (as STAR reports them): HI:1 scores 400 per mate, HI:2 has a
+    /// better read1 (410) but a worse read2 (380).
+    fn two_pairings() -> (Vec<GenomicAlignment>, Vec<i32>, Vec<ProjectedAlignment>) {
+        let gas = vec![
+            ga(1, 1000, 1200, 1, false),
+            ga(2, 1200, 1000, 1, true),
+            ga(1, 1000, 1200, 2, false),
+            ga(2, 1200, 1000, 2, true),
+        ];
+        let gn_as = vec![400, 400, 410, 380];
+        let proj = vec![
+            pa(0, 0, 100, 300),
+            pa(1, 0, 300, -300),
+            pa(2, 0, 101, 299),
+            pa(3, 0, 300, -299),
+        ];
+        (gas, gn_as, proj)
+    }
+
+    #[test]
+    fn pair_record_does_not_depend_on_bramble_output_order() {
+        let (gas, gn_as, proj) = two_pairings();
+        let want = record(&gas, &gn_as, &proj);
+        // every order of the four placements
+        let mut idx = [0usize, 1, 2, 3];
+        let mut n = 0;
+        permute(&mut idx, 0, &mut |order| {
+            let p: Vec<ProjectedAlignment> = order.iter().map(|&i| proj[i].clone()).collect();
+            assert_eq!(record(&gas, &gn_as, &p), want, "order {order:?}");
+            n += 1;
+        });
+        assert_eq!(n, 24);
+    }
+
+    fn permute(v: &mut [usize; 4], k: usize, f: &mut impl FnMut(&[usize])) {
+        if k == v.len() {
+            f(v);
+            return;
+        }
+        for i in k..v.len() {
+            v.swap(k, i);
+            permute(v, k + 1, f);
+            v.swap(k, i);
+        }
+    }
+
+    #[test]
+    fn read1_and_read2_of_different_alignments_are_not_combined() {
+        // read1 of HI:2 (410) + read2 of HI:1 (400) would score 810; the best
+        // real pair is HI:1 (800), with its position and fragment length. List
+        // the HI:2 read1 first, so "first read1 + first read2" would mix them.
+        let (gas, gn_as, proj) = two_pairings();
+        let proj: Vec<_> = [2, 1, 0, 3].iter().map(|&i| proj[i].clone()).collect();
+        let (_, hits) = record(&gas, &gn_as, &proj);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].score, 800);
+        assert_eq!(hits[0].pos, 99);
+        assert_eq!(hits[0].frag_len, 300);
+    }
+
+    #[test]
+    fn best_scoring_true_pair_wins() {
+        let gas = vec![
+            ga(1, 1000, 1200, 1, false),
+            ga(2, 1200, 1000, 1, true),
+            ga(1, 1020, 1220, 2, false),
+            ga(2, 1220, 1020, 2, true),
+        ];
+        let gn_as = vec![290, 290, 300, 300];
+        let proj = vec![
+            pa(0, 0, 100, 300),
+            pa(1, 0, 300, -300),
+            pa(2, 0, 120, 280),
+            pa(3, 0, 300, -280),
+        ];
+        let (_, hits) = record(&gas, &gn_as, &proj);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            (hits[0].score, hits[0].pos, hits[0].frag_len),
+            (600, 119, 280)
+        );
+        assert!(hits[0].is_fw && !hits[0].mate_fw);
+    }
+
+    #[test]
+    fn without_hi_mates_are_matched_by_position() {
+        let (mut gas, gn_as, proj) = two_pairings();
+        for g in &mut gas {
+            g.hit_index = 0;
+        }
+        // all four records point at each other, so every read1/read2 combination
+        // counts as mates; the best of them (410 + 400) wins
+        let (_, hits) = record(&gas, &gn_as, &proj);
+        assert_eq!(hits[0].score, 810);
+    }
+
+    #[test]
+    fn orphans_are_unchanged() {
+        // read1 on transcript 0 and read2 on transcript 1: two orphan hits,
+        // each with its own score and read length, in transcript order
+        let gas = vec![ga(1, 1000, 5000, 1, false), ga(2, 5000, 1000, 1, true)];
+        let proj = vec![pa(1, 1, 40, 0), pa(0, 0, 100, 0)];
+        let (_, hits) = record(&gas, &[300, 280], &proj);
+        let got: Vec<_> = hits
+            .iter()
+            .map(|h| (h.tid, h.pos, h.frag_len, h.score))
+            .collect();
+        assert_eq!(got, vec![(0, 99, 100, 300), (1, 39, 100, 280)]);
+    }
+
+    #[test]
+    fn pair_without_mate_information_falls_back_to_first_read1_and_read2() {
+        // bramble paired them, but the genomic records carry no mate position
+        let mut gas = vec![ga(1, 1000, 1200, 0, false), ga(2, 1200, 1000, 0, true)];
+        for g in &mut gas {
+            g.mate_ref_start = None;
+        }
+        let proj = vec![pa(1, 0, 300, -300), pa(0, 0, 100, 300)];
+        let (_, hits) = record(&gas, &[300, 280], &proj);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            (hits[0].score, hits[0].pos, hits[0].frag_len),
+            (580, 99, 300)
+        );
+    }
 }
