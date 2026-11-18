@@ -870,8 +870,8 @@ The changes were:
 Two GEUVADIS samples (2×76 bp lymphoblastoid RNA-seq, gzip FASTQ from ENA)
 against GENCODE v50 (654,828 transcripts, `salmon index --gencode`), on the same
 M4 Max with `-p 16 --dumpEq`. Each figure is the fastest of 3 alternated runs.
-The `--sketch` rows were measured with the GPU target selection, under a load
-average of 13–22. The selective-alignment rows are from the round before it,
+The `--sketch` rows were measured with the GPU target selection, the
+heavy-bucket table and the read-ahead, under a load average of 7–16. The selective-alignment rows are from the round before it,
 under 20–110; most of that load came from these runs' own threads. "GPU memory" is the Metal device's allocation once the lookup is
 built (`device_mb` in the `gpu_kmer_table` log line). On Apple silicon it is
 unified memory and is also counted in the process RSS, so the two do not add.
@@ -883,12 +883,12 @@ The index takes 10.9–12.9 s to build (4 builds), peaks at 5.3 GB of RSS and is
 
 | Sample | Mode | Run | Mapping | CPU RAM (peak RSS) | GPU memory | Mapped |
 |---|---|---:|---:|---:|---:|---:|
-| ERR188044, 36.3M pairs | `--sketch`, GPU | 22.0 s | 10.2 s | 3.5 GB | 1,181 MB | 92.8% |
-| | `--sketch`, CPU | 32.7 s | 21.1 s | 2.2 GB | | 92.8% |
+| ERR188044, 36.3M pairs | `--sketch`, GPU | 20.5 s | 8.9 s | 3.7 GB | 1,255 MB | 92.8% |
+| | `--sketch`, CPU | 31.3 s | 20.1 s | 2.2 GB | | 92.8% |
 | | selective alignment, GPU EM | 75.5 s | 55.4 s | 2.9 GB | | 94.4% |
 | | selective alignment, CPU | 81.2 s | 60.4 s | 2.4 GB | | 94.4% |
-| ERR188428, 39.7M pairs | `--sketch`, GPU | 22.8 s | 11.1 s | 3.4 GB | 1,181 MB | 77.2% |
-| | `--sketch`, CPU | 25.5 s | 16.3 s | 1.9 GB | | 77.2% |
+| ERR188428, 39.7M pairs | `--sketch`, GPU | 18.2 s | 8.1 s | 3.8 GB | 1,255 MB | 77.2% |
+| | `--sketch`, CPU | 24.7 s | 15.5 s | 2.0 GB | | 77.2% |
 | | selective alignment, GPU EM | 56.9 s | 41.4 s | 2.4 GB | | 76.1% |
 | | selective alignment, CPU | 54.5 s | 41.0 s | 2.0 GB | | 76.1% |
 
@@ -906,8 +906,8 @@ runs, lines join the fastest run per size. Panel C compares the two full
 samples. ERR188428 is faster despite more pairs because fewer of its reads map
 (77% against 93%), so it is kept off the curve. Both curves still
 grow with the input, the GPU one more slowly. The mapping phase grows by about
-0.28 s per million pairs on the GPU path (0.43 s before the GPU selection) and
-0.58 s on the CPU; kallisto-GPU reports about 0.05 s. On ERR188044, the time
+0.23 s per million pairs on the GPU path (0.28 s before the read-ahead, 0.43 s
+before the GPU selection) and 0.56 s on the CPU; kallisto-GPU reports about 0.05 s. On ERR188044, the time
 outside the mapping phase is the second (RAD) pass, 3.5 s, and the EM with the
 `--dumpEq` write, 7.4 s on either path (10–12 s before SQUAREM ran per
 component and the dump was compressed in parallel).
