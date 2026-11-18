@@ -57,10 +57,11 @@ pub(crate) use backend::{available, KmerDevice};
 #[cfg(gpu)]
 const CHUNK: u32 = 10;
 
-/// Below this many class–transcript incidences the CPU is faster: the GPU's
-/// fixed setup (25–50 ms on Metal) outweighs its faster M-steps.
+/// Below this much work (see [`converge`]) the CPU is faster: the GPU's fixed
+/// cost, about 0.1 s for its ~600–1000 global M-steps, outweighs its faster
+/// steps.
 // shortcut: crossover measured once (Apple M4 Max, 16 CPU threads, synthetic
-// classes; EM gains from ~150k, VBEM from ~500k); recalibrate per backend.
+// classes, test `crossover`); recalibrate per backend.
 #[cfg(gpu)]
 const MIN_INCIDENCES: usize = if cfg!(test) { 1 } else { 250_000 };
 
@@ -185,9 +186,11 @@ impl Problem {
 
 /// Iterate on the GPU from `init` until the global criterion holds (after
 /// `min_iter` steps) or `max_iter`; returns the last iterate and the number of
-/// M-steps run. `None` — a problem too small to gain or too large for the
-/// kernels' index width, or no usable device — means "continue on the CPU from
-/// `init`".
+/// M-steps run. `work` is the incidences the CPU would iterate as a whole:
+/// those of the component engine's large components (`ComponentPlan::
+/// large_incidences`), or all of them for the global kernels. `None` — too
+/// little work to gain, a problem too large for the kernels' index width, or
+/// no usable device — means "continue on the CPU from `init`".
 #[cfg(gpu)]
 pub(crate) fn converge(
     p: &PackedEqClasses,
@@ -196,9 +199,10 @@ pub(crate) fn converge(
     prior: &[f64],
     opts: &EmOptions,
     min_iter: u32,
+    work: usize,
 ) -> Option<(Vec<f64>, u32)> {
     let name = GPU_BACKEND.unwrap_or("gpu");
-    if p.labels.len() < MIN_INCIDENCES {
+    if work < MIN_INCIDENCES {
         return None;
     }
     if !backend::available() {
@@ -451,7 +455,16 @@ mod tests {
             let uniform = vec![p.total_count as f64 / p.num_txps as f64; p.num_txps];
             let prior = vec![cpu_opts.vb_prior; p.num_txps];
             assert!(
-                converge(&p, &p.counts, &uniform, &prior, &gpu_opts, 50).is_some(),
+                converge(
+                    &p,
+                    &p.counts,
+                    &uniform,
+                    &prior,
+                    &gpu_opts,
+                    50,
+                    p.labels.len()
+                )
+                .is_some(),
                 "the GPU path must actually run"
             );
             let cpu =
@@ -468,6 +481,92 @@ mod tests {
                     assert!((g - c).abs() / c < 1e-3, "vb={vb} t={t}: gpu {g} cpu {c}");
                 }
             }
+        }
+    }
+
+    /// Calibration of [`MIN_INCIDENCES`] and of the `work` [`converge`] is
+    /// given: CPU-only against GPU warm start (default VBEM, best of 3) on
+    /// classes drawn within "genes" of `gene_len` transcripts, a quarter of
+    /// them single-transcript, so each gene is a connected component. The
+    /// test asserts nothing; it prints the timings.
+    /// `cargo test --release -p salmon-infer --features metal crossover -- --ignored --nocapture`
+    #[cfg(gpu)]
+    #[test]
+    #[ignore = "timing, run by hand"]
+    fn crossover() {
+        use crate::{optimize_packed_with_init, EffLens, InitAlphas};
+        if !backend::available() {
+            return;
+        }
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        // (transcripts, gene length): 40-transcript genes as in a
+        // transcriptome, then components of ~18k, ~49k, ~73k and ~590k
+        // incidences (PULL_MIN_INCIDENCES is 65,536)
+        let cases = [
+            (200_000, 40),
+            (50_000, 1_563),
+            (200_000, 4_167),
+            (200_000, 6_250),
+            (50_000, 50_000),
+            (200_000, 200_000),
+        ];
+        for (num_txps, gene_len) in cases {
+            let mut p = PackedEqClasses {
+                labels: Vec::new(),
+                starts: vec![0],
+                combined: Vec::new(),
+                weights: Vec::new(),
+                counts: Vec::new(),
+                num_txps,
+                total_count: 0,
+            };
+            for c in 0..num_txps * 2 {
+                let g = (rnd() % (num_txps / gene_len) as u64) * gene_len as u64;
+                let n = if c % 4 == 0 {
+                    1
+                } else {
+                    2 + (rnd() % 12) as usize
+                };
+                let mut tids: Vec<u32> = (0..n)
+                    .map(|_| (g + rnd() % gene_len as u64) as u32)
+                    .collect();
+                tids.sort_unstable();
+                tids.dedup();
+                for _ in &tids {
+                    p.combined
+                        .push(1e-3 * (1.0 + (rnd() % 1000) as f64 / 997.0));
+                }
+                p.labels.extend_from_slice(&tids);
+                p.starts.push(p.labels.len() as u64);
+                let count = 1 + rnd() % 30;
+                p.counts.push(count);
+                p.total_count += count;
+            }
+            let mut best = [f64::MAX; 2];
+            for _ in 0..3 {
+                for (i, gpu) in [false, true].into_iter().enumerate() {
+                    let opts = EmOptions {
+                        gpu,
+                        ..Default::default()
+                    };
+                    let t = std::time::Instant::now();
+                    optimize_packed_with_init(&p, &opts, true, InitAlphas::NONE, EffLens::NONE);
+                    best[i] = best[i].min(t.elapsed().as_secs_f64());
+                }
+            }
+            eprintln!(
+                "{num_txps} transcripts in genes of {gene_len}: {} incidences, \
+                 cpu {:.3} s, gpu {:.3} s",
+                p.labels.len(),
+                best[0],
+                best[1]
+            );
         }
     }
 }
