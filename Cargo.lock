@@ -407,8 +407,7 @@ dependencies = [
 [[package]]
 name = "cf1-rs"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0880342df4e2e6aad18f8a03fca1532f7e699507f74dc8983f8aee43ba12eafa"
+source = "git+https://github.com/BenjaminDEMAILLE/cf1-rs?branch=perf%2Fall-combined#6928b8af564680d319b3820fb055f68b6a0ba54a"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1494,8 +1493,7 @@ dependencies = [
 [[package]]
 name = "ksw2rs"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "174a142b8d417d13b720b26f3b3ead48cb755399e83dc96fbcd5ba19e5b8be01"
+source = "git+https://github.com/BenjaminDEMAILLE/ksw2rs?branch=perf%2Fall-combined#e2838c67e97f82a9b4c7f457b0d60e6faddaf47b"
 dependencies = [
  "cc",
 ]
@@ -2236,9 +2234,8 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42878edafb89034c612379fa69561e117e6480573a69332e4f13b98373bf97f7"
+version = "0.12.4"
+source = "git+https://github.com/BenjaminDEMAILLE/piscem-rs?branch=perf%2Fall-combined#b8e7c0205288d3a13182ef60d220e05b462182a7"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2855,8 +2852,7 @@ checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
 [[package]]
 name = "seq_geom_parser"
 version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8c95f700367e275cebf0698ab89aa8ce184bb0ef1ff2fdc31f741befa208921"
+source = "git+https://github.com/BenjaminDEMAILLE/piscem-rs?branch=perf%2Fall-combined#b8e7c0205288d3a13182ef60d220e05b462182a7"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -3004,8 +3000,7 @@ checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 [[package]]
 name = "sshash-lib"
 version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71ea4a34780f39a2a0ac04eb5d2f5c42a6f2ab69f6430f3c2d846df4fc744c36"
+source = "git+https://github.com/BenjaminDEMAILLE/sshash-rs?branch=perf%2Fall-combined#a8eb5aec49d61d23da9fd96dbd2ae516141d1255"
 dependencies = [
  "anyhow",
  "dsi-progress-logger",
@@ -3235,8 +3230,7 @@ dependencies = [
 [[package]]
 name = "thread-broker"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e9cd700e3d20ade34b3d4c324084ff09cecbc27d61fae2b2dfeebbb2f44094d"
+source = "git+https://github.com/BenjaminDEMAILLE/piscem-rs?branch=perf%2Fall-combined#b8e7c0205288d3a13182ef60d220e05b462182a7"
 dependencies = [
  "cpu-time",
  "serde",

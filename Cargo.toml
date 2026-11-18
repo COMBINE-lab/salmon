@@ -152,3 +152,11 @@ lto = "thin"
 inherits = "release"
 lto = "thin"
 
+# Dependency performance PRs, combined (COMBINE-lab/{cf1-rs,ksw2rs,sshash-rs,
+# piscem-rs}); replaced by version bumps once they are released.
+[patch.crates-io]
+cf1-rs = { git = "https://github.com/BenjaminDEMAILLE/cf1-rs", branch = "perf/all-combined" }
+ksw2rs = { git = "https://github.com/BenjaminDEMAILLE/ksw2rs", branch = "perf/all-combined" }
+sshash-lib = { git = "https://github.com/BenjaminDEMAILLE/sshash-rs", branch = "perf/all-combined" }
+piscem-rs = { git = "https://github.com/BenjaminDEMAILLE/piscem-rs", branch = "perf/all-combined" }
+thread-broker = { git = "https://github.com/BenjaminDEMAILLE/piscem-rs", branch = "perf/all-combined" }
