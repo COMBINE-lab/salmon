@@ -1,8 +1,9 @@
 //! Pseudoalignment from raw hits computed elsewhere: the GPU k-mer lookup
-//! (`salmon_infer::kmers`), which finds piscem's `SkippingStrategy::Strict`
-//! raw hits. This module turns them into exactly what [`crate::sketch`] gets
-//! from `map_read` with `Strict`: piscem's target selection is replayed on
-//! them, then the same pairing and conversion run.
+//! (`salmon_infer::kmers`), which finds piscem's raw hits for either
+//! `SkippingStrategy`. This module turns them into exactly what
+//! [`crate::sketch`] gets from `map_read` with that strategy (which only
+//! changes how raw hits are collected): piscem's target selection is replayed
+//! on them, then the same pairing and conversion run.
 //!
 //! The selection below is piscem-rs 0.12.3 `mapping::engine::map_read` from
 //! its raw hits on (BSD-3-Clause, COMBINE-lab): `collect_live_targets`, the
@@ -354,8 +355,8 @@ fn accept(tid: u32, target: &SketchHitInfoSimple, nvh: u32, out: &mut Vec<Simple
     }
 }
 
-/// [`crate::map_single_read_sketch_into`] with `Strict` skipping, from the
-/// read's raw hits; `false` (and `result` untouched) when the CPU must map it.
+/// [`crate::map_single_read_sketch_into`] from the read's raw hits (found with
+/// the same skipping strategy); `false` (and `result` untouched) when the CPU must map it.
 pub fn map_single_read_hits_into(
     result: &mut Vec<ScoredMapping>,
     index: &ReferenceIndex,
@@ -380,8 +381,8 @@ pub fn map_single_read_hits_into(
     true
 }
 
-/// [`crate::map_read_pair_sketch_into`] with `Strict` skipping, from each
-/// mate's raw hits; `false` (and `result` untouched) when the CPU must map it.
+/// [`crate::map_read_pair_sketch_into`] from each mate's raw hits (found with
+/// the same skipping strategy); `false` (and `result` untouched) when the CPU must map it.
 #[allow(clippy::too_many_arguments)]
 pub fn map_read_pair_hits_into<R: RefProvider>(
     result: &mut Vec<ScoredMapping>,

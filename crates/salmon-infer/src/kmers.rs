@@ -3,10 +3,13 @@
 //! table from canonical k-mer to its unitig position, probed for every k-mer of
 //! every read by one GPU thread per read.
 //!
-//! The kernel reproduces piscem's `SkippingStrategy::Strict` hit collection
-//! (`HitSearcher::walk_safely_until`) exactly: it looks a k-mer up, emits a
-//! raw hit, walks the read along that unitig while each next read k-mer is the
-//! next unitig k-mer, and emits the walk's last matching k-mer as a second hit.
+//! The kernel reproduces piscem's hit collection exactly, with either skipping
+//! strategy. `Strict` (`HitSearcher::walk_safely_until`) looks a k-mer up,
+//! emits a raw hit, walks the read along that unitig while each next read
+//! k-mer is the next unitig k-mer, and emits the walk's last matching k-mer as
+//! a second hit. `Permissive` (`collect_permissive`, salmon's default) jumps
+//! from a hit to the end of its unitig and checks only that k-mer, falling
+//! back to a lookup there, one halfway, then the `Strict` walk.
 //! The CPU then runs piscem's target selection on those raw hits, so a read
 //! maps to the same transcripts, at the same positions, as the CPU path.
 //! [`KmerTable::hits`] is that kernel in Rust: the CPU reference the GPU is
@@ -410,11 +413,15 @@ impl KmerTable {
     /// The kernel's buffers `(keys, vals, aux, words, prm)`. Option A: the
     /// table, `aux = kstart`, `words = seq`. Option B: the minimizer table,
     /// `aux = bstart ‖ offs ‖ keep`, `words = seq ‖ soff`. `prm`: k, table
-    /// capacity, unitigs, hits per read, option B, m, magic (low, high), and
-    /// where `offs`, `keep` and `soff` start.
+    /// capacity, unitigs, hits per read, option B, m, magic (low, high),
+    /// where `offs`, `keep` and `soff` start, and `Permissive` skipping.
     #[cfg_attr(not(gpu), allow(dead_code))]
-    fn device(&self) -> (&[u64], &[u32], Cow<'_, [u32]>, Cow<'_, [u64]>, [u32; 11]) {
+    fn device(
+        &self,
+        permissive: bool,
+    ) -> (&[u64], &[u32], Cow<'_, [u32]>, Cow<'_, [u64]>, [u32; 12]) {
         let hcap = HITS_CAP as u32;
+        let perm = u32::from(permissive);
         let Some(s) = &self.sshash else {
             let nu = self.kstart.len() as u32 - 1;
             let prm = [
@@ -429,6 +436,7 @@ impl KmerTable {
                 0,
                 0,
                 0,
+                perm,
             ];
             return (
                 &self.keys,
@@ -452,20 +460,125 @@ impl KmerTable {
             s.bstart.len() as u32,
             (s.bstart.len() + s.offs.len()) as u32,
             self.seq.len() as u32,
+            perm,
         ];
         // `vals` is unused here; one word, as CUDA refuses an empty upload
         (&s.table, &[0], Cow::Owned(aux), Cow::Owned(words), prm)
     }
 
-    /// The raw hits of `read`, appended to `out`: the CPU reference of the GPU
-    /// kernel ([`KMER_BODY`]), line for line.
-    pub fn hits(&self, read: &[u8], out: &mut Vec<Hit>) {
+    /// The raw hits of `read`, appended to `out`, as piscem's `Permissive`
+    /// (`permissive`) or `Strict` skipping finds them: the CPU reference of the
+    /// GPU kernel ([`KMER_BODY`]), which computes the same in one loop.
+    pub fn hits(&self, read: &[u8], permissive: bool, out: &mut Vec<Hit>) {
         let k = self.k as i32;
+        let len = read.len() as i32;
         let mut it = Iter::new(read, k);
-        let mut last_pos = -1;
+        let mut last = -1;
+        if !permissive {
+            self.walk(&mut it, len - k, &mut last, out);
+            return;
+        }
+        // piscem's `collect_permissive`: from a hit, jump to the end of its
+        // unitig (or of the read) and check that k-mer on the unitig text;
+        // failing that, a lookup there, then one halfway, then a safe walk
         while !it.exhausted() {
-            let p = it.pos as usize;
-            if read[p..p + k as usize].iter().all(|&b| b == read[p]) {
+            if it.homopolymer() {
+                it.advance();
+                continue;
+            }
+            let Some((u, nk, cpos, fw_on)) = self.locate(it.fw, it.rc) else {
+                it.advance();
+                continue;
+            };
+            let pos = it.pos;
+            if pos > last {
+                push(out, &mut last, pos, u, fw_on, cpos);
+            }
+            let dir: i64 = if fw_on { 1 } else { -1 };
+            let skip =
+                i64::from(len - k - pos).min(if fw_on { nk - 1 - cpos } else { cpos }) as i32;
+            if skip <= 1 {
+                it.advance();
+                continue;
+            }
+            let backup = it.clone();
+            let nd = it.advance();
+            if it.exhausted() {
+                continue;
+            }
+            if nd < skip {
+                // the next k-mer leaves the unitig: look it up instead
+                if !self.direct(&it, u, fw_on, cpos + dir * i64::from(nd)) {
+                    continue;
+                }
+                it = backup.clone();
+            }
+            let moved = it.advance_by(skip);
+            if it.exhausted() {
+                it = backup;
+                it.advance();
+                self.walk(&mut it, pos + skip, &mut last, out);
+                continue;
+            }
+            let target = it.clone();
+            let c = cpos + dir * i64::from(skip);
+            if moved == skip && self.direct(&it, u, fw_on, c) {
+                push(out, &mut last, it.pos, u, fw_on, c);
+                it.advance();
+                continue;
+            }
+            let alt = self.locate(it.fw, it.rc);
+            if let Some((u2, _, c2, f2)) = alt {
+                if u2 == u && f2 == fw_on && if fw_on { c2 > cpos } else { c2 < cpos } {
+                    push(out, &mut last, it.pos, u2, f2, c2);
+                    it.advance();
+                    continue;
+                }
+            }
+            let mut mid_ok = false;
+            if skip > 4 {
+                let mut mid = backup.clone();
+                mid.advance_by(skip / 2);
+                if !mid.exhausted() {
+                    if let Some((um, _, cm, fm)) = self.locate(mid.fw, mid.rc) {
+                        if um == u {
+                            push(out, &mut last, mid.pos, um, fm, cm);
+                            if let Some((u2, _, c2, f2)) = alt {
+                                push(out, &mut last, target.pos, u2, f2, c2);
+                            }
+                            mid_ok = true;
+                        } else if let Some((u2, _, c2, f2)) = alt.filter(|a| a.0 == um) {
+                            push(out, &mut last, target.pos, u2, f2, c2);
+                            mid_ok = true;
+                        }
+                    }
+                }
+            }
+            if mid_ok {
+                it = target;
+                it.advance();
+            } else {
+                it = backup;
+                it.advance();
+                it.advance();
+                self.walk(&mut it, target.pos, &mut last, out);
+            }
+        }
+    }
+
+    /// Whether the read k-mer at `it` is unitig `u`'s k-mer `c`, in the
+    /// orientation `fw_on` (piscem's `check_direct_match`).
+    fn direct(&self, it: &Iter, u: usize, fw_on: bool, c: i64) -> bool {
+        let want = word_at(&self.seq, self.base(u) + c as u64, self.k);
+        let fw = it.fw == want;
+        (fw || it.rc == want) && fw == fw_on
+    }
+
+    /// piscem's `walk_safely_until`: every k-mer from `it` up to read position
+    /// `end`, a hit extended along its unitig for as long as the read matches it.
+    fn walk(&self, it: &mut Iter, end: i32, last: &mut i32, out: &mut Vec<Hit>) {
+        while !it.exhausted() && it.pos <= end {
+            if it.homopolymer() {
                 it.advance();
                 continue;
             }
@@ -475,13 +588,8 @@ impl KmerTable {
             };
             let base = self.base(u);
             let start = it.pos;
-            if start > last_pos {
-                out.push([
-                    start as u32,
-                    (u as u32) << 1 | u32::from(fw_on),
-                    cpos as u32,
-                ]);
-                last_pos = start;
+            if start > *last {
+                push(out, last, start, u, fw_on, cpos);
             }
             let dir: i64 = if fw_on { 1 } else { -1 };
             let mut dist = if fw_on { nk - 1 - cpos } else { cpos };
@@ -508,9 +616,8 @@ impl KmerTable {
                     }
                 }
             }
-            if lpos > last_pos {
-                out.push([lpos as u32, (u as u32) << 1 | u32::from(lfw), lcpos as u32]);
-                last_pos = lpos;
+            if lpos > *last {
+                push(out, last, lpos, u, lfw, lcpos);
             }
             if ended || it.pos == start {
                 it.advance();
@@ -519,7 +626,13 @@ impl KmerTable {
     }
 }
 
+fn push(out: &mut Vec<Hit>, last: &mut i32, pos: i32, u: usize, fw: bool, cpos: i64) {
+    out.push([pos as u32, (u as u32) << 1 | u32::from(fw), cpos as u32]);
+    *last = pos;
+}
+
 /// piscem's `ReadKmerIter`: the read's k-mer windows free of non-ACGT bytes.
+#[derive(Clone)]
 struct Iter<'a> {
     read: &'a [u8],
     k: i32,
@@ -587,6 +700,46 @@ impl<'a> Iter<'a> {
                 None => return,
             }
         }
+    }
+
+    fn homopolymer(&self) -> bool {
+        let w = &self.read[self.pos as usize..(self.pos + self.k) as usize];
+        w.iter().all(|&b| b == w[0])
+    }
+
+    /// Move `n` windows right (past any non-ACGT byte); the distance moved.
+    fn advance_by(&mut self, n: i32) -> i32 {
+        if n <= 0 || self.exhausted() {
+            return 0;
+        }
+        let old = self.pos;
+        if n <= self.k {
+            for _ in 0..n {
+                self.advance();
+                if self.exhausted() {
+                    break;
+                }
+            }
+        } else {
+            // a long jump rebuilds the window from scratch
+            self.pos += n;
+            let len = self.read.len() as i32;
+            if self.pos + self.k > len {
+                return len - old;
+            }
+            if let Some(i) = (self.pos..self.pos + self.k).rfind(|&i| !valid(self.read[i as usize]))
+            {
+                self.last_inv = i;
+            }
+            if self.last_inv >= self.pos {
+                self.pos = self.last_inv + 1;
+                self.find_next_valid();
+            }
+            if !self.exhausted() {
+                self.build();
+            }
+        }
+        self.pos - old
     }
 
     /// Move one window right (past any non-ACGT byte); the distance moved.
@@ -686,13 +839,39 @@ FN i64 lookup(u64 fw, u64 rc, G const u64* keys, G const u32* vals, u32 cap, PRI
         s = s + 1 == cap ? 0 : s + 1;
     }
 }
-FN void emit(G u32* out, PRIV u32& nh, u32 hcap, int pos, u32 u, bool fw, i64 cpos) {
+FN void emit(G u32* out, PRIV u32& nh, PRIV int& last, u32 hcap, int pos, u32 u, bool fw, i64 cpos) {
     if (nh < hcap) {
         out[3 * nh] = (u32)pos;
         out[3 * nh + 1] = (u << 1) | (fw ? 1u : 0u);
         out[3 * nh + 2] = (u32)cpos;
     }
     nh += 1;
+    last = pos;
+}
+FN bool homopolymer(PRIV const Iter& it, G const u8* r) {
+    for (int j = 1; j < it.k; ++j) {
+        if (r[it.pos + j] != r[it.pos]) return false;
+    }
+    return true;
+}
+FN int advance_by(PRIV Iter& it, G const u8* r, int n) {
+    if (n <= 0 || exhausted(it)) return 0;
+    int old = it.pos;
+    if (n <= it.k) {
+        for (int j = 0; j < n; ++j) {
+            advance(it, r);
+            if (exhausted(it)) break;
+        }
+    } else {
+        it.pos += n;
+        if (it.pos + it.k > it.len) return it.len - old;
+        for (int j = it.pos; j < it.pos + it.k; ++j) {
+            if (!valid_base(r[j])) it.last_inv = j;
+        }
+        if (it.last_inv >= it.pos) { it.pos = it.last_inv + 1; find_next_valid(it, r); }
+        if (!exhausted(it)) build_words(it, r);
+    }
+    return it.pos - old;
 }
 // the `len`-mer at base `b` of the packed bases `w`
 FN u64 word_at(G const u64* w, u64 b, int len) {
@@ -789,56 +968,151 @@ FN i64 locate_b(u64 fw, u64 rc, G const u64* table, G const u32* aux,
     }
     return -1;
 }
-// prm: see `KmerTable::device`
-FN void map_mate(u32 i, G const u8* seq, G const u32* off, G const u64* keys, G const u32* vals,
-                 G const u32* aux, G const u64* words, G const u32* prm, G u32* hits, G u32* counts) {
+// the lookup's buffers, as parameters and as arguments
+#define CTX G const u64* keys, G const u32* vals, G const u32* aux, G const u64* words, G const u32* prm
+#define CTXA keys, vals, aux, words, prm
+FN i64 locate(u64 fw, u64 rc, CTX, PRIV i64& nk, PRIV i64& cpos, PRIV bool& fw_on) {
+    return prm[4] != 0 ? locate_b(fw, rc, keys, aux, words, prm, nk, cpos, fw_on)
+                       : locate_a(fw, rc, keys, vals, aux, prm, nk, cpos, fw_on);
+}
+// unitig `u`'s first base in `words`
+FN u64 unitig_base(u32 u, CTX) {
+    return prm[4] != 0 ? words[prm[10] + u] : (u64)aux[u] + (u64)u * (u64)(prm[0] - 1);
+}
+// `KmerTable::direct`
+FN bool direct(PRIV const Iter& it, u64 base, bool fw_on, i64 c, CTX) {
+    u64 want = word_at(words, base + (u64)c, (int)prm[0]);
+    bool fw = it.fw == want;
+    return (fw || it.rc == want) && fw == fw_on;
+}
+// prm: see `KmerTable::device`. `KmerTable::hits` as one loop making one
+// lookup per turn, so the lookup and the walk are each inlined once (the
+// kernel's size sets its occupancy). `walk_end`: the `Strict` walk runs up to
+// that read position; `phase`: what the lookup is for (0: a walk or a new
+// anchor, 1: the k-mer a skip landed on, 2: the one halfway).
+FN void map_mate(u32 i, G const u8* seq, G const u32* off, CTX, G u32* hits, G u32* counts) {
     G const u8* r = seq + off[i];
     int k = (int)prm[0];
     u32 hcap = prm[3];
-    bool sshash = prm[4] != 0;
     G u32* out = hits + (u64)i * hcap * 3;
     u32 nh = 0;
-    int last_pos = -1;
+    int last = -1;
     Iter it;
     it.pos = 0; it.last_inv = -1; it.len = (int)(off[i + 1] - off[i]); it.k = k; it.fw = 0; it.rc = 0;
     find_next_valid(it, r);
     if (!exhausted(it)) build_words(it, r);
-    while (!exhausted(it)) {
-        bool homo = true;
-        for (int j = 1; j < k; ++j) {
-            if (r[it.pos + j] != r[it.pos]) { homo = false; break; }
+    int walk_end = prm[11] == 0 ? it.len : -1;
+    int phase = 0;
+    // the anchor of a skip, and the lookup at its target
+    Iter backup = it, mid = it;
+    u32 au = 0;
+    bool afw = false;
+    i64 acpos = 0, u2 = -1, c2 = 0;
+    bool f2 = false;
+    int skip = 0;
+    for (;;) {
+        if (phase == 0) {
+            if (exhausted(it)) break;
+            if (it.pos > walk_end) walk_end = -1;
+            if (homopolymer(it, r)) { advance(it, r); continue; }
         }
-        if (homo) { advance(it, r); continue; }
         bool fw_on = false;
         i64 nk = 0, cpos = 0;
-        i64 u = sshash ? locate_b(it.fw, it.rc, keys, aux, words, prm, nk, cpos, fw_on)
-                       : locate_a(it.fw, it.rc, keys, vals, aux, prm, nk, cpos, fw_on);
+        u64 qf = phase == 2 ? mid.fw : it.fw, qr = phase == 2 ? mid.rc : it.rc;
+        i64 u = locate(qf, qr, CTXA, nk, cpos, fw_on);
+        if (phase == 1) {
+            u2 = u; c2 = cpos; f2 = fw_on;
+            if (u == (i64)au && f2 == afw && (afw ? c2 > acpos : c2 < acpos)) {
+                emit(out, nh, last, hcap, it.pos, au, f2, c2);
+                advance(it, r);
+                phase = 0;
+                continue;
+            }
+            if (skip > 4) {
+                mid = backup;
+                advance_by(mid, r, skip / 2);
+                if (!exhausted(mid)) { phase = 2; continue; }
+            }
+        } else if (phase == 2) {
+            bool ok = false;
+            if (u >= 0 && u == (i64)au) {
+                emit(out, nh, last, hcap, mid.pos, au, fw_on, cpos);
+                if (u2 >= 0) emit(out, nh, last, hcap, it.pos, (u32)u2, f2, c2);
+                ok = true;
+            } else if (u >= 0 && u == u2) {
+                emit(out, nh, last, hcap, it.pos, (u32)u2, f2, c2);
+                ok = true;
+            }
+            if (ok) { advance(it, r); phase = 0; continue; }
+        }
+        if (phase != 0) {
+            // neither the target nor halfway confirms the skip: walk to it
+            int target = it.pos;
+            it = backup;
+            advance(it, r);
+            advance(it, r);
+            walk_end = target;
+            phase = 0;
+            continue;
+        }
         if (u < 0) { advance(it, r); continue; }
         u32 lo = (u32)u;
-        u64 base = sshash ? words[prm[10] + lo] : (u64)aux[lo] + (u64)lo * (u64)(k - 1);
-        int start = it.pos;
-        if (start > last_pos) { emit(out, nh, hcap, start, lo, fw_on, cpos); last_pos = start; }
+        u64 base = unitig_base(lo, CTXA);
+        int pos = it.pos;
+        if (pos > last) emit(out, nh, last, hcap, pos, lo, fw_on, cpos);
         i64 dir = fw_on ? 1 : -1;
-        i64 dist = fw_on ? nk - 1 - cpos : cpos;
-        i64 ccur = cpos;
-        int lpos = start;
-        i64 lcpos = cpos;
-        bool lfw = fw_on, ended = false;
-        while (!exhausted(it) && dist > 0) {
-            i64 inc = (i64)advance(it, r);
-            dist -= inc;
-            if (dist < 0) break;
-            ccur += dir * inc;
-            if (exhausted(it)) break;
-            u64 want = word_at(words, base + (u64)ccur, k);
-            if (it.fw != want && it.rc != want) break;
-            lfw = it.fw == want; lcpos += dir * inc; lpos = it.pos; ended = dist == 0;
+        if (walk_end >= 0) {
+            // `KmerTable::walk`
+            i64 dist = fw_on ? nk - 1 - cpos : cpos;
+            i64 ccur = cpos;
+            int lpos = pos;
+            i64 lcpos = cpos;
+            bool lfw = fw_on, ended = false;
+            while (!exhausted(it) && dist > 0) {
+                i64 inc = (i64)advance(it, r);
+                dist -= inc;
+                if (dist < 0) break;
+                ccur += dir * inc;
+                if (exhausted(it)) break;
+                u64 want = word_at(words, base + (u64)ccur, k);
+                if (it.fw != want && it.rc != want) break;
+                lfw = it.fw == want; lcpos += dir * inc; lpos = it.pos; ended = dist == 0;
+            }
+            if (lpos > last) emit(out, nh, last, hcap, lpos, lo, lfw, lcpos);
+            if (ended || it.pos == pos) advance(it, r);
+            continue;
         }
-        if (lpos > last_pos) { emit(out, nh, hcap, lpos, lo, lfw, lcpos); last_pos = lpos; }
-        if (ended || it.pos == start) advance(it, r);
+        // `Permissive`: skip to the unitig's or the read's end
+        i64 dc = fw_on ? nk - 1 - cpos : cpos, dr = (i64)(it.len - k - pos);
+        skip = (int)(dr < dc ? dr : dc);
+        if (skip <= 1) { advance(it, r); continue; }
+        backup = it;
+        int nd = advance(it, r);
+        if (exhausted(it)) continue;
+        if (nd < skip) {
+            if (!direct(it, base, fw_on, cpos + dir * (i64)nd, CTXA)) continue;
+            it = backup;
+        }
+        int moved = advance_by(it, r, skip);
+        if (exhausted(it)) {
+            it = backup;
+            advance(it, r);
+            walk_end = pos + skip;
+            continue;
+        }
+        i64 c = cpos + dir * (i64)skip;
+        if (moved == skip && direct(it, base, fw_on, c, CTXA)) {
+            emit(out, nh, last, hcap, it.pos, lo, fw_on, c);
+            advance(it, r);
+            continue;
+        }
+        au = lo; afw = fw_on; acpos = cpos;
+        phase = 1;
     }
     counts[i] = nh;
 }
+#undef CTX
+#undef CTXA
 "#;
 
 /// The k-mer table on the GPU backend of this build.
@@ -860,17 +1134,18 @@ impl KmerGpu {
         }
     }
 
-    /// Upload `table`; `Err` without a backend or device.
-    pub fn new(table: &KmerTable) -> Result<Self, String> {
+    /// Upload `table`, for piscem's `Permissive` (`permissive`) or `Strict`
+    /// skipping; `Err` without a backend or device.
+    pub fn new(table: &KmerTable, permissive: bool) -> Result<Self, String> {
         #[cfg(gpu)]
         {
-            let (keys, vals, aux, words, prm) = table.device();
+            let (keys, vals, aux, words, prm) = table.device(permissive);
             let dev = crate::gpu::KmerDevice::new(keys, vals, &aux, &words, &prm)?;
             Ok(Self { dev })
         }
         #[cfg(not(gpu))]
         {
-            let _ = table;
+            let _ = (table, permissive);
             Err("this build has no GPU backend".into())
         }
     }
@@ -925,9 +1200,16 @@ mod tests {
         KmerTable::build(k, kstart, |_| true, kmer).unwrap()
     }
 
+    /// `Strict` hits.
     fn hits(t: &KmerTable, read: &[u8]) -> Vec<Hit> {
         let mut v = Vec::new();
-        t.hits(read, &mut v);
+        t.hits(read, false, &mut v);
+        v
+    }
+
+    fn permissive(t: &KmerTable, read: &[u8]) -> Vec<Hit> {
+        let mut v = Vec::new();
+        t.hits(read, true, &mut v);
         v
     }
 
@@ -1004,6 +1286,19 @@ mod tests {
     }
 
     #[test]
+    fn permissive_jumps_to_the_read_end_over_a_substitution() {
+        let [u0, u1] = unitigs();
+        let t = table(&[&u0, &u1], 11);
+        assert_eq!(permissive(&t, &u1[3..20]), hits(&t, &u1[3..20]));
+        // the k-mer at the read's end is checked on the unitig, the
+        // substitution between is never seen (`Strict` splits the walk there)
+        let mut read = u1[0..25].to_vec();
+        read[12] = if read[12] == b'A' { b'C' } else { b'A' };
+        assert_eq!(permissive(&t, &read), [[0, 3, 0], [14, 3, 14]]);
+        assert_ne!(hits(&t, &read), [[0, 3, 0], [14, 3, 14]]);
+    }
+
+    #[test]
     fn short_reads_homopolymers_and_misses_give_no_hits() {
         let [u0, u1] = unitigs();
         let t = table(&[&u0, &u1], 11);
@@ -1046,9 +1341,7 @@ mod tests {
             .collect();
         let refs: Vec<&[u8]> = unitigs.iter().map(|u| u.as_slice()).collect();
         let t = table(&refs, 31);
-        let gpu = KmerGpu::new(&t).unwrap();
-        let (mut seq, mut off) = (Vec::new(), vec![0u32]);
-        let mut want = Vec::new();
+        let (mut seq, mut off, mut reads) = (Vec::new(), vec![0u32], Vec::new());
         for i in 0..10_000 {
             let u = &unitigs[rng.random_range(0..unitigs.len())];
             let a = rng.random_range(0..u.len());
@@ -1056,6 +1349,11 @@ mod tests {
             let mut r = u[a..b].to_vec();
             if i % 3 == 0 {
                 r = rc_str(&r);
+            }
+            // an occasional jump to another unitig, so skips meet mismatches
+            if i % 4 == 1 {
+                let v = &unitigs[rng.random_range(0..unitigs.len())];
+                r.extend_from_slice(&v[..v.len().min(60)]);
             }
             for x in r.iter_mut() {
                 match rng.random_range(0..200) {
@@ -1065,16 +1363,25 @@ mod tests {
                     _ => {}
                 }
             }
-            want.push(hits(&t, &r));
             seq.extend_from_slice(&r);
             off.push(seq.len() as u32);
+            reads.push(r);
         }
-        let (mut h, mut c) = (Vec::new(), Vec::new());
-        gpu.hits(&seq, &off, &mut h, &mut c).unwrap();
-        for (i, w) in want.iter().enumerate() {
-            assert_eq!(c[i] as usize, w.len(), "read {i} count");
-            let n = w.len().min(HITS_CAP);
-            assert_eq!(&h[i * HITS_CAP..i * HITS_CAP + n], &w[..n], "read {i}");
+        for perm in [false, true] {
+            let gpu = KmerGpu::new(&t, perm).unwrap();
+            let (mut h, mut c) = (Vec::new(), Vec::new());
+            gpu.hits(&seq, &off, &mut h, &mut c).unwrap();
+            for (i, r) in reads.iter().enumerate() {
+                let mut w = Vec::new();
+                t.hits(r, perm, &mut w);
+                assert_eq!(c[i] as usize, w.len(), "permissive {perm} read {i} count");
+                let n = w.len().min(HITS_CAP);
+                assert_eq!(
+                    &h[i * HITS_CAP..i * HITS_CAP + n],
+                    &w[..n],
+                    "permissive {perm} read {i}"
+                );
+            }
         }
     }
 }

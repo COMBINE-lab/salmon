@@ -1,6 +1,6 @@
 //! The GPU k-mer lookup path (`salmon_infer::kmers` raw hits + the replay in
-//! `salmon_map::sketch_hits`) must map every read exactly as piscem's
-//! `SkippingStrategy::Strict` CPU path does. Runs without a GPU: the hits come
+//! `salmon_map::sketch_hits`) must map every read exactly as piscem's CPU path
+//! does, with `SkippingStrategy::Permissive` and with `Strict`. Runs without a GPU: the hits come
 //! from `KmerTable::hits`, the CPU reference the GPU kernel is tested against.
 
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
@@ -139,7 +139,7 @@ fn hits_path_maps_like_piscem_strict() {
     let (mut cpu_s, mut hit_s) = (SketchScratch::new(index.k()), SketchScratch::new(index.k()));
     let (mut want, mut got) = (Vec::new(), Vec::new());
     let (mut h1, mut h2): (Vec<Hit>, Vec<Hit>) = (Vec::new(), Vec::new());
-    let mut mapped = 0;
+    let (mut mapped, mut differ) = (0, 0);
     // every read, packed as the GPU takes them
     let (mut seq, mut off) = (Vec::new(), vec![0u32]);
 
@@ -159,96 +159,97 @@ fn hits_path_maps_like_piscem_strict() {
         // small caps too, so the repetitive-hit, recovery and class paths run
         let (max_hit, max_read) = if n % 3 == 0 { (3, 4) } else { (256, 2500) };
 
-        // the oracle's raw hits are piscem's Strict raw hits
+        // the oracle's raw hits are piscem's, with either skipping strategy
         for r in [&r1, &r2] {
             seq.extend_from_slice(r);
             off.push(seq.len() as u32);
-            h1.clear();
-            table.hits(r, &mut h1);
-            sshash_lib::dispatch_on_k!(index.k(), K => {
-                let mut q = PiscemStreamingQuery::<K>::new(index.dict());
-                hs.get_raw_hits_sketch::<K>(r, &mut q, SkippingStrategy::Strict, true);
-            });
-            let piscem: Vec<Hit> = hs
-                .left_hits()
-                .iter()
-                .map(|(p, h)| {
-                    [
-                        *p as u32,
-                        h.contig_id() << 1 | h.hit_fw_on_contig() as u32,
-                        h.contig_pos(),
-                    ]
-                })
-                .collect();
-            assert_eq!(h1, piscem, "raw hits of {}", String::from_utf8_lossy(r));
-            h1.clear();
-            sshash.hits(r, &mut h1);
-            assert_eq!(
-                h1,
-                piscem,
-                "sshash raw hits of {}",
-                String::from_utf8_lossy(r)
-            );
+            let mut strict = Vec::new();
+            for strat in [SkippingStrategy::Strict, SkippingStrategy::Permissive] {
+                let perm = strat == SkippingStrategy::Permissive;
+                sshash_lib::dispatch_on_k!(index.k(), K => {
+                    let mut q = PiscemStreamingQuery::<K>::new(index.dict());
+                    hs.get_raw_hits_sketch::<K>(r, &mut q, strat, true);
+                });
+                let piscem: Vec<Hit> = hs
+                    .left_hits()
+                    .iter()
+                    .map(|(p, h)| {
+                        [
+                            *p as u32,
+                            h.contig_id() << 1 | h.hit_fw_on_contig() as u32,
+                            h.contig_pos(),
+                        ]
+                    })
+                    .collect();
+                for (name, t) in [("table", &table), ("sshash", &sshash)] {
+                    h1.clear();
+                    t.hits(r, perm, &mut h1);
+                    assert_eq!(
+                        h1,
+                        piscem,
+                        "{name} {strat:?} raw hits of {}",
+                        String::from_utf8_lossy(r)
+                    );
+                }
+                if perm {
+                    differ += (piscem != strict) as usize;
+                } else {
+                    strict = piscem;
+                }
+            }
         }
 
-        h1.clear();
-        h2.clear();
+        for strat in [SkippingStrategy::Strict, SkippingStrategy::Permissive] {
+            let perm = strat == SkippingStrategy::Permissive;
+            h1.clear();
+            h2.clear();
+            table.hits(&r1, perm, &mut h1);
+            table.hits(&r2, perm, &mut h2);
+            map_read_pair_sketch_into(
+                &mut want, index, &mut hs, &mut cpu_s, &r1, &r2, false, false, strat, max_hit,
+                max_read, &refs, false,
+            );
+            assert!(map_read_pair_hits_into(
+                &mut got,
+                index,
+                &mut hit_s,
+                (r1.len(), &h1),
+                (r2.len(), &h2),
+                false,
+                false,
+                max_hit,
+                max_read,
+                &refs,
+                false,
+            ));
+            assert_eq!(got, want, "{strat:?} pair {n}");
+            mapped += (perm && !want.is_empty()) as usize;
 
-        table.hits(&r1, &mut h1);
-        table.hits(&r2, &mut h2);
-        map_read_pair_sketch_into(
-            &mut want,
-            index,
-            &mut hs,
-            &mut cpu_s,
-            &r1,
-            &r2,
-            false,
-            false,
-            SkippingStrategy::Strict,
-            max_hit,
-            max_read,
-            &refs,
-            false,
-        );
-        assert!(map_read_pair_hits_into(
-            &mut got,
-            index,
-            &mut hit_s,
-            (r1.len(), &h1),
-            (r2.len(), &h2),
-            false,
-            false,
-            max_hit,
-            max_read,
-            &refs,
-            false,
-        ));
-        assert_eq!(got, want, "pair {n}");
-        mapped += !want.is_empty() as usize;
-
-        map_single_read_sketch_into(
-            &mut want,
-            index,
-            &mut hs,
-            &mut cpu_s,
-            &r1,
-            SkippingStrategy::Strict,
-            max_hit,
-            max_read,
-        );
-        assert!(map_single_read_hits_into(
-            &mut got,
-            index,
-            &mut hit_s,
-            r1.len(),
-            &h1,
-            max_hit,
-            max_read
-        ));
-        assert_eq!(got, want, "single {n}");
+            map_single_read_sketch_into(
+                &mut want, index, &mut hs, &mut cpu_s, &r1, strat, max_hit, max_read,
+            );
+            assert!(map_single_read_hits_into(
+                &mut got,
+                index,
+                &mut hit_s,
+                r1.len(),
+                &h1,
+                max_hit,
+                max_read
+            ));
+            assert_eq!(got, want, "{strat:?} single {n}");
+        }
     }
     assert!(mapped > 1500, "only {mapped} pairs mapped");
+    // the skips of `Permissive` are exercised, not only its `Strict` fallbacks
+    assert!(
+        differ > 500,
+        "Permissive differs from Strict on only {differ} reads"
+    );
+    eprintln!(
+        "Permissive raw hits differ from Strict on {differ} of {} reads",
+        off.len() - 1
+    );
 
     // with a device, the kernel matches the CPU reference in both modes
     if !KmerGpu::available() {
@@ -256,19 +257,25 @@ fn hits_path_maps_like_piscem_strict() {
         return;
     }
     for (name, t) in [("table", &table), ("sshash", &sshash)] {
-        let gpu = KmerGpu::new(t).expect("upload");
-        let (mut h, mut c) = (Vec::new(), Vec::new());
-        gpu.hits(&seq, &off, &mut h, &mut c).expect("kernel");
-        for i in 0..off.len() - 1 {
-            h1.clear();
-            t.hits(&seq[off[i] as usize..off[i + 1] as usize], &mut h1);
-            assert_eq!(c[i] as usize, h1.len(), "{name} read {i} count");
-            let n = h1.len().min(HITS_CAP);
-            assert_eq!(
-                &h[i * HITS_CAP..i * HITS_CAP + n],
-                &h1[..n],
-                "{name} read {i}"
-            );
+        for perm in [false, true] {
+            let gpu = KmerGpu::new(t, perm).expect("upload");
+            let (mut h, mut c) = (Vec::new(), Vec::new());
+            gpu.hits(&seq, &off, &mut h, &mut c).expect("kernel");
+            for i in 0..off.len() - 1 {
+                h1.clear();
+                t.hits(&seq[off[i] as usize..off[i + 1] as usize], perm, &mut h1);
+                assert_eq!(
+                    c[i] as usize,
+                    h1.len(),
+                    "{name} permissive {perm} read {i} count"
+                );
+                let n = h1.len().min(HITS_CAP);
+                assert_eq!(
+                    &h[i * HITS_CAP..i * HITS_CAP + n],
+                    &h1[..n],
+                    "{name} permissive {perm} read {i}"
+                );
+            }
         }
     }
 }

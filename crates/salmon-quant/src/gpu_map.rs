@@ -1,7 +1,6 @@
 //! `--sketch` mapping with the GPU k-mer lookup (`salmon_infer::kmers`): one
 //! GPU call per batch finds every read's raw hits, then each fragment is mapped
-//! from them (`salmon_map::sketch_hits`) exactly as the CPU `Strict` path
-//! would; a read past `HITS_CAP` hits, or one the replay declines, is mapped on
+//! from them (`salmon_map::sketch_hits`) exactly as the CPU path would; a read past `HITS_CAP` hits, or one the replay declines, is mapped on
 //! the CPU instead.
 
 use std::sync::atomic::{AtomicBool, Ordering};
