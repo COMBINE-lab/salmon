@@ -8,12 +8,20 @@ use std::sync::OnceLock;
 
 use salmon_infer::kmers::{Hit, KmerGpu, HITS_CAP};
 
+/// The device lookup, and each unitig's first base in piscem's SPSS plus the
+/// total, which the replay reads instead of sshash's Elias-Fano select (empty
+/// for the flat k-mer table).
+pub(crate) struct GpuLookup {
+    pub gpu: KmerGpu,
+    pub unitig_base: Vec<u32>,
+}
+
 /// The device lookup once its build thread has set it, the switch that sends
 /// every later batch to the CPU after a GPU failure, and whether a batch ran
 /// on the GPU.
 #[derive(Clone, Copy)]
 pub(crate) struct GpuMap<'a> {
-    pub gpu: &'a OnceLock<KmerGpu>,
+    pub gpu: &'a OnceLock<GpuLookup>,
     pub off: &'a AtomicBool,
     pub used: &'a AtomicBool,
 }
@@ -33,6 +41,13 @@ pub(crate) fn urgent() {
         // SAFETY: changes only the calling thread's QoS class; a failure
         // leaves it at the default.
         unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+    }
+}
+
+impl<'a> GpuMap<'a> {
+    /// [`GpuLookup::unitig_base`], empty until the lookup is built.
+    pub fn unitig_base(self) -> &'a [u32] {
+        self.gpu.get().map_or(&[], |l| &l.unitig_base)
     }
 }
 
@@ -59,7 +74,10 @@ impl BatchHits {
             // a batch is a few thousand reads, far below 4 GiB
             self.off.push(self.seq.len() as u32);
         }
-        match gpu.hits(&self.seq, &self.off, &mut self.hits, &mut self.counts) {
+        match gpu
+            .gpu
+            .hits(&self.seq, &self.off, &mut self.hits, &mut self.counts)
+        {
             Ok(()) => {
                 g.used.store(true, Ordering::Relaxed);
                 true

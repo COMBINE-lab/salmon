@@ -105,14 +105,24 @@ pub fn sshash_parts(index: &ReferenceIndex) -> Option<SshashParts<'_>> {
     })
 }
 
-/// The hits as piscem's `(read_pos, ProjectedHits)` pairs.
-fn project<'i>(index: &'i ReferenceIndex, hits: &[RawHit]) -> Vec<(i32, ProjectedHits<'i>)> {
+/// The hits as piscem's `(read_pos, ProjectedHits)` pairs. `unitig_base`,
+/// when not empty, is each unitig's first base in the SPSS plus the total
+/// ([`SshashParts::soff`] as `u32`), read instead of sshash's Elias-Fano
+/// select.
+fn project<'i>(
+    index: &'i ReferenceIndex,
+    hits: &[RawHit],
+    unitig_base: &[u32],
+) -> Vec<(i32, ProjectedHits<'i>)> {
     let spss = index.dict().spss();
     let k = index.k() as u32;
     hits.iter()
         .map(|&[read_pos, uf, cpos]| {
             let u = uf >> 1;
-            let (begin, end) = spss.string_offsets(u64::from(u));
+            let (begin, end) = match unitig_base.get(u as usize..u as usize + 2) {
+                Some(&[b, e]) => (u64::from(b), u64::from(e)),
+                _ => spss.string_offsets(u64::from(u)),
+            };
             let hit = ProjectedHits::new(
                 u,
                 cpos,
@@ -129,13 +139,19 @@ fn project<'i>(index: &'i ReferenceIndex, hits: &[RawHit]) -> Vec<(i32, Projecte
 
 /// piscem `map_read` after its hit collection, on `hits` of a read of length
 /// `rl`; `false` for a read piscem would send down its hash-map fallback.
-fn select(cache: &mut Cache, index: &ReferenceIndex, hits: &[RawHit], rl: usize) -> bool {
+fn select(
+    cache: &mut Cache,
+    index: &ReferenceIndex,
+    hits: &[RawHit],
+    rl: usize,
+    unitig_base: &[u32],
+) -> bool {
     cache.clear();
     // salmon never loads the poison table; `map_read` would scan with one
     if index.poison_table().is_some() {
         return false;
     }
-    let raw = project(index, hits);
+    let raw = project(index, hits, unitig_base);
     cache.has_matching_kmers = !raw.is_empty();
     if cache.has_matching_kmers {
         let ambig = index.has_ec_table();
@@ -356,7 +372,9 @@ fn accept(tid: u32, target: &SketchHitInfoSimple, nvh: u32, out: &mut Vec<Simple
 }
 
 /// [`crate::map_single_read_sketch_into`] from the read's raw hits (found with
-/// the same skipping strategy); `false` (and `result` untouched) when the CPU must map it.
+/// the same skipping strategy); `false` (and `result` untouched) when the CPU
+/// must map it. `unitig_base` as in [`project`] (`&[]` reads sshash's).
+#[allow(clippy::too_many_arguments)]
 pub fn map_single_read_hits_into(
     result: &mut Vec<ScoredMapping>,
     index: &ReferenceIndex,
@@ -365,6 +383,7 @@ pub fn map_single_read_hits_into(
     hits: &[RawHit],
     max_hit_occ: usize,
     max_read_occ: usize,
+    unitig_base: &[u32],
 ) -> bool {
     if read_len < index.k() {
         result.clear();
@@ -373,7 +392,7 @@ pub fn map_single_read_hits_into(
     let cache = &mut scratch.left;
     cache.max_hit_occ = max_hit_occ;
     cache.max_read_occ = max_read_occ;
-    if !select(cache, index, hits, read_len) {
+    if !select(cache, index, hits, read_len, unitig_base) {
         return false;
     }
     result.clear();
@@ -382,7 +401,8 @@ pub fn map_single_read_hits_into(
 }
 
 /// [`crate::map_read_pair_sketch_into`] from each mate's raw hits (found with
-/// the same skipping strategy); `false` (and `result` untouched) when the CPU must map it.
+/// the same skipping strategy); `false` (and `result` untouched) when the CPU
+/// must map it. `unitig_base` as in [`project`] (`&[]` reads sshash's).
 #[allow(clippy::too_many_arguments)]
 pub fn map_read_pair_hits_into<R: RefProvider>(
     result: &mut Vec<ScoredMapping>,
@@ -396,6 +416,7 @@ pub fn map_read_pair_hits_into<R: RefProvider>(
     max_read_occ: usize,
     refs: &R,
     allow_decoy_orphans: bool,
+    unitig_base: &[u32],
 ) -> bool {
     let k = index.k();
     if l1 < k && l2 < k {
@@ -414,7 +435,7 @@ pub fn map_read_pair_hits_into<R: RefProvider>(
     for (len, hits, cache) in [(l1, h1, &mut scratch.left), (l2, h2, &mut scratch.right)] {
         if len < k {
             cache.clear();
-        } else if !select(cache, index, hits, len) {
+        } else if !select(cache, index, hits, len, unitig_base) {
             return false;
         }
     }

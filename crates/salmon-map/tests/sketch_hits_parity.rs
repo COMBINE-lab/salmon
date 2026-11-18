@@ -124,6 +124,7 @@ fn hits_path_maps_like_piscem_strict() {
     let table = KmerTable::build(index.k(), kstart, keep, kmer).expect("table");
     // option B: piscem's own sshash dictionary, minimizer → bucket → positions
     let p = sshash_parts(index).expect("u32 offsets");
+    let unitig_base: Vec<u32> = p.soff.iter().map(|&o| o as u32).collect();
     let sshash = KmerTable::build_sshash(
         index.k(),
         p.m,
@@ -222,6 +223,8 @@ fn hits_path_maps_like_piscem_strict() {
                 max_read,
                 &refs,
                 false,
+                // the replay's own unitig bases on pairs, sshash's on single reads
+                &unitig_base,
             ));
             assert_eq!(got, want, "{strat:?} pair {n}");
             mapped += (perm && !want.is_empty()) as usize;
@@ -236,7 +239,8 @@ fn hits_path_maps_like_piscem_strict() {
                 r1.len(),
                 &h1,
                 max_hit,
-                max_read
+                max_read,
+                &[],
             ));
             assert_eq!(got, want, "{strat:?} single {n}");
         }

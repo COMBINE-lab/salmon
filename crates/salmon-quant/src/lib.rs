@@ -439,9 +439,11 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
             let build = || {
                 if std::env::var("SALMON_GPU_LOOKUP").as_deref() == Ok("table") {
                     let (kstart, keep, kmer) = sh::unitig_kmers(idx);
-                    KmerTable::build(idx.k(), kstart, keep, kmer)
+                    KmerTable::build(idx.k(), kstart, keep, kmer).map(|t| (t, Vec::new()))
                 } else {
                     sh::sshash_parts(idx).and_then(|p| {
+                        // `build_sshash` takes only offsets below 2^32
+                        let unitig_base = p.soff.iter().map(|&o| o as u32).collect();
                         KmerTable::build_sshash(
                             idx.k(),
                             p.m,
@@ -454,6 +456,7 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
                             // its minimizer table is built on the device where it can be
                             !KmerGpu::builds_table(),
                         )
+                        .map(|t| (t, unitig_base))
                     })
                 }
             };
@@ -474,14 +477,14 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
             }
             match table
                 .ok_or_else(|| "the index does not fit the GPU lookup".to_string())
-                .and_then(|table| {
+                .and_then(|(table, unitig_base)| {
                     let gpu = KmerGpu::new(&table, skip == SkippingStrategy::Permissive)?;
                     // here, not on the first mapping batches
                     gpu.warm_up(&table);
-                    Ok(gpu)
+                    Ok(gpu_map::GpuLookup { gpu, unitig_base })
                 }) {
                 Ok(gpu) => {
-                    let device_mb = gpu.device_bytes().map_or(-1.0, |b| b as f64 / 1e6);
+                    let device_mb = gpu.gpu.device_bytes().map_or(-1.0, |b| b as f64 / 1e6);
                     let _ = slot.set(gpu);
                     let elapsed_s = t0.elapsed().as_secs_f64();
                     tracing::info!(target: "salmon::timing", phase = "gpu_kmer_table", elapsed_s, device_mb, "phase complete");
