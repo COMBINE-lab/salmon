@@ -588,12 +588,9 @@ pub fn write_eq_classes(
     let num_txps = names.len();
     std::fs::create_dir_all(dir.join("aux_info"))?;
     let f = std::fs::File::create(dir.join("aux_info").join("eq_classes.txt.gz"))?;
-    // One `write!` per field per class is a lot of small writes; buffer them
-    // before they reach the encoder.
-    let mut w = std::io::BufWriter::with_capacity(
-        1 << 16,
-        flate2::write::GzEncoder::new(f, flate2::Compression::new(6)),
-    );
+    // The text is formatted whole, then compressed in parallel: ~150 MB for a
+    // human sample, which one deflate thread took a second over.
+    let mut w: Vec<u8> = Vec::new();
 
     if with_weights {
         writeln!(w, "{num_txps}")?;
@@ -601,7 +598,7 @@ pub fn write_eq_classes(
         for name in names {
             writeln!(w, "{name}")?;
         }
-        for (group, value) in &collapsed.classes {
+        par_lines(&mut w, &collapsed.classes, |w, (group, value)| {
             write!(w, "{}", group.txps.len())?;
             for &tid in &group.txps {
                 write!(w, "\t{tid}")?;
@@ -609,8 +606,8 @@ pub fn write_eq_classes(
             for wt in &value.combined_weights {
                 write!(w, "\t{wt}")?;
             }
-            writeln!(w, "\t{}", value.count)?;
-        }
+            writeln!(w, "\t{}", value.count)
+        })?;
     } else {
         // Collapse range-factorized sub-classes that share a transcript set.
         let mut merged: BTreeMap<&Vec<u32>, u64> = BTreeMap::new();
@@ -622,16 +619,100 @@ pub fn write_eq_classes(
         for name in names {
             writeln!(w, "{name}")?;
         }
-        for (txps, count) in &merged {
+        let merged: Vec<_> = merged.into_iter().collect();
+        par_lines(&mut w, &merged, |w, (txps, count)| {
             write!(w, "{}", txps.len())?;
             for &tid in *txps {
                 write!(w, "\t{tid}")?;
             }
-            writeln!(w, "\t{count}")?;
-        }
+            writeln!(w, "\t{count}")
+        })?;
     }
-    w.into_inner().map_err(|e| e.into_error())?.finish()?;
+    let mut out = std::io::BufWriter::new(f);
+    par_gzip(&w, 6, &mut out)?;
+    out.flush()
+}
+
+/// Append one `line` per item to `w`, formatted in parallel chunks and joined
+/// in order.
+fn par_lines<T: Sync>(
+    w: &mut Vec<u8>,
+    items: &[T],
+    line: impl Fn(&mut Vec<u8>, &T) -> std::io::Result<()> + Sync,
+) -> std::io::Result<()> {
+    use rayon::prelude::*;
+    let parts = items
+        .par_chunks(8192)
+        .map(|c| {
+            let mut b = Vec::new();
+            for x in c {
+                line(&mut b, x)?;
+            }
+            Ok(b)
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    for p in parts {
+        w.extend_from_slice(&p);
+    }
     Ok(())
+}
+
+/// gzip `data` as a single member at `level`, deflating 1 MiB blocks in
+/// parallel the way pigz does: each block is primed with the 32 KiB before it
+/// and ends on a sync flush, so the blocks concatenate into one deflate stream
+/// that any gzip reader decompresses to `data`.
+fn par_gzip(data: &[u8], level: u32, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    use flate2::{Compress, Compression, FlushCompress, Status};
+    use rayon::prelude::*;
+    const BLOCK: usize = 1 << 20;
+    const DICT: usize = 1 << 15;
+    let n = data.len().div_ceil(BLOCK).max(1);
+    let parts = (0..n)
+        .into_par_iter()
+        .map(|i| -> std::io::Result<(Vec<u8>, crc32fast::Hasher)> {
+            let start = i * BLOCK;
+            let block = &data[start..(start + BLOCK).min(data.len())];
+            let mut c = Compress::new(Compression::new(level), false);
+            if i > 0 {
+                c.set_dictionary(&data[start - DICT.min(start)..start])
+                    .map_err(std::io::Error::other)?;
+            }
+            let last = i + 1 == n;
+            let flush = if last {
+                FlushCompress::Finish
+            } else {
+                FlushCompress::Sync
+            };
+            let mut z = Vec::with_capacity(block.len() / 4 + 1024);
+            loop {
+                z.reserve(1 << 16);
+                let st = c
+                    .compress_vec(&block[c.total_in() as usize..], &mut z, flush)
+                    .map_err(std::io::Error::other)?;
+                // a flush is complete once all input is in and it left room unused
+                let done = if last {
+                    st == Status::StreamEnd
+                } else {
+                    c.total_in() as usize == block.len() && z.len() < z.capacity()
+                };
+                if done {
+                    break;
+                }
+            }
+            let mut crc = crc32fast::Hasher::new();
+            crc.update(block);
+            Ok((z, crc))
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    // header: deflate, no flags, no mtime, unknown OS
+    out.write_all(&[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff])?;
+    let mut crc = crc32fast::Hasher::new();
+    for (z, c) in &parts {
+        out.write_all(z)?;
+        crc.combine(c);
+    }
+    out.write_all(&crc.finalize().to_le_bytes())?;
+    out.write_all(&(data.len() as u32).to_le_bytes())
 }
 
 /// One placement of a NAIVE fragment signature: a transcript plus enough
@@ -740,6 +821,27 @@ impl NaiveEqBuilder {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn par_gzip_round_trips_as_one_member() {
+        use std::io::Read as _;
+        let mut big = Vec::new();
+        for i in 0..400_000u32 {
+            big.extend_from_slice(
+                format!("{}\t{}\n", i % 7, i.wrapping_mul(2654435761)).as_bytes(),
+            );
+        }
+        assert!(big.len() > 3 * (1 << 20));
+        for data in [&b""[..], b"x", &big] {
+            let mut z = Vec::new();
+            super::par_gzip(data, 6, &mut z).unwrap();
+            // the single-member decoder must see every byte
+            let mut back = Vec::new();
+            flate2::read::GzDecoder::new(&z[..])
+                .read_to_end(&mut back)
+                .unwrap();
+            assert_eq!(back, data);
+        }
+    }
 
     /// The `--dumpEq` file is what a downstream tool reads instead of re-deriving
     /// the classes, so its two shapes have to stay exactly what salmon promises:

@@ -3083,9 +3083,11 @@ dependencies = [
 name = "salmon-eqclass"
 version = "2.12.0"
 dependencies = [
+ "crc32fast",
  "dashmap",
  "flate2",
  "hashbrown 0.17.1",
+ "rayon",
  "salmon-core",
  "tempfile",
  "xxhash-rust",
