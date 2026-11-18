@@ -63,7 +63,7 @@ Quantify from FASTQ reads (reads mode, `-i`), from a transcriptome BAM
 | `--juncMissDiscount <f>` | Penalty for an unannotated splice junction in genome projection (default `1.0` = none). |
 | `--rad <RAD>` | RAD mode: quantify a RAD file of mappings (salmon `--writeRad` **or** piscem `map-bulk`/sketch output) directly. No `-i` needed — reference names travel in the RAD header. See [RAD I/O & deterministic quantification](../../guides/rad-and-determinism/). |
 | `--fldPolicy <baked\|derive\|prior>` | `--rad` only: where the fragment-length distribution comes from. `baked` (default) reproduces the run that wrote the RAD; `derive` rebuilds it from the RAD; `prior` puts `--fldMean`/`--fldSD` in sole control. See [RAD I/O & determinism](../../guides/rad-and-determinism/#fragment-length-distribution---fldpolicy). |
-| `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode). Enables the error model in ordinary alignment mode; supplies reference sequences for bias correction and (with `--errorModel`) the deterministic error model. |
+| `-t, --targets <FASTA>` | Transcriptome FASTA (alignment mode and `--rad`). Supplies reference sequences for bias correction and, with `--errorModel`, for training the error model. |
 | `-l, --libType <TYPE>` | Library type (e.g. `IU`, `ISR`, `A` for auto). Default `A`. See [library types](../../guides/library-types/). |
 | `-1/-2, --mates1/2 <FASTQ>…` | Paired-end read files. |
 | `-r, --unmatedReads <FASTQ>…` | Single-end read files. |
@@ -88,16 +88,15 @@ so decoding is worth dedicated slots much later:
 
 | mode | engages when `-p` ≥ (per gzip input) |
 | --- | --- |
-| selective alignment (default or `--online`) | 50 |
-| sketch, paired-end — the 2.6.0 default | 9 |
-| sketch with `--online`, or single-end reads | 10 |
+| selective alignment | 50 |
+| sketch, paired-end | 9 |
+| sketch, single-end | 10 |
 
-The deterministic mapping pass does less work per fragment (no online
-inference, eq-class assembly, bias collection or prefix library-type
-detection), so decoding is worth dedicated slots sooner. Since 2.6.0 that is
-the default, which is why a plain `--sketch` run engages at 9; the 10 now
-applies only under the deprecated `--online` path, or to single-end input,
-where the cheap pass does not apply.
+A paired-end mapping pass does the least work per fragment (an integer
+fragment-length / library-format tally, with no eq-class assembly or bias
+collection), so decoding is worth dedicated slots sooner, which is why a plain
+paired `--sketch` run engages at 9. Single-end input keeps the threshold that
+was measured for the heavier per-fragment path.
 
 Below the threshold the serial decoder inflates inline on the mapping threads,
 which measured faster at every budget tested under it. Override with
@@ -142,8 +141,8 @@ salmon quant -i salmon_index -l A -o SRR000001 \
 | `--minScoreFraction <f>` | Min alignment score as a fraction of perfect. Default `0.65`. |
 | `--ma/--mp/--go/--ge` | Match score / mismatch / gap-open / gap-extend. |
 | `--orphanChainSubThresh <f>` | Orphan chain pruning (default `0.0` = align all). |
-| `--noErrorModel` | Disable the alignment error model (ordinary alignment mode). |
-| `--errorModel` | Opt in to the order-independent error model in deterministic alignment mode (`-a --deterministic`, needs `-t`). Off by default — deterministic mode scores by the BAM `AS` tag (single pass, at least as accurate against truth); this adds a second BAM pass. See [deterministic alignment mode](../../guides/rad-and-determinism/#deterministic-alignment-mode--a---deterministic). |
+| `--noErrorModel` | Disable the alignment error model (overrides `--errorModel`; alignment mode already scores by `AS` without it). |
+| `--errorModel` | Opt in to the order-independent alignment error model in alignment mode (`-a`, needs `-t`). Off by default — alignment mode scores by the BAM `AS` tag (single pass, at least as accurate against truth); this adds a second BAM pass, so the BAM must be a regular file (not a pipe). See [deterministic alignment mode](../../guides/rad-and-determinism/#deterministic-alignment-mode--a---deterministic). |
 
 ### Model & bias
 
@@ -163,8 +162,8 @@ See the [RAD I/O & deterministic quantification](../../guides/rad-and-determinis
 | --- | --- |
 | `--writeRad <FILE>` | Write per-fragment mappings to a RAD file (piscem `map-bulk`-compatible). Quantification still runs unless `--skipQuant`. |
 | `--skipQuant` | Skip quantification (EM, Gibbs/bootstrap, `quant.sf`); still map, build equivalence classes, detect library type, write metadata. |
-| `--deterministic` | **The default since 2.6.0** (accepted as a no-op): map once to an intermediate RAD, then quantify from it with a fixed fragment-length distribution. Byte-identical across runs and thread counts. |
-| `--online` | Quantify with the pre-2.6 online one-pass path instead. **Deprecated**, and will be removed in a future release: results depend on the thread count. Online-only knobs (`--forgettingFactor`, `--numAuxModelSamples`, `--numPreAuxModelSamples`) warn and are ignored without it. |
+| `--deterministic` | **The default since 2.6.0, and the only path since 2.12.0** (accepted as a no-op): map once to an intermediate RAD, then quantify from it with a fixed fragment-length distribution. Byte-identical across runs and thread counts. |
+| `--online` | **Removed in 2.12.0** (deprecated since 2.6.0): passing it is an error. The removed path's knobs (`--forgettingFactor`, `--numAuxModelSamples`, `--numPreAuxModelSamples`) are accepted, warn, and are ignored. |
 | `--keepRad` | Keep the `--deterministic` intermediate RAD (deleted by default). |
 | `--radScratchDir <DIR>` | Directory for the `--deterministic` intermediate RAD (default: the output directory). Point at node-local or memory-backed storage (e.g. `/dev/shm`) when the output volume is slow, networked, or space-constrained. Ignored with an explicit `--writeRad`. |
 | `--radCompress <CODEC>` | RAD chunk compression for `--writeRad` / `--deterministic`: `lz4` (default), `zstd` (smaller), or `none`. |

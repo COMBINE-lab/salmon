@@ -99,10 +99,10 @@ fn deterministic_flow_honors_the_output_contract_with_decoys() {
     };
 
     // The decoy round trip: phase 1 bakes the boundary into the RAD, phase 2
-    // excludes the block — so the deterministic flow's quant.sf carries the
-    // same row set as the one-pass path's, decoy-free.
+    // excludes the block — so quant.sf is decoy-free, with or without the
+    // (no-op) `--deterministic`.
     let det = run("det", &["--deterministic"]);
-    let online = run("online", &[]);
+    let bare = run("bare", &[]);
     let det_names = quant_names(&det);
     assert!(
         !det_names.iter().any(|n| n == "decoy1"),
@@ -110,8 +110,8 @@ fn deterministic_flow_honors_the_output_contract_with_decoys() {
     );
     assert_eq!(
         det_names,
-        quant_names(&online),
-        "deterministic and one-pass runs must emit the same quant.sf row set"
+        quant_names(&bare),
+        "--deterministic and default runs must emit the same quant.sf row set"
     );
 
     // Phase 2 keeps phase 1's invocation record: the index and the read files

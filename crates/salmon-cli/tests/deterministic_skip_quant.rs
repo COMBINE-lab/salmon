@@ -1,7 +1,7 @@
 //! `--skipQuant --deterministic` maps and stops.
 //!
 //! It used to quantify anyway: phase 1 sets `skip_quant` for its own purposes
-//! (map, write the RAD, do not run the online EM), so the user's request was
+//! (map, write the RAD, do not run the EM), so the user's request was
 //! overwritten there and never reached phase 2. The run produced a full
 //! `quant.sf` from a flag asking for no quantification, and then deleted the RAD
 //! it had just been asked to produce (COMBINE-lab/salmon#1140).
@@ -297,7 +297,7 @@ fn skip_quant_does_not_count_wrong_strand_fragments_as_mapped() {
 }
 
 /// `-g` under `--skipQuant` writes no gene table because there are no
-/// abundances. The BAM, RAD, projection and online drivers say so; the default
+/// abundances. The BAM, RAD and projection drivers say so; the default
 /// reads driver returned before reaching that message and dropped `-g`
 /// silently (COMBINE-lab/salmon#1314).
 #[test]

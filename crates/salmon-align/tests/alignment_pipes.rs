@@ -6,8 +6,8 @@
 
 use noodles_sam::alignment::io::Write as _;
 use salmon_align::{
-    project_genome_bam_to_rad, quantify_alignments, quantify_rad, write_alignment_rad,
-    AlignQuantOptions, GenomeProjectOptions,
+    project_genome_bam_to_rad, quantify_rad, write_alignment_rad, AlignQuantOptions,
+    GenomeProjectOptions,
 };
 use salmon_rad::ChunkCodec;
 use std::path::{Path, PathBuf};
@@ -141,15 +141,6 @@ fn deterministic(input: &Path, out: &Path, lib: &str) -> (Vec<u8>, Vec<u8>) {
     })
 }
 
-/// The `--online` path. Returns quant.sf.
-fn online(input: &Path, out: &Path, lib: &str) -> Vec<u8> {
-    let (input, out, lib) = (input.to_path_buf(), out.to_path_buf(), lib.to_string());
-    bounded(move || {
-        quantify_alignments(&opts(&input, &out, &lib)).unwrap();
-        std::fs::read(out.join("quant.sf")).unwrap()
-    })
-}
-
 /// Genome projection to RAD, then quantification. Returns RAD and quant.sf.
 fn projected(input: &Path, gtf: &Path, out: &Path, lib: &str) -> (Vec<u8>, Vec<u8>) {
     let (input, gtf, out, lib) = (
@@ -184,7 +175,7 @@ fn projected(input: &Path, gtf: &Path, out: &Path, lib: &str) -> (Vec<u8>, Vec<u
     })
 }
 
-/// Both drivers over the transcriptome input, SAM and BAM, explicit and `-l A`
+/// The transcriptome driver, SAM and BAM, explicit and `-l A`
 /// (whose pairedness peek reads ahead into the records): a FIFO gives the same
 /// RAD and the same abundances as the file it carries.
 #[test]
@@ -204,9 +195,6 @@ fn a_fifo_alignment_input_reads_like_its_file() {
                 "{tag}: RAD from a FIFO differs from the file's"
             );
             assert_eq!(want.1, got.1, "{tag}: quant.sf from a FIFO differs");
-            let want = online(file, &d.join(format!("{tag}-ofile")), lib);
-            let got = online(&pipe("online"), &d.join(format!("{tag}-ofifo")), lib);
-            assert_eq!(want, got, "{tag}: --online quant.sf from a FIFO differs");
         }
     }
 }

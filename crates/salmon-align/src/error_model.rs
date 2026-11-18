@@ -31,8 +31,6 @@
 //! foreground likelihood `fg`; the background `bg` accumulates the match
 //! self-transition `(0,0)`. The per-alignment score used downstream is `fg − bg`.
 
-use salmon_core::math::log_add;
-
 /// Alignment symbols (salmon's `AlignmentModelChar`).
 const ALN_DASH: usize = 4;
 const ALN_SOFT_CLIP: usize = 5;
@@ -124,38 +122,6 @@ impl TransMatrix {
             rowsums: vec![(NUM_ALN_STATES as f64 * alpha).ln(); NUM_ALN_STATES],
         }
     }
-    /// A zero-mass (`-inf` everywhere) delta matrix: a per-thread accumulator
-    /// whose increments are later `log_add`-folded into an alpha-seeded global
-    /// (so the pseudocount baseline is counted exactly once, in the global).
-    fn empty() -> Self {
-        Self {
-            storage: vec![f64::NEG_INFINITY; NUM_ALN_STATES * NUM_ALN_STATES],
-            rowsums: vec![f64::NEG_INFINITY; NUM_ALN_STATES],
-        }
-    }
-    #[inline]
-    fn increment(&mut self, prev: usize, cur: usize, amt: f64) {
-        let k = prev * NUM_ALN_STATES + cur;
-        self.storage[k] = log_add(self.storage[k], amt);
-        self.rowsums[prev] = log_add(self.rowsums[prev], amt);
-    }
-    /// Reset all masses to `-inf` (log-zero) in place, without reallocating, so
-    /// a delta accumulator can be reused after flushing.
-    fn clear(&mut self) {
-        self.storage.iter_mut().for_each(|v| *v = f64::NEG_INFINITY);
-        self.rowsums.iter_mut().for_each(|v| *v = f64::NEG_INFINITY);
-    }
-    /// Fold another matrix's masses into this one element-wise (`log_add`).
-    /// Combining an alpha-seeded global with `empty()`-seeded per-thread deltas
-    /// reconstructs `alpha + Σ deltas` exactly.
-    fn combine(&mut self, other: &TransMatrix) {
-        for (s, o) in self.storage.iter_mut().zip(&other.storage) {
-            *s = log_add(*s, *o);
-        }
-        for (s, o) in self.rowsums.iter_mut().zip(&other.rowsums) {
-            *s = log_add(*s, *o);
-        }
-    }
     /// Normalized log transition probability `P(cur | prev)`.
     #[inline]
     #[allow(dead_code)] // retained for unit tests / API symmetry
@@ -180,33 +146,6 @@ impl AlignmentModel {
             left: (0..read_bins).map(|_| TransMatrix::new(alpha)).collect(),
             right: (0..read_bins).map(|_| TransMatrix::new(alpha)).collect(),
             read_bins,
-        }
-    }
-
-    /// Reset all per-bin matrices to log-zero in place (reuse after flushing).
-    pub fn clear(&mut self) {
-        self.left.iter_mut().for_each(|m| m.clear());
-        self.right.iter_mut().for_each(|m| m.clear());
-    }
-
-    /// A zero-mass per-thread delta accumulator with the same shape. Its updates
-    /// are merged into an alpha-seeded global via [`AlignmentModel::combine`].
-    pub fn empty(read_bins: usize) -> Self {
-        Self {
-            left: (0..read_bins).map(|_| TransMatrix::empty()).collect(),
-            right: (0..read_bins).map(|_| TransMatrix::empty()).collect(),
-            read_bins,
-        }
-    }
-
-    /// Fold another model's masses into this one (element-wise `log_add` over
-    /// every position bin and mate). Used to merge per-thread deltas.
-    pub fn combine(&mut self, other: &AlignmentModel) {
-        for (s, o) in self.left.iter_mut().zip(&other.left) {
-            s.combine(o);
-        }
-        for (s, o) in self.right.iter_mut().zip(&other.right) {
-            s.combine(o);
         }
     }
 
@@ -263,42 +202,9 @@ impl AlignmentModel {
         }
     }
 
-    /// Accumulate the alignment's transitions into the model, weighted by
-    /// `log_weight` (log space). `is_left` selects the mate's matrices.
-    pub fn update(
-        &mut self,
-        read_2bit: &[u8],
-        ref_bytes: &[u8],
-        pos: usize,
-        ops: &[(AlnOp, usize)],
-        is_left: bool,
-        log_weight: f64,
-    ) {
-        // Collect transitions first (immutable walk), then apply (mutable).
-        let mut trans: Vec<(usize, usize, usize)> = Vec::new();
-        Self::walk(
-            self.read_bins,
-            read_2bit,
-            ref_bytes,
-            pos,
-            ops,
-            |bin, prev, cur| {
-                trans.push((bin, prev, cur));
-            },
-        );
-        let mats = if is_left {
-            &mut self.left
-        } else {
-            &mut self.right
-        };
-        for (bin, prev, cur) in trans {
-            mats[bin].increment(prev, cur, log_weight);
-        }
-    }
-
     /// Foreground/background log-likelihoods `(fg, bg)` of the alignment under
     /// the current model. The per-alignment score is `fg − bg`.
-    #[allow(dead_code)] // retained for unit tests; the live path reads SharedAlignmentModel
+    #[allow(dead_code)] // retained for unit tests
     pub fn log_likelihood(
         &self,
         read_2bit: &[u8],
@@ -329,9 +235,9 @@ impl AlignmentModel {
 /// *count* per `(read_bin, is_left, prev, cur)` accumulated as `u64` integers.
 /// Integer addition is associative and commutative, so merging per-thread
 /// counters ([`combine`](Self::combine)) yields the same totals regardless of
-/// how fragments were partitioned across threads — the property the online
-/// [`SharedAlignmentModel`] cannot offer (its log-space, posterior-weighted,
-/// concurrently-flushed updates depend on processing order). Once training is
+/// how fragments were partitioned across threads — the property salmon's
+/// online model (log-space, posterior-weighted, concurrently flushed; removed
+/// in 2.12) could not offer. Once training is
 /// done, [`finalize`](Self::finalize) normalizes the counts once (adding the
 /// `alpha` pseudocount exactly, in the denominator too) into a fixed log-space
 /// [`AlignmentModel`], so scoring reuses the same `log_likelihood` walk. This is
@@ -403,7 +309,7 @@ impl CountingAlignmentModel {
     /// Normalize the integer counts into a fixed log-space [`AlignmentModel`],
     /// adding an `alpha` Laplace pseudocount to every cell (and `NUM_ALN_STATES *
     /// alpha` to each row denominator) so unobserved transitions keep a small
-    /// mass — matching the online model's alpha-seeded matrices. The result is a
+    /// mass — matching salmon's alpha-seeded matrices. The result is a
     /// deterministic function of the totals alone.
     pub fn finalize(&self, alpha: f64) -> AlignmentModel {
         let build = |counts: &[Vec<u64>]| -> Vec<TransMatrix> {
@@ -432,108 +338,6 @@ impl CountingAlignmentModel {
     }
 }
 
-/// An atomic, log-space transition matrix shared across worker threads. Reads
-/// (`get`) are lock-free relaxed loads (free on x86); updates arrive as
-/// occasional bulk merges of a per-thread plain [`TransMatrix`] delta, so the
-/// hot match-state cell is not CAS-contended on every base.
-struct SharedTransMatrix {
-    storage: Vec<salmon_core::atomic::AtomicF64>,
-    rowsums: Vec<salmon_core::atomic::AtomicF64>,
-}
-
-impl SharedTransMatrix {
-    fn new(alpha: f64) -> Self {
-        Self {
-            storage: (0..NUM_ALN_STATES * NUM_ALN_STATES)
-                .map(|_| salmon_core::atomic::AtomicF64::new(alpha.ln()))
-                .collect(),
-            rowsums: (0..NUM_ALN_STATES)
-                .map(|_| salmon_core::atomic::AtomicF64::new((NUM_ALN_STATES as f64 * alpha).ln()))
-                .collect(),
-        }
-    }
-    #[inline]
-    fn get(&self, prev: usize, cur: usize) -> f64 {
-        self.storage[prev * NUM_ALN_STATES + cur].load() - self.rowsums[prev].load()
-    }
-    /// Fold a per-thread plain delta into this shared matrix atomically (only the
-    /// touched, non-`-inf` cells).
-    fn flush_from(&self, delta: &TransMatrix) {
-        for (a, &d) in self.storage.iter().zip(&delta.storage) {
-            if d != f64::NEG_INFINITY {
-                a.log_add_assign(d);
-            }
-        }
-        for (a, &d) in self.rowsums.iter().zip(&delta.rowsums) {
-            if d != f64::NEG_INFINITY {
-                a.log_add_assign(d);
-            }
-        }
-    }
-}
-
-/// Shared, atomic counterpart of [`AlignmentModel`]: read concurrently for the
-/// foreground/background likelihood (`basis`) during the online pass while
-/// worker threads periodically flush their private deltas into it. Matches
-/// salmon's shared `AtomicMatrix` error model, but with batched (per-minibatch)
-/// flushing to keep update contention negligible.
-pub struct SharedAlignmentModel {
-    left: Vec<SharedTransMatrix>,
-    right: Vec<SharedTransMatrix>,
-    read_bins: usize,
-}
-
-impl SharedAlignmentModel {
-    pub fn new(alpha: f64, read_bins: usize) -> Self {
-        Self {
-            left: (0..read_bins)
-                .map(|_| SharedTransMatrix::new(alpha))
-                .collect(),
-            right: (0..read_bins)
-                .map(|_| SharedTransMatrix::new(alpha))
-                .collect(),
-            read_bins,
-        }
-    }
-
-    /// Foreground/background log-likelihoods `(fg, bg)` under the current shared
-    /// model (lock-free atomic reads).
-    pub fn log_likelihood(
-        &self,
-        read_2bit: &[u8],
-        ref_bytes: &[u8],
-        pos: usize,
-        ops: &[(AlnOp, usize)],
-        is_left: bool,
-    ) -> (f64, f64) {
-        let mats = if is_left { &self.left } else { &self.right };
-        let mut fg = 0.0;
-        let mut bg = 0.0;
-        AlignmentModel::walk(
-            self.read_bins,
-            read_2bit,
-            ref_bytes,
-            pos,
-            ops,
-            |bin, prev, cur| {
-                fg += mats[bin].get(prev, cur);
-                bg += mats[bin].get(0, 0);
-            },
-        );
-        (fg, bg)
-    }
-
-    /// Atomically merge a per-thread plain delta model into the shared model.
-    pub fn flush_from(&self, delta: &AlignmentModel) {
-        for (s, d) in self.left.iter().zip(&delta.left) {
-            s.flush_from(d);
-        }
-        for (s, d) in self.right.iter().zip(&delta.right) {
-            s.flush_from(d);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,32 +347,6 @@ mod tests {
         let read = vec![0u8, 1, 2, 3, 0];
         let refs = b"ACGTA".to_vec();
         (read, refs, vec![(AlnOp::Match, 5)])
-    }
-
-    #[test]
-    /// Once trained on real alignments, a clean alignment must score above a
-    /// mismatched one — the basic property the whole model exists to provide.
-    fn matches_score_higher_than_mismatches_after_training() {
-        let mut m = AlignmentModel::new(1.0, 4);
-        let (read, refs, ops) = perfect();
-        // train on many perfect matches
-        for _ in 0..200 {
-            m.update(&read, &refs, 0, &ops, true, 0.0);
-        }
-        // a read with a mismatch (read[2] G->A vs ref G)
-        let mut bad = read.clone();
-        bad[2] = 0; // A where ref is G
-        let (fg_good, bg_good) = m.log_likelihood(&read, &refs, 0, &ops, true);
-        let (fg_bad, bg_bad) = m.log_likelihood(&bad, &refs, 0, &ops, true);
-        // the all-match read has higher foreground likelihood ...
-        assert!(fg_good > fg_bad, "fg_good {fg_good} !> fg_bad {fg_bad}");
-        // ... and a higher final score (fg - bg); bg is identical (same #positions)
-        assert!(
-            (fg_good - bg_good) > (fg_bad - bg_bad),
-            "perfect score {} !> mismatch score {}",
-            fg_good - bg_good,
-            fg_bad - bg_bad
-        );
     }
 
     #[test]

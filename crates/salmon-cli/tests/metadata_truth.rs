@@ -416,7 +416,8 @@ fn bias_model_shapes_are_recorded() {
 fn single_end_gc_bias_without_observations_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let (index, r1, _) = fixture(dir.path());
-    for mode in [&[][..], &["--online"][..]] {
+    {
+        let mode: &[&str] = &[];
         let run = |extra: &[&str], out: &Path| -> String {
             let o = Command::new(SALMON)
                 .args(["quant", "-i"])
@@ -448,47 +449,6 @@ fn single_end_gc_bias_without_observations_changes_nothing() {
         );
         assert_eq!(meta(&gc)["gc_bias_correct"], false, "{mode:?}");
     }
-}
-
-/// `--online --writeRad` writes the RAD, so the run must not call the flag inert.
-#[test]
-fn online_write_rad_is_not_reported_inert() {
-    let dir = tempfile::tempdir().unwrap();
-    let (index, r1, _) = fixture(dir.path());
-    let rad = dir.path().join("m.rad");
-    let o = Command::new(SALMON)
-        .args(["quant", "-i"])
-        .arg(&index)
-        .args(["-l", "U", "-r"])
-        .arg(&r1)
-        .args(["--online", "--radCompress", "zstd", "--writeRad"])
-        .arg(&rad)
-        .arg("-o")
-        .arg(dir.path().join("q"))
-        .output()
-        .unwrap();
-    let log = String::from_utf8_lossy(&o.stderr);
-    assert!(o.status.success(), "{log}");
-    assert!(rad.exists());
-    assert!(!log.contains("writes no intermediate RAD"), "{log}");
-
-    // Without `--writeRad` nothing is written, so the codec flag is inert and
-    // must still say so.
-    let o = Command::new(SALMON)
-        .args(["quant", "-i"])
-        .arg(&index)
-        .args(["-l", "U", "-r"])
-        .arg(&r1)
-        .args(["--online", "--radCompress", "zstd", "-o"])
-        .arg(dir.path().join("q2"))
-        .output()
-        .unwrap();
-    let log = String::from_utf8_lossy(&o.stderr);
-    assert!(o.status.success(), "{log}");
-    assert!(
-        log.contains("--radCompress has no effect") && log.contains("writes no intermediate RAD"),
-        "{log}"
-    );
 }
 
 /// `--skipQuant --numBootstraps 30` draws no samples, yet `samp_type` read the

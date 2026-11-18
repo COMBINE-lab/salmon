@@ -678,11 +678,10 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 rc_pos: frag_start + frag_len - 1,
                 // The recovered pair's orientation IS observed: the anchor's
                 // strand is real evidence and the rescued mate is opposite by
-                // construction. Filling it lets the one-pass strand filter judge
-                // recovered pairs the way the deterministic path always has —
-                // the RAD stores both strand bits, so a requant judged these
-                // while one-pass waved them through on `format: None` (#1140,
-                // the #1136 pattern surviving on this one site).
+                // construction. Filling it lets the mapping pass's library-format
+                // tallies judge recovered pairs the way the requant does from the
+                // RAD's strand bits, instead of waving them through on
+                // `format: None` (#1140, the #1136 pattern on this one site).
                 format: Some(salmon_core::observed_paired_format(mate1_fw, mate2_fw)),
                 r1_pos: if anchor_is_left {
                     anchor_start

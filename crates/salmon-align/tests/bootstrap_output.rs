@@ -5,13 +5,22 @@
 //! mass (sums to the number of quantified fragments).
 
 use flate2::read::GzDecoder;
-use salmon_align::{quantify_alignments, AlignQuantOptions};
+use salmon_align::AlignQuantOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Tiny two-transcript transcriptome SAM with inward (ISF) paired fragments,
 /// some uniquely mapping and some ambiguous (aligning to both transcripts) so
 /// the bootstrap actually has reassignment to resample over.
+/// The alignment-mode pipeline: BAM/SAM to an intermediate RAD, then quantify it.
+fn quantify_two_phase(opts: &AlignQuantOptions) -> anyhow::Result<salmon_align::AlignQuantResult> {
+    let mut opts = opts.clone();
+    opts.input_is_alignments = true;
+    let rad = opts.output_dir.with_extension("rad");
+    salmon_align::write_alignment_rad(&opts, &rad, salmon_rad::ChunkCodec::None)?;
+    salmon_align::quantify_rad(&opts, &rad)
+}
+
 fn write_sam(dir: &Path) -> PathBuf {
     let path = dir.join("aln.sam");
     let mut f = std::fs::File::create(&path).unwrap();
@@ -52,7 +61,7 @@ fn run(sam: &Path, out: &Path, configure: impl FnOnce(&mut AlignQuantOptions)) {
     opts.transcripts = None; // lengths from @SQ; no error model / bias
     opts.no_error_model = true;
     configure(&mut opts);
-    quantify_alignments(&opts).expect("quantify_alignments");
+    quantify_two_phase(&opts).expect("alignment quantification");
 }
 
 fn read_quant(out: &Path) -> (Vec<String>, Vec<f64>) {

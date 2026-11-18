@@ -2743,6 +2743,7 @@ dependencies = [
  "piscem-rs",
  "rapidgzip-core",
  "rayon",
+ "salmon-align",
  "salmon-core",
  "salmon-eqclass",
  "salmon-index",

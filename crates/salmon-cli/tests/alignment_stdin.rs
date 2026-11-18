@@ -1,6 +1,6 @@
 //! `salmon quant -a /dev/stdin` fed from a pipe (`samtools view -b ... | salmon
-//! quant -a /dev/stdin`), SAM and BAM, on every alignment driver: the default
-//! deterministic path, `--online`, and genome projection. A pipe has no
+//! quant -a /dev/stdin`), SAM and BAM, on both alignment drivers: transcriptome
+//! alignments and genome projection. A pipe has no
 //! extension and cannot be reopened, so this needs the input opened once and its
 //! format read from its bytes.
 #![cfg(unix)]
@@ -137,11 +137,9 @@ fn dev_stdin_from_a_pipe_quantifies_like_the_file() {
     let gbam = sam_to_bam(&gsam, &d.join("g.bam"));
     let gtf = gtf.to_str().unwrap();
     // `-l A` throughout: its pairedness peek reads ahead into the records.
-    let runs: [(&str, &Path, Vec<&str>); 6] = [
+    let runs: [(&str, &Path, Vec<&str>); 4] = [
         ("sam", &sam, vec!["-l", "A", "-p", "2"]),
         ("bam", &bam, vec!["-l", "A", "-p", "2"]),
-        ("sam-online", &sam, vec!["-l", "A", "-p", "1", "--online"]),
-        ("bam-online", &bam, vec!["-l", "A", "-p", "1", "--online"]),
         (
             "gsam",
             &gsam,

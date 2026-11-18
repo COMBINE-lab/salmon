@@ -53,19 +53,20 @@ use thread_broker::{BusyMeter, Consumer, EngagementPolicy, ResizeError, Work};
 ///
 /// * **selective alignment vs sketch.** SA extends and scores alignments per
 ///   candidate; sketch does not. SA has the larger `C`, so it engages later.
-/// * **`--deterministic`.** Its mapping pass does, per `record_discrete`, "no
-///   online inference, eq-class assembly, bias collection, or prefix
-///   library-type detection" — four categories of per-fragment work removed. It
-///   lowers `C` in *both* modes, so it engages *earlier* than its counterpart.
+/// * **paired vs single-end.** A paired library's mapping pass takes the cheap
+///   `record_discrete` (an integer FLD / format tally). The cells were measured
+///   when single-end and the removed one-pass `--online` path both did more
+///   per-fragment work (online inference, eq-class assembly, bias collection,
+///   prefix library-type detection); the `*_deterministic` cells are the paired
+///   mapping pass. They lower `C` in *both* modes, so they engage *earlier*.
 ///
 /// The ordering is therefore
 /// `sa < sa+deterministic` is **false**; it is
 /// `sa+deterministic < sa` and `sketch+deterministic < sketch`, with both
 /// sketch cells below their SA counterparts.
 ///
-/// Caveat: `--deterministic` only takes the cheap path when the library is
-/// paired (`deterministic_fld && is_paired()`), so single-end gets the ordinary
-/// cost and the ordinary threshold.
+/// Single-end input gets the non-`_deterministic` cells (the flag passed to
+/// [`default_engagement_policy`] is `is_paired()`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Thresholds {
     pub sketch: usize,
@@ -381,8 +382,8 @@ mod tests {
             t(false, true) <= t(false, false),
             "--deterministic must not make selective alignment engage later"
         );
-        // --deterministic removes online inference, eq-class assembly, bias
-        // collection and prefix detection, so it must engage *earlier*.
+        // The paired mapping pass is the lightest per-fragment work, so it
+        // must engage *earlier*.
         assert!(
             t(true, true) < t(true, false),
             "--deterministic lightens sketch, so its threshold must fall"
