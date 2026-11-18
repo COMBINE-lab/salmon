@@ -877,9 +877,14 @@ fn read_rad_parallel<R, W>(path: &Path, nthreads: usize, what: &str, worker: W) 
 where
     R: MappedRecord + Send,
     R::ParsingContext: RecordContext + Clone + Send + Sync,
-    W: Fn(GatedChunks<'_, R>) + Sync,
+    W: Fn(&mut dyn Iterator<Item = MetaChunk<R>>) + Sync,
 {
     let (reader, prelude, file_tag_map) = open_prelude(path)?;
+    let codec = libradicl::codec::chunk_codec_from_tag_map(&file_tag_map)
+        .with_context(|| format!("reading the RAD chunk codec ({what})"))?;
+    if codec != libradicl::ChunkCodec::None {
+        return read_compressed_parallel(reader, &prelude, codec, nthreads, what, &worker);
+    }
     let nz = NonZeroUsize::new(nthreads.max(1)).unwrap();
     let mut prr =
         ParallelRadReader::<R, _>::from_prelude_and_file_tag_map(reader, prelude, file_tag_map, nz);
@@ -887,17 +892,142 @@ where
     let queue = prr.get_queue();
     std::thread::scope(|s| -> Result<()> {
         for _ in 0..nz.get() {
-            let chunks = GatedChunks {
+            let mut chunks = GatedChunks {
                 chunks: prr.chunk_iter(),
                 gate: &gate,
             };
             let worker = &worker;
-            s.spawn(move || worker(chunks));
+            s.spawn(move || worker(&mut chunks));
         }
         // Producer: fill the queue until the file is exhausted.
         prr.start_chunk_parsing(Some(|_, _| gate.wait_for_room(&queue)))
             .with_context(|| format!("parsing RAD chunks ({what})"))
     })
+}
+
+/// Compressed chunks read on the calling thread and decompressed on the
+/// workers. libradicl's producer decompresses every chunk itself before
+/// queueing it, which on a 6 GB lz4 RAD (GEUVADIS ERR188044) kept it busy 75%
+/// of the pass while the 16 workers waited on it about half the time.
+fn read_compressed_parallel<R, W>(
+    mut reader: BufReader<File>,
+    prelude: &RadPrelude,
+    codec: libradicl::ChunkCodec,
+    nthreads: usize,
+    what: &str,
+    worker: &W,
+) -> Result<()>
+where
+    R: MappedRecord + Send,
+    R::ParsingContext: RecordContext + Clone + Send + Sync,
+    W: Fn(&mut dyn Iterator<Item = MetaChunk<R>>) + Sync,
+{
+    /// chunks per hand-off: a meta-chunk's worth for the workers
+    const BATCH: usize = 16;
+    type Batch = (usize, Vec<(u32, Vec<u8>)>);
+    let ctx = prelude
+        .get_record_context_prefer_roles::<R::ParsingContext>()
+        .context("could not build the record context for the chunk reader")?;
+    let num_chunks: Option<usize> = prelude.hdr.num_chunks().map(Into::into);
+    let nthreads = nthreads.max(1);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Batch>(2 * nthreads);
+    let rx = Mutex::new(rx);
+    let failed: Mutex<Option<anyhow::Error>> = Mutex::new(None);
+    // [nbytes][nrec][records] per chunk, as libradicl's producer lays it out
+    // (`Chunk::from_bytes` reads the header in native byte order)
+    let decode = |(first, batch): Batch| -> Result<MetaChunk<R>> {
+        let (mut blob, mut nrec_all) = (Vec::new(), 0u32);
+        let n = batch.len();
+        for (nrec, payload) in batch {
+            let decoded = libradicl::codec::decompress_payload(codec, &payload)?;
+            blob.extend_from_slice(&(decoded.len() as u32 + 8).to_ne_bytes());
+            blob.extend_from_slice(&nrec.to_ne_bytes());
+            blob.extend_from_slice(&decoded);
+            nrec_all += nrec;
+        }
+        let nbytes = blob.len() as u32;
+        Ok(MetaChunk::new(
+            first,
+            n,
+            nbytes,
+            nrec_all,
+            ctx.clone(),
+            blob,
+        ))
+    };
+    let produced = std::thread::scope(|s| -> Result<()> {
+        for _ in 0..nthreads {
+            s.spawn(|| {
+                let mut chunks = std::iter::from_fn(|| loop {
+                    let batch = rx.lock().unwrap_or_else(|e| e.into_inner()).recv().ok()?;
+                    // after a failure, keep draining so the producer never blocks
+                    if failed.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+                        continue;
+                    }
+                    match decode(batch) {
+                        Ok(mc) => return Some(mc),
+                        Err(e) => {
+                            failed
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .get_or_insert(e);
+                        }
+                    }
+                });
+                worker(&mut chunks);
+                // a worker that returns early must not strand the producer
+                while rx.lock().unwrap_or_else(|e| e.into_inner()).recv().is_ok() {}
+            });
+        }
+        let mut batch = Vec::with_capacity(BATCH);
+        let (mut idx, mut first) = (0usize, 0usize);
+        loop {
+            let more = match num_chunks {
+                Some(n) => idx < n,
+                None => libradicl::utils::has_data_left(&mut reader)?,
+            };
+            if !more {
+                break;
+            }
+            let (nbytes, nrec) =
+                libradicl::utils::read_chunk_header(&mut reader).with_context(|| {
+                    format!(
+                        "failed to read the header of chunk {idx}; the RAD file may be truncated"
+                    )
+                })?;
+            anyhow::ensure!(
+                nbytes >= 8,
+                "chunk {idx} declares a size of {nbytes} bytes, below its own 8-byte header; \
+                 the RAD file appears to be corrupt"
+            );
+            let mut payload = vec![0u8; nbytes as usize - 8];
+            std::io::Read::read_exact(&mut reader, &mut payload).with_context(|| {
+                format!(
+                    "failed to read the {nbytes} compressed bytes of chunk {idx}; \
+                     the RAD file may be truncated"
+                )
+            })?;
+            batch.push((nrec, payload));
+            idx += 1;
+            if batch.len() == BATCH {
+                let full = std::mem::replace(&mut batch, Vec::with_capacity(BATCH));
+                if tx.send((first, full)).is_err() {
+                    break;
+                }
+                first = idx;
+            }
+        }
+        if !batch.is_empty() {
+            let _ = tx.send((first, batch));
+        }
+        drop(tx);
+        Ok(())
+    });
+    produced.with_context(|| format!("parsing RAD chunks ({what})"))?;
+    match failed.into_inner().unwrap_or_else(|e| e.into_inner()) {
+        Some(e) => Err(e.context(format!("decompressing RAD chunks ({what})"))),
+        None => Ok(()),
+    }
 }
 
 fn ref_lengths_from_tags(prelude: &RadPrelude, file_tag_map: &TagMap) -> Result<Vec<u32>> {
