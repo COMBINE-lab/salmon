@@ -822,6 +822,9 @@ pub(crate) struct Settings {
     /// When a run stops: [`EmStop::Global`] runs [`run_tiled`],
     /// [`EmStop::Projected`] [`run_projected`].
     pub(crate) stop: EmStop,
+    /// SQUAREM per component ([`run_squarem`]), stopping by the projected
+    /// rule whatever `stop` says
+    pub(crate) squarem: bool,
 }
 
 /// How a component-engine run ended, per component.
@@ -1021,7 +1024,7 @@ pub(crate) fn run(
         .collect();
     let total_reads = reads.iter().sum();
     let (iters, converged, summary) = match set.stop {
-        EmStop::Global => {
+        EmStop::Global if !set.squarem => {
             let (it, ok) = run_tiled(plan, &mut states, set);
             // Cut off by the cap: only the components whose own criterion still
             // failed held the run up, and each knows from its last step.
@@ -1037,13 +1040,17 @@ pub(crate) fn run(
             };
             (it, ok, summary)
         }
-        EmStop::Projected => {
-            let ends = run_projected(plan, &mut states, set);
+        _ => {
+            let ends = if set.squarem {
+                run_squarem(plan, &mut states, set)
+            } else {
+                run_projected(plan, &mut states, set)
+            };
             let mut iters: Vec<u32> = ends.iter().map(|e| e.iters).collect();
             iters.sort_unstable();
             let capped = ends.iter().filter(|e| !e.stopped);
             let summary = ComponentSummary {
-                stop: set.stop,
+                stop: EmStop::Projected,
                 num_components: ends.len(),
                 num_unconverged: ends.iter().filter(|e| !e.met).count(),
                 num_at_max_iter: capped.clone().count(),
@@ -1380,6 +1387,85 @@ fn settle_dead(
     now_dead
 }
 
+/// SQUAREM run on each component on its own: cycles of two M-steps, the SqS3
+/// extrapolation ([`crate::squarem_point`]) and a stabilizing M-step, until
+/// salmon's criterion holds over the cycle (after `min_iter`) and the
+/// projected remaining movement is small, as in [`run_projected`] with a cycle
+/// taking the place of a step. Each component stops on its own, so the
+/// slowest no longer holds every other one at full cost, and the result is
+/// independent of the thread count. No transcripts are frozen.
+fn run_squarem(
+    plan: &ComponentPlan,
+    states: &mut [(usize, CompState)],
+    set: &Settings,
+) -> Vec<CompEnd> {
+    let one = |(c, s): &mut (usize, CompState)| -> CompEnd {
+        let c = *c;
+        let view = plan.view(c);
+        let mass = view.reads();
+        let lazy = (plan.pull[c].is_none() && view.labels.len() >= plan.lazy_pull_min)
+            .then(|| view.transpose());
+        let pull = lazy.as_ref().or(plan.pull[c].as_ref());
+        let n = s.alpha.len();
+        let [mut x0, mut x1, mut xp, mut r, mut v] = std::array::from_fn(|_| vec![0.0f64; n]);
+        let mut ratios = [f64::INFINITY; RATE_WINDOW];
+        let mut prev_l1 = f64::NAN;
+        let (mut met, mut it, mut cycle) = (false, 0u32, 0usize);
+        let end = |iters, met, stopped| CompEnd {
+            comp: c,
+            iters,
+            met,
+            stopped,
+        };
+        while it < set.max_iter {
+            x0.copy_from_slice(s.alpha);
+            step_view_l1(plan.view(c), pull, s, set);
+            x1.copy_from_slice(s.alpha);
+            step_view_l1(plan.view(c), pull, s, set);
+            it += 2;
+            // at the fixpoint (`false`) the plain step stands
+            if !crate::squarem_point(&x0, &x1, s.alpha, &mut r, &mut v, &mut xp) {
+                return end(it, true, true);
+            }
+            s.alpha.copy_from_slice(&xp);
+            step_view_l1(plan.view(c), pull, s, set);
+            it += 1;
+            let (d, l1) = criterion(&x0, s.alpha, set.cutoff);
+            ratios[cycle % RATE_WINDOW] = if prev_l1 > 0.0 {
+                l1 / prev_l1
+            } else if l1 == 0.0 {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+            prev_l1 = l1;
+            cycle += 1;
+            if it < set.min_iter {
+                continue;
+            }
+            if d == f64::NEG_INFINITY {
+                return end(it, true, true);
+            }
+            if d < set.tol {
+                met = true;
+                let rho = ratios.iter().copied().fold(0.0f64, f64::max).min(RATE_CAP);
+                if l1 / (1.0 - rho) < PROJECTED_EPS * mass {
+                    return end(it, met, true);
+                }
+            }
+        }
+        end(it, met, false)
+    };
+    if set.parallel {
+        // Largest first, as in `run_projected`. Scheduling only.
+        let mut order: Vec<_> = states.iter_mut().collect();
+        order.sort_by_key(|(c, _)| std::cmp::Reverse(plan.comp_incidences(*c)));
+        order.into_par_iter().with_max_len(1).map(one).collect()
+    } else {
+        states.iter_mut().map(one).collect()
+    }
+}
+
 /// How one component's iteration ended under [`EmStop::Projected`].
 struct CompEnd {
     comp: usize,
@@ -1643,6 +1729,7 @@ mod tests {
             // tests below also check that dropping it changes no bit.
             guard_zero_et: true,
             stop: EmStop::Global,
+            squarem: false,
         }
     }
 
@@ -1695,6 +1782,7 @@ mod tests {
         assert!(plan.comp_incidences(0) >= FREEZE_MIN_INCIDENCES);
         let set = Settings {
             stop: EmStop::Projected,
+            squarem: false,
             ..settings(true, false)
         };
         // `run` drops the guard for this prior, which is what allows freezing.
@@ -1896,6 +1984,7 @@ mod tests {
         for vb in [false, true] {
             let set = Settings {
                 stop: EmStop::Projected,
+                squarem: false,
                 ..settings(vb, false)
             };
             let (got, iters, converged, summary) = run(&mut seq, &init, &prior, &set);
@@ -1980,6 +2069,7 @@ mod tests {
             );
             let set = Settings {
                 stop: EmStop::Projected,
+                squarem: false,
                 ..settings(vb, false)
             };
             let (got, iters, converged, summary) = run(&mut plan, &init, &prior, &set);
@@ -2008,6 +2098,7 @@ mod tests {
         let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
         let set = Settings {
             stop: EmStop::Projected,
+            squarem: false,
             max_iter: 200,
             ..settings(false, false)
         };
@@ -2046,6 +2137,7 @@ mod tests {
         let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, false);
         let set = Settings {
             stop: EmStop::Global,
+            squarem: false,
             max_iter: 6,
             min_iter: 1,
             ..settings(false, false)
