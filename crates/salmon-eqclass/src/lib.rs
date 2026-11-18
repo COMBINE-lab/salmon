@@ -590,8 +590,10 @@ pub fn write_eq_classes(
     let f = std::fs::File::create(dir.join("aux_info").join("eq_classes.txt.gz"))?;
     // One `write!` per field per class is a lot of small writes; buffer them
     // before they reach the encoder.
-    let f = std::io::BufWriter::new(f);
-    let mut w = flate2::write::GzEncoder::new(f, flate2::Compression::new(6));
+    let mut w = std::io::BufWriter::with_capacity(
+        1 << 16,
+        flate2::write::GzEncoder::new(f, flate2::Compression::new(6)),
+    );
 
     if with_weights {
         writeln!(w, "{num_txps}")?;
@@ -628,7 +630,7 @@ pub fn write_eq_classes(
             writeln!(w, "\t{count}")?;
         }
     }
-    w.finish()?;
+    w.into_inner().map_err(|e| e.into_error())?.finish()?;
     Ok(())
 }
 
