@@ -744,14 +744,20 @@ text, the bucket offsets and the bucket table: about 3.7 bytes per k-mer, or
 0.24 GB of it).
 
 The structures are copied from the loaded index on a background thread
-(`gpu_kmer_table` in the timing log, about 0.2–0.5 s here). The CPU maps the
-first batches in the meantime, so the build does not delay the run. Three
-things keep it short, because at 2M pairs the reads run out about when it
+(`gpu_kmer_table` in the timing log, about 0.13–0.2 s here). The CPU maps the
+first batches in the meantime, so the build does not delay the run. These
+things keep it short, because at 2M pairs the reads run out soon after it
 ends:
 
-- the Metal device is opened on that thread, not before mapping starts (about
-  50 ms);
+- the Metal device is opened on that thread, beside the CPU half of the build
+  (about 50 ms);
 - sshash's compressed bucket and offset arrays are read in parallel;
+- Metal fills the bucket table on the device (`kmer_table`: a 32-bit
+  compare-and-swap on each entry's fingerprint word, which is never
+  0xFFFFFFFF, the empty value). ROCm and CUDA get it built on the CPU;
+- before mapping sees the device, the thread runs batches of reads taken from
+  the index until a call's time settles. The first ~20 calls otherwise take
+  9–17 ms instead of about 1 ms, slower than the CPU maps the same batch;
 - on macOS its threads run at the `USER_INTERACTIVE` QoS class. The 16
   mapping threads, and on a busy machine other processes, otherwise get the
   cores first, and the build then took up to twice as long.
@@ -797,24 +803,26 @@ on the runs below. Two tests check this without a GPU:
 
 Measured on the M4 Max with 16 threads, against 191k synthetic transcripts
 (208 Mb), with `salmon quant -l A --sketch -p 16 --dumpEq`. Each figure is
-the fastest of 3 alternated runs. "Run" is the whole `salmon quant`;
+the fastest of 3 (10M) or 5 (2M) alternated runs. "Run" is the whole `salmon quant`;
 "mapping" includes the background build on the GPU rows. The load average
-from other processes was 5–9. The equivalence classes and `quant.sf` are
+from other processes was 6–9. The equivalence classes and `quant.sf` are
 byte-identical between the GPU and CPU runs of each strategy, since the EM
 stays on the CPU here (rule above).
 
 | `--sketch`, 16 threads | GPU build | mapping | run |
 |---|---:|---:|---:|
-| 2M pairs, Metal, `Permissive` (default) | 0.23 s | 0.31 s | 0.65 s |
+| 2M pairs, Metal, `Permissive` (default) | 0.14 s | 0.22 s | 0.54 s |
 | 2M pairs, CPU, `Permissive` (`--no-gpu`) | | 0.28 s | 0.60 s |
-| 10M pairs, Metal, `Permissive` (default) | 0.22 s | 0.81 s | 1.37 s |
-| 10M pairs, CPU, `Permissive` (`--no-gpu`) | | 1.32 s | 1.86 s |
-| 10M pairs, Metal, `Strict` | 0.24 s | 0.85 s | 1.42 s |
+| 10M pairs, Metal, `Permissive` (default) | 0.16 s | 0.74 s | 1.31 s |
+| 10M pairs, CPU, `Permissive` (`--no-gpu`) | | 1.33 s | 1.89 s |
+| 10M pairs, Metal, `Strict` (before the device-built table) | 0.24 s | 0.85 s | 1.42 s |
 | 10M pairs, CPU, `Strict` | | 1.77 s | 2.32 s |
 
-At 10M pairs the whole GPU run is 1.36 times faster than the CPU with
-`Permissive`. At 2M pairs it is 0.04 s slower: the CPU collects `Permissive`
-hits cheaply, and the GPU path has a 0.2 s build to recover before it gains.
+With `Permissive`, the whole GPU run is 1.44 times faster than the CPU at 10M
+pairs. At 2M pairs the median of 5 is 0.57 s against 0.61 s. A run whose build
+the machine slows to 0.3 s still costs about 0.03 s more than the CPU. Before
+the device-built table and the warm-up, the build took 0.2–0.45 s and the GPU
+run was 0.65 s at 2M, slower than the CPU.
 On the GPU both strategies cost about the same. On 1M reads from 16 threads
 the kernel takes 0.074 s with `Permissive` and 0.083 s with `Strict`. The
 kernel is one loop making one lookup per turn, so that the sshash lookup and
