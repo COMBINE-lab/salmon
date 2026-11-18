@@ -286,9 +286,15 @@ fn hits_path_maps_like_piscem_strict() {
             gpu.warm_up(t);
             let (mut h, mut c) = (Vec::new(), Vec::new());
             gpu.hits(&seq, &off, &mut h, &mut c).expect("kernel");
+            let mut on_cpu = 0;
             for i in 0..off.len() - 1 {
                 h1.clear();
                 cpu.hits(&seq[off[i] as usize..off[i + 1] as usize], perm, &mut h1);
+                // past `HITS_CAP` or in a heavy bucket: the CPU maps it
+                if c[i] as usize > HITS_CAP && h1.len() <= HITS_CAP {
+                    on_cpu += 1;
+                    continue;
+                }
                 assert_eq!(
                     c[i] as usize,
                     h1.len(),
@@ -301,6 +307,10 @@ fn hits_path_maps_like_piscem_strict() {
                     "{name} permissive {perm} read {i}"
                 );
             }
+            assert!(
+                on_cpu * 20 < off.len(),
+                "{name}: {on_cpu} reads sent to the CPU"
+            );
         }
     }
 }

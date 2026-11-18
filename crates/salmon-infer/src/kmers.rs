@@ -966,6 +966,8 @@ FN u64 minimizer(u64 fw, u64 rc, int k, int m, u64 magic, PRIV int& pos) {
 }
 // option B: piscem's sshash dictionary (minimizer → bucket → super-k-mer
 // positions, verified on the text); the unitig, or -1
+// sshash's skew index takes buckets above 2^6 super-k-mers
+#define HEAVY_BUCKET 64u
 FN i64 locate_b(u64 fw, u64 rc, G const u64* table, G const u32* aux,
                 G const u64* words, G const u32* prm, PRIV i64& nk, PRIV i64& cpos, PRIV bool& fw_on) {
     int k = (int)prm[0], m = (int)prm[5];
@@ -984,6 +986,10 @@ FN i64 locate_b(u64 fw, u64 rc, G const u64* table, G const u32* aux,
         if ((u32)(x >> 32) == fp) { b = (u32)x; break; }
         s = s + 1 == cap ? 0 : s + 1;
     }
+    // sshash looks a heavy bucket up in its skew index; scanning it here
+    // stalls the whole SIMD group (2k positions on average for a human
+    // transcriptome), so its read goes to the CPU (`map_mate`)
+    if (aux[b + 1] - aux[b] > HEAVY_BUCKET) return -2;
     for (u32 j = aux[b]; j < aux[b + 1]; ++j) {
         u64 pos = (u64)offs[j];
         for (int t = 0; t < 2; ++t) {
@@ -1058,6 +1064,8 @@ FN void map_mate(u32 i, G const u8* seq, G const u32* off, CTX, G u32* hits, G u
         i64 nk = 0, cpos = 0;
         u64 qf = phase == 2 ? mid.fw : it.fw, qr = phase == 2 ? mid.rc : it.rc;
         i64 u = locate(qf, qr, CTXA, nk, cpos, fw_on);
+        // past `HITS_CAP`: the CPU maps this read
+        if (u == -2) { counts[i] = hcap + 1; return; }
         if (phase == 1) {
             u2 = u; c2 = cpos; f2 = fw_on;
             if (u == (i64)au && f2 == afw && (afw ? c2 > acpos : c2 < acpos)) {
@@ -1229,6 +1237,18 @@ impl KmerGpu {
             if i >= 8 && dt < 1.25 * best {
                 return;
             }
+        }
+    }
+
+    /// Bytes the device holds now, on the backends that report it (Metal).
+    pub fn device_bytes(&self) -> Option<u64> {
+        #[cfg(gpu)]
+        {
+            self.dev.device_bytes()
+        }
+        #[cfg(not(gpu))]
+        {
+            None
         }
     }
 
@@ -1453,9 +1473,15 @@ mod tests {
             let gpu = KmerGpu::new(&t, perm).unwrap();
             let (mut h, mut c) = (Vec::new(), Vec::new());
             gpu.hits(&seq, &off, &mut h, &mut c).unwrap();
+            let mut on_cpu = 0;
             for (i, r) in reads.iter().enumerate() {
                 let mut w = Vec::new();
                 t.hits(r, perm, &mut w);
+                // past `HITS_CAP` or in a heavy bucket: the CPU maps it
+                if c[i] as usize > HITS_CAP && w.len() <= HITS_CAP {
+                    on_cpu += 1;
+                    continue;
+                }
                 assert_eq!(c[i] as usize, w.len(), "permissive {perm} read {i} count");
                 let n = w.len().min(HITS_CAP);
                 assert_eq!(
@@ -1464,6 +1490,7 @@ mod tests {
                     "permissive {perm} read {i}"
                 );
             }
+            assert!(on_cpu * 20 < reads.len(), "{on_cpu} reads sent to the CPU");
         }
     }
 }

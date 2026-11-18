@@ -523,9 +523,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     Ok(gpu)
                 }) {
                 Ok(gpu) => {
+                    let device_mb = gpu.device_bytes().map_or(-1.0, |b| b as f64 / 1e6);
                     let _ = slot.set(gpu);
                     let elapsed_s = t0.elapsed().as_secs_f64();
-                    tracing::info!(target: "salmon::timing", phase = "gpu_kmer_table", elapsed_s, "phase complete");
+                    tracing::info!(target: "salmon::timing", phase = "gpu_kmer_table", elapsed_s, device_mb, "phase complete");
                 }
                 Err(e) => tracing::warn!("GPU k-mer lookup off ({e}); mapping on the CPU"),
             }

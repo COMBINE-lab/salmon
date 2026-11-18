@@ -472,6 +472,11 @@ impl KmerDevice {
         })
     }
 
+    /// See `KmerGpu::device_bytes`.
+    pub(crate) fn device_bytes(&self) -> Option<u64> {
+        Some(self.dev.currentAllocatedSize() as u64)
+    }
+
     /// See `KmerGpu::hits`; `hits` and `counts` are already sized.
     pub(crate) fn hits(
         &self,
