@@ -1464,6 +1464,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                 gpu_hits.lookup(g, pairs.iter().flat_map(|(a, b)| [a.seq(), b.seq()]))
             });
         lap.mark(stage::GPU_LOOKUP);
+        let unitig_base = sh.gpu.map_or(&[][..], |g| g.unitig_base());
         let (mut n_gpu, mut n_cpu) = (0u64, 0u64);
         for (i, (r1, r2)) in pairs.into_iter().enumerate() {
             // Per fragment, not per batch: a batch runs far longer than one
@@ -1487,6 +1488,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         sh.max_read_occ,
                         sh.salmon,
                         sh.map_cfg.score.allow_decoy_orphans,
+                        unitig_base,
                     ),
                     _ => false,
                 };
@@ -1694,6 +1696,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                         h,
                         sh.map_cfg.collect.max_hit_occ,
                         sh.max_read_occ,
+                        sh.gpu.map_or(&[][..], |g| g.unitig_base()),
                     )
                 });
             if from_gpu {
