@@ -543,16 +543,21 @@ pub(crate) fn run_em_counts(
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
-    // Unaccelerated runs go through the component-decomposed engine: the
-    // same fixed-point iteration and stopping rule, laid out and scheduled by
-    // connected component (see `components`). The accelerators extrapolate
-    // over whole vectors between M-steps, so they keep the global kernels.
-    let stop = if opts.use_vbem {
+    // Unaccelerated and SQUAREM runs go through the component-decomposed
+    // engine: the same fixed-point iteration, laid out and scheduled by
+    // connected component (see `components`). SQUAREM extrapolates and stops
+    // per component there, always under the projected rule. DAAREM's
+    // monotonicity control needs the whole objective, so it keeps the global
+    // kernels.
+    let squarem = opts.accel == EmAccel::Squarem;
+    let stop = if squarem {
+        EmStop::Projected
+    } else if opts.use_vbem {
         opts.vb_stop
     } else {
         opts.em_stop
     };
-    let mut cplan = (opts.accel == EmAccel::None && opts.max_iter > 0)
+    let mut cplan = (opts.accel != EmAccel::Daarem && opts.max_iter > 0)
         .then(|| components::ComponentPlan::new(p, counts, parallel, stop));
     #[allow(unused_mut)]
     let (mut gpu_iters, mut min_iter, mut gpu_backend) = (0u32, min_iter, None);
@@ -586,6 +591,7 @@ pub(crate) fn run_em_counts(
                 parallel,
                 guard_zero_et: true,
                 stop,
+                squarem,
             };
             let (alphas, iters, converged, summary) =
                 components::run(cplan, &alphas, &prior_alphas, &set);
@@ -731,6 +737,73 @@ pub(crate) fn run_em_counts(
     (alphas, it + gpu_iters, converged, None, gpu_backend)
 }
 
+/// The SqS3 point `xp` extrapolated from `x0` through its two M-steps `x1`
+/// and `x2` (`r`, `v` are scratch). `false`, leaving `xp` untouched, when the
+/// second differences vanish or are not finite: at the fixpoint, where the
+/// caller takes `x2`. See [`squarem_loop`].
+pub(crate) fn squarem_point(
+    x0: &[f64],
+    x1: &[f64],
+    x2: &[f64],
+    r: &mut [f64],
+    v: &mut [f64],
+    xp: &mut [f64],
+) -> bool {
+    let n = x0.len();
+    // r = x1 - x0 ; v = (x2 - x1) - r ; and their squared norms.
+    let mut r_sq = 0.0f64;
+    let mut v_sq = 0.0f64;
+    for i in 0..n {
+        let ri = x1[i] - x0[i];
+        let vi = (x2[i] - x1[i]) - ri;
+        r[i] = ri;
+        v[i] = vi;
+        r_sq += ri * ri;
+        v_sq += vi * vi;
+    }
+    // `v_sq <= 0.0` is false for NaN, so the finiteness check also guards
+    // NaN/inf.
+    if v_sq <= 0.0 || !v_sq.is_finite() {
+        return false;
+    }
+
+    // SqS3 steplength, clamped so |alpha| ≥ 1 (alpha = -1 ⇒ xp = x2).
+    // The ratio of step size to step-size *change* estimates how far the
+    // geometric series still has to run.
+    let mut alpha = -(r_sq.sqrt() / v_sq.sqrt());
+    if alpha > -1.0 {
+        alpha = -1.0;
+    }
+
+    // Extrapolate, backing off toward the double-step if a component < 0.
+    //
+    // Abundances are counts and cannot be negative; an over-long jump can
+    // overshoot past zero, so the step is repeatedly halved back toward the
+    // plain double step until every component is valid.
+    let mut tries = 0u32;
+    loop {
+        let a2 = alpha * alpha;
+        let mut ok = true;
+        for i in 0..n {
+            let val = x0[i] - 2.0 * alpha * r[i] + a2 * v[i];
+            xp[i] = val;
+            if val < 0.0 {
+                ok = false;
+            }
+        }
+        if ok {
+            return true;
+        }
+        if alpha >= -1.0 || tries >= 30 {
+            // Give up accelerating this cycle: fall back to the plain x2.
+            xp.copy_from_slice(x2);
+            return true;
+        }
+        alpha = (alpha - 1.0) / 2.0; // move toward -1
+        tries += 1;
+    }
+}
+
 /// SQUAREM (SqS3) acceleration of the fixed-point iteration.
 ///
 /// **The intuition.** Near its fixed point, EM moves along a roughly straight
@@ -786,60 +859,11 @@ fn squarem_loop(
         f(&x1, &mut x2);
         *it += 1;
 
-        // r = x1 - x0 ; v = (x2 - x1) - r ; and their squared norms.
-        let mut r_sq = 0.0f64;
-        let mut v_sq = 0.0f64;
-        for i in 0..n {
-            let ri = x1[i] - x0[i];
-            let vi = (x2[i] - x1[i]) - ri;
-            r[i] = ri;
-            v[i] = vi;
-            r_sq += ri * ri;
-            v_sq += vi * vi;
-        }
-
-        // Vanishing (or non-finite) second differences ⇒ at the fixpoint: take the
-        // plain step x2. `v_sq <= 0.0` is false for NaN, so the finiteness check
-        // also guards NaN/inf.
-        if v_sq <= 0.0 || !v_sq.is_finite() {
+        // Vanishing (or non-finite) second differences ⇒ at the fixpoint: take
+        // the plain step x2.
+        if !squarem_point(x0, &x1, &x2, &mut r, &mut v, &mut xp) {
             std::mem::swap(x0, &mut x2);
             return true;
-        }
-
-        // SqS3 steplength, clamped so |alpha| ≥ 1 (alpha = -1 ⇒ xp = x2).
-        // The ratio of step size to step-size *change* estimates how far the
-        // geometric series still has to run.
-        let mut alpha = -(r_sq.sqrt() / v_sq.sqrt());
-        if alpha > -1.0 {
-            alpha = -1.0;
-        }
-
-        // Extrapolate, backing off toward the double-step if a component < 0.
-        //
-        // Abundances are counts and cannot be negative; an over-long jump can
-        // overshoot past zero, so the step is repeatedly halved back toward the
-        // plain double step until every component is valid.
-        let mut tries = 0u32;
-        loop {
-            let a2 = alpha * alpha;
-            let mut ok = true;
-            for i in 0..n {
-                let val = x0[i] - 2.0 * alpha * r[i] + a2 * v[i];
-                xp[i] = val;
-                if val < 0.0 {
-                    ok = false;
-                }
-            }
-            if ok {
-                break;
-            }
-            if alpha >= -1.0 || tries >= 30 {
-                // Give up accelerating this cycle: fall back to the plain x2.
-                xp.copy_from_slice(&x2);
-                break;
-            }
-            alpha = (alpha - 1.0) / 2.0; // move toward -1
-            tries += 1;
         }
 
         // Stabilizing M-step, then converge-check on the whole cycle.
