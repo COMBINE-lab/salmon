@@ -822,6 +822,11 @@ struct QuantArgs {
     /// Allow dovetailed mappings (mates extending past each other) as concordant.
     #[arg(long = "allowDovetail")]
     allow_dovetail: bool,
+    /// Largest overhang, in bases, at which inward mates that extend past each
+    /// other's 5' end (a short insert read through into adapter) still pair
+    /// without --allowDovetail (expert; default 32, 0 rejects every dovetail).
+    #[arg(long = "dovetailTolerance", hide = true)]
+    dovetail_tolerance: Option<u32>,
     /// ksw2 DP bandwidth for selective alignment (reads mode).
     #[arg(long = "bandwidth")]
     bandwidth: Option<i32>,
@@ -2085,6 +2090,7 @@ fn reads_only_mapping_flags(args: &QuantArgs) -> Vec<(&'static str, bool)> {
         ("--mismatchSeedSkip", args.mismatch_seed_skip.is_some()),
         ("--recoverOrphans", args.recover_orphans),
         ("--allowDovetail", args.allow_dovetail),
+        ("--dovetailTolerance", args.dovetail_tolerance.is_some()),
         ("--discardOrphansQuasi", args.discard_orphans_quasi),
         (
             "--orphansRequireUnmappedMate",
@@ -2815,6 +2821,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             &[
                 ("--recoverOrphans", args.recover_orphans),
                 ("--allowDovetail", args.allow_dovetail),
+                ("--dovetailTolerance", args.dovetail_tolerance.is_some()),
                 ("--discardOrphansQuasi", args.discard_orphans_quasi),
                 (
                     "--orphansRequireUnmappedMate",
@@ -2971,6 +2978,11 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.align.bandwidth = args.bandwidth.unwrap_or(15);
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
+    opts.map_config.pair.dovetail_tolerance = args
+        .dovetail_tolerance
+        .map_or(salmon_map::DEFAULT_DOVETAIL_TOLERANCE, |t| {
+            t.min(i32::MAX as u32) as i32
+        });
     opts.map_config.pair.orphans_require_unmapped_mate = args.orphans_require_unmapped_mate;
     opts.map_config.align.softclip = args.softclip;
     opts.map_config.align.softclip_overhangs = args.softclip_overhangs;

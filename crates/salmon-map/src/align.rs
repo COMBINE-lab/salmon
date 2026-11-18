@@ -159,12 +159,38 @@ pub fn align_chain_view(
     chain: &MemChain,
     cfg: &AlignConfig,
 ) -> Option<Alignment> {
+    align_chain_clipped_view(read, ref_seq, chain, cfg, (0, 0))
+}
+
+/// [`align_chain_view`] scoring only the query (the read, or its reverse
+/// complement for a reverse-strand chain, in reference-forward order) with
+/// `clip.0` bases removed from its left end and `clip.1` from its right.
+///
+/// The clipped bases are adapter read-through of a dovetailed pair: they lie
+/// past the other mate's 5' end, outside the fragment. They contribute nothing
+/// to the score, as a soft clip does under `--softclip`, and the acceptance
+/// threshold is `minScoreFraction` of a perfect alignment of the kept bases,
+/// since those are all the insert the read holds. MEMs reaching into a clipped
+/// end are cut back to the kept bases. With no clip this is
+/// [`align_chain_view`].
+pub fn align_chain_clipped_view(
+    read: &[u8],
+    ref_seq: RefView<'_>,
+    chain: &MemChain,
+    cfg: &AlignConfig,
+    clip: (i32, i32),
+) -> Option<Alignment> {
+    let kept = read.len() as i32 - clip.0.max(0) - clip.1.max(0);
+    if kept <= 0 {
+        return None;
+    }
     align_chain_above(
         read,
         ref_seq,
         chain,
         cfg,
-        min_accepted_score(read.len(), cfg),
+        min_accepted_score(kept as usize, cfg),
+        clip,
     )
 }
 
@@ -175,7 +201,23 @@ pub fn align_chain_exact(
     chain: &MemChain,
     cfg: &AlignConfig,
 ) -> Option<Alignment> {
-    align_chain_above(read, ref_seq, chain, cfg, NO_FLOOR)
+    align_chain_above(read, ref_seq, chain, cfg, NO_FLOOR, (0, 0))
+}
+
+/// `mems` cut to the query interval `[lo, hi)` and shifted so `lo` is offset 0;
+/// anchors wholly outside it are dropped.
+fn clip_mems(mems: &[crate::mem::Mem], lo: i32, hi: i32) -> Vec<crate::mem::Mem> {
+    mems.iter()
+        .filter_map(|m| {
+            let s = m.read_start.max(lo);
+            let e = m.read_end().min(hi);
+            (e > s).then(|| crate::mem::Mem {
+                read_start: s - lo,
+                ref_start: m.ref_start + (s - m.read_start),
+                len: e - s,
+            })
+        })
+        .collect()
 }
 
 fn align_chain_above(
@@ -184,12 +226,15 @@ fn align_chain_above(
     chain: &MemChain,
     cfg: &AlignConfig,
     floor: i32,
+    clip: (i32, i32),
 ) -> Option<Alignment> {
     if read.is_empty() || ref_seq.is_empty() {
         return None;
     }
+    let (clip_l, clip_r) = (clip.0.max(0), clip.1.max(0));
 
-    let diag_origin = chain.ref_start() - chain.read_start();
+    // The kept query starts `clip_l` bases right of the read's projected start.
+    let diag_origin = chain.ref_start() - chain.read_start() + clip_l;
     let win_start = diag_origin.max(0);
     let reflen_i = ref_seq.len() as i32;
 
@@ -197,12 +242,15 @@ fn align_chain_above(
     // times per read, so a read's reverse complement is kept between calls.
     ALIGN_QUERY.with(|memo| {
         let mut memo = memo.borrow_mut();
-        let query: &[u8] = if chain.is_fw {
+        let full: &[u8] = if chain.is_fw {
             read
         } else {
             memo.revcomp_of(read)
         };
-        let qlen = query.len() as i32;
+        let full_len = full.len() as i32;
+        if clip_l + clip_r >= full_len {
+            return None;
+        }
 
         // Invariant boundary: every MEM must lie within the read and the reference.
         // Seeding guarantees this; a violation is an upstream bug. We `debug_assert`
@@ -214,16 +262,26 @@ fn align_chain_above(
             m.read_start < 0
                 || m.ref_start < 0
                 || m.len <= 0
-                || m.read_end() > qlen
+                || m.read_end() > full_len
                 || m.ref_end() > reflen_i
         });
         debug_assert!(
             !out_of_bounds,
-            "align_chain: chain MEM outside read/reference bounds (qlen={qlen} reflen={reflen_i}) — upstream seeding bug"
+            "align_chain: chain MEM outside read/reference bounds (qlen={full_len} reflen={reflen_i}) — upstream seeding bug"
         );
         if out_of_bounds {
             return None;
         }
+        // Score only the kept bases (all of them unless a dovetail clips some).
+        let query = &full[clip_l as usize..(full_len - clip_r) as usize];
+        let qlen = query.len() as i32;
+        let clipped_mems;
+        let mems: &[crate::mem::Mem] = if clip_l == 0 && clip_r == 0 {
+            &chain.mems
+        } else {
+            clipped_mems = clip_mems(&chain.mems, clip_l, full_len - clip_r);
+            &clipped_mems
+        };
 
         let score = if cfg.full_length_alignment {
             // Full-read DP over the implied window.
@@ -238,7 +296,7 @@ fn align_chain_above(
             })
         } else {
             // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
-            anchored_score_above(query, ref_seq, &chain.mems, cfg, floor)
+            anchored_score_above(query, ref_seq, mems, cfg, floor)
         };
 
         let valid = score > min_accepted_score(query.len(), cfg);
@@ -1857,6 +1915,71 @@ mod tests {
     /// A forward chain whose single MEM places read offset 0 at ref `r0`.
     fn fw_chain(r0: i32, len: i32) -> MemChain {
         MemChain::new(vec![Mem::new(0, r0, len)], len as f32, true)
+    }
+
+    #[test]
+    /// A dovetailed mate's read-through bases are clipped from scoring: the read
+    /// is 80 insert bases plus 30 adapter bases. Unclipped, the adapter costs it
+    /// validity; with the 30 bases clipped on the right (forward mate) it scores
+    /// exactly a perfect 80-base alignment and is judged against the threshold
+    /// for 80 bases. The same holds for a reverse-strand mate clipped on the
+    /// left, and in full-length mode; MEMs reaching into the clip are cut back.
+    fn clipped_read_through_scores_only_insert_bases() {
+        let reference = gen_seq(400, 11);
+        let adapter = gen_seq(30, 0xADA);
+        let mut read = reference[100..180].to_vec();
+        read.extend_from_slice(&adapter);
+        // A MEM over the whole insert and one into the adapter: the second is
+        // spurious and lies wholly in the clip.
+        let chain = MemChain::new(vec![Mem::new(0, 100, 80)], 80.0, true);
+        for full in [false, true] {
+            let cfg = AlignConfig {
+                full_length_alignment: full,
+                ..Default::default()
+            };
+            let unclipped = align_chain(&read, &reference, &chain, &cfg).unwrap();
+            assert!(!unclipped.valid, "full={full} {unclipped:?}");
+            let a =
+                align_chain_clipped_view(&read, RefView::Bytes(&reference), &chain, &cfg, (0, 30))
+                    .unwrap();
+            assert_eq!(a.score, perfect_score(80, &cfg), "full={full}");
+            assert!(a.valid);
+        }
+        // Reverse-strand mate: the query is the read's reverse complement in
+        // reference order, and its read-through lies on the left.
+        let mut rc_query = adapter.clone();
+        rc_query.extend_from_slice(&reference[100..180]);
+        let rc_read = revcomp(&rc_query);
+        let chain = MemChain::new(vec![Mem::new(25, 95, 85)], 85.0, false);
+        let cfg = AlignConfig::default();
+        let a =
+            align_chain_clipped_view(&rc_read, RefView::Bytes(&reference), &chain, &cfg, (30, 0))
+                .unwrap();
+        assert_eq!(a.score, perfect_score(80, &cfg));
+        // Clipping everything leaves nothing to align.
+        assert!(align_chain_clipped_view(
+            &read,
+            RefView::Bytes(&reference),
+            &chain,
+            &cfg,
+            (60, 50)
+        )
+        .is_none());
+        // MEMs are cut to the kept interval and shifted.
+        let cut = clip_mems(&[Mem::new(0, 100, 80), Mem::new(85, 190, 20)], 0, 80);
+        assert_eq!(
+            cut.iter()
+                .map(|m| (m.read_start, m.ref_start, m.len))
+                .collect::<Vec<_>>(),
+            [(0, 100, 80)]
+        );
+        let cut = clip_mems(&[Mem::new(25, 95, 85)], 30, 110);
+        assert_eq!(
+            cut.iter()
+                .map(|m| (m.read_start, m.ref_start, m.len))
+                .collect::<Vec<_>>(),
+            [(0, 100, 80)]
+        );
     }
 
     #[test]
