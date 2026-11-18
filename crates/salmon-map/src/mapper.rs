@@ -50,7 +50,9 @@ pub enum SeedMode {
     #[default]
     UniMem,
 }
-use crate::pair::{extents_dovetail, join_reads_and_filter, PairingConfig};
+use crate::pair::{
+    extents_admissible, fragment_extent, join_reads_and_filter, pair_fragment, PairingConfig,
+};
 use crate::score::{
     finalize_mappings_counted_into, MapScratch, RawMapping, ScoreConfig, ScoredMapping,
 };
@@ -375,7 +377,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                         // the fragment 3' end, not the reverse mate's leftmost (which
                         // is 3'end - readLen) — fixing a coordinate mismatch between
                         // the observed and expected 3' positional models.
-                        let frag_start = l.proj_start().min(r.proj_start());
+                        let (frag_start, _) = pair_fragment(l, r);
                         let (fw_pos, rc_pos) = if l.is_fw != r.is_fw {
                             (frag_start.max(0), frag_start + j.fragment_len - 1)
                         } else {
@@ -777,8 +779,8 @@ impl Placements {
 
 /// Try to place the partner mate within a fragment-length window of the anchor.
 /// Returns `(partner_alignment_score, partner_start, fragment_start,
-/// fragment_length)` on success, the fragment spanning both mates' outermost ends
-/// as in `join_reads_and_filter`. A placement that normal pairing would reject
+/// fragment_length)` on success, the fragment running between the two mates' 5'
+/// ends as in `join_reads_and_filter`. A placement that normal pairing would reject
 /// (too long, or dovetailed) is not a success.
 fn recover_mate(
     partner_read: &[u8],
@@ -820,7 +822,11 @@ fn recover_mate(
         )?;
         // partner ends `end_col` bases past the window start -> fragment length
         let partner_end = win_start + aln.end_col as i32;
-        if !allow_dovetail && extents_dovetail((a_s, a_e), (partner_end - plen, partner_end)) {
+        if !extents_admissible(
+            (a_s, a_e),
+            (partner_end - plen, partner_end),
+            allow_dovetail,
+        ) {
             return None;
         }
         (aln.score, partner_end - plen, partner_end)
@@ -839,16 +845,24 @@ fn recover_mate(
         )?;
         let partner_end_abs = win_start + aln.end_col as i32;
         let partner_start_abs = partner_end_abs - plen;
-        if !allow_dovetail && extents_dovetail((partner_start_abs, partner_end_abs), (a_s, a_e)) {
+        if !extents_admissible(
+            (partner_start_abs, partner_end_abs),
+            (a_s, a_e),
+            allow_dovetail,
+        ) {
             return None;
         }
         (aln.score, partner_start_abs, partner_end_abs)
     };
-    // Outermost ends, like normal pairing: with dovetails allowed the partner can
-    // sit inside the anchor, where `partner_end - anchor_start` came out shorter
-    // than the anchor itself.
-    let frag_start = a_s.min(p_s);
-    let frag_len = a_e.max(p_e) - frag_start;
+    // Delimited by the two 5' ends, like normal pairing (`fragment_extent`): with
+    // dovetails allowed the partner can sit inside the anchor, and the anchor's
+    // bases past the partner's 5' end are read-through, not insert.
+    let (fw, rc) = if anchor.is_fw {
+        ((a_s, a_e), (p_s, p_e))
+    } else {
+        ((p_s, p_e), (a_s, a_e))
+    };
+    let (frag_start, frag_len) = fragment_extent(fw, rc);
     (frag_len > 0 && frag_len <= max_frag).then_some((score, p_s, frag_start, frag_len))
 }
 
