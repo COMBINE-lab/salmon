@@ -65,6 +65,19 @@ fn inference_path(out: &Path) -> String {
         .to_string()
 }
 
+/// Raw JSON value of a scalar `key` in `meta_info.json`.
+fn meta_raw(out: &Path, key: &str) -> String {
+    let text = std::fs::read_to_string(out.join("aux_info").join("meta_info.json")).unwrap();
+    let k = format!("\"{key}\":");
+    let start = text.find(&k).unwrap_or_else(|| panic!("{key} missing")) + k.len();
+    text[start..]
+        .split([',', '\n'])
+        .next()
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
 #[test]
 fn deterministic_is_the_default_and_online_is_the_deprecated_escape_hatch() {
     let dir = tempfile::tempdir().unwrap();
@@ -100,6 +113,8 @@ fn deterministic_is_the_default_and_online_is_the_deprecated_escape_hatch() {
     let (out, res) = run("bare", &[]);
     assert!(res.status.success());
     assert_eq!(inference_path(&out), "deterministic");
+    // far below the GPU's size floor, so CPU only, and meta_info says so
+    assert_eq!(meta_raw(&out, "gpu_backend"), "null");
     assert!(
         !out.join("intermediate_mappings.rad").exists(),
         "the intermediate is cleaned up on success"
@@ -116,6 +131,7 @@ fn deterministic_is_the_default_and_online_is_the_deprecated_escape_hatch() {
     let (out, res) = run("online", &["--online"]);
     assert!(res.status.success());
     assert_eq!(inference_path(&out), "online");
+    assert_eq!(meta_raw(&out, "gpu_backend"), "null");
     let err = String::from_utf8_lossy(&res.stderr);
     assert!(
         err.contains("deprecated"),

@@ -34,13 +34,14 @@
 
 mod bam;
 pub mod decode;
+mod gpu_map;
 mod mapping_record;
 mod output;
 mod processor;
 mod sam;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 
@@ -346,6 +347,9 @@ pub struct QuantResult {
     /// to any transcript in the final min-alpha redistribution because every
     /// member of the class was truncated; reported, not rescaled. Normally 0.
     pub inference_truncated_mass: f64,
+    /// the GPU backend that warm-started the EM/VBEM point estimate or ran the
+    /// `--sketch` k-mer lookup, or `None` when both ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
     pub num_eq_classes: usize,
     /// index of the first decoy reference (`None` if the index has no decoys).
     /// The decoy block is `[first_decoy_index, first_decoy_index + num_decoys)`;
@@ -447,10 +451,78 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     } else {
         RefseqLoad::None
     };
-    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
-        .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
+    // shared with the thread that builds the GPU k-mer lookup
+    let salmon = std::sync::Arc::new(
+        SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
+            .with_context(|| format!("loading index {}", opts.index_dir.display()))?,
+    );
     let num_refs = salmon.num_refs();
     timer.mark("index_load");
+
+    // `--sketch` k-mer lookup on the GPU (same mappings as the CPU `Strict` path).
+    // It is built on a thread while the CPU maps the first batches, so its
+    // build (`gpu_kmer_table` in the timing log) does not delay the run.
+    // shortcut: rebuilt every run; persist it beside the index if it ever
+    // outlasts the mapping.
+    let kmer_gpu = std::sync::Arc::new(std::sync::OnceLock::new());
+    if opts.sketch && opts.em.gpu && salmon.inner().poison_table().is_none() {
+        let (salmon, slot) = (salmon.clone(), kmer_gpu.clone());
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            gpu_map::urgent();
+            // opening the device takes tens of ms: off the mapping's path
+            if !salmon_infer::kmers::KmerGpu::available() {
+                return;
+            }
+            let idx = salmon.inner();
+            use salmon_infer::kmers::{KmerGpu, KmerTable};
+            use salmon_map::sketch_hits as sh;
+            // piscem's sshash dictionary by default; the flat k-mer table is
+            // kept behind a switch while the two are compared
+            // shortcut: env switch, drop the loser once measured on real data
+            let build = || {
+                if std::env::var("SALMON_GPU_LOOKUP").as_deref() == Ok("table") {
+                    let (kstart, keep, kmer) = sh::unitig_kmers(idx);
+                    KmerTable::build(idx.k(), kstart, keep, kmer)
+                } else {
+                    sh::sshash_parts(idx).and_then(|p| {
+                        KmerTable::build_sshash(
+                            idx.k(),
+                            p.m,
+                            p.magic,
+                            p.spss,
+                            p.soff,
+                            sh::kept(idx),
+                            p.bstart,
+                            p.offs,
+                        )
+                    })
+                }
+            };
+            // its own pool, so its threads can take the build's priority; as
+            // many threads as the global pool, which `-p` sized
+            let table = match rayon::ThreadPoolBuilder::new()
+                .num_threads(rayon::current_num_threads())
+                .start_handler(|_| gpu_map::urgent())
+                .build()
+            {
+                Ok(pool) => pool.install(build),
+                Err(_) => build(),
+            };
+            match table
+                .ok_or_else(|| "the index does not fit the GPU lookup".to_string())
+                .and_then(|table| KmerGpu::new(&table))
+            {
+                Ok(gpu) => {
+                    let _ = slot.set(gpu);
+                    let elapsed_s = t0.elapsed().as_secs_f64();
+                    tracing::info!(target: "salmon::timing", phase = "gpu_kmer_table", elapsed_s, "phase complete");
+                }
+                Err(e) => tracing::warn!("GPU k-mer lookup off ({e}); mapping on the CPU"),
+            }
+        });
+    }
+    let (kmer_gpu_off, kmer_gpu_used) = (AtomicBool::new(false), AtomicBool::new(false));
 
     let eq_builder = EquivalenceClassBuilder::new();
     // Gaussian-prior fragment length distribution (mean 250, sd 25); empirical
@@ -734,7 +806,14 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
             pre_burnin: opts.num_pre_aux_model_samples,
-            skip: SkippingStrategy::Permissive,
+            // Strict (every k-mer between two hits is checked) so the GPU
+            // k-mer lookup, which reads every k-mer, gives the same mappings.
+            skip: SkippingStrategy::Strict,
+            gpu: Some(gpu_map::GpuMap {
+                gpu: &kmer_gpu,
+                off: &kmer_gpu_off,
+                used: &kmer_gpu_used,
+            }),
             range_factorization_bins: opts.range_factorization_bins,
             expected_format,
             incompat_prior: opts.incompat_prior,
@@ -1079,6 +1158,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             converged: true,
             components: None,
             dropped_mass: 0.0,
+            gpu_backend: None,
         }
     } else if bias_on {
         let mut pre = opts.em.clone();
@@ -1336,6 +1416,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // eq-class co-members, so `counts` already sum to `total_count` minus only the
     // mass in fully-truncated classes (`dropped_mass`, normally 0). No rescale.
     let inference_truncated_mass = em.dropped_mass;
+    let mapped_on_gpu = kmer_gpu_used.load(Ordering::Relaxed);
+    let gpu_backend = em
+        .gpu_backend
+        .or(mapped_on_gpu.then_some(salmon_infer::GPU_BACKEND).flatten());
     let (em_iters, em_converged) = (em.iters, em.converged);
     let em_components = em.components.clone();
     if opts.skip_quant && want_rough_abund {
@@ -1482,6 +1566,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_incompatible_fragments: num_frags_incompat.load(Ordering::Relaxed),
         lib_format_counts: std::array::from_fn(|i| lib_format_counts[i].load(Ordering::Relaxed)),
         inference_truncated_mass,
+        gpu_backend,
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,
         num_decoys: salmon.info().num_decoys,

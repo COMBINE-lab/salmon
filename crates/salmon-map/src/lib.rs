@@ -54,6 +54,7 @@ pub mod mem;
 pub mod pair;
 pub mod score;
 pub mod sketch;
+pub mod sketch_hits;
 
 pub use align::{
     align_chain, align_chain_view, align_in_window, perfect_score, AlignConfig, Alignment,

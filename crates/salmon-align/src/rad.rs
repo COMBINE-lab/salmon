@@ -2363,6 +2363,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             converged: true,
             components: None,
             dropped_mass: 0.0,
+            gpu_backend: None,
         }
     } else if let Some((seq_obs, gc_obs, pos_obs)) = fused_bias_obs {
         let abund = upfront_abund
@@ -2487,6 +2488,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         em
     };
     let inference_truncated_mass = em.dropped_mass;
+    let gpu_backend = em.gpu_backend.or(opts.prior_gpu_backend);
     let (em_iters, em_converged) = (em.iters, em.converged);
     let em_components = em.components.clone();
     if let Some(c) = &em_components {
@@ -2603,6 +2605,7 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
         source: crate::FragmentSource::Rad,
         provenance,
         inference_truncated_mass,
+        gpu_backend,
         num_eq_classes,
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),

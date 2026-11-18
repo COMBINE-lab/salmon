@@ -311,6 +311,17 @@ impl<'p> ComponentPlan<'p> {
     }
 
     /// Incidences of component `c`.
+    /// Incidences in the components that are stepped one at a time, each in
+    /// parallel ([`PULL_MIN_INCIDENCES`] or more); the smaller ones run side
+    /// by side and each converges on its own, which the GPU's global iteration
+    /// does not beat (see `gpu::converge`).
+    pub(crate) fn large_incidences(&self) -> usize {
+        (0..self.num_components())
+            .map(|c| self.comp_incidences(c))
+            .filter(|&n| n >= PULL_MIN_INCIDENCES)
+            .sum()
+    }
+
     fn comp_incidences(&self, c: usize) -> usize {
         self.cls_start[self.comp_cls[c + 1]] - self.cls_start[self.comp_cls[c]]
     }
