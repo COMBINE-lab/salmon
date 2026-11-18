@@ -31,7 +31,7 @@ If you are moving from `--online` to the default, these differences may show up:
   - To get error-model scoring now, add `--errorModel -t <FASTA>`. It trains an
     order-independent counting model in a second pass over the BAM.
   - Every benchmark with ground truth found `AS` scoring at least as accurate,
-    in half the time.
+    in a single pass over the BAM.
 - **Piped alignment input with `--errorModel` is not supported.**
   - `--errorModel` reads the BAM twice, so the BAM must be a regular file.
   - Write the BAM to disk first, or keep the default `AS` scoring, which needs
@@ -58,7 +58,9 @@ If you are moving from `--online` to the default, these differences may show up:
 Paired-end accuracy against simulated truth is unchanged from `--online`, to
 the fourth decimal and in no consistent direction. This holds for selective
 alignment, `--sketch`, a high-multimapping set and `--seqBias --gcBias
---posBias`. The default uses less CPU in every measured cell and less wall
+--posBias`. It also holds on simulations with real GC and 3′ positional bias:
+with the matching correction, the default and `--online` agree to within 0.001
+Spearman. The default uses less CPU in every measured cell and less wall
 time in all but one: with reads-mode bias correction it takes about 5% more
 wall time at `-p 16`, which is the rough seed EM it runs before baking the RAD.
 Measured on 4.65M simulated pairs at `-p 16`.
