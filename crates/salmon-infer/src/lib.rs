@@ -505,13 +505,31 @@ pub(crate) fn run_em_counts(
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
+    // Unaccelerated runs go through the component-decomposed engine: the
+    // same fixed-point iteration and stopping rule, laid out and scheduled by
+    // connected component (see `components`). The accelerators extrapolate
+    // over whole vectors between M-steps, so they keep the global kernels.
+    let stop = if opts.use_vbem {
+        opts.vb_stop
+    } else {
+        opts.em_stop
+    };
+    let mut cplan = (opts.accel == EmAccel::None && opts.max_iter > 0)
+        .then(|| components::ComponentPlan::new(p, counts, parallel, stop));
     #[allow(unused_mut)]
     let (mut gpu_iters, mut min_iter, mut gpu_backend) = (0u32, min_iter, None);
     // GPU only for open-ended point-estimate runs: bootstrap replicates pass
     // `parallel = false`, bias-seed runs are fixed-length (`min_iter == max_iter`).
     #[cfg(gpu)]
     if opts.gpu && parallel && min_iter < opts.max_iter {
-        if let Some((warm, n)) = gpu::converge(p, counts, &alphas, &prior_alphas, opts, min_iter) {
+        // the work the GPU would take over: the component engine's large
+        // components, or every incidence for the global kernels
+        let work = cplan
+            .as_ref()
+            .map_or(p.labels.len(), |c| c.large_incidences());
+        if let Some((warm, n)) =
+            gpu::converge(p, counts, &alphas, &prior_alphas, opts, min_iter, work)
+        {
             alphas = warm;
             gpu_iters = n;
             gpu_backend = GPU_BACKEND;
@@ -519,17 +537,7 @@ pub(crate) fn run_em_counts(
             min_iter = min_iter.saturating_sub(n);
         }
     }
-    // Unaccelerated runs go through the component-decomposed engine: the
-    // same fixed-point iteration and stopping rule, laid out and scheduled by
-    // connected component (see `components`). The accelerators extrapolate
-    // over whole vectors between M-steps, so they keep the global kernels.
-    if opts.accel == EmAccel::None && opts.max_iter > 0 {
-        let stop = if opts.use_vbem {
-            opts.vb_stop
-        } else {
-            opts.em_stop
-        };
-        let mut cplan = components::ComponentPlan::new(p, counts, parallel, stop);
+    if let Some(cplan) = &mut cplan {
         if cplan.num_components() > 0 {
             let set = components::Settings {
                 vb: opts.use_vbem,
@@ -542,7 +550,7 @@ pub(crate) fn run_em_counts(
                 stop,
             };
             let (alphas, iters, converged, summary) =
-                components::run(&mut cplan, &alphas, &prior_alphas, &set);
+                components::run(cplan, &alphas, &prior_alphas, &set);
             return (
                 alphas,
                 iters + gpu_iters,
