@@ -762,53 +762,66 @@ That table takes about 24 bytes per k-mer on the device, against 3.7, and
 about 1.1 s to build. It maps no faster.
 
 Each batch of reads then makes one GPU call, with one thread per read. The
-thread runs piscem's `SkippingStrategy::Strict` hit collection
-(`walk_safely_until`): it looks a k-mer up, follows the read along that
-unitig while each next read k-mer is the next unitig k-mer, and emits piscem's
-raw hits. As in piscem, the walk compares the read with the unitig's own
-bases, which also go to the device at 2 bits per base. The table is only
-probed where a walk starts or a k-mer is missing, about 9 times per 100-base
-read instead of about 70. Back on the CPU, `salmon_map::sketch_hits` replays piscem's target
-selection on those hits. That replay covers live targets, occurrence recovery,
-ambiguous equivalence classes and the `--maxReadOcc` cut, and is followed by
-the usual pairing. A fragment therefore gets exactly the mappings of the CPU
-`Strict` path. Two kinds of read are mapped on the CPU instead:
+thread runs piscem's hit collection with the CPU's skipping strategy,
+`SkippingStrategy::Permissive` (piscem's and salmon's default,
+`collect_permissive`). From a hit, it jumps to the end of the hit's unitig, or
+of the read, and checks only that k-mer against the unitig's bases. When that
+check fails, it looks the k-mer there up, then the one halfway, and finally
+falls back to the `Strict` walk (`walk_safely_until`). The walk follows the
+read along the unitig while each next read k-mer is the next unitig k-mer. As
+in piscem, both compare the read with the unitig's own bases, which also go to
+the device at 2 bits per base. The kernel implements `Strict` too
+(`KmerGpu::new(table, false)`), which the tests check. Back on the CPU,
+`salmon_map::sketch_hits` replays piscem's target selection on those hits. The
+strategy only changes how raw hits are collected, not this selection. The
+replay covers live targets, occurrence recovery, ambiguous equivalence classes
+and the `--maxReadOcc` cut, and is followed by the usual pairing. A fragment
+therefore gets exactly the mappings of the CPU path. Two kinds of read are
+mapped on the CPU instead:
 
 - a read with more than 32 raw hits;
 - an index with a poison table, where the replay declines.
 
-`--sketch` now uses `Strict` on the CPU as well, so `--no-gpu` changes timing
-and not mappings. The equivalence classes are identical with and without a
-GPU; the counts differ to the EM tolerance only when the EM is also
-warm-started on the GPU, which the rule above skips on the runs below. Two tests check this without a GPU:
+`--no-gpu` therefore changes timing and not mappings. The equivalence classes
+are identical with and without a GPU. The counts differ, to the EM tolerance,
+only when the EM is also warm-started on the GPU, which the rule above skips
+on the runs below. Two tests check this without a GPU:
 
 - `crates/salmon-map/tests/sketch_hits_parity.rs`: piscem's raw hits and
-  mappings against the CPU reference `KmerTable::hits`, for both lookups.
-  With a device, it also checks the kernel against that reference;
+  mappings against the CPU reference `KmerTable::hits`, for both strategies
+  and both lookups. `Permissive` gives different raw hits from `Strict` on
+  about a third of its reads. With a device, the test also checks the kernel
+  against that reference;
 - `kmers::tests::gpu_hits_match_the_cpu_reference`: the GPU kernel against
   that reference.
 
 Measured on the M4 Max with 16 threads, against 191k synthetic transcripts
 (208 Mb), with `salmon quant -l A --sketch -p 16 --dumpEq`. Each figure is
-the fastest of alternated GPU and `--no-gpu` runs: 5 pairs at 2M, 3 at 10M.
-"Run" is the whole `salmon quant`; "mapping" includes the background build on
-the GPU rows. The load average from other processes was 11–14. The
-equivalence classes and `quant.sf` are byte-identical between the GPU and CPU
-runs, since the EM stays on the CPU here (rule above).
+the fastest of 3 alternated runs. "Run" is the whole `salmon quant`;
+"mapping" includes the background build on the GPU rows. The load average
+from other processes was 5–9. The equivalence classes and `quant.sf` are
+byte-identical between the GPU and CPU runs of each strategy, since the EM
+stays on the CPU here (rule above).
 
 | `--sketch`, 16 threads | GPU build | mapping | run |
 |---|---:|---:|---:|
-| 2M pairs, Metal | 0.23 s | 0.33 s | 0.66 s |
-| 2M pairs, CPU `Strict` (`--no-gpu`) | | 0.39 s | 0.71 s |
-| 10M pairs, Metal | 0.28 s | 0.93 s | 1.50 s |
-| 10M pairs, CPU `Strict` (`--no-gpu`) | | 1.88 s | 2.45 s |
+| 2M pairs, Metal, `Permissive` (default) | 0.23 s | 0.31 s | 0.65 s |
+| 2M pairs, CPU, `Permissive` (`--no-gpu`) | | 0.28 s | 0.60 s |
+| 10M pairs, Metal, `Permissive` (default) | 0.22 s | 0.81 s | 1.37 s |
+| 10M pairs, CPU, `Permissive` (`--no-gpu`) | | 1.32 s | 1.86 s |
+| 10M pairs, Metal, `Strict` | 0.24 s | 0.85 s | 1.42 s |
+| 10M pairs, CPU, `Strict` | | 1.77 s | 2.32 s |
 
-At 10M pairs the whole GPU run is 1.6 times faster than the CPU; at 2M pairs
-it is 7% faster. The 2M margin depends on how fast the build gets the cores:
-across those 5 pairs the medians are 0.71 s (GPU) and 0.72 s (CPU), and the
-one run whose build took 0.44 s was 0.09 s slower than its CPU pair.
-Under a load average of 25–40, 12 alternated pairs at 2M gave medians of
-1.34 s (GPU) and 1.54 s (CPU), and 6 pairs at 10M 1.67 s and 2.69 s.
+At 10M pairs the whole GPU run is 1.36 times faster than the CPU with
+`Permissive`. At 2M pairs it is 0.04 s slower: the CPU collects `Permissive`
+hits cheaply, and the GPU path has a 0.2 s build to recover before it gains.
+On the GPU both strategies cost about the same. On 1M reads from 16 threads
+the kernel takes 0.074 s with `Permissive` and 0.083 s with `Strict`. The
+kernel is one loop making one lookup per turn, so that the sshash lookup and
+the walk are each inlined once. A first version inlined the walk at four
+sites and the lookup at three. It took 0.11–0.12 s in both modes, against
+0.08 s for the `Strict`-only kernel, because the larger kernel got a lower
+GPU occupancy.
 
 Before the changes of this round, the same runs took 1.40 s (GPU) against
 1.23 s (CPU) at 2M and 2.51 s against 3.88 s at 10M, under a load of 28–73.

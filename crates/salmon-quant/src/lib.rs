@@ -459,7 +459,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let num_refs = salmon.num_refs();
     timer.mark("index_load");
 
-    // `--sketch` k-mer lookup on the GPU (same mappings as the CPU `Strict` path).
+    // piscem's default; the GPU lookup reproduces it exactly
+    let skip = SkippingStrategy::Permissive;
+    // `--sketch` k-mer lookup on the GPU (same mappings as the CPU path).
     // It is built on a thread while the CPU maps the first batches, so its
     // build (`gpu_kmer_table` in the timing log) does not delay the run.
     // shortcut: rebuilt every run; persist it beside the index if it ever
@@ -511,7 +513,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             };
             match table
                 .ok_or_else(|| "the index does not fit the GPU lookup".to_string())
-                .and_then(|table| KmerGpu::new(&table))
+                .and_then(|table| KmerGpu::new(&table, skip == SkippingStrategy::Permissive))
             {
                 Ok(gpu) => {
                     let _ = slot.set(gpu);
@@ -806,9 +808,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
             pre_burnin: opts.num_pre_aux_model_samples,
-            // Strict (every k-mer between two hits is checked) so the GPU
-            // k-mer lookup, which reads every k-mer, gives the same mappings.
-            skip: SkippingStrategy::Strict,
+            skip,
             gpu: Some(gpu_map::GpuMap {
                 gpu: &kmer_gpu,
                 off: &kmer_gpu_off,
