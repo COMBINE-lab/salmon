@@ -2,9 +2,17 @@
 //! point. RAD has more exhaustive invariance coverage; this test ensures the
 //! shared correction remains wired into BAM/SAM quantification.
 
-use salmon_align::{quantify_alignments, AlignQuantOptions};
+use salmon_align::{quantify_rad, write_alignment_rad, AlignQuantOptions, AlignQuantResult};
+use salmon_rad::ChunkCodec;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+/// The alignment-mode pipeline: BAM/SAM to an intermediate RAD, then quantify it.
+fn quantify_two_phase(opts: &AlignQuantOptions) -> anyhow::Result<AlignQuantResult> {
+    let rad = opts.output_dir.with_extension("rad");
+    write_alignment_rad(opts, &rad, ChunkCodec::None)?;
+    quantify_rad(opts, &rad)
+}
 
 fn write_fixture(dir: &Path) -> (PathBuf, PathBuf) {
     let sam = dir.join("bias.sam");
@@ -67,7 +75,7 @@ fn all_bias_alignment_mode_smoke() {
         .num_threads(4)
         .build()
         .unwrap()
-        .install(|| quantify_alignments(&opts).expect("all-bias alignment quantification"));
+        .install(|| quantify_two_phase(&opts).expect("all-bias alignment quantification"));
 
     assert_eq!(result.num_mapped, 600);
     assert!(result.eff_lengths.iter().all(|value| value.is_finite()));
@@ -118,7 +126,7 @@ fn bias_ignores_fasta_polya_tail_beyond_header_length() {
             .num_threads(4)
             .build()
             .unwrap()
-            .install(|| quantify_alignments(&opts).unwrap())
+            .install(|| quantify_two_phase(&opts).unwrap())
             .eff_lengths
     };
     assert_eq!(run(fasta, "plain"), run(tailed, "tailed"));

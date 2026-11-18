@@ -35,12 +35,10 @@ use salmon_eqclass::CollapsedEqClasses;
 
 mod components;
 mod daarem;
-mod online;
 mod packed;
 pub mod uncertainty;
 
 pub use components::ComponentSummary;
-pub use online::OnlineInference;
 pub use packed::{PackedEqClasses, PosteriorMethod};
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
 

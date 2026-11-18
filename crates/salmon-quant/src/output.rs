@@ -27,23 +27,21 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::{QuantOptions, QuantResult};
+use crate::{MapResult, QuantOptions};
 
 /// This build's version, read from Cargo.toml at compile time and recorded in
 /// every output file for provenance.
 pub(crate) const SALMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Write the standard salmon output set into `opts.output_dir`.
-pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
+pub fn write_outputs(opts: &QuantOptions, res: &MapResult) -> Result<()> {
     let dir = &opts.output_dir;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating aux_info")?;
 
-    // Under `--skipQuant` there are no abundances, so (like salmon) no quant.sf;
-    // the eq-classes, metadata, and library counts are still written.
-    if !opts.skip_quant {
-        write_quant_sf(&dir.join("quant.sf"), res, opts.sig_digits as usize)?;
-    }
+    // The mapping pass estimates no abundances, so (like salmon's
+    // `--skipQuant`) it writes no quant.sf; the requant pass writes it, and
+    // overwrites the metadata below, when the run continues.
     write_cmd_info(&dir.join("cmd_info.json"), opts)?;
     // The library-format warnings are structured diagnostics: written into
     // `meta_info.json`'s `diagnostics` alongside the run's own, so a pipeline
@@ -65,16 +63,16 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
     write_quant_log(&dir.join("logs").join("salmon_quant.log"), opts, res)?;
     salmon_model::dumps::write_fld_dump(&dir.join("aux_info").join("fld.gz"), &res.frag_len_dist)
         .context("writing fld.gz")?;
-    salmon_model::dumps::write_aux_bias_dumps(&dir.join("aux_info"), &res.bias_dump)
-        .context("writing aux bias dumps")?;
-    if !res.bootstraps.is_empty() {
-        write_bootstraps(&dir.join("aux_info").join("bootstrap"), res)?;
-    }
+    salmon_model::dumps::write_aux_bias_dumps(
+        &dir.join("aux_info"),
+        &salmon_model::dumps::BiasDump::default(),
+    )
+    .context("writing aux bias dumps")?;
     Ok(())
 }
 /// `logs/salmon_quant.log`: a concise run summary. salmon's log is more verbose,
 /// but downstream tools key off the JSON; this records the salient counters.
-fn write_quant_log(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Result<()> {
+fn write_quant_log(path: &Path, opts: &QuantOptions, res: &MapResult) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context("creating logs")?;
     }
@@ -96,10 +94,7 @@ fn write_quant_log(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
     s.push_str(&format!("observed fragments: {}\n", res.num_processed));
     s.push_str(&format!("mapped fragments:   {}\n", res.num_mapped));
     s.push_str(&format!("mapping rate: {pct:.4}%\n"));
-    s.push_str(&format!(
-        "number of equivalence classes: {}\n",
-        res.num_eq_classes
-    ));
+    s.push_str("number of equivalence classes: 0\n");
     s.push_str(&format!(
         "fragment length mean (sd): {:.2} ({:.2})\n",
         res.frag_len_mean, res.frag_len_sd
@@ -113,112 +108,19 @@ fn write_quant_log(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
 ///
 /// A cheap confidence indicator: a transcript whose evidence is mostly unique is
 /// well determined, one whose evidence is mostly shared is not.
-fn write_ambig_info(path: &Path, res: &QuantResult) -> Result<()> {
-    let (uniq, ambig) = &res.ambig;
+fn write_ambig_info(path: &Path, res: &MapResult) -> Result<()> {
     let mut w = std::io::BufWriter::new(
         std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
     );
     writeln!(w, "UniqueCount\tAmbigCount")?;
-    for i in salmon_core::quant_row_indices(uniq.len(), res.first_decoy_index, res.num_decoys) {
-        writeln!(w, "{}\t{}", uniq[i], ambig[i])?;
+    // No eq-classes exist in the mapping pass: every row is 0/0 until the
+    // requant overwrites the file.
+    for _ in salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
+    {
+        writeln!(w, "0\t0")?;
     }
     w.flush()?;
     Ok(())
-}
-
-/// `aux_info/bootstrap/{names.tsv.gz, bootstraps.gz}`: salmon's posterior-sample
-/// layout — `names.tsv.gz` lists the transcript names (tab-separated, id order),
-/// `bootstraps.gz` is the gzip of raw little-endian `f64`s with each sample's
-/// `num_txps` values written contiguously (tximport reads it directly).
-///
-/// The emitted set is restricted to the same rows as `quant.sf` via
-/// `quant_row_indices` — decoys are excluded and the sub-`k` "short" transcripts
-/// (always 0) are included — so both files align positionally and by name with
-/// `quant.sf`, which is what tximport and friends assume when they read
-/// `bootstraps.gz` against the `quant.sf` rows. (The per-sample vectors are
-/// indexed by reference id over the full `[transcripts][decoys][shorts]` range;
-/// without this filter they would carry the decoy columns and misalign.)
-fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-
-    let row_indices: Vec<usize> =
-        salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
-            .collect();
-
-    let f = std::fs::File::create(dir.join("names.tsv.gz"))?;
-    let mut enc = GzEncoder::new(f, Compression::new(6));
-    enc.write_all(&select_names_tsv(&res.names, &row_indices))?;
-    enc.finish()?;
-
-    salmon_model::dumps::write_gz_segments(
-        &dir.join("bootstraps.gz"),
-        res.bootstraps.len(),
-        |s, buf| *buf = select_sample_bytes(&res.bootstraps[s], &row_indices),
-    )?;
-    Ok(())
-}
-
-/// Tab-separated, newline-terminated `names.tsv.gz` body for the selected rows.
-fn select_names_tsv(names: &[String], row_indices: &[usize]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for (j, &i) in row_indices.iter().enumerate() {
-        if j > 0 {
-            out.push(b'\t');
-        }
-        out.extend_from_slice(names[i].as_bytes());
-    }
-    out.push(b'\n');
-    out
-}
-
-/// Little-endian `f64` bytes for one posterior sample, restricted to the selected
-/// rows (in `row_indices` order) so the stream aligns positionally with `quant.sf`.
-fn select_sample_bytes(sample: &[f64], row_indices: &[usize]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(row_indices.len() * 8);
-    for &i in row_indices {
-        out.extend_from_slice(&sample[i].to_le_bytes());
-    }
-    out
-}
-
-/// `quant.sf`: `Name  Length  EffectiveLength  TPM  NumReads`.
-///
-/// The four numbers per transcript: its annotated length, the effective length
-/// used as the divisor, TPM (a within-sample relative abundance that already
-/// accounts for length, summing to one million), and the estimated fragment
-/// count — fractional, because ambiguous fragments are split between
-/// transcripts.
-fn write_quant_sf(path: &Path, res: &QuantResult, sig_digits: usize) -> Result<()> {
-    salmon_core::write_via_rename(path, |w| {
-        writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-        // The reference numbering is `[transcripts][decoys][short transcripts]`:
-        // decoys occupy `[first_decoy_index, first_decoy_index + num_decoys)` and are
-        // never quantified (excluded here, matching salmon), while sub-`k` "short"
-        // transcripts (no k-mers, never seeded) are appended after the decoy block by
-        // the index builder. We still report the shorts — always 0 reads / 0 TPM — so
-        // `quant.sf` lists every input transcript.
-        // salmon writes EffectiveLength and NumReads with `--sigDigits` decimals
-        // (default 3) and TPM with the fixed `{:f}` (6-decimal) format.
-        for i in
-            salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
-        {
-            writeln!(
-                w,
-                "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
-                res.names[i],
-                res.lengths[i],
-                sig_digits,
-                res.eff_lengths[i],
-                res.tpm[i],
-                sig_digits,
-                res.counts[i]
-            )?;
-        }
-        Ok(())
-    })
-    .with_context(|| format!("writing {}", path.display()))
 }
 
 /// `cmd_info.json`: the run's inputs and key settings.
@@ -270,7 +172,7 @@ fn write_cmd_info(path: &Path, opts: &QuantOptions) -> Result<()> {
 fn write_lib_counts(
     path: &Path,
     opts: &QuantOptions,
-    res: &QuantResult,
+    res: &MapResult,
 ) -> Result<Vec<crate::Diagnostic>> {
     let mut read_files = paths_to_strings(&opts.mates1);
     read_files.extend(paths_to_strings(&opts.mates2));
@@ -378,11 +280,10 @@ struct MetaInfo {
     em_components: Option<salmon_core::EmComponentsMeta>,
     /// library format observed by the auto-detector (null if not observed)
     detected_library_type: Option<String>,
-    /// which inference path produced these results: `online` (the one-pass
-    /// streaming quant), or `none` for a mapping-only `--skipQuant` pass (a
-    /// `--deterministic` run's phase 2 rewrites this file with
-    /// `deterministic`). Makes the online-to-deterministic transition
-    /// auditable from existing output (#1140).
+    /// which inference path produced these results: always `none` here (the
+    /// mapping pass estimates nothing; the requant rewrites this file with
+    /// `deterministic`, so `none` survives only a `--skipQuant` run). Pre-2.12
+    /// one-pass runs wrote `online` (#1140).
     inference_path: &'static str,
     /// total wall-clock seconds and peak resident set size (KiB, Linux)
     total_time_seconds: f64,
@@ -397,7 +298,7 @@ struct MetaInfo {
 fn write_meta_info(
     path: &Path,
     opts: &QuantOptions,
-    res: &QuantResult,
+    res: &MapResult,
     lib_diags: &[crate::Diagnostic],
 ) -> Result<()> {
     // Mapping the reads answers nearly everything directly; what it cannot
@@ -415,16 +316,8 @@ fn write_meta_info(
     } else {
         0.0
     };
-    // What was actually drawn, as salmon-align writes it: a run that draws no
-    // samples (e.g. `--skipQuant`) must not claim a sample type that
-    // `num_bootstraps: 0` beside it contradicts.
-    let samp_type = if res.bootstraps.is_empty() {
-        "none"
-    } else if opts.num_bootstraps > 0 {
-        "bootstrap"
-    } else {
-        "gibbs"
-    };
+    // The mapping pass draws no posterior samples.
+    let samp_type = "none";
     // eq-class properties match salmon's default in-memory representation.
     let eq_class_properties = if opts.range_factorization_bins > 0 {
         vec!["range_factorized".to_string(), "gzipped".to_string()]
@@ -443,7 +336,7 @@ fn write_meta_info(
         frag_length_sd: res.frag_len_sd,
         frag_length_source: res.frag_len_source.as_str(),
         seq_bias_correct: opts.seq_bias,
-        gc_bias_correct: opts.gc_bias && !res.bias_dump.obs_gc.is_empty(),
+        gc_bias_correct: false,
         pos_bias_correct: opts.pos_bias,
         // Not the seq/GC/pos bin count, despite the name. C++ salmon writes
         // `bcounts.size()` here (`GZipWriter.cpp:532`), where `bcounts` is the
@@ -463,13 +356,9 @@ fn write_meta_info(
         num_bias_bins: 0,
         // The counts the field above cannot carry, measured from the models
         // this run produced rather than from the requested options.
-        seq_bias_context_length: (!res.bias_dump.obs5_seq.is_empty())
-            .then_some(salmon_model::seqbias::CONTEXT_LENGTH),
-        gc_bias_bins: (!res.bias_dump.obs_gc.is_empty()).then_some(res.bias_dump.obs_gc.len()),
-        pos_bias_bins: res.bias_dump.obs5_pos.first().map(|first| PosBiasShape {
-            length_classes: res.bias_dump.obs5_pos.len(),
-            bins_per_class: first.len(),
-        }),
+        seq_bias_context_length: None,
+        gc_bias_bins: None,
+        pos_bias_bins: None,
         mapping_type: if opts.sketch { "pseudo" } else { "mapping" }.to_string(),
         keep_duplicates: res.keep_duplicates,
         index_seq_hash: res.index_seq_hash.clone(),
@@ -493,7 +382,7 @@ fn write_meta_info(
             res.first_decoy_index
                 .map_or(0, |fdi| res.names.len().saturating_sub(fdi))
         },
-        num_eq_classes: res.num_eq_classes,
+        num_eq_classes: 0,
         serialized_eq_classes: opts.dump_eq || opts.dump_eq_weights,
         eq_class_properties,
         length_classes: res.length_classes.clone(),
@@ -505,8 +394,8 @@ fn write_meta_info(
             .num_alignments_below_threshold_for_mapped_fragments_vm,
         percent_mapped,
         num_decoy_fragments: res.num_decoy_fragments,
-        inference_truncated_mass: res.inference_truncated_mass,
-        num_bootstraps: res.bootstraps.len() as u32,
+        inference_truncated_mass: 0.0,
+        num_bootstraps: 0,
         num_orphan: res.num_orphan,
         meta_info_complete: missing_meta_info_fields.is_empty(),
         incomplete_meta_info_fields: missing_meta_info_fields,
@@ -515,7 +404,7 @@ fn write_meta_info(
         em_converged: res.em_converged,
         em_components: res.em_components.as_ref().map(|c| c.to_meta()),
         detected_library_type: res.detected_library_type.clone(),
-        inference_path: if opts.skip_quant { "none" } else { "online" },
+        inference_path: "none",
         total_time_seconds: res.total_seconds,
         peak_rss_kb: res.peak_rss_kb,
         diagnostics: {
@@ -540,8 +429,6 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{select_names_tsv, select_sample_bytes};
-
     /// Collect the emitted row indices for a given reference layout.
     fn rows(total: usize, fdi: Option<usize>, nd: usize) -> Vec<usize> {
         salmon_core::quant_row_indices(total, fdi, nd).collect()
@@ -583,34 +470,5 @@ mod tests {
     fn clamps_out_of_range_decoy_block() {
         // num_decoys overshooting total must not panic or emit phantom rows.
         assert_eq!(rows(5, Some(3), 99), vec![0, 1, 2]);
-    }
-
-    /// tximport reads `bootstraps.gz` positionally against the `quant.sf` rows,
-    /// so a misalignment here would silently attribute every posterior sample to
-    /// the wrong transcript.
-    #[test]
-    fn bootstrap_output_aligns_with_quant_rows() {
-        // Reference layout: [t0 t1 t2][d0 d1][s0] — 3 transcripts, 2 decoys, 1
-        // short. The per-sample vector is indexed by reference id over the full
-        // range (decoys carry residual mass, the short is always 0). The emitted
-        // bootstrap rows must drop the decoys, keep the short at 0, and stay in
-        // quant.sf order so names.tsv.gz/bootstraps.gz align positionally.
-        let names: Vec<String> = ["t0", "t1", "t2", "d0", "d1", "s0"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let sample = vec![10.0_f64, 20.0, 30.0, 7.0, 9.0, 0.0];
-        let row_indices: Vec<usize> =
-            salmon_core::quant_row_indices(names.len(), Some(3), 2).collect();
-        assert_eq!(row_indices, vec![0, 1, 2, 5]);
-
-        let names_tsv = select_names_tsv(&names, &row_indices);
-        assert_eq!(names_tsv, b"t0\tt1\tt2\ts0\n");
-
-        let bytes = select_sample_bytes(&sample, &row_indices);
-        let (words, _) = bytes.as_chunks::<8>();
-        let got: Vec<f64> = words.iter().copied().map(f64::from_le_bytes).collect();
-        // decoy values 7.0/9.0 excluded; short s0 present at 0.0.
-        assert_eq!(got, vec![10.0, 20.0, 30.0, 0.0]);
     }
 }

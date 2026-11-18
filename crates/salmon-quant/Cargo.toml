@@ -31,6 +31,8 @@ noodles-bgzf = "0.52"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# the requant half of the two-phase pipeline, for end-to-end tests
+salmon-align = { workspace = true }
 noodles-bam = "0.98"
 noodles-sam = "0.93"
 # reading back RAD output in the end-to-end test

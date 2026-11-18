@@ -16,7 +16,31 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use salmon_index::{build, IndexBuildOptions};
-use salmon_quant::{quantify, QuantOptions};
+use salmon_quant::{map_to_rad, QuantOptions};
+
+/// The reads-mode pipeline as the CLI runs it: map to an intermediate RAD
+/// (`map_to_rad`), then quantify the RAD (`quantify_rad`).
+fn quantify_two_phase(opts: &QuantOptions) -> anyhow::Result<salmon_align::AlignQuantResult> {
+    let rad = opts
+        .write_rad
+        .clone()
+        .unwrap_or_else(|| opts.output_dir.join("intermediate_mappings.rad"));
+    std::fs::create_dir_all(&opts.output_dir)?;
+    map_to_rad(opts, &rad)?;
+    let mut q = salmon_align::AlignQuantOptions::new(rad.clone(), opts.output_dir.clone());
+    q.lib_type = opts.lib_type.clone();
+    q.em = opts.em.clone();
+    q.range_factorization_bins = opts.range_factorization_bins;
+    q.incompat_prior = opts.incompat_prior;
+    q.score_exp = opts.map_config.score.score_exp;
+    q.hard_filter = opts.map_config.score.hard_filter;
+    q.fld_mean = opts.fld_mean;
+    q.fld_sd = opts.fld_sd;
+    q.fld_max = opts.fld_max;
+    q.model_single_frag_prob = opts.model_single_frag_prob;
+    q.preserve_cmd_info = true;
+    salmon_align::quantify_rad(&q, &rad)
+}
 
 const READ_LEN: usize = 75;
 
@@ -132,7 +156,7 @@ fn simulate_scaled(dir: &Path, scale: u64) -> (PathBuf, PathBuf, PathBuf, HashMa
     (fasta, r1p, r2p, truth)
 }
 
-fn counts_by_name(res: &salmon_quant::QuantResult) -> HashMap<String, f64> {
+fn counts_by_name(res: &salmon_align::AlignQuantResult) -> HashMap<String, f64> {
     res.names
         .iter()
         .cloned()
@@ -157,7 +181,7 @@ fn selective_alignment_quantification_tracks_truth() {
     opts.lib_type = "IU".to_string();
     opts.num_threads = 1;
 
-    let res = quantify(&opts).expect("quantify");
+    let res = quantify_two_phase(&opts).expect("quantify");
 
     let total_truth: u64 = truth.values().sum();
     assert!(
@@ -189,13 +213,12 @@ fn selective_alignment_quantification_tracks_truth() {
     assert!(out.join("quant.sf").exists());
     assert!(out.join("aux_info").join("meta_info.json").exists());
 
-    // The one-pass path labels itself in meta_info (#1140), so the
-    // online-to-deterministic transition is auditable from existing output.
+    // The requant labels itself in meta_info (#1140).
     let meta: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(out.join("aux_info").join("meta_info.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(meta["inference_path"].as_str().unwrap(), "online");
+    assert_eq!(meta["inference_path"].as_str().unwrap(), "deterministic");
 
     // quant.sf has a header + one row per transcript.
     let sf = std::fs::read_to_string(out.join("quant.sf")).unwrap();
@@ -229,7 +252,7 @@ fn stranded_num_mapped_matches_quantified_mass() {
 
     // Mass conservation must hold for any library type: every fragment counted as
     // mapped distributes its full unit of mass across transcripts.
-    let mass_conserved = |res: &salmon_quant::QuantResult| {
+    let mass_conserved = |res: &salmon_align::AlignQuantResult| {
         let sum_counts: f64 = res.counts.iter().sum();
         let tol = 1.0 + 0.005 * res.num_mapped as f64;
         assert!(
@@ -246,7 +269,7 @@ fn stranded_num_mapped_matches_quantified_mass() {
     opts.mates2 = vec![r2.clone()];
     opts.lib_type = "ISF".to_string();
     opts.num_threads = 1;
-    let res_isf = quantify(&opts).expect("quantify ISF");
+    let res_isf = quantify_two_phase(&opts).expect("quantify ISF");
     assert!(
         res_isf.num_mapped as f64 >= 0.9 * total_truth as f64,
         "ISF: only {} / {} fragments mapped",
@@ -264,7 +287,7 @@ fn stranded_num_mapped_matches_quantified_mass() {
     opts.mates2 = vec![r2];
     opts.lib_type = "ISR".to_string();
     opts.num_threads = 1;
-    let res_isr = quantify(&opts).expect("quantify ISR");
+    let res_isr = quantify_two_phase(&opts).expect("quantify ISR");
     assert!(
         (res_isr.num_mapped as f64) < 0.1 * total_truth as f64,
         "ISR: strand-incompatible fragments counted as mapped: num_mapped={} of {}",
@@ -310,7 +333,7 @@ fn stranded_lib_format_counts_report_incompatible_fragments() {
         opts.mates2 = vec![r2.clone()];
         opts.lib_type = lib_type.to_string();
         opts.num_threads = 1;
-        quantify(&opts).unwrap_or_else(|e| panic!("quantify {lib_type}: {e}"))
+        quantify_two_phase(&opts).unwrap_or_else(|e| panic!("quantify {lib_type}: {e}"))
     };
 
     // Matching stranded type: essentially every mapped fragment is compatible.
@@ -436,7 +459,7 @@ fn sketch_lib_format_counts_report_dropped_wrong_strand_fragments() {
         opts.lib_type = lib_type.to_string();
         opts.sketch = true;
         opts.num_threads = 1;
-        quantify(&opts).unwrap_or_else(|e| panic!("sketch quantify {lib_type}: {e}"))
+        quantify_two_phase(&opts).unwrap_or_else(|e| panic!("sketch quantify {lib_type}: {e}"))
     };
     let lib_counts = |dir: &Path| -> serde_json::Value {
         let s = std::fs::read_to_string(dir.join("lib_format_counts.json")).unwrap();
@@ -544,11 +567,8 @@ fn deterministic_mapping_pass_reports_incompatible_fragments() {
     opts.mates2 = vec![r2];
     opts.lib_type = "ISR".to_string();
     opts.num_threads = 1;
-    opts.write_rad = Some(out.join("intermediate_mappings.rad"));
-    opts.skip_quant = true;
-    opts.deterministic_fld = true;
     std::fs::create_dir_all(&out).unwrap();
-    quantify(&opts).expect("deterministic mapping pass");
+    map_to_rad(&opts, &out.join("intermediate_mappings.rad")).expect("mapping pass");
 
     let s = std::fs::read_to_string(out.join("lib_format_counts.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -644,7 +664,7 @@ fn writes_rad_output_readable_and_complete() {
         opts.sketch = sketch;
         opts.write_rad = Some(rad_path.clone());
 
-        let res = quantify(&opts).expect("quantify with --writeRad");
+        let res = quantify_two_phase(&opts).expect("quantify with --writeRad");
         let (profile, ref_names, recs) = read_rad(&rad_path);
 
         assert_eq!(profile, expected_profile, "{tag}: profile detection");
@@ -737,7 +757,7 @@ fn quant_to_sam_and_bam(
         opts.lib_type = "IU".into();
         opts.num_threads = threads;
         set(&mut opts);
-        quantify(&opts).unwrap_or_else(|e| panic!("{out} quantification: {e}"));
+        quantify_two_phase(&opts).unwrap_or_else(|e| panic!("{out} quantification: {e}"));
     };
 
     let sam_path = tmp.join("mappings.sam");
@@ -849,7 +869,7 @@ fn bam_content_is_independent_of_thread_count() {
         opts.lib_type = "IU".into();
         opts.num_threads = threads;
         opts.write_bam = Some(bam_path.clone());
-        quantify(&opts).expect("BAM-output quantification");
+        quantify_two_phase(&opts).expect("BAM-output quantification");
 
         let (_, mut records) = read_bam_records(&bam_path);
         records.sort_by_key(record_sort_key);
@@ -909,7 +929,7 @@ fn bam_write_failure_is_reported() {
     opts.num_threads = 2;
     opts.write_bam = Some(PathBuf::from("/dev/full"));
 
-    let error = quantify(&opts).expect_err("writing to /dev/full must fail");
+    let error = quantify_two_phase(&opts).expect_err("writing to /dev/full must fail");
     let chain = format!("{error:#}");
     assert!(
         chain.contains("No space left on device"),
@@ -924,7 +944,7 @@ fn sam_and_bam_outputs_are_mutually_exclusive() {
     let mut opts = QuantOptions::new(tmp.path().join("idx"), tmp.path().join("quant"));
     opts.write_mappings = Some(tmp.path().join("mappings.sam"));
     opts.write_bam = Some(tmp.path().join("mappings.bam"));
-    let error = quantify(&opts).unwrap_err().to_string();
+    let error = quantify_two_phase(&opts).unwrap_err().to_string();
     assert!(error.contains("mutually exclusive"), "{error}");
 }
 
@@ -948,7 +968,7 @@ fn pseudoalignment_quantification_tracks_truth() {
     opts.num_threads = 1;
     opts.sketch = true; // pseudoalignment-only
 
-    let res = quantify(&opts).expect("quantify (sketch)");
+    let res = quantify_two_phase(&opts).expect("quantify (sketch)");
     let total_truth: u64 = truth.values().sum();
     assert!(
         res.num_mapped as f64 >= 0.9 * total_truth as f64,
@@ -1040,7 +1060,7 @@ fn mates_orphaning_to_different_transcripts_are_one_orphan_fragment() {
 
     // The assertion fires during `record`, so reaching a result at all is the
     // regression check in a debug build.
-    let res = quantify(&opts).expect("quantify must not abort on mixed-orphan fragments");
+    let res = quantify_two_phase(&opts).expect("quantify must not abort on mixed-orphan fragments");
 
     // Every fragment placed, and each counts once — as an orphan, not a pair.
     assert_eq!(
@@ -1113,7 +1133,7 @@ fn write_unmapped_names_lists_exactly_the_unmapped_fragments() {
     opts.lib_type = "IU".to_string();
     opts.num_threads = 2;
     opts.write_unmapped_names = true;
-    quantify(&opts).expect("quantify");
+    quantify_two_phase(&opts).expect("quantify");
 
     let txt = std::fs::read_to_string(out.join("aux_info").join("unmapped_names.txt"))
         .expect("unmapped_names.txt must exist");
@@ -1172,7 +1192,7 @@ fn pseudoalignment_strand_filter_respects_library_type() {
         opts.lib_type = lib_type.to_string();
         opts.sketch = true;
         opts.num_threads = 1;
-        quantify(&opts).unwrap_or_else(|e| panic!("quantify {lib_type}: {e}"))
+        quantify_two_phase(&opts).unwrap_or_else(|e| panic!("quantify {lib_type}: {e}"))
     };
 
     // Matching stranded type: everything maps, mass conserved.
@@ -1212,8 +1232,13 @@ fn pseudoalignment_strand_filter_respects_library_type() {
     // type is a best guess from the partial samples — which, before the fix,
     // were *zero* in sketch mode, so `-l A` always fell back to `IU`.
     let auto = quant("A", tmp.path().join("sk_auto"));
+    let lib: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(tmp.path().join("sk_auto").join("lib_format_counts.json"))
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
-        auto.library_type, "ISF",
+        lib["expected_format"], "ISF",
         "sketch `-l A` should resolve the simulated inward-FR orientation \
          from the detector's samples, not fall back to IU"
     );
@@ -1282,7 +1307,7 @@ fn recovered_pairs_are_strand_judged() {
         opts.lib_type = lib_type.to_string();
         opts.num_threads = 1;
         opts.map_config.recover_orphans = recover;
-        quantify(&opts).unwrap_or_else(|e| panic!("quantify {lib_type}: {e}"))
+        quantify_two_phase(&opts).unwrap_or_else(|e| panic!("quantify {lib_type}: {e}"))
     };
 
     // Without rescue, the corrupted mates orphan; with it, pairs are recovered
@@ -1291,8 +1316,8 @@ fn recovered_pairs_are_strand_judged() {
     let plain = quant("ISF", false, tmp.path().join("no_rescue"));
     let rescued = quant("ISF", true, tmp.path().join("rescue_isf"));
     assert!(
-        rescued.num_orphan < plain.num_orphan,
-        "rescue must convert orphans ({}) into pairs ({} orphans remain)",
+        rescued.num_orphan.unwrap() < plain.num_orphan.unwrap(),
+        "rescue must convert orphans ({:?}) into pairs ({:?} orphans remain)",
         plain.num_orphan,
         rescued.num_orphan
     );

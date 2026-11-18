@@ -1,11 +1,12 @@
-//! 2.6.0 flips the default quantification path to deterministic (#1140).
+//! 2.6.0 flipped the default quantification path to deterministic (#1140);
+//! 2.12.0 removed the one-pass `--online` path.
 //!
 //! These tests pin the flip's contract at the binary level: a bare run takes
 //! the deterministic two-phase path (auditable via `meta_info.json`'s
-//! `inference_path`), `--online` selects the deprecated one-pass path with a
-//! deprecation warning, `--deterministic` stays accepted as a no-op (it is in
-//! scripts and CI configs already), the contradictory spelling errors out, and
-//! online-only knobs warn instead of being silently inert under the default.
+//! `inference_path`), `--online` (removed in 2.12.0) is refused with a fix-it
+//! message, `--deterministic` stays accepted as a no-op (it is in scripts and
+//! CI configs already), and the removed online-only knobs warn instead of being
+//! silently inert.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -66,7 +67,7 @@ fn inference_path(out: &Path) -> String {
 }
 
 #[test]
-fn deterministic_is_the_default_and_online_is_the_deprecated_escape_hatch() {
+fn deterministic_is_the_default_and_online_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let (fasta, r1, r2) = fixture(dir.path());
     let index = dir.path().join("idx");
@@ -112,21 +113,16 @@ fn deterministic_is_the_default_and_online_is_the_deprecated_escape_hatch() {
     assert!(res.status.success(), "--deterministic must stay accepted");
     assert_eq!(inference_path(&out), "deterministic");
 
-    // `--online` selects the one-pass path and says it is deprecated.
-    let (out, res) = run("online", &["--online"]);
-    assert!(res.status.success());
-    assert_eq!(inference_path(&out), "online");
+    // `--online` was removed in 2.12.0: it fails with a pointer to the default
+    // rather than silently running something else.
+    let (_, res) = run("online", &["--online"]);
+    assert!(!res.status.success(), "--online must be refused");
     let err = String::from_utf8_lossy(&res.stderr);
     assert!(
-        err.contains("deprecated"),
-        "--online must announce its deprecation: {err}"
-    );
-
-    // The contradictory spelling is an error, not a guess.
-    let (_, res) = run("conflict", &["--online", "--deterministic"]);
-    assert!(
-        !res.status.success(),
-        "--online --deterministic must not pick a side silently"
+        err.contains("--online was removed")
+            && err.contains("--errorModel -t")
+            && err.contains("--radScratchDir"),
+        "--online must say it was removed and name the replacements: {err}"
     );
 
     // An online-only knob without `--online` warns instead of being silently
@@ -138,15 +134,5 @@ fn deterministic_is_the_default_and_online_is_the_deprecated_escape_hatch() {
     assert!(
         err.contains("--forgettingFactor"),
         "an inert online knob must be named in a warning: {err}"
-    );
-
-    // ...and the same knob under `--online` is used without complaint about
-    // inertness (the only warning is the deprecation one).
-    let (_, res) = run("online_knob", &["--online", "--forgettingFactor", "0.8"]);
-    assert!(res.status.success());
-    let err = String::from_utf8_lossy(&res.stderr);
-    assert!(
-        !err.contains("ignored"),
-        "an online knob under --online is not inert: {err}"
     );
 }

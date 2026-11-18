@@ -422,11 +422,13 @@ fn driver_diagnostics_reach_meta_on_the_alignment_path() {
         "warning",
         "carried across from the driver".to_string(),
     ));
-    salmon_align::quantify_alignments(&opts).unwrap();
+    let rad = dir.path().join("q.rad");
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    quantify_rad(&opts, &rad).unwrap();
     let meta = std::fs::read_to_string(out.join("aux_info").join("meta_info.json")).unwrap();
     assert!(
         meta.contains("test_probe_diagnostic"),
-        "driver-supplied diagnostics must reach meta_info.json on the online -a path: {meta}"
+        "driver-supplied diagnostics must reach meta_info.json on the -a path: {meta}"
     );
 }
 
@@ -461,7 +463,7 @@ fn write_sam_with_orphans(dir: &Path) -> PathBuf {
 /// `--discardOrphans` was read only by the online path, so on the 2.6.0
 /// default (`-a` deterministic) it was accepted and silently did nothing
 /// (#1140, audit C10). Dropping the half-mapped fragments before they reach
-/// the RAD makes both alignment paths answer the flag the same way.
+/// the RAD makes the flag take effect.
 fn discard_orphans_is_honoured_on_the_deterministic_path() {
     let dir = tempfile::tempdir().unwrap();
     let sam = write_sam_with_orphans(dir.path());
@@ -987,26 +989,19 @@ fn a_placement_on_a_reference_missing_from_t_does_not_win() {
     }
     drop(f);
 
-    // The RAD path, then the one-pass (`--online`) path.
-    for online in [false, true] {
-        let out = dir.path().join(format!("q{online}"));
-        let mut opts = AlignQuantOptions::new(sam.clone(), out.clone());
-        opts.lib_type = "U".to_string();
-        opts.deterministic_error_model = !online;
-        opts.transcripts = Some(fasta.clone());
-        if online {
-            salmon_align::quantify_alignments(&opts).unwrap();
-        } else {
-            let rad = dir.path().join("a.rad");
-            write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
-            quantify_rad(&opts, &rad).unwrap();
-        }
-        let counts = quant_counts(&out);
-        assert!(
-            counts[1].1 <= counts[0].1 + 1.0,
-            "online={online}: an unscorable placement must not beat a scored one: {counts:?}"
-        );
-    }
+    let out = dir.path().join("q");
+    let mut opts = AlignQuantOptions::new(sam.clone(), out.clone());
+    opts.lib_type = "U".to_string();
+    opts.deterministic_error_model = true;
+    opts.transcripts = Some(fasta.clone());
+    let rad = dir.path().join("a.rad");
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    quantify_rad(&opts, &rad).unwrap();
+    let counts = quant_counts(&out);
+    assert!(
+        counts[1].1 <= counts[0].1 + 1.0,
+        "an unscorable placement must not beat a scored one: {counts:?}"
+    );
 }
 
 /// A transcript with no sequence in `-t` has an empty GC view, which reads the

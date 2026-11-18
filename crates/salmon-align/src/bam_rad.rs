@@ -34,10 +34,11 @@
 //!     naive-eq tally; the counts are normalized once into a fixed log-space
 //!     model; pass B scores each placement `Σ(fg−bg)` against that fixed model
 //!     and stores the quantized log-weight (`score_kind = LOGWEIGHT`). This
-//!     restores the fidelity of salmon's online error model while staying
-//!     byte-reproducible. Training is uniform (one count per placement-mate, no
-//!     posterior weighting) — a deliberate, documented divergence from the online
-//!     model's posterior-weighted training (which is order-dependent by design).
+//!     restores the fidelity of salmon's (C++, and pre-2.12 one-pass) online
+//!     error model while staying byte-reproducible. Training is uniform (one
+//!     count per placement-mate, no posterior weighting) — a deliberate,
+//!     documented divergence from that model's posterior-weighted training
+//!     (which is order-dependent by design).
 
 use std::path::Path;
 
@@ -62,7 +63,7 @@ use crate::{
 
 /// Flush a worker's chunk buffer once it reaches this many record bytes.
 const CHUNK_FLUSH_BYTES: usize = 64 * 1024;
-/// Fragment groups per reader→worker minibatch (matches the online pass).
+/// Fragment groups per reader→worker minibatch.
 const MINIBATCH: usize = 1000;
 /// Laplace pseudocount per error-model transition cell (salmon's default alpha).
 const ERROR_MODEL_ALPHA: f64 = 1.0;
@@ -113,11 +114,9 @@ pub fn write_alignment_rad(
     // ever consume (#1140).
     let bias_on =
         (opts.seq_bias || opts.gc_bias || opts.pos_bias) && opts.length_correction().is_effective();
-    // Matches the alignment-mode `paired_lib` derivation in `quantify_alignments`.
     let is_paired = crate::rad_library_is_paired(&opts.bam, &opts.lib_type)?;
     // Only meaningful for a paired library: with single-end reads every
-    // placement is an "orphan" and the flag would discard the entire run. Same
-    // guard the online path applies (`discard_orphans && paired_lib`).
+    // placement is an "orphan" and the flag would discard the entire run.
     let discard_orphans = opts.discard_orphans && is_paired;
     // The user-fixed expected format (`None` for auto / unstranded), resolved
     // against the FLD-detected format at end of pass.
@@ -127,7 +126,7 @@ pub fn write_alignment_rad(
     };
     // The `-l A` caveat belongs to alignment *input*, not to the estimator
     // reading it: this path detects via the FLD pass, so it owes the same
-    // warning the online path gives (#1140, audit C12).
+    // warning every alignment-input producer gives (#1140, audit C12).
     if LibraryFormat::is_auto(&opts.lib_type) {
         crate::warn_auto_detect_from_alignments();
     }
@@ -426,11 +425,10 @@ fn analyze_group<R: sam::alignment::Record>(
         crate::fill_missing_bases(&mut frags);
     }
     let mut placements = pair_records(&frags);
-    // `--discardOrphans`: drop half-mapped fragments before they reach the RAD,
-    // by the same rule the online path applies at weighting time (a placement
-    // backed by fewer than two records is an orphan). Applied here rather than
-    // at requant so both alignment paths answer the flag identically and the
-    // FLD / naive-eq tallies see exactly the placements that get written
+    // `--discardOrphans`: drop half-mapped fragments before they reach the RAD
+    // (a placement backed by fewer than two records is an orphan). Applied here
+    // rather than at requant so the FLD / naive-eq tallies see exactly the
+    // placements that get written
     // (#1140, audit C10 — the flag was silently inert on the 2.6.0 default).
     if discard_orphans {
         placements.retain(|pl| pl.idxs.len() >= 2);
@@ -816,9 +814,9 @@ impl GroupWorker for ScoreWriteWorker<'_> {
 // Reader / worker orchestration
 // ---------------------------------------------------------------------------
 
-/// Dispatch the grouped pass over SAM or BAM (chosen by extension), mirroring
-/// [`crate::stream_online_pass`]'s decoder setup, driving one `make_worker()`
-/// per thread. See [`run_grouped`] for what it returns.
+/// Dispatch the grouped pass over SAM or BAM (chosen by extension; BAM is
+/// decoded on a small BGZF worker pool), driving one `make_worker()` per
+/// thread. See [`run_grouped`] for what it returns.
 fn stream_grouped<MK, W>(
     bam_path: &Path,
     nthreads: usize,

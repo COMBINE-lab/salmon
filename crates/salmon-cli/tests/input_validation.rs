@@ -898,8 +898,7 @@ fn explicit_deterministic_is_a_no_op_with_an_info_note() {
 }
 
 /// The online-only knobs (`--forgettingFactor`, `--numAuxModelSamples`,
-/// `--numPreAuxModelSamples`) warn-and-ignore when passed without `--online`,
-/// noting the planned removal, and the message agrees in number: one flag
+/// `--numPreAuxModelSamples`) warn-and-ignore, noting the removal, and the message agrees in number: one flag
 /// "configures … to use it", several "configure … to use them".
 #[test]
 fn online_only_knobs_warn_without_online_and_agree_in_number() {
@@ -924,8 +923,7 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
     let e1 = String::from_utf8_lossy(&one.stderr);
     assert!(
         e1.contains("--forgettingFactor configures the online inference path")
-            && e1.contains("to be removed in a")
-            && e1.contains("to use it."),
+            && e1.contains("which was removed in 2.12.0"),
         "single online knob must warn in the singular, noting the removal: {e1}"
     );
 
@@ -948,29 +946,8 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
     assert!(two.status.success());
     let e2 = String::from_utf8_lossy(&two.stderr);
     assert!(
-        e2.contains("configure the online inference path") && e2.contains("to use them."),
+        e2.contains("--forgettingFactor, --numAuxModelSamples configure the online inference path"),
         "two online knobs must warn in the plural: {e2}"
-    );
-
-    // Passing --online must suppress the inert-knob warning (the knobs now apply).
-    let online = run(&[
-        os("quant"),
-        os("-i"),
-        fx.index.as_os_str(),
-        os("-l"),
-        os("A"),
-        os("-r"),
-        fx.se.as_os_str(),
-        os("--online"),
-        os("-f"),
-        os("0.7"),
-        os("-o"),
-        tmp.path().join("o3").as_os_str(),
-    ]);
-    assert!(online.status.success());
-    assert!(
-        !String::from_utf8_lossy(&online.stderr).contains("configures the online inference path"),
-        "under --online the knob is honoured, not warned about"
     );
 }
 
@@ -1260,7 +1237,7 @@ fn single_end_auto_detection_reads_the_whole_input() {
 /// `ambig_info.tsv` is read row for row against `quant.sf`, on every path: a
 /// decoy row would shift every transcript after it.
 #[test]
-fn ambig_info_has_one_row_per_quant_row_under_online() {
+fn ambig_info_has_one_row_per_quant_row_with_decoys() {
     let dir = tempfile::tempdir().unwrap();
     let txs = [sequence(5, 3000), sequence(19, 3000)];
     let fasta = dir.path().join("gentrome.fa");
@@ -1303,7 +1280,6 @@ fn ambig_info_has_one_row_per_quant_row_under_online() {
     let out = dir.path().join("out");
     let o = run(&[
         os("quant"),
-        os("--online"),
         os("-i"),
         index.as_os_str(),
         os("-l"),

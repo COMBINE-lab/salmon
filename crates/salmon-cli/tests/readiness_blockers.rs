@@ -86,8 +86,8 @@ fn meta_number(out: &Path, key: &str) -> f64 {
 }
 
 /// B1: `-g` produced no `quant.genes.sf` at all in the DEFAULT reads mode — the
-/// single most common salmon invocation — while `-a`, `--rad` and `--online`
-/// all wrote one. The gene-level guard tested `map_opts.skip_quant`, which
+/// single most common salmon invocation — while `-a`, `--rad` and the (since
+/// removed) `--online` all wrote one. The gene-level guard tested `map_opts.skip_quant`, which
 /// phase 1 forces true regardless of what the user asked, so the write was dead
 /// code and the run explained itself with a `--skipQuant` message on a command
 /// line that never contained `--skipQuant`.

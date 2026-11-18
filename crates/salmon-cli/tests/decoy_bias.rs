@@ -146,7 +146,8 @@ fn decoys_are_excluded_and_mass_is_conserved_with_bias() {
     // decoy is neither a gene nor a transcript the annotation failed to cover.
     let gene_map = dir.path().join("t2g.tsv");
     std::fs::write(&gene_map, "txA\tG1\ntxB\tG1\ntxC\tG2\n").unwrap();
-    for (name, extra) in [("genes", &[][..]), ("genes_online", &["--online"][..])] {
+    {
+        let (name, extra): (&str, &[&str]) = ("genes", &[]);
         let out = dir.path().join(name);
         let run = Command::new(SALMON)
             .args(["quant", "-i"])

@@ -35,7 +35,6 @@ use salmon_core::math::{log_add, LOG_0, LOG_EPSILON};
 use salmon_core::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 use statrs::distribution::{Binomial, ContinuousCDF, Discrete, Normal};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
 
 /// Tracks the observed distribution of fragment lengths.
 #[derive(Debug)]
@@ -59,32 +58,6 @@ pub struct FragmentLengthDistribution {
     /// cached CMF
     cached_cmf: Vec<f64>,
     have_cache: bool,
-
-    /// Periodically-refreshed snapshot of the (un-normalized) log-PMF used during
-    /// the *online* phase, indexed by raw length. Reading the live `hist`/`tot_mass`
-    /// directly (two separate atomic loads on a concurrently-updated distribution)
-    /// returns slightly different values for the same length across calls, which
-    /// breaks the weight symmetry of exact-duplicate transcripts and is then
-    /// amplified by the VBEM `α<1` prior. Mirroring C++ salmon (`cachedPMF_` +
-    /// `LogCMFCache`), worker threads instead capture an immutable snapshot of this
-    /// once per fragment ([`online_snapshot`](Self::online_snapshot)) so every
-    /// transcript of a given length in that fragment gets an identical value;
-    /// [`refresh_online`](Self::refresh_online) rebuilds it at mini-batch
-    /// boundaries.
-    ///
-    /// This is a real correctness issue, not a micro-optimization: two transcripts
-    /// that are byte-identical must receive byte-identical weights, or the EM will
-    /// split them unevenly for no reason.
-    online_pmf: RwLock<Arc<Vec<f64>>>,
-
-    /// Periodically-refreshed snapshot of the (normalized) log-CMF, the
-    /// cumulative companion to [`online_pmf`](Self::online_pmf). Used for the
-    /// ambiguous (orphan / single-end) fragment-length probability and for the
-    /// `pmf(flen) − cmf(txpLen)` length-conditioning of proper pairs, both of
-    /// which need cumulative mass. Rebuilt alongside `online_pmf` in
-    /// [`refresh_online`](Self::refresh_online); mirrors C++ salmon's
-    /// `LogCMFCache`.
-    online_cmf: RwLock<Arc<Vec<f64>>>,
 }
 
 impl FragmentLengthDistribution {
@@ -176,8 +149,6 @@ impl FragmentLengthDistribution {
             cached_pmf: Vec::new(),
             cached_cmf: Vec::new(),
             have_cache: false,
-            online_pmf: RwLock::new(Arc::new(Vec::new())),
-            online_cmf: RwLock::new(Arc::new(Vec::new())),
         }
     }
 
@@ -241,68 +212,10 @@ impl FragmentLengthDistribution {
         self.hist[l].load() - self.tot_mass.load()
     }
 
-    /// Rebuild the online log-PMF snapshot from the current histogram (one pass
-    /// over the length bins, with a single `tot_mass` read so the snapshot is
-    /// internally consistent). Call at mini-batch boundaries during the online
-    /// phase; no-op once the final [`cache`](Self::cache) has been taken. Cheap
-    /// relative to mapping a batch, and decouples per-fragment reads from the
-    /// concurrent `add_val` writes so identical lengths read identical values.
-    pub fn refresh_online(&self) {
-        if self.have_cache {
-            return;
-        }
-        let max_raw = self.max_val();
-        let max_v = max_raw / self.bin_size;
-        // One read, reused for every bin: mixing two reads of a concurrently
-        // updated total is exactly the inconsistency this snapshot exists to avoid.
-        let tot = self.tot_mass.load();
-        // Per-bin cumulative mass (matches `cmf()`), so the snapshot CMF at raw
-        // index `raw` equals `cmf(raw)`. Built first, then both the PMF and CMF
-        // snapshots are expanded over raw indices from the same `tot` read so
-        // they are mutually consistent.
-        let mut bin_cum = Vec::with_capacity(max_v + 1);
-        let mut cum = LOG_0;
-        for b in 0..=max_v {
-            cum = log_add(cum, self.hist[b].load() - tot);
-            bin_cum.push(cum);
-        }
-        // Expand from bin indices to raw lengths, so lookups need no division.
-        let mut v = Vec::with_capacity(max_raw + 1);
-        let mut c = Vec::with_capacity(max_raw + 1);
-        for raw in 0..=max_raw {
-            let l = (raw / self.bin_size).min(max_v);
-            v.push(self.hist[l].load() - tot);
-            c.push(bin_cum[l]);
-        }
-        // Publishing a fresh `Arc` rather than mutating in place means readers
-        // holding the old snapshot keep a consistent view.
-        *self.online_pmf.write().unwrap() = Arc::new(v);
-        *self.online_cmf.write().unwrap() = Arc::new(c);
-    }
-
-    /// Cheap (one `Arc` clone) immutable handle to the current online log-PMF
-    /// snapshot. Capture once per fragment and index by raw length: every
-    /// transcript of a given length then reads an identical value even if another
-    /// thread refreshes the shared snapshot meanwhile. Empty until the first
-    /// [`refresh_online`](Self::refresh_online) (the pre-burn-in window, where this
-    /// term is not folded into the eq-class weight anyway).
-    pub fn online_snapshot(&self) -> Arc<Vec<f64>> {
-        self.online_pmf.read().unwrap().clone()
-    }
-
-    /// Cheap (one `Arc` clone) immutable handle to the current online log-CMF
-    /// snapshot, the cumulative companion to [`online_snapshot`](Self::online_snapshot).
-    /// Capture once per fragment for the ambiguous (orphan / single-end)
-    /// fragment-length probability and the proper-pair length-conditioning.
-    /// Empty until the first [`refresh_online`](Self::refresh_online).
-    pub fn online_cmf_snapshot(&self) -> Arc<Vec<f64>> {
-        self.online_cmf.read().unwrap().clone()
-    }
-
     /// Logged cumulative mass up to and including `len`.
     ///
-    /// The uncached path re-sums from zero each call, which is why the online
-    /// phase uses the precomputed snapshot instead.
+    /// The uncached path re-sums from zero each call; call
+    /// [`cache`](Self::cache) first when reading it repeatedly.
     pub fn cmf(&self, len: usize) -> f64 {
         if self.have_cache {
             return *self
@@ -622,14 +535,11 @@ pub struct PairObs {
 /// implied length is usually the true one, since the longer alternatives come
 /// from isoforms that retain an intron or extend an exon between the mates.
 ///
-/// Unlike [`FragmentLengthDistribution`] — which accumulates in **log space** and
-/// is required for the online phase (it folds in per-fragment forgetting mass and
-/// is read per fragment) — this stores plain **integer counts** per length,
+/// Unlike [`FragmentLengthDistribution`] — which accumulates in **log space**
+/// — this stores plain **integer counts** per length,
 /// bucketed by orientation. Integer increments are commutative, so the tallies
 /// are independent of thread / chunk order; the FLD is then built **once**,
-/// deterministically (fixed length order), in [`finish`](Self::finish). Keeping
-/// it a separate type means the online FLD's float/log-space accumulation is
-/// never disturbed, and no runtime dispatch is needed.
+/// deterministically (fixed length order), in [`finish`](Self::finish).
 ///
 /// This is what `--deterministic` uses: same input, byte-identical distribution,
 /// whatever the thread count.
@@ -1054,7 +964,7 @@ mod tests {
     fn ambig_frag_prob_bounds_and_orientation() {
         let mut fld = FragmentLengthDistribution::new(1000.0, 1000, 250.0, 25.0, 4, 0.5, 1);
         fld.cache();
-        // Use the cached (frozen) CMF as a stand-in for the online snapshot.
+        // Use the cached (frozen) CMF.
         let cmf = fld.cached_cmf.clone();
         let txp_len = 2000i32;
         // A forward read with ample downstream space (mate fits at the typical

@@ -32,7 +32,7 @@
 //! and a pool of worker threads, mirroring piscem-infer's `process_parallel`.
 //!
 //! Quantification is **deterministic** and order-independent: there is no online
-//! (dual-phase) phase. Instead the fragment-length distribution is *fixed before*
+//! (dual-phase) phase, as in C++ salmon and the pre-2.12 one-pass path. Instead the fragment-length distribution is *fixed before*
 //! equivalence-class assembly, so every fragment's weight is a pure function of
 //! its placements and that FLD, and the eq-class builder (sorted `finish`) +
 //! range-factorization + EM are all order-independent. Two-pass when the FLD must
@@ -558,7 +558,7 @@ fn unpaired_log_frag_prob(
 /// interpretation. Uniform (`0`) when the profile is unscored; for a raw AS
 /// score, the salmon soft-weight `−scoreExp·(best−score)` (best hit → `0`, worse
 /// hits penalized); for a quantized log-LR ([`salmon_rad::SCORE_KIND_LOGWEIGHT`]),
-/// the log-weight itself (`score / scale`), used absolutely like the online error
+/// the log-weight itself (`score / scale`), used absolutely like an error
 /// model's `Σ(fg−bg)` (the eq-class softmax handles the relative scaling).
 #[inline]
 fn score_weight_basis(scored: bool, score_kind: u8, score_exp: f64, best: i32, score: i32) -> f64 {
@@ -616,9 +616,8 @@ fn best_kept_score(
 }
 
 /// Weight one fragment's placements and add the equivalence class. Returns
-/// `true` if the fragment was assigned (had a surviving placement). A trimmed
-/// analog of [`crate::process_fragment`] with no error model, bias, or online
-/// phase: the FLD (`cfg.pmf`/`cfg.cmf`) is fixed for the whole run, so the weight
+/// `true` if the fragment was assigned (had a surviving placement). There is no
+/// error model, bias, or online phase here: the FLD (`cfg.pmf`/`cfg.cmf`) is fixed for the whole run, so the weight
 /// is a deterministic function of the placements alone — duplicate/paralogous
 /// transcripts sharing a fragment length get identical weights, and the result is
 /// independent of fragment processing order.
@@ -1534,8 +1533,8 @@ struct BiasCfg<'a> {
 }
 
 /// Collect one fragment's sequence/GC/positional bias contributions, weighted by
-/// an abundance-aware posterior derived from the FIXED abundance vector (the RAD
-/// analog of `process_fragment`'s online posterior). The reference context comes
+/// an abundance-aware posterior derived from the FIXED abundance vector (the
+/// deterministic stand-in for salmon's online posterior). The reference context comes
 /// from `ref_bytes` at the fragment's positions — RAD never needs the read bases.
 fn collect_bias_fragment(
     placements: &[RadPlacement],
@@ -1562,7 +1561,7 @@ fn collect_bias_fragment(
         }
     };
 
-    // Each placement carries its online log-weight (aux + start-position term)
+    // Each placement carries its log-weight (aux + start-position term)
     // and its fragment geometry in one record.
     scratch.bias.clear();
     for p in placements {
@@ -1637,8 +1636,8 @@ fn collect_bias_fragment(
     }
 
     // Aggregate by transcript and form the abundance-aware posterior:
-    // softmax over tids of `ln(alpha_tid) + online_log_tid` (the RAD stand-in for
-    // `OnlineInference::assign_fragment`, using the fixed abundance vector).
+    // softmax over tids of `ln(alpha_tid) + log_w_tid` (salmon's online
+    // posterior, evaluated against the fixed abundance vector).
     scratch.bias.group(&mut scratch.group_log);
     // Split the scratch into its fields so the read-only groups and the two
     // buffers written below can be borrowed at the same time.

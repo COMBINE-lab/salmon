@@ -140,12 +140,12 @@ fn dump_eq_describes_the_classes_in_both_modes() {
         .unwrap();
     assert!(status.success(), "indexing failed");
 
-    let online = dir.path().join("online");
+    let bare = dir.path().join("bare");
     let det = dir.path().join("det");
-    quant(&index, &r1, &r2, &online, false);
+    quant(&index, &r1, &r2, &bare, false);
     quant(&index, &r1, &r2, &det, true);
 
-    for (label, out) in [("one-pass", &online), ("deterministic", &det)] {
+    for (label, out) in [("default", &bare), ("--deterministic", &det)] {
         let dump = read_dump(out);
         // The regression: the deterministic dump used to declare zero classes,
         // written by a pass that had none to declare.

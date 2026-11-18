@@ -21,7 +21,7 @@
 //! index over a transcriptome) and `quant` (quantify from FASTQ reads, via
 //! selective alignment or the pseudoalignment-only `--sketch` path). Flag
 //! names mirror C++ salmon where they overlap. Alignment-based `quant -a`
-//! (online and deterministic, including genome-BAM projection via
+//! (deterministic, including genome-BAM projection via
 //! `--annotation`) and `quantmerge` are fully implemented; `alevin` is a
 //! permanent redirect to the alevin-fry ecosystem.
 
@@ -35,11 +35,11 @@ use clap::{Args, Parser, Subcommand};
 mod global_alloc;
 
 use salmon_align::{
-    project_genome_bam_to_rad, quantify_alignments, quantify_rad, AlignQuantOptions,
-    ExplicitFldArgs, FldPolicy, GenomeProjectOptions,
+    project_genome_bam_to_rad, quantify_rad, AlignQuantOptions, ExplicitFldArgs, FldPolicy,
+    GenomeProjectOptions,
 };
 use salmon_index::{build as build_index, IndexBuildOptions};
-use salmon_quant::{quantify, ChunkCodec, EmAccel, EmStop, ProgressCounters, QuantOptions};
+use salmon_quant::{map_to_rad, ChunkCodec, EmAccel, EmStop, ProgressCounters, QuantOptions};
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -421,9 +421,9 @@ struct QuantArgs {
     rad: Option<PathBuf>,
     /// Transcriptome FASTA for alignment mode (`-a`) and RAD-input mode
     /// (`--rad`): supplies the reference sequences that seq/GC bias correction
-    /// needs, and (under `--online -a`) enables the alignment error model — the
-    /// default alignment path takes `--errorModel` instead. Ignored in reads
-    /// mode, where the index already carries the sequences.
+    /// needs, and that the alignment error model (`--errorModel`) trains
+    /// against. Ignored in reads mode, where the index already carries the
+    /// sequences.
     #[arg(short = 't', long = "targets")]
     targets: Option<PathBuf>,
     /// Disable the alignment error model (alignment mode).
@@ -607,19 +607,17 @@ struct QuantArgs {
     /// Deterministic quantification: map once to an intermediate RAD, then
     /// quantify from it with a fixed fragment-length distribution, so the
     /// result is byte-identical across runs and thread counts. **The default
-    /// since 2.6.0** — the flag is accepted as a no-op; use --online for the
-    /// deprecated one-pass path. The intermediate RAD is written under
+    /// since 2.6.0, and the only path since 2.12.0** — the flag is accepted as
+    /// a no-op. The intermediate RAD is written under
     /// the output directory and deleted on success unless --keepRad (or use
     /// --writeRad PATH to choose its location and keep it). With --skipQuant the
     /// run stops after mapping and the RAD is kept as its output, in the output
     /// directory even when --radScratchDir is given.
     #[arg(long = "deterministic")]
     deterministic: bool,
-    /// Quantify with the pre-2.6 online one-pass path instead of the default
-    /// deterministic two-phase flow. Deprecated: results depend on the thread
-    /// count (the default is byte-identical at any -p), and it will be removed
-    /// in a future release.
-    #[arg(long = "online", conflicts_with = "deterministic")]
+    /// Removed in 2.12.0 (deprecated since 2.6.0): selected the one-pass online
+    /// path. Accepted only to fail with a pointer to the default.
+    #[arg(long = "online", hide = true)]
     online: bool,
     /// Keep the intermediate RAD produced by --deterministic (by default it is
     /// deleted once quantification finishes). Ignored without --deterministic.
@@ -789,15 +787,11 @@ struct QuantArgs {
     /// fragment-length sensitivity analysis actually vary anything.
     #[arg(long = "fldPolicy", value_enum, default_value_t = FldPolicyArg::Baked)]
     fld_policy: FldPolicyArg,
-    /// Online-phase forgetting factor in (0.5, 1.0]; default 0.65. Online-path
-    /// only (--online, deprecated): ignored with a warning under the default
-    /// deterministic mode.
-    #[arg(short = 'f', long = "forgettingFactor", value_parser = parse_forgetting_factor)]
+    /// Removed online-path knob (2.12.0): accepted and ignored with a warning.
+    #[arg(short = 'f', long = "forgettingFactor", value_parser = parse_forgetting_factor, hide = true)]
     forgetting_factor: Option<f64>,
-    /// Initialize the optimizer uniformly. In reads mode (one-pass and
-    /// --deterministic) the optimizer already starts uniform, so this is the
-    /// existing behavior; in online alignment mode (-a) it replaces the
-    /// warm start from the online estimates.
+    /// Initialize the optimizer uniformly. Accepted for salmon compatibility:
+    /// every quantification path already starts the optimizer uniformly.
     #[arg(long = "initUniform")]
     init_uniform: bool,
     /// Interpret --vbPrior as a per-transcript prior (salmon's default).
@@ -881,11 +875,8 @@ struct QuantArgs {
     /// Larger = faster bias correction, coarser. (salmon's --biasSpeedSamp)
     #[arg(long = "biasSpeedSamp")]
     bias_speed_samp: Option<usize>,
-    /// Number of leading fragments used to train the auxiliary models
-    /// (fragment-length / bias / error); they are fixed afterward; default
-    /// 5000000. Online-path only (--online, deprecated): ignored with a
-    /// warning under the default deterministic mode.
-    #[arg(long = "numAuxModelSamples")]
+    /// Removed online-path knob (2.12.0): accepted and ignored with a warning.
+    #[arg(long = "numAuxModelSamples", hide = true)]
     num_aux_model_samples: Option<u64>,
     /// Disable the lower threshold on how short bias correction may make an
     /// effective length (increases precision, reduces robustness). Experimental.
@@ -935,24 +926,17 @@ struct QuantArgs {
     /// file instead of mapping/alignments (an input mode, not the --dumpEq output).
     #[arg(long = "eqclasses")]
     eqclasses: Option<PathBuf>,
-    /// Fragments processed before the auxiliary (fragment-length) model is
-    /// applied during online inference. (salmon's --numPreAuxModelSamples;
-    /// salmon's default is 1000000, this port's is 5000.) Online-path only
-    /// (--online, deprecated): ignored with a warning under the default
-    /// deterministic mode.
-    #[arg(long = "numPreAuxModelSamples")]
+    /// Removed online-path knob (2.12.0): accepted and ignored with a warning.
+    #[arg(long = "numPreAuxModelSamples", hide = true)]
     num_pre_aux_model_samples: Option<u64>,
     /// Disable fragment-length-distribution concordance in the per-fragment
-    /// probability. Honoured on every quantification path except the deprecated
-    /// online alignment path (--online -a), which warns that it lacks it.
+    /// probability. Honoured on every quantification path.
     #[arg(long = "noFragLengthDist")]
     no_frag_length_dist: bool,
     /// Disable the single-end/orphan fragment-length probability estimate:
     /// orphans take a flat penalty instead of the bounded-CMF ambiguous weight,
     /// which can change which transcript wins a contested orphan. Honoured on
-    /// the reads paths and on every RAD-based path (deterministic reads phase 2,
-    /// -a, --rad). Redundant on the deprecated online alignment path
-    /// (--online -a), which weights every orphan flat by construction.
+    /// every quantification path (reads, -a, --rad).
     #[arg(long = "noSingleFragProb")]
     no_single_frag_prob: bool,
     /// [accepted; not yet implemented] write a BAM of posterior-sampled
@@ -1286,8 +1270,6 @@ fn write_gene_level(
 ///   prior into the bake. Forwarding them would have phase 2 warn that a baked
 ///   FLD overrides the run's own `--fldMean`, against a bake that came from that
 ///   very argument.
-/// * `forgetting_factor`, `num_aux_model_samples`, `num_pre_aux_model_samples`:
-///   online-inference knobs. Phase 2 has no online phase to apply them to.
 /// * `num_error_bins`, `discard_orphans`, `no_error_model`,
 ///   `deterministic_error_model`: BAM-side knobs. Phase 2 reads a RAD whose
 ///   placements were already scored and filtered during mapping.
@@ -1329,12 +1311,11 @@ fn requant_options(
     q.num_bootstraps = map_opts.num_bootstraps;
     q.num_gibbs_samples = map_opts.num_gibbs_samples;
     q.thinning_factor = map_opts.thinning_factor;
-    // The three below were missing until #1140's audit. They are not
-    // online-only knobs: the RAD quantifier honours all three, so dropping them
-    // meant the flag was accepted and then ignored.
+    // The two below were missing until #1140's audit: the RAD quantifier
+    // honours both, so dropping them meant the flag was accepted and then
+    // ignored.
     q.bias_speed_samp = map_opts.bias_speed_samp;
     q.no_bias_length_threshold = map_opts.no_bias_length_threshold;
-    q.init_uniform = map_opts.init_uniform;
     // Phase 2 is where the equivalence classes exist, so it is where they are
     // dumped. Phase 1 has none to dump (COMBINE-lab/salmon#1140), which is why
     // this mapping has to be built from the request as the user made it, before
@@ -1544,14 +1525,13 @@ fn run_deterministic(
     let mut q = requant_options(&map_opts, &rad_path, out_dir, None);
 
     // Phase 1 — map once, write the RAD (bakes the deterministic FLD + resolved
-    // library format), skipping the online EM: quantification happens in phase 2.
+    // library format); quantification happens in phase 2.
     //
     // `skip_quant` is about to be set for phase 1 whatever the user asked, since
     // phase 1's job is to map and write the RAD. Take the request first: with
     // `--skipQuant` there is no phase 2, and the RAD is the deliverable rather
     // than an intermediate. Alignment mode already worked this way.
     let stop_after_mapping = map_opts.skip_quant;
-    map_opts.write_rad = Some(rad_path.clone());
     map_opts.skip_quant = true;
     // The classes live in phase 2, which already has these flags. Left on here,
     // phase 1 pays for `build_eq` and then writes a well-formed
@@ -1559,12 +1539,8 @@ fn run_deterministic(
     // (COMBINE-lab/salmon#1140).
     map_opts.dump_eq = false;
     map_opts.dump_eq_weights = false;
-    // Derive the FLD + library format order-independently during this pass and
-    // bake them (see `QuantOptions::deterministic_fld`), so phase 2 is a single
-    // pass and the whole result is byte-identical across thread counts.
-    map_opts.deterministic_fld = true;
     remove_previous_quant_files(out_dir)?;
-    let map_res = match quantify(&map_opts) {
+    let map_res = match map_to_rad(&map_opts, &rad_path) {
         Ok(r) => r,
         Err(e) => {
             if !explicit {
@@ -1589,9 +1565,9 @@ fn run_deterministic(
     if stop_after_mapping {
         // The classes are built by phase 2, which is exactly the pass
         // `--skipQuant` asks not to run, so there is nothing to dump. Saying so
-        // beats writing no file and no explanation: one-pass `--skipQuant
-        // --dumpEq` does produce a dump, so the difference would otherwise look
-        // like the flag being dropped.
+        // beats writing no file and no explanation: the removed one-pass path's
+        // `--skipQuant --dumpEq` did produce a dump, so the difference would
+        // otherwise look like the flag being dropped.
         if q.dump_eq || q.dump_eq_weights {
             tracing::warn!(
                 "--dumpEq/--dumpEqWeights has nothing to write under --skipQuant --deterministic: \
@@ -1697,7 +1673,8 @@ fn run_deterministic(
 /// library format, and rough abundances when bias is requested), then quantify
 /// from it via the same deterministic [`quantify_rad`] the reads path uses, so
 /// the result is byte-identical across thread counts. Score-based (carries the
-/// BAM `AS` tag); the online alignment error model is not used in this mode.
+/// BAM `AS` tag) unless `--errorModel` trains the order-independent counting
+/// error model in a second pass over the BAM.
 // The same two-pass split for alignment input: BAM to RAD, then quantify.
 fn run_deterministic_align(
     mut opts: AlignQuantOptions,
@@ -1982,7 +1959,8 @@ fn run_genome_project(
 /// Warn, by name, about flags the selected mode cannot act on.
 ///
 /// The rule this serves: a flag that does nothing must say so. Salmon already
-/// applied it for sketch-vs-selective-alignment and for the online-only knobs;
+/// applied it for sketch-vs-selective-alignment and for the (since removed)
+/// online-only knobs;
 /// the readiness sweep found it had never been written for reads-vs-`-a`/`--rad`,
 /// where ~30 mapping flags were accepted in total silence (#1140).
 ///
@@ -2276,43 +2254,29 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     let out_dir = args.output.clone();
     let gene_map = load_gene_map(args.gene_map.clone(), args.ignore_tx_version)?;
 
-    // 2.6.0 flips the default to the deterministic two-phase flow; `--online`
-    // selects the pre-2.6 one-pass path for one deprecation cycle. The knobs
-    // that only exist on the online path warn when passed without it, rather
-    // than being silently inert under the new default — silent inertness is
-    // the exact failure mode #1140's audit spent a release hunting down.
-    // In RAD-input mode there is no online path at all — a RAD is always
-    // quantified with the offline estimator — so `--online` there must not
-    // claim the one-pass path will run, and must not suppress the inert-knob
-    // warnings below (`--rad X --online -f 0.9` used to drop `-f` silently
-    // behind a misleading deprecation notice, #1140).
-    // `--deterministic` is the default since 2.6.0, so passing it explicitly is
-    // a no-op. Say so at INFO rather than staying silent: the flag lives in
-    // scripts and CI from the opt-in period, and a one-line note tells those
-    // users they can drop it without implying anything is wrong. (`--online`
-    // conflicts with `--deterministic` at the clap layer, so the two branches
-    // are mutually exclusive.)
+    // The one-pass online path was removed in 2.12.0 (deprecated since 2.6.0).
+    // Refuse it rather than run a different algorithm than the one requested,
+    // and name what replaces each thing it did.
+    if args.online {
+        anyhow::bail!(
+            "--online was removed in salmon 2.12.0 (deprecated since 2.6.0): the \
+             deterministic two-phase path (map to an intermediate RAD, then quantify it) is \
+             the only quantification path, and its results are byte-identical at any -p. \
+             Drop the flag. For alignment-error-model scoring in alignment mode (-a), add \
+             `--errorModel -t <transcripts.fa>`; to place the intermediate RAD (e.g. on \
+             /dev/shm or node-local scratch), use `--radScratchDir <dir>`."
+        );
+    }
+    // `--deterministic` is the only quantification path since 2.12.0 (the
+    // default since 2.6.0), so passing it is a no-op; say so at INFO, since the
+    // flag lives in scripts and CI from the opt-in period.
     if args.deterministic {
         tracing::info!(
             "--deterministic is the default since 2.6.0 and no longer needs to be passed; \
-             accepting it as a no-op. Pass --online for the deprecated one-pass path \
-             (to be removed in a future release)."
+             accepting it as a no-op."
         );
     }
-    let online_path_exists = args.rad.is_none();
-    if args.online && !online_path_exists {
-        tracing::warn!(
-            "--online has no effect in RAD-input mode (--rad): a RAD is always quantified \
-             with the offline (deterministic) estimator"
-        );
-    }
-    if args.online && online_path_exists {
-        tracing::warn!(
-            "--online selects the deprecated one-pass quantification path, which will be \
-             removed in a future release. Its results depend on the thread count; the default \
-             deterministic mode is byte-identical at any -p and was measured as fast or faster."
-        );
-    } else {
+    {
         let mut inert: Vec<&str> = Vec::new();
         if args.forgetting_factor.is_some() {
             inert.push("--forgettingFactor");
@@ -2324,18 +2288,14 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             inert.push("--numPreAuxModelSamples");
         }
         if !inert.is_empty() {
-            // Agree with how many were passed: one flag reads "--forgettingFactor
-            // configures … to use it", several read "…, … configure … to use
-            // them". Same singular/plural care as `warn_inert_in_mode`.
-            let (subject, verb, pronoun) = if inert.len() == 1 {
-                (inert[0].to_string(), "configures", "it")
+            let (subject, verb) = if inert.len() == 1 {
+                (inert[0].to_string(), "configures")
             } else {
-                (inert.join(", "), "configure", "them")
+                (inert.join(", "), "configure")
             };
             tracing::warn!(
-                "{subject} {verb} the online inference path, which the default deterministic \
-                 mode does not run: ignored. Pass --online (deprecated, to be removed in a \
-                 future release) to use {pronoun}."
+                "{subject} {verb} the online inference path, which was removed in 2.12.0: \
+                 ignored."
             );
         }
     }
@@ -2414,13 +2374,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
         opts.fld_sd = args.fld_sd.unwrap_or(DEFAULT_FLD_SD);
         opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
-        opts.forgetting_factor = args.forgetting_factor.unwrap_or(0.65);
-        // `--meta` promises a uniform start, and this is the one path where
-        // that is a real choice: the online alignment optimizer warm-starts
-        // from its online estimates unless told otherwise. Every other path
-        // starts uniform by construction, which is why the preset's own log
-        // line was true everywhere except here (#1140, audit D15).
-        opts.init_uniform = args.init_uniform || args.meta;
         opts.model_single_frag_prob = !args.no_single_frag_prob;
         // The other half of the --scoreExp policy, which this path already
         // honours; accepting one and ignoring the other left it half-applied.
@@ -2432,22 +2385,18 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.no_effective_length_correction = args.no_effective_length_correction;
         opts.no_frag_length_dist = args.no_frag_length_dist;
         opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
-        opts.num_aux_model_samples = args.num_aux_model_samples.unwrap_or(5_000_000);
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
         opts.num_error_bins = args.num_error_bins.unwrap_or(4);
         opts.discard_orphans = args.discard_orphans;
         opts.gc_bins = args.num_gc_bins.unwrap_or(25);
         opts.cond_gc_bins = args.conditional_gc_bins.unwrap_or(3);
         opts.skip_quant = args.skip_quant;
-        opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples.unwrap_or(5_000);
         opts.num_bootstraps = args.num_bootstraps;
         opts.num_gibbs_samples = args.num_gibbs_samples;
         opts.thinning_factor = args.thinning_factor.unwrap_or(16);
         // --scoreExp scales the best-minus-score soft weight, and the RAD
         // quantifier applies it to AS-scored placements exactly as it does to
         // selective-alignment ones — so the deterministic `-a` path honours it.
-        // A previous comment here claimed alignment mode "has no such term",
-        // which was true only of the online path (#1140, audit C11).
         opts.score_exp = args.score_exp.unwrap_or(1.0);
 
         // Genome-alignment mode: `-a <genome.bam> --annotation <gtf>` projects the
@@ -2457,12 +2406,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             // Genome projection is inherently deterministic (RAD-based) and has no
             // error model (bramble exposes no projected CIGAR), so flags that only
             // matter for transcriptomic alignment are accepted but no-ops here.
-            if args.online {
-                tracing::warn!(
-                    "--online has no effect in genome-projection mode (--annotation): \
-                     projection is inherently RAD-based and deterministic; ignoring it"
-                );
-            }
             if args.error_model {
                 tracing::warn!(
                     "--errorModel has no effect in genome-projection mode (--annotation): \
@@ -2497,117 +2440,23 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             );
         }
 
-        // Default (2.6.0): deterministic alignment quant — write the BAM's
-        // placements to an intermediate RAD (baking the FLD/library-format +
-        // rough abundances) and requantify from it, for results byte-identical
-        // across thread counts. Score-based (`AS`); `--errorModel` opts into
-        // the order-independent error model. `--online` selects the deprecated
-        // one-pass path below, which is the only place the online error model
-        // still lives.
-        if !args.online {
-            let codec = rad_codec_from_args(
-                args.no_compress_rad,
-                args.rad_compress.as_deref().unwrap_or("lz4"),
-            )?;
-            return run_deterministic_align(
-                opts,
-                args.write_rad.clone(),
-                args.rad_scratch_dir.as_deref(),
-                args.keep_rad,
-                gene_map.as_ref(),
-                codec,
-            );
-        }
-
-        // The online alignment path never supported --noFragLengthDist (C++
-        // did); the deterministic default honours it, so under `--online` it
-        // warns rather than silently doing nothing (#1140: no parity work for a
-        // path scheduled for removal). The length-correction flags only set the
-        // effective lengths, which this path shares, so they apply here too.
-        if args.no_frag_length_dist {
-            tracing::warn!(
-                "--noFragLengthDist is not supported on the deprecated online alignment \
-                 path: ignored. The default (deterministic) mode honours it."
-            );
-        }
-        // The online alignment path writes no RAD, so the flags that place or
-        // shape one are inert here; the deterministic default honours them
-        // (#1140: a flag that does nothing must say so).
-        warn_inert_in_mode(
-            "the deprecated online alignment path (--online -a)",
-            Some(("shapes", "shape")),
-            "the intermediate RAD, which that path never writes (the default deterministic \
-             mode honours them)",
-            &[
-                ("--writeRad", args.write_rad.is_some()),
-                ("--keepRad", args.keep_rad),
-                ("--radScratchDir", args.rad_scratch_dir.is_some()),
-                ("--radCompress", args.rad_compress.is_some()),
-                ("--noCompressRad", args.no_compress_rad),
-            ],
+        // Deterministic alignment quant: write the BAM's placements to an
+        // intermediate RAD (baking the FLD/library-format + rough abundances)
+        // and requantify from it, for results byte-identical across thread
+        // counts. Score-based (`AS`); `--errorModel` opts into the
+        // order-independent error model.
+        let codec = rad_codec_from_args(
+            args.no_compress_rad,
+            args.rad_compress.as_deref().unwrap_or("lz4"),
+        )?;
+        return run_deterministic_align(
+            opts,
+            args.write_rad.clone(),
+            args.rad_scratch_dir.as_deref(),
+            args.keep_rad,
+            gene_map.as_ref(),
+            codec,
         );
-        // Live progress spinner on an interactive terminal (unless --quiet/--no-progress).
-        let progress = Arc::new(ProgressCounters::default());
-        let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
-            opts.progress = Some(progress.clone());
-            Some(ProgressGuard::start(progress.clone()))
-        } else {
-            None
-        };
-        remove_previous_quant_files(&opts.output_dir)?;
-        let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
-        drop(guard); // stop + clear the spinner before the summary
-        let pct = if res.num_processed > 0 {
-            100.0 * res.num_mapped as f64 / res.num_processed as f64
-        } else {
-            0.0
-        };
-        // Alignment mode: the records are already aligned (by the upstream
-        // aligner), so `num_processed` is the count of *aligned* fragments and
-        // `num_mapped` is those with a strand-compatible placement we could
-        // quantify. Report it that way so a (necessarily) <100% rate on a
-        // stranded library reads as "strand-incompatible", not "lost alignments".
-        if res.num_processed > res.num_mapped {
-            tracing::info!(
-                "{} fragments; {} aligned, strand-compatible and quantified ({:.2}%); \
-                 {} dropped as incompatible with library type {}; {} equivalence classes",
-                res.num_processed,
-                res.num_mapped,
-                pct,
-                res.num_processed - res.num_mapped,
-                opts.lib_type,
-                res.num_eq_classes
-            );
-        } else {
-            tracing::info!(
-                "{} fragments, all aligned, strand-compatible and quantified; {} equivalence classes",
-                res.num_processed,
-                res.num_eq_classes
-            );
-        }
-        // The truncated-mass warning now fires in the shared output writer,
-        // covering this path and every quantify_rad driver alike (#1140).
-        // `--skipQuant` estimates no abundances; aggregating the zero rows to
-        // gene level would announce success over an empty result (#1140 — the
-        // deterministic reads driver already skipped it, the others wrote
-        // zeros silently).
-        if args.skip_quant && gene_map.is_some() {
-            tracing::info!(
-                "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
-            );
-        } else if let Some(gm) = &gene_map {
-            write_gene_level(
-                &out_dir,
-                gm,
-                &res.quant_rows(),
-                &res.names,
-                &res.lengths,
-                &res.eff_lengths,
-                &res.tpm,
-                &res.counts,
-            )?;
-        }
-        return Ok(());
     }
 
     // RAD-input mode: quantify directly from a RAD file of mappings, in parallel.
@@ -2843,24 +2692,6 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
             args.decoy_threshold.unwrap_or(1.0)
         );
     }
-    // The one-pass reads path writes no intermediate RAD, so the flags that
-    // place or keep one are inert. `--writeRad` still writes a RAD of the
-    // mappings there, so it is not listed, and the codec flags are inert only
-    // without it.
-    if args.online {
-        let no_rad = args.write_rad.is_none();
-        warn_inert_in_mode(
-            "the deprecated one-pass reads path (--online)",
-            None,
-            "it writes no intermediate RAD",
-            &[
-                ("--keepRad", args.keep_rad),
-                ("--radScratchDir", args.rad_scratch_dir.is_some()),
-                ("--radCompress", no_rad && args.rad_compress.is_some()),
-                ("--noCompressRad", no_rad && args.no_compress_rad),
-            ],
-        );
-    }
     // Posterior sampling happens inside the quantification pass, so
     // `--skipQuant` and it cannot both be honoured. The sibling cases
     // (`--skipQuant --dumpEq`, `--skipQuant -g`) both explain themselves;
@@ -2991,12 +2822,10 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         args.post_merge_chain_sub_thresh.unwrap_or(0.0);
     // model toggles (Tier 2)
     opts.bias_speed_samp = args.bias_speed_samp.unwrap_or(5);
-    opts.num_aux_model_samples = args.num_aux_model_samples.unwrap_or(5_000_000);
     opts.no_bias_length_threshold = args.no_bias_length_threshold;
     opts.gc_bins = args.num_gc_bins.unwrap_or(25);
     opts.cond_gc_bins = args.conditional_gc_bins.unwrap_or(3);
     opts.skip_quant = args.skip_quant;
-    opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples.unwrap_or(5_000);
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems, args.sparse_seeds);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma.unwrap_or(2) as i8;
@@ -3083,101 +2912,29 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.fld_max = args.fld_max.unwrap_or(DEFAULT_FLD_MAX);
     opts.fld_prior_user_supplied = args.fld_mean.is_some() || args.fld_sd.is_some();
     warn_unsupported_fld_policy(args.fld_policy, "reads mode");
-    opts.forgetting_factor = args.forgetting_factor.unwrap_or(0.65);
-    opts.init_uniform = args.init_uniform;
 
-    // Default (2.6.0): deterministic mode — map once to an intermediate RAD,
-    // then quantify from it with a fixed FLD (byte-identical output at any
-    // thread count, no second mapping pass). `--online` selects the deprecated
-    // one-pass path below.
-    if !args.online {
-        let rad_out = opts.write_rad.take(); // honour an explicit --writeRad path
-                                             // The phase-1 mapping spinner, wired exactly as the one-pass path wires
-                                             // its own: a default mode cannot be a silent black box for the minutes
-                                             // the mapping pass takes. Handed into the driver so it stops when
-                                             // phase 1 does, rather than spinning frozen through phase 2.
-        let progress = Arc::new(ProgressCounters::default());
-        let spinner = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
-            opts.progress = Some(progress.clone());
-            Some(ProgressGuard::start(progress))
-        } else {
-            None
-        };
-        return run_deterministic(
-            opts,
-            rad_out,
-            args.rad_scratch_dir.as_deref(),
-            args.keep_rad,
-            gene_map.as_ref(),
-            &out_dir,
-            spinner,
-        );
-    }
-    // `--initUniform` asks for a uniform optimizer start, and in one-pass reads
-    // mode that is already the only initialization there is: the offline EM
-    // always starts uniform (the C++ online-blended warm start was deliberately
-    // not carried over — measured not to change the converged estimate, and
-    // dropping it removed an order-dependent step; see the `--meta` note above,
-    // which records the same fact). The same holds under `--deterministic`,
-    // whose RAD quantifier likewise always starts uniform. So the flag is
-    // honoured by construction in both modes and is accepted silently; the one
-    // path where it toggles anything is online alignment mode (`-a`), whose
-    // offline EM otherwise warm-starts from the online estimates.
-
-    // Live mapping spinner on an interactive terminal (unless --quiet/--no-progress).
+    // Deterministic mode — map once to an intermediate RAD, then quantify from
+    // it with a fixed FLD (byte-identical output at any thread count, no second
+    // mapping pass).
+    let rad_out = opts.write_rad.take(); // honour an explicit --writeRad path
+                                         // The phase-1 mapping spinner: handed into the driver so it stops when
+                                         // phase 1 does, rather than spinning frozen through phase 2.
     let progress = Arc::new(ProgressCounters::default());
-    let guard = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
+    let spinner = if !quiet && !args.no_progress && std::io::stderr().is_terminal() {
         opts.progress = Some(progress.clone());
-        Some(ProgressGuard::start(progress.clone()))
+        Some(ProgressGuard::start(progress))
     } else {
         None
     };
-    remove_previous_quant_files(&opts.output_dir)?;
-    let res = quantify(&opts).context("quantification failed")?;
-    drop(guard); // stop + clear the spinner before the summary
-    let pct = if res.num_processed > 0 {
-        100.0 * res.num_mapped as f64 / res.num_processed as f64
-    } else {
-        0.0
-    };
-    // Status to stderr (same handle as the rest of salmon's logging, matching C++).
-    tracing::info!(
-        "processed {} fragments, mapped {} ({:.2}%), {} equivalence classes",
-        res.num_processed,
-        res.num_mapped,
-        pct,
-        res.num_eq_classes
-    );
-    if res.inference_truncated_mass > 0.0 {
-        tracing::warn!(
-            "{:.3} fragments of equivalence-class mass could not be assigned (every member \
-             transcript was truncated below the min-alpha threshold); reported as \
-             inference_truncated_mass in meta_info.json",
-            res.inference_truncated_mass
-        );
-    }
-    // `--skipQuant` estimates no abundances; aggregating the zero rows to
-    // gene level would announce success over an empty result (#1140 — the
-    // deterministic reads driver already skipped it, the others wrote
-    // zeros silently).
-    if args.skip_quant && gene_map.is_some() {
-        tracing::info!(
-            "--skipQuant: gene-level aggregation (-g) skipped — no abundances were estimated"
-        );
-    } else if let Some(gm) = &gene_map {
-        write_gene_level(
-            &out_dir,
-            gm,
-            &salmon_core::quant_row_indices(res.names.len(), res.first_decoy_index, res.num_decoys)
-                .collect::<Vec<_>>(),
-            &res.names,
-            &res.lengths,
-            &res.eff_lengths,
-            &res.tpm,
-            &res.counts,
-        )?;
-    }
-    Ok(())
+    run_deterministic(
+        opts,
+        rad_out,
+        args.rad_scratch_dir.as_deref(),
+        args.keep_rad,
+        gene_map.as_ref(),
+        &out_dir,
+        spinner,
+    )
 }
 
 /// Shown when a legacy C++ invocation uses a removed/renamed option or
@@ -3509,14 +3266,14 @@ mod tests {
     #[test]
     fn inert_reason_with_its_own_subject_is_left_alone() {
         let msg = inert_in_mode_message(
-            "the deprecated one-pass reads path (--online)",
+            "a --skipQuant run",
             None,
-            "it writes no intermediate RAD",
-            &[("--keepRad", true)],
+            "it estimates no abundances",
+            &[("--numBootstraps", true)],
         )
         .expect("one flag was passed");
         assert!(
-            msg.ends_with("(--online): it writes no intermediate RAD. Ignored."),
+            msg.ends_with("a --skipQuant run: it estimates no abundances. Ignored."),
             "reason should be verbatim: {msg}"
         );
     }
@@ -3605,7 +3362,6 @@ mod tests {
         map_opts.thinning_factor = 9;
         map_opts.bias_speed_samp = 25;
         map_opts.no_bias_length_threshold = true;
-        map_opts.init_uniform = true;
         map_opts.dump_eq = true;
         map_opts.dump_eq_weights = true;
         map_opts.dump_bias_models = true;
@@ -3644,7 +3400,6 @@ mod tests {
         assert_eq!(q.thinning_factor, 9);
         assert_eq!(q.bias_speed_samp, 25);
         assert!(q.no_bias_length_threshold);
-        assert!(q.init_uniform);
         assert!(q.dump_eq);
         assert!(q.dump_eq_weights);
         assert!(q.dump_bias_models);
@@ -3668,7 +3423,6 @@ mod tests {
             q.no_bias_length_threshold,
             defaults.no_bias_length_threshold
         );
-        assert_eq!(q.init_uniform, defaults.init_uniform);
         assert_eq!(q.dump_eq, defaults.dump_eq);
         assert_eq!(q.dump_eq_weights, defaults.dump_eq_weights);
         assert_eq!(q.no_length_correction, defaults.no_length_correction);

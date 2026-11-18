@@ -200,7 +200,7 @@ pub fn project_genome_bam_to_rad(
     };
     // The `-l A` caveat belongs to alignment *input*, not to the estimator
     // reading it: this path detects via the FLD pass, so it owes the same
-    // warning the online path gives (#1140, audit C12).
+    // warning every alignment-input producer gives (#1140, audit C12).
     if LibraryFormat::is_auto(&opts.lib_type) {
         crate::warn_auto_detect_from_alignments();
     }
