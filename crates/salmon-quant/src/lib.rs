@@ -307,6 +307,9 @@ pub struct MapResult {
     /// `lib_format_counts.json`'s per-format keys and its
     /// concordant/inconsistent/strand-bias derivations.
     pub lib_format_counts: salmon_core::LibFormatCountsArray,
+    /// the GPU backend that ran the `--sketch` k-mer lookup, or `None` when
+    /// the mapping ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
     /// index of the first decoy reference (`None` if the index has no decoys).
     /// The decoy block is `[first_decoy_index, first_decoy_index + num_decoys)`;
     /// any references beyond it are short (sub-`k`, never-seeded) transcripts that
@@ -1013,6 +1016,10 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
         num_compatible_fragments: num_frags_compat.load(Ordering::Relaxed),
         num_incompatible_fragments: num_frags_incompat.load(Ordering::Relaxed),
         lib_format_counts: std::array::from_fn(|i| lib_format_counts[i].load(Ordering::Relaxed)),
+        gpu_backend: kmer_gpu_used
+            .load(Ordering::Relaxed)
+            .then_some(salmon_infer::GPU_BACKEND)
+            .flatten(),
         first_decoy_index: salmon.info().first_decoy_index,
         num_decoys: salmon.info().num_decoys,
         keep_duplicates: salmon.info().keep_duplicates,

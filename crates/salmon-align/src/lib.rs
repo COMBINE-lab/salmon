@@ -192,6 +192,10 @@ pub struct AlignQuantOptions {
     /// start time (asctime) of that earlier phase; when set, reported as the
     /// run's `start_time` instead of this pass's own
     pub external_start_time: Option<String>,
+    /// GPU backend an earlier phase used (reads-mode `--deterministic`'s
+    /// `--sketch` k-mer lookup); reported as `gpu_backend` when this pass's
+    /// EM ran on the CPU
+    pub prior_gpu_backend: Option<&'static str>,
     /// keep the `cmd_info.json` an earlier phase already wrote instead of
     /// overwriting it: reads-mode `--deterministic` phase 1 records the real
     /// invocation (index, read files, threads); phase 2's own record would
@@ -325,6 +329,7 @@ impl AlignQuantOptions {
             fld_prior_user_supplied: false,
             prior_seconds: 0.0,
             external_start_time: None,
+            prior_gpu_backend: None,
             preserve_cmd_info: false,
             input_is_alignments: false,
             read_files: Vec::new(),
@@ -1851,7 +1856,8 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
         em_converged: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         em_components: Option<salmon_core::EmComponentsMeta>,
-        /// GPU backend that warm-started the EM/VBEM; null when CPU only
+        /// GPU backend that warm-started the EM/VBEM or ran the `--sketch`
+        /// k-mer lookup; null when CPU only
         gpu_backend: Option<&'static str>,
         detected_library_type: Option<String>,
         /// which inference path produced these results: `deterministic` (RAD

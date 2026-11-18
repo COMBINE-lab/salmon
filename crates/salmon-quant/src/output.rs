@@ -406,7 +406,7 @@ fn write_meta_info(
         num_em_iterations: res.em_iters,
         em_converged: res.em_converged,
         em_components: res.em_components.as_ref().map(|c| c.to_meta()),
-        gpu_backend: None,
+        gpu_backend: res.gpu_backend,
         detected_library_type: res.detected_library_type.clone(),
         inference_path: "none",
         total_time_seconds: res.total_seconds,

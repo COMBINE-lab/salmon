@@ -1669,6 +1669,7 @@ fn run_deterministic(
     }
     q.prior_seconds = run_start.elapsed().as_secs_f64();
     q.external_start_time = Some(map_res.start_time.clone());
+    q.prior_gpu_backend = map_res.gpu_backend;
     // Phase 1 wrote the true invocation record and named the read files; keep
     // both instead of letting the requant's RAD-centric view replace them
     // (#1140).
