@@ -73,7 +73,8 @@ impl BatchHits {
         }
     }
 
-    /// Read `i`'s hits, `None` when it had more than the GPU kept.
+    /// Read `i`'s hits, `None` when it had more than the GPU kept or met one
+    /// of sshash's heavy buckets.
     pub fn read(&self, i: usize) -> Option<&[Hit]> {
         let n = self.counts[i] as usize;
         (n <= HITS_CAP).then(|| &self.hits[i * HITS_CAP..i * HITS_CAP + n])

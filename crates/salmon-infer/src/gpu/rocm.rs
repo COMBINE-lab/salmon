@@ -454,6 +454,12 @@ impl KmerDevice {
         })
     }
 
+    /// See `KmerGpu::device_bytes`.
+    // shortcut: not reported on this backend; sum the uploads if it matters
+    pub(crate) fn device_bytes(&self) -> Option<u64> {
+        None
+    }
+
     /// See `KmerGpu::hits`; `hits` and `counts` are already sized.
     pub(crate) fn hits(
         &self,
