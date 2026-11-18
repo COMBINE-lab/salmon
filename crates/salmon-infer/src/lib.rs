@@ -299,13 +299,14 @@ pub struct EmResult {
 /// transcript hide behind thousands of settled ones.
 const VECTOR_REDUCTION_CHUNK: usize = 2048;
 
-fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
+fn max_rel_diff<T: Copy + Into<f64>>(alpha_in: &[T], alpha_out: &[T], cutoff: f64) -> f64 {
     let mut max_d = f64::NEG_INFINITY;
     for i in 0..alpha_in.len() {
+        let (a_in, a_out): (f64, f64) = (alpha_in[i].into(), alpha_out[i].into());
         // Skip negligible transcripts (see `alpha_check_cutoff`); a positive
         // cutoff also keeps the denominator non-zero.
-        if alpha_out[i] > cutoff {
-            let d = (alpha_out[i] - alpha_in[i]).abs() / alpha_out[i];
+        if a_out > cutoff {
+            let d = (a_out - a_in).abs() / a_out;
             if d > max_d {
                 max_d = d;
             }
@@ -320,9 +321,9 @@ fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
 /// ascending chunk order. Unlike a sum, max does not round, but retaining an
 /// explicit order also pins the treatment of non-finite candidates to the
 /// sequential `if d > max` semantics above.
-fn max_rel_diff_par(
-    alpha_in: &[f64],
-    alpha_out: &[f64],
+fn max_rel_diff_par<T: Copy + Into<f64> + Sync>(
+    alpha_in: &[T],
+    alpha_out: &[T],
     cutoff: f64,
     partials: &mut Vec<f64>,
 ) -> f64 {

@@ -54,17 +54,24 @@ kernel void et_kernel(device const float* alpha [[buffer(0)]],
     et[t] = ap > 1e-10f ? exp_digamma(ap) : 0.0f;  // DIGAMMA_MIN
 }
 
-// partial[k] = sum of x[idx[e]] * w[e] over chunk k (both CSR directions)
+// partial[k] = sum of x[idx[e]] * w[e] over chunk k (both CSR directions),
+// read from the sliced layout (`sliced`): thread s takes chunk k = order[s],
+// whose element j is at soff[s / 32] + j * 32 + s % 32, so a SIMD group's
+// loads are contiguous
 kernel void chunk_dot(device const uint* chunk [[buffer(0)]],
-                      device const uint* idx [[buffer(1)]],
-                      device const float* w [[buffer(2)]],
-                      device const float* x [[buffer(3)]],
-                      device float* partial [[buffer(4)]],
-                      constant uint& n [[buffer(5)]],
-                      uint k [[thread_position_in_grid]]) {
-    if (k >= n) return;
+                      device const uint* soff [[buffer(1)]],
+                      device const uint* idx [[buffer(2)]],
+                      device const float* w [[buffer(3)]],
+                      device const float* x [[buffer(4)]],
+                      device float* partial [[buffer(5)]],
+                      device const uint* order [[buffer(6)]],
+                      constant uint& n [[buffer(7)]],
+                      uint s [[thread_position_in_grid]]) {
+    if (s >= n) return;
+    uint k = order[s];
     float acc = 0.0f;
-    for (uint e = chunk[k]; e < chunk[k + 1]; ++e) {
+    uint e = soff[s >> 5] + (s & 31u);
+    for (uint j = chunk[k + 1] - chunk[k]; j > 0; --j, e += 32u) {
         float b = x[idx[e]];
         acc += b > 0.0f ? b * w[e] : 0.0f;
     }
@@ -114,11 +121,17 @@ pub(super) struct Device {
     txp_finish: Pso,
     c_chunk: Buf,
     c_first: Buf,
+    /// `labels`/`w` (and `t_cls`/`t_w`) in the sliced layout, `c_soff`/`t_soff`
+    /// each slice's start
+    c_soff: Buf,
+    c_order: Buf,
     labels: Buf,
     w: Buf,
     count: Buf,
     t_chunk: Buf,
     t_first: Buf,
+    t_soff: Buf,
+    t_order: Buf,
     t_cls: Buf,
     t_w: Buf,
     single: Buf,
@@ -157,6 +170,51 @@ fn buffer<T: Copy>(dev: &ProtocolObject<dyn MTLDevice>, data: &[T]) -> Result<Bu
         }
     };
     made.ok_or_else(|| "Metal buffer allocation failed".to_string())
+}
+
+/// Lay the chunks of `idx`/`w` out in slices of 32 chunks (one SIMD group):
+/// the i-th chunk of slice s is chunk `order[32 * s + i]`, and its element j
+/// sits at `soff[s] + j * 32 + i`, each slice padded to its longest chunk.
+/// Every chunk keeps its order, so its sum is the same as over the packed
+/// layout; only the loads change, from 32 scattered rows to one contiguous row
+/// per step. `None` past 32-bit indexing.
+#[allow(clippy::type_complexity)]
+fn sliced(
+    chunk: &[u32],
+    idx: &[u32],
+    w: &[f32],
+) -> Option<(Vec<u32>, Vec<u32>, Vec<f32>, Vec<u32>)> {
+    let n = chunk.len() - 1;
+    let len = |k: usize| (chunk[k + 1] - chunk[k]) as usize;
+    // Chunks sorted longest first within windows of 2048: a slice's chunks
+    // then have near-equal lengths (padding 1.4-1.6x unsorted, 1.01x here, on
+    // GEUVADIS), while the window keeps neighbouring classes' gathers local.
+    let mut order: Vec<u32> = (0..n as u32).collect();
+    for c in order.chunks_mut(2048) {
+        c.sort_by_key(|&k| std::cmp::Reverse(len(k as usize)));
+    }
+    let mut soff = Vec::with_capacity(n.div_ceil(32) + 1);
+    let mut total = 0usize;
+    for s in (0..n).step_by(32) {
+        soff.push(u32::try_from(total).ok()?);
+        total += 32
+            * order[s..n.min(s + 32)]
+                .iter()
+                .map(|&k| len(k as usize))
+                .max()
+                .unwrap_or(0);
+    }
+    soff.push(u32::try_from(total).ok()?);
+    let (mut si, mut sw) = (vec![0u32; total], vec![0f32; total]);
+    for (slot, &k) in order.iter().enumerate() {
+        let k = k as usize;
+        let base = soff[slot / 32] as usize + slot % 32;
+        for (j, e) in (chunk[k] as usize..chunk[k + 1] as usize).enumerate() {
+            si[base + 32 * j] = idx[e];
+            sw[base + 32 * j] = w[e];
+        }
+    }
+    Some((soff, si, sw, order))
 }
 
 /// A shared buffer of `len` `u32`s the GPU fills (nothing copied in).
@@ -242,6 +300,17 @@ impl Device {
             let nt = prob.num_txps();
             let zeros_t = vec![0f32; nt];
             let (ncc, ntc) = (prob.c_chunk.len() - 1, prob.t_chunk.len() - 1);
+            let too_big = || "problem exceeds the sliced layout's 32-bit indexing".to_string();
+            let (c_soff, labels, w, c_order) =
+                sliced(&prob.c_chunk, &prob.labels, &prob.w).ok_or_else(too_big)?;
+            let (t_soff, t_cls, t_w, t_order) =
+                sliced(&prob.t_chunk, &prob.t_cls, &prob.t_w).ok_or_else(too_big)?;
+            tracing::debug!(
+                incidences = prob.labels.len(),
+                class_slots = labels.len(),
+                txp_slots = t_cls.len(),
+                "GPU EM sliced layout"
+            );
             Ok(Self {
                 queue: dev.newCommandQueue().ok_or("no Metal command queue")?,
                 et: if vb {
@@ -254,13 +323,17 @@ impl Device {
                 txp_finish: pipeline(&dev, &lib, "txp_finish")?,
                 c_chunk: buffer(&dev, &prob.c_chunk)?,
                 c_first: buffer(&dev, &prob.c_first)?,
-                labels: buffer(&dev, &prob.labels)?,
-                w: buffer(&dev, &prob.w)?,
+                c_soff: buffer(&dev, &c_soff)?,
+                c_order: buffer(&dev, &c_order)?,
+                labels: buffer(&dev, &labels)?,
+                w: buffer(&dev, &w)?,
                 count: buffer(&dev, &prob.count)?,
                 t_chunk: buffer(&dev, &prob.t_chunk)?,
                 t_first: buffer(&dev, &prob.t_first)?,
-                t_cls: buffer(&dev, &prob.t_cls)?,
-                t_w: buffer(&dev, &prob.t_w)?,
+                t_soff: buffer(&dev, &t_soff)?,
+                t_order: buffer(&dev, &t_order)?,
+                t_cls: buffer(&dev, &t_cls)?,
+                t_w: buffer(&dev, &t_w)?,
                 single: buffer(&dev, &prob.single)?,
                 prior: buffer(&dev, &f32s(prior))?,
                 basis: buffer(&dev, &zeros_t)?,
@@ -298,11 +371,27 @@ impl Device {
                     None => src,
                 };
                 let p = &self.partial;
-                let class_dot = [&self.c_chunk, &self.labels, &self.w, basis, p];
+                let class_dot = [
+                    &self.c_chunk,
+                    &self.c_soff,
+                    &self.labels,
+                    &self.w,
+                    basis,
+                    p,
+                    &self.c_order,
+                ];
                 dispatch(&enc, &self.dot, &class_dot, self.ncc);
                 let class_fin = [&self.c_first, p, &self.count, &self.class_scale];
                 dispatch(&enc, &self.class_finish, &class_fin, self.nc);
-                let txp_dot = [&self.t_chunk, &self.t_cls, &self.t_w, &self.class_scale, p];
+                let txp_dot = [
+                    &self.t_chunk,
+                    &self.t_soff,
+                    &self.t_cls,
+                    &self.t_w,
+                    &self.class_scale,
+                    p,
+                    &self.t_order,
+                ];
                 dispatch(&enc, &self.dot, &txp_dot, self.ntc);
                 let txp_fin = [&self.t_first, p, basis, &self.single, dst];
                 dispatch(&enc, &self.txp_finish, &txp_fin, self.nt);
@@ -718,5 +807,32 @@ impl KmerDevice {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sliced_layout_keeps_each_chunk_in_order() {
+        // 70 chunks of lengths 0..=32, so the last slice is partial
+        let mut chunk = vec![0u32];
+        for k in 0..70u32 {
+            chunk.push(chunk[k as usize] + (k * 7) % 33);
+        }
+        let n = *chunk.last().unwrap() as usize;
+        let idx: Vec<u32> = (0..n as u32).map(|e| e * 3 + 1).collect();
+        let w: Vec<f32> = (0..n).map(|e| e as f32 + 0.5).collect();
+        let (soff, si, sw, order) = super::sliced(&chunk, &idx, &w).unwrap();
+        assert_eq!(soff.len(), 70usize.div_ceil(32) + 1);
+        let mut seen = order.clone();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..70).collect::<Vec<u32>>());
+        for (slot, &k) in order.iter().enumerate() {
+            let k = k as usize;
+            let base = soff[slot / 32] as usize + slot % 32;
+            for (j, e) in (chunk[k] as usize..chunk[k + 1] as usize).enumerate() {
+                assert_eq!((si[base + 32 * j], sw[base + 32 * j]), (idx[e], w[e]));
+            }
+        }
     }
 }

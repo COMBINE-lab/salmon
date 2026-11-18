@@ -666,6 +666,23 @@ tolerance. Sorting classes by size and transcripts by degree was measured
 1.3–1.5× slower on Metal because it destroys gather locality, so packed order
 is kept.
 
+On Metal, `chunk_dot` reads the chunks from a sliced layout (`sliced`). 32
+chunks form a slice, one per lane of a SIMD group, and step j of every lane
+reads one contiguous row, `soff[slice] + 32·j + lane`. Packed, the 32 lanes
+read 32 rows 128 bytes or more apart. Within windows of 2,048 chunks, the
+chunks are ordered longest first, so a slice's lanes have about the same
+length: padding goes from 1.4–1.6× to 1.01× on GEUVADIS. The window is small
+enough to keep neighbouring classes' gathers local. Each chunk still sums its
+own elements in their original order, so the iterates are bit-identical to
+the packed kernel's.
+
+On the giant component of ERR188044 (18.3M incidences, 3,800 M-steps), an
+M-step goes from 1.59 to 0.78 ms. The convergence check now runs over the
+`f32` iterates in parallel (`max_rel_diff_par`, the same value as over `f64`
+copies) instead of converting them first, and drops from 1.8 to 0.5 ms per
+check. The EM phase (`em_bias`) goes from 7.4 to 3.8 s, with an identical
+`quant.sf`. CUDA and ROCm keep the packed layout.
+
 Known `f32` limit: `exp(ψ(x))` underflows below `x ≈ 0.0115`. A VBEM class
 whose members all sit below that is therefore dropped on the GPU, where `f64`
 still splits it. A class feeds its own count back to its members every step,
@@ -908,9 +925,20 @@ samples. ERR188428 is faster despite more pairs because fewer of its reads map
 grow with the input, the GPU one more slowly. The mapping phase grows by about
 0.23 s per million pairs on the GPU path (0.28 s before the read-ahead, 0.43 s
 before the GPU selection) and 0.56 s on the CPU; kallisto-GPU reports about 0.05 s. On ERR188044, the time
-outside the mapping phase is the second (RAD) pass, 3.5 s, and the EM with the
-`--dumpEq` write, 7.4 s on either path (10–12 s before SQUAREM ran per
-component and the dump was compressed in parallel).
+outside the mapping phase is the second (RAD) pass, 2.8–2.9 s (3.5 s before
+the workers decompressed the chunks), and the EM with the `--dumpEq` write:
+3.8 s on the GPU path (7.5 s before the sliced kernel layout) and 7.3–7.8 s on
+the CPU path.
+
+**The RAD pass.** libradicl's producer decompresses every lz4 chunk itself
+before it queues it. On the 6.3 GB intermediate RAD of ERR188044 that kept the
+producer busy 75% of the pass, and the 16 workers waited on it about half the
+time. For a compressed RAD, `read_compressed_parallel` now reads the chunks
+compressed on the calling thread and decompresses them on the workers, which
+build the same `MetaChunk`s. The pass goes from 3.5 to 2.8–2.9 s, with
+identical classes and `quant.sf`. The producer now waits on the workers. In
+their time, about 15% is contention on the equivalence-class builder's
+shard locks (`add_slices`).
 
 **Where the mapping phase's time goes.** Under `RUST_LOG=salmon::timing=debug`,
 each mapping thread charges its time to stages, and the run logs the sums in
