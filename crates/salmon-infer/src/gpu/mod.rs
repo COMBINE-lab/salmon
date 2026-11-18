@@ -32,7 +32,7 @@
 
 use crate::packed::PackedEqClasses;
 #[cfg(gpu)]
-use crate::{max_rel_diff, EmOptions, GPU_BACKEND};
+use crate::{max_rel_diff_par, EmOptions, GPU_BACKEND};
 
 // `build.rs` sets `cfg(gpu = ...)` to at most one backend.
 #[cfg(gpu = "cuda")]
@@ -216,20 +216,20 @@ pub(crate) fn converge(
     let run = || -> Result<(Vec<f64>, u32), String> {
         let mut dev = backend::Device::new(&prob, init, prior, opts.use_vbem)?;
         let mut it = 0u32;
+        let mut partials = Vec::new();
         loop {
             let n = CHUNK.min(opts.max_iter - it);
             dev.run(n)?;
             it += n;
             let (prev, cur) = dev.read()?;
-            let cur: Vec<f64> = cur.iter().map(|&x| f64::from(x)).collect();
-            if it >= opts.max_iter {
-                return Ok((cur, it));
-            }
-            let prev: Vec<f64> = prev.iter().map(|&x| f64::from(x)).collect();
-            if it >= min_iter
-                && max_rel_diff(&prev, &cur, opts.alpha_check_cutoff) < opts.rel_diff_tol
+            // on the f32 iterates, each widened as it is read: the same value
+            // as over f64 copies, without making them every check
+            if it >= opts.max_iter
+                || it >= min_iter
+                    && max_rel_diff_par(&prev, &cur, opts.alpha_check_cutoff, &mut partials)
+                        < opts.rel_diff_tol
             {
-                return Ok((cur, it));
+                return Ok((cur.iter().map(|&x| f64::from(x)).collect(), it));
             }
         }
     };
