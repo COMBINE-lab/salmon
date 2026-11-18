@@ -1468,6 +1468,7 @@ fn run_projected_lent(
             let view = plan.view_in(c, labels, weights);
             (view.reads(), view.labels.len())
         };
+        let t0 = std::time::Instant::now();
         let mut ratios = [f64::INFINITY; RATE_WINDOW];
         let mut prev_l1 = f64::NAN;
         let mut met = false;
@@ -1571,6 +1572,21 @@ fn run_projected_lent(
         if reduced.is_some() {
             settle_dead(plan, c, s, reduced.as_ref(), &dead);
             plan.restore(c, labels, weights);
+        }
+        let secs = t0.elapsed().as_secs_f64();
+        if secs > 0.05 {
+            tracing::debug!(
+                target: "salmon::timing",
+                comp = c,
+                ntxp,
+                incidences,
+                mass,
+                iters = end.iters,
+                ndead,
+                pull = plan.pull[c].is_some() || incidences >= plan.lazy_pull_min,
+                secs,
+                "slow EM component"
+            );
         }
         end
     };

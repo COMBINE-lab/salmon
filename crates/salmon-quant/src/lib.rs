@@ -735,11 +735,17 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
         };
         let collection = Collection::new(readers, kind)
             .map_err(|e| anyhow::anyhow!("building read collection: {e}"))?;
+        let stages = tracing::enabled!(target: "salmon::timing", tracing::Level::DEBUG);
+        processor::stage::ON.store(stages, Ordering::Relaxed);
+        let map_start = std::time::Instant::now();
         let mapped = if opts.is_paired() {
             collection.process_parallel_paired_pool(&mut proc, &plan.map_pool, None)
         } else {
             collection.process_parallel_pool(&mut proc, &plan.map_pool, None)
         };
+        if stages {
+            log_map_stages(map_start.elapsed().as_secs_f64(), nthreads);
+        }
 
         // Settle the broker before propagating a mapping error, and never let a
         // broker failure become the run's error. piscem shipped the opposite:
@@ -1090,3 +1096,25 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
 }
 
 pub(crate) use salmon_core::asctime_now;
+
+/// Log the mapping loop's per-stage thread time (paired path) and what is left of `threads × wall`: reading, decompression and
+/// waiting in paraseq's reader.
+fn log_map_stages(wall_s: f64, threads: usize) {
+    use processor::stage;
+    let mut sum = 0.0;
+    for (name, ns) in stage::NAMES.iter().zip(&stage::NS) {
+        let s = ns.swap(0, Ordering::Relaxed) as f64 / 1e9;
+        sum += s;
+        tracing::debug!(target: "salmon::timing", stage = name, thread_s = s, "map stage");
+    }
+    tracing::debug!(
+        target: "salmon::timing",
+        wall_s,
+        threads,
+        thread_s = wall_s * threads as f64,
+        outside_s = wall_s * threads as f64 - sum,
+        frags_gpu = stage::FRAGS_GPU.swap(0, Ordering::Relaxed),
+        frags_cpu_in_gpu_batch = stage::FRAGS_CPU_IN_GPU_BATCH.swap(0, Ordering::Relaxed),
+        "map stages (outside = reading, decompression, waiting)"
+    );
+}
