@@ -129,11 +129,23 @@ is written under the output directory and removed on success unless you pass
 `--deterministic` is still accepted as a no-op, and `meta_info.json` records
 which path ran in `inference_path`.
 
-The pre-2.6 online one-pass path remains available behind `--online`
-(**deprecated**, and to be removed in a future release). Its results depend on
-the thread count, and the online-only knobs — `--forgettingFactor`,
-`--numAuxModelSamples`, `--numPreAuxModelSamples` — warn and are ignored unless
-`--online` is passed.
+Since **2.12.0 it is the only path**. The pre-2.6 one-pass "online" path
+(`--online`, deprecated in 2.6.0) was removed: passing `--online` is an error
+that names the replacements, and its knobs — `--forgettingFactor`,
+`--numAuxModelSamples`, `--numPreAuxModelSamples` — are accepted, warn, and are
+ignored. Coming from `--online`, three differences are worth knowing:
+
+- **Alignment mode (`-a`) scores by the BAM `AS` tag.** `--online -a -t`
+  trained an error model by default; add `--errorModel -t <FASTA>` for the
+  deterministic equivalent ([below](#--errormodel-opt-in)).
+- **`-l A` is detected from the whole run** and the quantification pass filters
+  against the result, rather than locking in after a ~50k-fragment prefix, so
+  small or mixed-orientation inputs can count a few more fragments as
+  incompatible.
+- **Single-end reads without `--fldMean`/`--fldSD`** use a widened version of
+  the default fragment-length prior for the single-end length term, which is
+  more robust when the default is wrong. If you know the library's
+  fragment-length distribution, pass it and it is used as given.
 
 The determinism comes from making the computation itself order-independent rather
 than sorting records:
@@ -157,11 +169,12 @@ rounding wobble). Absolute accuracy versus ground truth is unchanged.
 
 ### Deterministic alignment mode (`-a --deterministic`)
 
-`--deterministic` also applies to **alignment mode** — quantifying a
-name-grouped transcriptome BAM:
+The same two-phase flow is how **alignment mode** quantifies a name-grouped
+transcriptome BAM (it is the only `-a` path since 2.12.0; `--deterministic` is
+accepted as a no-op here too):
 
 ```sh
-salmon quant -a aln.bam -l A -p 16 --deterministic -o out
+salmon quant -a aln.bam -l A -p 16 -o out
 ```
 
 salmon writes the BAM's placements to an intermediate RAD (baking the
@@ -171,8 +184,8 @@ determinism guarantee as RAD mode above: byte-identical at a fixed thread
 count of one, and stable to well beyond the reported precision across thread
 counts.
 
-By default each placement is scored by its BAM alignment score (`AS`), which is
-what `--noErrorModel` does in ordinary alignment mode. This is deliberate: across
+By default each placement is scored by its BAM alignment score (`AS`). This is
+deliberate: across
 every benchmark with ground truth (uniform and realistic position-dependent
 Illumina errors, at 50 bp and 76 bp), `AS` scoring is **at least as accurate** as
 an error model, and it needs only a **single BAM pass**.
@@ -183,7 +196,7 @@ To reproduce salmon's classic error-modeled weighting deterministically, pass
 `--errorModel` (which requires `-t`, the transcriptome the reads were aligned to):
 
 ```sh
-salmon quant -a aln.bam -t txome.fa -l A -p 16 --deterministic --errorModel -o out
+salmon quant -a aln.bam -t txome.fa -l A -p 16 --errorModel -o out
 ```
 
 This trains an **order-independent** error model — first-order per-base
@@ -191,7 +204,8 @@ transition *counts* accumulated as integers, merged across threads by integer
 addition (so the trained model is independent of thread count), then normalized
 once and used to score every placement. It stays fully deterministic, but costs a
 **second BAM pass** (train, then score), roughly doubling the alignment-mode
-runtime.
+runtime. Because it reads the BAM twice, `--errorModel` needs the alignments
+in a regular file: write the BAM to disk rather than piping it in.
 
 When is it worth it? On well-aligned short-read data with informative `AS` tags
 (e.g. bowtie2, STAR) it changes results but does **not** measurably improve
@@ -201,9 +215,9 @@ error-modeled quant, or when the aligner does not emit a usable `AS` (without
 which `AS` scoring falls back to uniform weighting).
 
 :::note
-Passing `-t` alone does **not** enable the error model in deterministic mode (it
-does in ordinary alignment mode) — you also supply it to reconstruct reference
-sequences for bias correction. The error model is enabled only by `--errorModel`.
+Passing `-t` alone does **not** enable the error model (it did under the removed
+`--online -a` path) — you also supply it to reconstruct reference sequences for
+bias correction. The error model is enabled only by `--errorModel`.
 :::
 
 ## Disk use of the `--deterministic` intermediate

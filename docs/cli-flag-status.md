@@ -59,8 +59,8 @@ misbehaves.
 | `--numBootstraps`, `--numGibbsSamples`, `--thinningFactor` | ✅ | |
 | `--vbPrior`, `--perTranscriptPrior`, `--perNucleotidePrior` | ✅ | |
 | `--rangeFactorizationBins`, `--incompatPrior`, `--sigDigits` | ✅ | |
-| `--dumpEq`, `--dumpEqWeights`, `--writeUnmappedNames` | ✅ | The eq dumps come from the pass that builds the classes, so they work in every RAD-based mode (including the 2.6.0 default and `--rad`) as well as `--online`. `--writeUnmappedNames` is reads-mode only: it warns and is ignored under `-a`/`--rad`, where salmon never sees the unmapped reads. |
-| `--initUniform` | ✅ | |
+| `--dumpEq`, `--dumpEqWeights`, `--writeUnmappedNames` | ✅ | The eq dumps come from the pass that builds the classes, so they work in every RAD-based mode (the default reads and `-a` paths, and `--rad`). `--writeUnmappedNames` is reads-mode only: it warns and is ignored under `-a`/`--rad`, where salmon never sees the unmapped reads. |
+| `--initUniform` | ✅ | Accepted no-op: every EM starts uniform. |
 | `--skipQuant` | ✅ | Skips EM + Gibbs/bootstrap + quant.sf; still emits eq-classes/metadata. |
 | `-g/--geneMap`, `--genes` | ✅ | Gene-level aggregation. Rust also adds `--ignoreTxVersion` (no C++ equivalent) for Ensembl cDNA + GTF identifier mismatches. |
 | `-q/--quiet` | ✅ | |
@@ -77,16 +77,16 @@ misbehaves.
 | `--seqBias`, `--gcBias`, `--posBias` | ✅ | |
 | `--fldMean`, `--fldSD`, `--fldMax` | ✅ | Priors. With `--rad` they are ignored unless `--fldPolicy` says otherwise (a salmon RAD bakes its FLD); salmon warns when an explicitly-supplied value is ignored. |
 | `--fldPolicy` | ✅ | `baked` (default) / `derive` / `prior`: where a RAD requant's fragment-length distribution comes from. Rust-port feature; not in this salmon build. |
-| `-f/--forgettingFactor` | ✅ | Online-path only: since 2.6.0 the deterministic default runs no online phase, so it warns and is ignored without `--online`. |
-| `--numAuxModelSamples` | ✅ | Online-phase model-training window; same `--online`-only caveat as `--forgettingFactor`. |
+| `-f/--forgettingFactor` | ✅ | Accepted, warns, ignored: it configured the one-pass `--online` path, removed in 2.12.0. Hidden from `--help`. |
+| `--numAuxModelSamples` | ✅ | Online-phase model-training window; accepted, warns, ignored since 2.12.0 (same as `--forgettingFactor`). |
 | `--biasSpeedSamp` | ✅ | GC convolution fragment-length stride. |
 | `--numGCBins`, `--conditionalGCBins` | ✅ | |
 | `--noBiasLengthThreshold` | ✅ | |
 | `--reduceGCMemory` | 🟰 | The rank-bitvector GC representation it selects is now the default (faster + ~2× leaner, identical results). |
 | `--numBiasSamples` | ⛔ | No separate seq-bias sample cap (collected within the aux window). |
-| `--numPreAuxModelSamples` | ✅ | Pre-aux burn-in window (port default 5000; salmon 1,000,000); same `--online`-only caveat as `--forgettingFactor`. |
-| `--noFragLengthDist` | ✅ | Drops the fragment-length term from a placement's probability (the proper-pair PMF term and the orphan ambiguous-length term alike). Honoured on every quantification path — reads, `-a`, `--rad`, deterministic and online — except the deprecated `--online -a`, which warns that it lacks it. |
-| `--noSingleFragProb` | ✅ | Replaces an orphan's bounded-CMF fragment-length estimate with salmon's flat `LOG_EPSILON` penalty. Honoured on the default deterministic / RAD paths as well as `--online`; it changes point estimates wherever orphans are contested. |
+| `--numPreAuxModelSamples` | ✅ | Pre-aux burn-in window; accepted, warns, ignored since 2.12.0 (same as `--forgettingFactor`). |
+| `--noFragLengthDist` | ✅ | Drops the fragment-length term from a placement's probability (the proper-pair PMF term and the orphan ambiguous-length term alike). Honoured on every quantification path — reads, `-a`, `--rad`. |
+| `--noSingleFragProb` | ✅ | Replaces an orphan's bounded-CMF fragment-length estimate with salmon's flat `LOG_EPSILON` penalty. Honoured on every quantification path; it changes point estimates wherever orphans are contested. |
 
 ## `salmon quant` — mapping / selective alignment (reads mode)
 
