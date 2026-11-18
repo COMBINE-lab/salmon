@@ -37,7 +37,7 @@
 //! per fragment. **This is why salmon cannot simply inherit piscem's 8.** That 8
 //! encodes `C/P = 7` for piscem's sketch-like mapping; selective alignment does
 //! substantially more work per fragment, which raises `C`, lowers the producer's
-//! cost share, and pushes the threshold up. See [`ENGAGEMENT_SELECTIVE_ALIGNMENT`]
+//! cost share, and pushes the threshold up. See [`THRESHOLDS`]
 //! for what was measured.
 
 use std::sync::Arc;

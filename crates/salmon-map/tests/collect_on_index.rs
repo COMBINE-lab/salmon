@@ -321,22 +321,24 @@ fn orphan_recovery_refuses_a_dovetailed_mate() {
     };
     let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
     assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
-    // Measured as normal pairing does, from the outermost ends: [200, 300), not
-    // the 80 that `anchor_end - partner_start` gave.
+    // Measured as normal pairing does, between the mates' 5' ends: the forward
+    // mate starts at 220 and the reverse anchor ends at 300, so [220, 300); the
+    // anchor's 20 bases before 220 are read-through, not insert.
     assert_eq!(
         (m[0].ref_pos, m[0].fragment_len, m[0].rc_pos),
-        (200, 100, 299),
+        (220, 80, 299),
         "{m:?}"
     );
 
-    // Same with the forward mate anchoring (`partner_end - anchor_start` gave 80).
+    // Same with the forward mate anchoring: [200, 280), the anchor's bases past
+    // the rescued reverse mate's 5' end (280) being read-through.
     let r1 = transcript[200..300].to_vec();
     let r2 = break_kmers(&revcomp(&transcript[220..280]), 25);
     let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
     assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
     assert_eq!(
         (m[0].ref_pos, m[0].fragment_len, m[0].rc_pos),
-        (200, 100, 299),
+        (200, 80, 279),
         "{m:?}"
     );
 }
@@ -423,6 +425,16 @@ fn pseudoalignment_only_mode() {
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "sketch pair: {sp:?}"
     );
+    // The fragment is [50, 430): 380 bases ending at 429, as selective alignment
+    // measures it. piscem-rs before the fix reported 381 (`+ 1` in its `tlen`),
+    // which shifted every sketch FLD sample and put `rc_pos` one past the
+    // fragment.
+    let pair = sp
+        .iter()
+        .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+        .unwrap();
+    assert_eq!(pair.fragment_len, 380, "{pair:?}");
+    assert_eq!(pair.rc_pos, 429, "{pair:?}");
 }
 
 #[test]
@@ -461,6 +473,18 @@ fn dovetail_pair_rejected_by_default_accepted_with_flag() {
             .iter()
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "SA --allowDovetail should pair the dovetail: {sa_allow:?}"
+    );
+    // The fragment runs between the mates' 5' ends, [200, 250): the bases each
+    // read has past the other's 5' end are read-through, not insert. (It was
+    // the union [150, 300), 150 bases.)
+    let pair = sa_allow
+        .iter()
+        .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+        .unwrap();
+    assert_eq!(
+        (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+        (200, 50, 200, 249),
+        "{pair:?}"
     );
 
     // --- sketch / pseudoalignment ---
@@ -507,6 +531,56 @@ fn dovetail_pair_rejected_by_default_accepted_with_flag() {
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "sketch --allowDovetail should pair the dovetail: {sk_allow:?}"
     );
+    // Same fragment as selective alignment: it starts at the forward mate (200),
+    // not at the reverse mate's earlier start (150).
+    let pair = sk_allow
+        .iter()
+        .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+        .unwrap();
+    assert_eq!(
+        (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+        (200, 50, 200, 249),
+        "{pair:?}"
+    );
+}
+
+#[test]
+/// A sketch pair whose forward mate hangs 10 bases off the transcript start:
+/// the fragment [-10, 380) is clipped to [0, 380), 380 bases, so its 3' end
+/// (`rc_pos`) is the fragment's last base, 379, as piscem's RAD writer clips it.
+fn sketch_pair_overhanging_the_start_is_clipped() {
+    let transcript = gen_seq(600, 0x5EED);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
+    let mut r1 = gen_seq(10, 0xBAD);
+    r1.extend_from_slice(&transcript[0..70]);
+    let r2 = revcomp(&transcript[300..380]);
+    for (a, b) in [(&r1, &r2), (&r2, &r1)] {
+        let sp = map_read_pair_sketch(
+            idx.inner(),
+            &mut hs,
+            &mut scratch,
+            a,
+            b,
+            false,
+            false,
+            SkippingStrategy::Permissive,
+            256,
+            2500,
+            &idx,
+            false,
+        );
+        let pair = sp
+            .iter()
+            .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+            .unwrap_or_else(|| panic!("no pair: {sp:?}"));
+        assert_eq!(
+            (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+            (0, 380, 0, 379),
+            "{pair:?}"
+        );
+    }
 }
 
 #[test]

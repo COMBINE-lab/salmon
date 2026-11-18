@@ -318,12 +318,21 @@ pub fn map_read_pair_sketch_into<'idx, R: RefProvider>(
                     // surviving mate's `pos` is set. Derive the same position
                     // fields selective alignment fills so bias context, the
                     // ambiguous-fragment FLD term, and SAM output all work.
-                    let frag = h.frag_len();
+                    let mut frag = h.frag_len();
                     let (ref_pos, fw_pos, rc_pos, read_len, r1_pos, r2_pos, r2_fw) = match status
                     {
                         MateStatus::PairedEndPaired => {
                             let (p1, p2) = (h.pos.max(0), h.mate_pos.max(0));
-                            let frag_start = p1.min(p2);
+                            // The fragment runs from the forward mate's 5' end to
+                            // the reverse mate's 5' end (`frag` long), so it starts
+                            // at the forward mate, not at min(pos, mate_pos) (a
+                            // dovetailed or read-through reverse mate can start
+                            // earlier). A start before the transcript is clipped to
+                            // 0 and the length shortened to match, as piscem's RAD
+                            // writer does, so `rc_pos` is the fragment's last base.
+                            let start = h.pair_start();
+                            let frag_start = start.max(0);
+                            frag += start.min(0);
                             // 5' START -> fw positional model, 3' END -> rc model
                             // (matches the SA paired case).
                             (frag_start, frag_start, frag_start + frag - 1, 0, p1, p2, h.mate_is_fw)

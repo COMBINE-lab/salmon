@@ -44,7 +44,6 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use crossbeam_channel::bounded;
-use noodles_bam as bam;
 use noodles_sam as sam;
 use noodles_sam::Header;
 
@@ -57,8 +56,8 @@ use salmon_rad::{
 
 use crate::error_model::{AlignmentModel, CountingAlignmentModel};
 use crate::{
-    coordinate_sorted_unusable, frag_format, is_sam_path, load_ref_bytes, open_sam_reader,
-    pair_records, read_alignment_header, record_to_frag, AlignQuantOptions, FragRecord,
+    coordinate_sorted_unusable, frag_format, load_ref_bytes, pair_records, record_to_frag,
+    AlignQuantOptions, FragRecord,
 };
 
 /// Flush a worker's chunk buffer once it reaches this many record bytes.
@@ -88,7 +87,7 @@ pub fn write_alignment_rad(
     rad_path: &Path,
     codec: ChunkCodec,
 ) -> Result<AlignRadSummary> {
-    let header = read_alignment_header(&opts.bam)?;
+    let (header, mut records) = crate::open_alignment_input(&opts.bam)?;
     if coordinate_sorted_unusable(&header) {
         bail!(
             "alignment input looks coordinate-sorted; salmon needs read-name-grouped \
@@ -114,7 +113,7 @@ pub fn write_alignment_rad(
     // ever consume (#1140).
     let bias_on =
         (opts.seq_bias || opts.gc_bias || opts.pos_bias) && opts.length_correction().is_effective();
-    let is_paired = crate::rad_library_is_paired(&opts.bam, &opts.lib_type)?;
+    let is_paired = crate::rad_library_is_paired(&mut records, &opts.lib_type);
     // Only meaningful for a paired library: with single-end reads every
     // placement is an "orphan" and the flag would discard the entire run.
     let discard_orphans = opts.discard_orphans && is_paired;
@@ -155,6 +154,18 @@ pub fn write_alignment_rad(
     }
     let use_error_model =
         opts.deterministic_error_model && ref_bytes.is_some() && !opts.no_error_model;
+    // The one path that reads the records twice (train, then score), so the one
+    // that cannot take a pipe.
+    if use_error_model {
+        let meta = std::fs::metadata(&opts.bam)
+            .with_context(|| format!("opening alignment input {}", opts.bam.display()))?;
+        anyhow::ensure!(
+            meta.is_file(),
+            "--errorModel reads the alignments twice, so it needs them in a regular file; \
+             {} is not one (a pipe or process substitution?)",
+            opts.bam.display()
+        );
+    }
 
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut writer = RadOutputWriter::create(
@@ -186,7 +197,7 @@ pub fn write_alignment_rad(
         // Pass A — train the counting error model + FLD + naive-eq (records not
         // written yet; scores aren't final). Per-worker counting models are
         // merged by integer add, so the total is partition-independent.
-        let (models, _) = stream_grouped(&opts.bam, nthreads, || {
+        let (models, _) = stream_grouped(records, &header, nthreads, || {
             TrainWorker::new(error_bins, &fld, naive.as_ref(), ref_bytes, discard_orphans)
         })?;
         let mut counting = CountingAlignmentModel::new(error_bins);
@@ -195,14 +206,15 @@ pub fn write_alignment_rad(
         }
         let fixed = counting.finalize(ERROR_MODEL_ALPHA);
         // Pass B — score each placement against the fixed model and write records.
-        let (sums, unmapped_reads) = stream_grouped(&opts.bam, nthreads, || {
+        let (_, again) = crate::open_alignment_input(&opts.bam)?;
+        let (sums, unmapped_reads) = stream_grouped(again, &header, nthreads, || {
             ScoreWriteWorker::new(&writer, ref_bytes, &fixed, discard_orphans)
         })?;
         writer.set_score_kind(salmon_rad::SCORE_KIND_LOGWEIGHT);
         reduce_summary(sums, unmapped_reads)
     } else {
         // One pass — write records carrying the BAM `AS` score + FLD + naive-eq.
-        let (sums, unmapped_reads) = stream_grouped(&opts.bam, nthreads, || {
+        let (sums, unmapped_reads) = stream_grouped(records, &header, nthreads, || {
             WriteWorker::new(&writer, &fld, naive.as_ref(), discard_orphans)
         })?;
         // The scores these records carry are only as good as the tags they came
@@ -492,9 +504,13 @@ fn tally_fld_naive(data: &GroupData, fld: &DiscreteFld, naive: Option<&NaiveEqBu
         data.infos.len() == 1,
         data.infos
             .iter()
-            .filter(|i| i.paired && i.frag_len > 0)
-            .map(|i| PairObs {
-                len: i.frag_len as usize,
+            .filter_map(|i| {
+                // the length the RAD record stores (see `clip_pair_start`)
+                let len = salmon_rad::clip_pair_start(i.pos, i.frag_len).1;
+                (i.paired && len > 0).then_some((i, len))
+            })
+            .map(|(i, len)| PairObs {
+                len: len as usize,
                 tid: i.tid,
                 is_fw: i.is_fw,
                 mate_fw: i.mate_fw,
@@ -814,11 +830,11 @@ impl GroupWorker for ScoreWriteWorker<'_> {
 // Reader / worker orchestration
 // ---------------------------------------------------------------------------
 
-/// Dispatch the grouped pass over SAM or BAM (chosen by extension; BAM is
-/// decoded on a small BGZF worker pool), driving one `make_worker()` per
+/// Run the grouped pass over an opened input, driving one `make_worker()` per
 /// thread. See [`run_grouped`] for what it returns.
 fn stream_grouped<MK, W>(
-    bam_path: &Path,
+    records: crate::AlignmentRecords,
+    header: &Header,
     nthreads: usize,
     make_worker: MK,
 ) -> Result<(Vec<W::Output>, u64)>
@@ -826,26 +842,7 @@ where
     MK: Fn() -> W + Sync + Send,
     W: GroupWorker,
 {
-    if is_sam_path(bam_path) {
-        let mut reader = open_sam_reader(bam_path)?;
-        let header = reader.read_header().context("reading SAM header")?;
-        run_grouped(reader.records(), &header, nthreads, make_worker)
-    } else {
-        let file = std::fs::File::open(bam_path)
-            .with_context(|| format!("opening {}", bam_path.display()))?;
-        let bgzf_workers = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .clamp(1, 4);
-        let bgzf_workers = std::num::NonZeroUsize::new(bgzf_workers).unwrap();
-        {
-            let decoder =
-                noodles_bgzf::io::MultithreadedReader::with_worker_count(bgzf_workers, file);
-            let mut reader = bam::io::Reader::from(decoder);
-            let header = reader.read_header().context("reading BAM header")?;
-            run_grouped(reader.records(), &header, nthreads, make_worker)
-        }
-    }
+    crate::with_alignment_records!(records, recs => run_grouped(recs, header, nthreads, make_worker))
 }
 
 /// One reader thread groups consecutive same-canonical-name records into

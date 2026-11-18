@@ -167,8 +167,8 @@ const _: () = assert!(DEDUP_HASH_THRESHOLD > 20 && DEDUP_HASH_THRESHOLD < 200);
 pub struct MapScratch {
     /// validated mappings for this fragment, before scoring and collapse
     pub(crate) raw: Vec<RawMapping>,
-    /// reverse complement of a mate during orphan recovery
-    pub(crate) revcomp: Vec<u8>,
+    /// orphan-recovery buffers and per-fragment memo
+    pub(crate) rescue: crate::mapper::RescueScratch,
     /// dedup table for fragments with many mappings
     pub(crate) dedup: DedupScratch,
     /// concordant pairs aligned while looking for a valid one, as
@@ -185,8 +185,8 @@ pub struct MapScratch {
 /// So reuse is what matters most, and the parameter is worth the ~10% over TLS
 /// given `QuantProcessor` already owns a scratch struct to put it in.
 ///
-/// Empty until a fragment exceeds [`DEDUP_HASH_THRESHOLD`], so a run that never
-/// sees one never allocates.
+/// Empty until a fragment exceeds `DEDUP_HASH_THRESHOLD` (112) raw mappings,
+/// so a run that never sees one never allocates.
 #[derive(Default)]
 pub struct DedupScratch {
     table: hashbrown::HashTable<RawMapping>,
