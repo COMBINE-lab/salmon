@@ -310,9 +310,9 @@ dependencies = [
 
 [[package]]
 name = "bramble-rs"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e1da606844ed6d72c0872368710dba1cd5bd7f1e64901ada5bedd6ac124d961"
+checksum = "6ccb06a52ffbd853207f6f5d9edb3d3c6ce319427f321755c1453382a05a797d"
 dependencies = [
  "ahash",
  "anyhow",
@@ -400,9 +400,9 @@ dependencies = [
 
 [[package]]
 name = "cf1-rs"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0880342df4e2e6aad18f8a03fca1532f7e699507f74dc8983f8aee43ba12eafa"
+checksum = "183c86a1f98b52421805b5e5dd133ac149eac1100c8262c93edd628fca2fbf42"
 dependencies = [
  "ahash",
  "anyhow",
@@ -930,9 +930,9 @@ dependencies = [
 
 [[package]]
 name = "dsi-progress-logger"
-version = "0.8.10"
+version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3394f42d94af60fb7c43d94ca60e659b3da88dedb3af0489e52a24d381573f"
+checksum = "482073f47eef3a19c7b2d6b216c9ecaebba637e7cbcf1d139723ab1b16dfeceb"
 dependencies = [
  "log",
  "num-format",
@@ -1454,9 +1454,9 @@ dependencies = [
 
 [[package]]
 name = "ksw2rs"
-version = "0.2.1"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "174a142b8d417d13b720b26f3b3ead48cb755399e83dc96fbcd5ba19e5b8be01"
+checksum = "a0225d70201dc730e46d0aa48306ed14198cc080ba063a5ed6c7c5834ff1a83f"
 dependencies = [
  "cc",
 ]
@@ -1736,9 +1736,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "memmap2"
-version = "0.9.11"
+version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+checksum = "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
 dependencies = [
  "libc",
 ]
@@ -2147,10 +2147,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "paraseq-temp"
-version = "0.6.3-pre.1"
+name = "paraseq"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea290fbfc62e5abfee846800eca397a837d1d817a3474c209c7fbf6fcd5f0ad3"
+checksum = "da5f1e06221decffa6ae5bd37ef8448a03bffc350cef996e918ee31a33ec4c13"
 dependencies = [
  "crossbeam-channel",
  "either",
@@ -2197,9 +2197,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscem-rs"
-version = "0.12.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21327da6ea59b6d8a7c4971e7188fb3b6e8fa67a38c757a5d02c60c043a44051"
+checksum = "cdf6694e922258bac13136bf74b2a8c8845257ffae3c5deffd65759da8c562ba"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2214,7 +2214,7 @@ dependencies = [
  "mem_dbg",
  "mimalloc",
  "niffler",
- "paraseq-temp",
+ "paraseq",
  "rapidgzip-core",
  "rayon",
  "seq_geom_parser",
@@ -2563,9 +2563,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags",
  "errno",
@@ -2739,7 +2739,7 @@ dependencies = [
  "noodles-bam",
  "noodles-bgzf",
  "noodles-sam",
- "paraseq-temp",
+ "paraseq",
  "piscem-rs",
  "rapidgzip-core",
  "rayon",
@@ -2967,9 +2967,9 @@ checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
 name = "sshash-lib"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71ea4a34780f39a2a0ac04eb5d2f5c42a6f2ab69f6430f3c2d846df4fc744c36"
+checksum = "149fa173230b293272ec741990277436feb85e7a1ff2e1836712714a2bf227de"
 dependencies = [
  "anyhow",
  "dsi-progress-logger",
@@ -3252,9 +3252,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-dict"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e17e72cd82578cb6661a9b3850cf2c002c24d80f31f6b32ea276c145eab1dc9"
+checksum = "a43185143307a4e8c5fc9907631f1f3a28c1452d67cb11266cd6d928f493186b"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.1",
