@@ -36,7 +36,7 @@ because the underlying feature was removed or has no equivalent in 2.0.
 | `--mimicBT2`, `--mimicStrictBT2` | quant | bowtie2-mimicking presets removed; 2.0's selective alignment is the single supported mode. |
 | `--minAssignedFrags` | quant | The "zero the output below N assigned fragments" guard was removed; 2.0 reports what it quantifies. A run in which no fragment is processed or mapped still writes its output, then exits non-zero. |
 | `--alternativeInitMode`, `--bootstrapReproject`, `--noGammaDraw` | quant | Inference-internal toggles not present in the 2.0 optimizer/Gibbs implementation. |
-| `--numBiasSamples` | quant | 2.0 collects bias samples online (abundance-aware dual-phase), so a fixed sample budget no longer applies. |
+| `--numBiasSamples` | quant | Bias observations come from every mapped fragment, weighted by abundance-aware posteriors over seed abundances, so a fixed sample budget no longer applies. |
 | `--auxTargetFile`, `--writeOrphanLinks` | quant -a | Removed alignment-mode features. |
 
 ## Accepted but ignored (parse + warn)
@@ -51,7 +51,10 @@ These still parse so existing scripts run; 2.0 logs a warning and ignores them
 - index: `--filterSize`
 - quant: `--eqclasses`, `--noFragLengthDist`, `--noSingleFragProb`,
   `--mismatchSeedSkip`, `--disableChainingHeuristic`, `--hitFilterPolicy`,
-  `--maxRecoverReadOcc`, `--validateMappings` (selective alignment is the default)
+  `--maxRecoverReadOcc`, `--validateMappings` (selective alignment is the default),
+  `-f/--forgettingFactor`, `--numAuxModelSamples`, `--numPreAuxModelSamples`
+  (they tuned C++ salmon's online phase; 2.x quantifies in two deterministic
+  phases and has none — see the 2.12.0 notes)
 - quant -a: `--mappingCacheMemoryLimit`, `-s/--sampleOut`, `-u/--sampleUnaligned`,
   `--writeQualities`
 

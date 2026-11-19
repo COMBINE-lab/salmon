@@ -567,6 +567,57 @@ fn a_truncated_fastq_is_refused_rather_than_partially_quantified() {
     );
 }
 
+/// `debug-map` read its FASTQ with a hand-rolled line loop that stopped at the
+/// first I/O error or missing line and exited 0, so a truncated or corrupt
+/// file printed a partial table indistinguishable from a complete one. `quant`
+/// refuses the same inputs; `debug-map` must too (COMBINE-lab/salmon#1314).
+#[test]
+fn debug_map_refuses_a_truncated_or_corrupt_fastq() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path());
+    let full = std::fs::read_to_string(&fx.se).unwrap();
+    let lines: Vec<&str> = full.lines().collect();
+    let debug_map = |reads: &Path| {
+        run(&[
+            os("debug-map"),
+            os("-i"),
+            fx.index.as_os_str(),
+            os("-r"),
+            reads.as_os_str(),
+        ])
+    };
+
+    assert!(debug_map(&fx.se).status.success(), "intact FASTQ must run");
+
+    let mut bad: Vec<(String, Vec<u8>)> = (1..=3)
+        .map(|extra| {
+            let keep = lines.len() - 4 + extra;
+            (
+                format!("ending {extra} line(s) into a record"),
+                format!("{}\n", lines[..keep].join("\n")).into_bytes(),
+            )
+        })
+        .collect();
+    // Last quality line cut short: every line is present, the record is not.
+    bad.push(("cut mid-quality".into(), full[..full.len() - 10].into()));
+    // Not UTF-8 (e.g. a gzip file passed by mistake) is a read error.
+    let mut binary = full.clone().into_bytes();
+    binary.extend_from_slice(b"@x\n\xff\xfe\n+\nII\n");
+    bad.push(("with a non-UTF-8 record".into(), binary));
+
+    for (what, bytes) in bad {
+        let path = dir.path().join("bad.fq");
+        std::fs::write(&path, bytes).unwrap();
+        let o = debug_map(&path);
+        assert!(!o.status.success(), "debug-map must refuse a FASTQ {what}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains("bad.fq"),
+            "the error must name the file:\n{err}"
+        );
+    }
+}
+
 // ---- Group 3: incompatibilities detectable at invocation ------------------
 
 /// Genome projection lives inside the `-a` branch, so `--annotation` with any
@@ -847,8 +898,7 @@ fn explicit_deterministic_is_a_no_op_with_an_info_note() {
 }
 
 /// The online-only knobs (`--forgettingFactor`, `--numAuxModelSamples`,
-/// `--numPreAuxModelSamples`) warn-and-ignore when passed without `--online`,
-/// noting the planned removal, and the message agrees in number: one flag
+/// `--numPreAuxModelSamples`) warn-and-ignore, noting the removal, and the message agrees in number: one flag
 /// "configures … to use it", several "configure … to use them".
 #[test]
 fn online_only_knobs_warn_without_online_and_agree_in_number() {
@@ -873,8 +923,7 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
     let e1 = String::from_utf8_lossy(&one.stderr);
     assert!(
         e1.contains("--forgettingFactor configures the online inference path")
-            && e1.contains("to be removed in a")
-            && e1.contains("to use it."),
+            && e1.contains("which was removed in 2.12.0"),
         "single online knob must warn in the singular, noting the removal: {e1}"
     );
 
@@ -897,29 +946,8 @@ fn online_only_knobs_warn_without_online_and_agree_in_number() {
     assert!(two.status.success());
     let e2 = String::from_utf8_lossy(&two.stderr);
     assert!(
-        e2.contains("configure the online inference path") && e2.contains("to use them."),
+        e2.contains("--forgettingFactor, --numAuxModelSamples configure the online inference path"),
         "two online knobs must warn in the plural: {e2}"
-    );
-
-    // Passing --online must suppress the inert-knob warning (the knobs now apply).
-    let online = run(&[
-        os("quant"),
-        os("-i"),
-        fx.index.as_os_str(),
-        os("-l"),
-        os("A"),
-        os("-r"),
-        fx.se.as_os_str(),
-        os("--online"),
-        os("-f"),
-        os("0.7"),
-        os("-o"),
-        tmp.path().join("o3").as_os_str(),
-    ]);
-    assert!(online.status.success());
-    assert!(
-        !String::from_utf8_lossy(&online.stderr).contains("configures the online inference path"),
-        "under --online the knob is honoured, not warned about"
     );
 }
 
@@ -1209,7 +1237,7 @@ fn single_end_auto_detection_reads_the_whole_input() {
 /// `ambig_info.tsv` is read row for row against `quant.sf`, on every path: a
 /// decoy row would shift every transcript after it.
 #[test]
-fn ambig_info_has_one_row_per_quant_row_under_online() {
+fn ambig_info_has_one_row_per_quant_row_with_decoys() {
     let dir = tempfile::tempdir().unwrap();
     let txs = [sequence(5, 3000), sequence(19, 3000)];
     let fasta = dir.path().join("gentrome.fa");
@@ -1252,7 +1280,6 @@ fn ambig_info_has_one_row_per_quant_row_under_online() {
     let out = dir.path().join("out");
     let o = run(&[
         os("quant"),
-        os("--online"),
         os("-i"),
         index.as_os_str(),
         os("-l"),
@@ -1302,4 +1329,42 @@ fn the_bias_seed_em_is_not_reported_as_unconverged() {
         !err.contains("never met the convergence criterion"),
         "{err}"
     );
+}
+
+/// `-t idx/cleaned_refs.fa -i idx` would truncate its own input, and a build
+/// that fails must not leave a cleaned copy behind.
+#[test]
+fn index_refuses_its_own_cleaned_fasta_and_cleans_up_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = dir.path().join("idx");
+    std::fs::create_dir_all(&idx).unwrap();
+    let cleaned = idx.join("cleaned_refs.fa");
+    std::fs::write(&cleaned, format!(">t\n{}\n", sequence(7, 300))).unwrap();
+    let o = run(&[
+        os("index"),
+        os("-t"),
+        cleaned.as_os_str(),
+        os("-i"),
+        idx.as_os_str(),
+    ]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("cleaned_refs.fa"));
+    assert!(
+        std::fs::read_to_string(&cleaned).unwrap().len() > 300,
+        "input was truncated"
+    );
+
+    // An empty reference fails in preprocessing.
+    let empty = dir.path().join("empty.fa");
+    std::fs::write(&empty, "").unwrap();
+    let out = dir.path().join("idx2");
+    let o = run(&[
+        os("index"),
+        os("-t"),
+        empty.as_os_str(),
+        os("-i"),
+        out.as_os_str(),
+    ]);
+    assert!(!o.status.success());
+    assert!(!out.join("cleaned_refs.fa").exists());
 }

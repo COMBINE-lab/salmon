@@ -32,7 +32,7 @@
 //! and a pool of worker threads, mirroring piscem-infer's `process_parallel`.
 //!
 //! Quantification is **deterministic** and order-independent: there is no online
-//! (dual-phase) phase. Instead the fragment-length distribution is *fixed before*
+//! (dual-phase) phase, as in C++ salmon and the pre-2.12 one-pass path. Instead the fragment-length distribution is *fixed before*
 //! equivalence-class assembly, so every fragment's weight is a pure function of
 //! its placements and that FLD, and the eq-class builder (sorted `finish`) +
 //! range-factorization + EM are all order-independent. Two-pass when the FLD must
@@ -69,8 +69,7 @@ use libradicl::readers::{MetaChunk, MetaChunkStream, ParallelRadReader};
 use libradicl::record::{MappedRecord, PiscemBulkReadRecord, RecordContext};
 
 use salmon_core::{
-    is_compatible, LibraryFormat, MateStatus, PhaseTimer, ReadOrientation, ReadStrandedness,
-    ReadType,
+    is_compatible, LibraryFormat, MateStatus, PhaseTimer, ReadOrientation, ReadType,
 };
 use salmon_eqclass::{
     range_factorize_bins_into, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement,
@@ -420,31 +419,8 @@ struct RadScratch {
 /// cannot be distinguished — acceptable for the common inward libraries).
 fn rad_frag_format(p: &RadPlacement) -> (Option<LibraryFormat>, bool, MateStatus) {
     if p.status == MateStatus::PairedEndPaired {
-        let (orientation, strandedness) = if p.is_fw != p.mate_fw {
-            (
-                ReadOrientation::Toward,
-                if p.is_fw {
-                    ReadStrandedness::SA
-                } else {
-                    ReadStrandedness::AS
-                },
-            )
-        } else {
-            (
-                ReadOrientation::Same,
-                if p.is_fw {
-                    ReadStrandedness::S
-                } else {
-                    ReadStrandedness::A
-                },
-            )
-        };
         (
-            Some(LibraryFormat::new(
-                ReadType::PairedEnd,
-                orientation,
-                strandedness,
-            )),
+            Some(salmon_core::observed_paired_format(p.is_fw, p.mate_fw)),
             p.is_fw,
             MateStatus::PairedEndPaired,
         )
@@ -582,7 +558,7 @@ fn unpaired_log_frag_prob(
 /// interpretation. Uniform (`0`) when the profile is unscored; for a raw AS
 /// score, the salmon soft-weight `−scoreExp·(best−score)` (best hit → `0`, worse
 /// hits penalized); for a quantized log-LR ([`salmon_rad::SCORE_KIND_LOGWEIGHT`]),
-/// the log-weight itself (`score / scale`), used absolutely like the online error
+/// the log-weight itself (`score / scale`), used absolutely like an error
 /// model's `Σ(fg−bg)` (the eq-class softmax handles the relative scaling).
 #[inline]
 fn score_weight_basis(scored: bool, score_kind: u8, score_exp: f64, best: i32, score: i32) -> f64 {
@@ -640,9 +616,8 @@ fn best_kept_score(
 }
 
 /// Weight one fragment's placements and add the equivalence class. Returns
-/// `true` if the fragment was assigned (had a surviving placement). A trimmed
-/// analog of [`crate::process_fragment`] with no error model, bias, or online
-/// phase: the FLD (`cfg.pmf`/`cfg.cmf`) is fixed for the whole run, so the weight
+/// `true` if the fragment was assigned (had a surviving placement). There is no
+/// error model, bias, or online phase here: the FLD (`cfg.pmf`/`cfg.cmf`) is fixed for the whole run, so the weight
 /// is a deterministic function of the placements alone — duplicate/paralogous
 /// transcripts sharing a fragment length get identical weights, and the result is
 /// independent of fragment processing order.
@@ -1558,8 +1533,8 @@ struct BiasCfg<'a> {
 }
 
 /// Collect one fragment's sequence/GC/positional bias contributions, weighted by
-/// an abundance-aware posterior derived from the FIXED abundance vector (the RAD
-/// analog of `process_fragment`'s online posterior). The reference context comes
+/// an abundance-aware posterior derived from the FIXED abundance vector (the
+/// deterministic stand-in for salmon's online posterior). The reference context comes
 /// from `ref_bytes` at the fragment's positions — RAD never needs the read bases.
 fn collect_bias_fragment(
     placements: &[RadPlacement],
@@ -1586,7 +1561,7 @@ fn collect_bias_fragment(
         }
     };
 
-    // Each placement carries its online log-weight (aux + start-position term)
+    // Each placement carries its log-weight (aux + start-position term)
     // and its fragment geometry in one record.
     scratch.bias.clear();
     for p in placements {
@@ -1661,8 +1636,8 @@ fn collect_bias_fragment(
     }
 
     // Aggregate by transcript and form the abundance-aware posterior:
-    // softmax over tids of `ln(alpha_tid) + online_log_tid` (the RAD stand-in for
-    // `OnlineInference::assign_fragment`, using the fixed abundance vector).
+    // softmax over tids of `ln(alpha_tid) + log_w_tid` (salmon's online
+    // posterior, evaluated against the fixed abundance vector).
     scratch.bias.group(&mut scratch.group_log);
     // Split the scratch into its fields so the read-only groups and the two
     // buffers written below can be borrowed at the same time.
@@ -1743,7 +1718,12 @@ fn collect_bias_fragment(
                     }
                 }
             }
-            if let (Some(gc), true) = (local.gc_obs.as_mut(), proper && fe < rl) {
+            // GC needs this transcript's own bases: with none, its view would
+            // read the next transcript's (the seq branch above has the same guard).
+            if let (Some(gc), true) = (
+                local.gc_obs.as_mut(),
+                proper && fe < rl && !refseq.is_empty(),
+            ) {
                 let view = cfg.gc_store.view(*tid as usize);
                 if let Some((ff, cf)) = salmon_model::gc_desc(&view, fs as i32, fe as i32) {
                     gc.inc(ff, cf, p);
@@ -2556,20 +2536,11 @@ pub fn quantify_rad(opts: &AlignQuantOptions, rad_path: &Path) -> Result<AlignQu
             0x5A13_0000,
         )
     } else if opts.num_gibbs_samples > 0 {
-        let prior = if opts.em.use_vbem {
-            opts.em.vb_prior.max(1.0)
-        } else {
-            1e-3
-        };
-        let gopts = salmon_infer::GibbsOptions {
-            num_samples: opts.num_gibbs_samples,
-            thinning: opts.thinning_factor,
-            prior,
-            // Honour --perNucleotidePrior here as the EM does; hardcoding a
-            // per-transcript prior made the flag a no-op for Gibbs on every
-            // path (#1140, audit D13).
-            per_transcript_prior: !opts.em.per_nucleotide_prior,
-        };
+        let gopts = salmon_infer::GibbsOptions::for_em(
+            &opts.em,
+            opts.num_gibbs_samples,
+            opts.thinning_factor,
+        );
         salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
     } else {
         Vec::new()

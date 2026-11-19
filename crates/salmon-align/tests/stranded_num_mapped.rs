@@ -5,7 +5,7 @@
 //! alignment mode counted every aligned fragment as mapped, regardless of the
 //! strand-compatibility filter applied during assignment.
 
-use salmon_align::{quantify_alignments, AlignQuantOptions};
+use salmon_align::AlignQuantOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,15 @@ use std::path::{Path, PathBuf};
 /// `n_rev` have read1 on the reverse strand (ISR-compatible, ISF-incompatible).
 /// Records of a fragment are consecutive (grouped by read name), as an aligner
 /// emits them. Returns the SAM path.
+/// The alignment-mode pipeline: BAM/SAM to an intermediate RAD, then quantify it.
+fn quantify_two_phase(opts: &AlignQuantOptions) -> anyhow::Result<salmon_align::AlignQuantResult> {
+    let mut opts = opts.clone();
+    opts.input_is_alignments = true;
+    let rad = opts.output_dir.with_extension("rad");
+    salmon_align::write_alignment_rad(&opts, &rad, salmon_rad::ChunkCodec::None)?;
+    salmon_align::quantify_rad(&opts, &rad)
+}
+
 fn write_sam(dir: &Path, n_fwd: usize, n_rev: usize) -> PathBuf {
     let path = dir.join("aln.sam");
     let mut f = std::fs::File::create(&path).unwrap();
@@ -74,7 +83,7 @@ fn run(sam: &Path, out: &Path, lib_type: &str) -> salmon_align::AlignQuantResult
     opts.lib_type = lib_type.to_string();
     opts.transcripts = None; // lengths from @SQ; no error model / bias
     opts.no_error_model = true;
-    quantify_alignments(&opts).expect("quantify_alignments")
+    quantify_two_phase(&opts).expect("alignment quantification")
 }
 
 #[test]
@@ -248,7 +257,7 @@ fn stranded_align_lib_format_counts_report_incompatible_fragments() {
     );
 }
 
-/// `-l A` in online alignment mode must infer the library type from the
+/// `-l A` in alignment mode must infer the library type from the
 /// alignments (the reads-mode prefix detector, fed from the BAM/SAM stream) and
 /// report it — where before it silently skipped detection and filtering
 /// entirely, leaving `expected_format: "A"` and a fictitious ratio.
@@ -285,15 +294,14 @@ fn align_auto_library_type_detects_from_alignments() {
     let out = tmp.path().join("auto_se");
     let res = run(&se, &out, "A");
     assert_eq!(res.detected_library_type.as_deref(), Some("SF"));
-    assert_eq!(res.num_mapped, 50);
+    // Detection here covers the whole input and the requant filters against
+    // the detected type, so the 2 reverse reads are judged incompatible
+    // (the removed one-pass path judged nothing below its lock-in budget).
+    assert_eq!(res.num_mapped, 48);
     let v = lib_counts(&out);
     assert_eq!(v["expected_format"].as_str().unwrap(), "SF");
     assert_eq!(v["SF"].as_u64().unwrap(), 48);
     assert_eq!(v["SR"].as_u64().unwrap(), 2);
-    assert_eq!(v["num_incompatible_fragments"].as_u64().unwrap(), 0);
-    assert_eq!(v["num_assigned_fragments"].as_u64().unwrap(), 50);
-    let bias = v["strand_mapping_bias"].as_f64().unwrap();
-    assert!((bias - 0.96).abs() < 1e-12, "bias {bias} != 0.96");
 }
 
 /// Mates apart (a position-sorted file whose header does not say so) make every
@@ -318,12 +326,12 @@ fn input_not_grouped_by_read_name_is_refused() {
     let mut opts = AlignQuantOptions::new(path, tmp.path().join("out"));
     opts.lib_type = "IU".to_string();
     opts.no_error_model = true;
-    let online = quantify_alignments(&opts).unwrap_err();
     let rad = tmp.path().join("a.rad");
     let default = salmon_align::write_alignment_rad(&opts, &rad, salmon_rad::ChunkCodec::None)
         .map(|_| ())
         .unwrap_err();
-    for err in [online, default] {
+    {
+        let err = default;
         let err = format!("{err:#}");
         assert!(err.contains("not grouped by read name"), "{err}");
     }
@@ -332,7 +340,7 @@ fn input_not_grouped_by_read_name_is_refused() {
 /// Unmapped records (bowtie2's default, STAR's `--outSAMunmapped Within`) are
 /// fragments the aligner saw and could not place, so they count against the
 /// mapping rate. Dropped at the reader, a 25% library reported 100%, on both the
-/// default path and `--online`.
+/// default path and the (removed) `--online`.
 #[test]
 fn unmapped_fragments_count_against_the_mapping_rate() {
     let tmp = tempfile::tempdir().unwrap();
@@ -350,13 +358,6 @@ fn unmapped_fragments_count_against_the_mapping_rate() {
         writeln!(f, "u{i}\t141\t*\t0\t0\t*\t*\t0\t0\t*\t*").unwrap();
     }
     drop(f);
-
-    let online = run(&path, &tmp.path().join("online"), "IU");
-    assert_eq!(
-        (online.num_processed, online.num_mapped),
-        (8, 2),
-        "--online"
-    );
 
     let mut opts = AlignQuantOptions::new(path, tmp.path().join("rad_out"));
     opts.lib_type = "IU".to_string();

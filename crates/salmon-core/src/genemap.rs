@@ -281,7 +281,7 @@ pub fn matches_ignoring_tx_version(names: &[String], gene_map: &HashMap<String, 
 /// Ensembl/GENCODE/RefSeq identifier schemes.
 ///
 /// `unmatched_out`, when given, receives the unmatched transcript names as JSON
-/// (see [`write_unmatched_list`]) in `names` order, and is removed when nothing
+/// (see `write_unmatched_list`) in `names` order, and is removed when nothing
 /// is unmatched so a stale list from an earlier run cannot be mistaken for a
 /// current one. The returned
 /// [`GeneQuantSummary`] is what the caller should report — in particular
@@ -354,37 +354,40 @@ pub fn write_gene_quant(
     // smallest positive double, matching salmon's `minTPM = denorm_min`.
     // Used as the "is the total effectively zero" threshold below.
     let min_tpm = f64::from_bits(1);
-    let mut w = io::BufWriter::new(std::fs::File::create(out_path)?);
-    writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-    for (gene, idxs) in &genes {
-        // Additive quantities: straight sums over the gene's transcripts.
-        let total_tpm: f64 = idxs.iter().map(|&i| tpm[i]).sum();
-        let total_reads: f64 = idxs.iter().map(|&i| counts[i]).sum();
-        let (mut g_len, mut g_eff) = (0.0f64, 0.0f64);
-        if total_tpm > min_tpm {
-            // Weight each isoform's length by its share of the gene's expression.
-            for &i in idxs {
-                let frac = tpm[i] / total_tpm;
-                g_len += lengths[i] as f64 * frac;
-                g_eff += eff_lengths[i] * frac;
+    // Through a temporary name, like `quant.sf`: a run that fails mid-write must
+    // not leave a gene table that looks complete.
+    crate::write_via_rename(out_path, |w| {
+        writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
+        for (gene, idxs) in &genes {
+            // Additive quantities: straight sums over the gene's transcripts.
+            let total_tpm: f64 = idxs.iter().map(|&i| tpm[i]).sum();
+            let total_reads: f64 = idxs.iter().map(|&i| counts[i]).sum();
+            let (mut g_len, mut g_eff) = (0.0f64, 0.0f64);
+            if total_tpm > min_tpm {
+                // Weight each isoform's length by its share of the gene's expression.
+                for &i in idxs {
+                    let frac = tpm[i] / total_tpm;
+                    g_len += lengths[i] as f64 * frac;
+                    g_eff += eff_lengths[i] * frac;
+                }
+            } else {
+                // Nothing expressed: weighting by zero would give 0/0, so fall back
+                // to a plain average over the isoforms.
+                let frac = 1.0 / idxs.len() as f64;
+                for &i in idxs {
+                    g_len += lengths[i] as f64 * frac;
+                    g_eff += eff_lengths[i] * frac;
+                }
             }
-        } else {
-            // Nothing expressed: weighting by zero would give 0/0, so fall back
-            // to a plain average over the isoforms.
-            let frac = 1.0 / idxs.len() as f64;
-            for &i in idxs {
-                g_len += lengths[i] as f64 * frac;
-                g_eff += eff_lengths[i] * frac;
-            }
+            // Fixed decimal places matching salmon's output precision exactly, so
+            // downstream tools that diff the two see no difference.
+            writeln!(
+                w,
+                "{gene}\t{g_len:.3}\t{g_eff:.3}\t{total_tpm:.6}\t{total_reads:.3}"
+            )?;
         }
-        // Fixed decimal places matching salmon's output precision exactly, so
-        // downstream tools that diff the two see no difference.
-        writeln!(
-            w,
-            "{gene}\t{g_len:.3}\t{g_eff:.3}\t{total_tpm:.6}\t{total_reads:.3}"
-        )?;
-    }
-    w.flush()?;
+        Ok(())
+    })?;
     summary.genes_written = genes.len();
     Ok(summary)
 }

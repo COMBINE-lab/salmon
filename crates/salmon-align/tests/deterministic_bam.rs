@@ -422,11 +422,13 @@ fn driver_diagnostics_reach_meta_on_the_alignment_path() {
         "warning",
         "carried across from the driver".to_string(),
     ));
-    salmon_align::quantify_alignments(&opts).unwrap();
+    let rad = dir.path().join("q.rad");
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    quantify_rad(&opts, &rad).unwrap();
     let meta = std::fs::read_to_string(out.join("aux_info").join("meta_info.json")).unwrap();
     assert!(
         meta.contains("test_probe_diagnostic"),
-        "driver-supplied diagnostics must reach meta_info.json on the online -a path: {meta}"
+        "driver-supplied diagnostics must reach meta_info.json on the -a path: {meta}"
     );
 }
 
@@ -461,7 +463,7 @@ fn write_sam_with_orphans(dir: &Path) -> PathBuf {
 /// `--discardOrphans` was read only by the online path, so on the 2.6.0
 /// default (`-a` deterministic) it was accepted and silently did nothing
 /// (#1140, audit C10). Dropping the half-mapped fragments before they reach
-/// the RAD makes both alignment paths answer the flag the same way.
+/// the RAD makes the flag take effect.
 fn discard_orphans_is_honoured_on_the_deterministic_path() {
     let dir = tempfile::tempdir().unwrap();
     let sam = write_sam_with_orphans(dir.path());
@@ -942,4 +944,181 @@ fn only_mate_suffixes_are_stripped_from_read_names() {
     let summary = write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
     // r/a and r/b are two fragments; s/1 and s/2 are the mates of one.
     assert_eq!(summary.num_processed, 3);
+}
+
+fn random_bases(mut x: u64, n: usize) -> Vec<u8> {
+    (0..n)
+        .map(|_| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            b"ACGT"[(x >> 33) as usize & 3]
+        })
+        .collect()
+}
+
+/// `-t` may cover only part of the BAM's references. A placement on one it does
+/// not cover cannot be scored by the error model; scored 0, it beat every real
+/// alignment with a mismatch, so the reads moved to the reference with no sequence.
+#[test]
+fn a_placement_on_a_reference_missing_from_t_does_not_win() {
+    let dir = tempfile::tempdir().unwrap();
+    let tx_a = random_bases(5, 3000);
+    let fasta = dir.path().join("t.fa");
+    std::fs::write(
+        &fasta,
+        format!(">txA\n{}\n", String::from_utf8_lossy(&tx_a)),
+    )
+    .unwrap();
+    let flip = |b: u8| if b == b'A' { b'C' } else { b'A' };
+
+    let sam = dir.path().join("a.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:unsorted").unwrap();
+    writeln!(f, "@SQ\tSN:txA\tLN:3000").unwrap();
+    writeln!(f, "@SQ\tSN:txB\tLN:3000").unwrap();
+    for i in 0..1000 {
+        let p = (i * 3) % 2800;
+        let mut read = tx_a[p..p + 100].to_vec();
+        read[30] = flip(read[30]);
+        read[70] = flip(read[70]);
+        let read = String::from_utf8_lossy(&read);
+        let (q, one) = ("I".repeat(100), p + 1);
+        writeln!(f, "r{i}\t0\ttxA\t{one}\t60\t100M\t*\t0\t0\t{read}\t{q}").unwrap();
+        writeln!(f, "r{i}\t256\ttxB\t{one}\t0\t100M\t*\t0\t0\t{read}\t{q}").unwrap();
+    }
+    drop(f);
+
+    let out = dir.path().join("q");
+    let mut opts = AlignQuantOptions::new(sam.clone(), out.clone());
+    opts.lib_type = "U".to_string();
+    opts.deterministic_error_model = true;
+    opts.transcripts = Some(fasta.clone());
+    let rad = dir.path().join("a.rad");
+    write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+    quantify_rad(&opts, &rad).unwrap();
+    let counts = quant_counts(&out);
+    assert!(
+        counts[1].1 <= counts[0].1 + 1.0,
+        "an unscorable placement must not beat a scored one: {counts:?}"
+    );
+}
+
+/// A transcript with no sequence in `-t` has an empty GC view, which reads the
+/// next transcript's bases. Its fragments must add nothing to the observed GC
+/// model, which must match a run that never saw them.
+#[test]
+fn gc_bias_ignores_fragments_on_a_reference_missing_from_t() {
+    let dir = tempfile::tempdir().unwrap();
+    let tx_a = random_bases(11, 3000);
+    let fasta = dir.path().join("t.fa");
+    std::fs::write(
+        &fasta,
+        format!(">txA\n{}\n", String::from_utf8_lossy(&tx_a)),
+    )
+    .unwrap();
+    let write = |name: &str, with_b: bool| -> PathBuf {
+        let path = dir.path().join(name);
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+        // txB first, so its empty view starts where txA's bases do.
+        writeln!(f, "@SQ\tSN:txB\tLN:3000").unwrap();
+        writeln!(f, "@SQ\tSN:txA\tLN:3000").unwrap();
+        let txs: &[&str] = if with_b { &["txA", "txB"] } else { &["txA"] };
+        for tx in txs {
+            for i in 0..100 {
+                let (l, r) = (1 + i * 25, 201 + i * 25);
+                writeln!(
+                    f,
+                    "{tx}{i}\t99\t{tx}\t{l}\t60\t100M\t=\t{r}\t300\t*\t*\tAS:i:0"
+                )
+                .unwrap();
+                writeln!(
+                    f,
+                    "{tx}{i}\t147\t{tx}\t{r}\t60\t100M\t=\t{l}\t-300\t*\t*\tAS:i:0"
+                )
+                .unwrap();
+            }
+        }
+        path
+    };
+    let obs_gc = |sam: PathBuf, tag: &str| {
+        let out = dir.path().join(tag);
+        std::fs::create_dir_all(&out).unwrap();
+        let mut opts = opts_for(&sam, &out);
+        opts.gc_bias = true;
+        opts.transcripts = Some(fasta.clone());
+        let rad = out.join("aln.rad");
+        write_alignment_rad(&opts, &rad, ChunkCodec::None).unwrap();
+        quantify_rad(&opts, &rad).unwrap().bias_dump.obs_gc
+    };
+    let with_b = obs_gc(write("ab.sam", true), "ab");
+    let only_a = obs_gc(write("a.sam", false), "a");
+    assert!(!only_a.is_empty());
+    assert_eq!(
+        with_b, only_a,
+        "txB has no bases, so it must not shape the GC model"
+    );
+}
+
+/// An exon the genome cannot supply used to be skipped, so the transcript got
+/// the other exons glued together and every later base shifted. Such a
+/// transcript now gets no sequence at all, which the bias models skip.
+#[test]
+fn genome_projection_gives_no_sequence_to_a_transcript_with_a_missing_exon() {
+    let dir = tempfile::tempdir().unwrap();
+    let genome = dir.path().join("g.fa");
+    std::fs::write(
+        &genome,
+        format!(
+            ">chr1\n{}\n",
+            String::from_utf8_lossy(&random_bases(3, 5000))
+        ),
+    )
+    .unwrap();
+    let gtf = dir.path().join("a.gtf");
+    let mut f = std::fs::File::create(&gtf).unwrap();
+    // txA's second exon lies past the 5000 bp contig; txB fits.
+    for (tx, exons) in [
+        ("txA", &[(1001, 1500), (9001, 9500)][..]),
+        ("txB", &[(2001, 3000)][..]),
+    ] {
+        let attrs = format!("gene_id \"g{tx}\"; transcript_id \"{tx}\";");
+        let (s, e) = (exons[0].0, exons[exons.len() - 1].1);
+        writeln!(f, "chr1\tt\ttranscript\t{s}\t{e}\t.\t+\t.\t{attrs}").unwrap();
+        for (s, e) in exons {
+            writeln!(f, "chr1\tt\texon\t{s}\t{e}\t.\t+\t.\t{attrs}").unwrap();
+        }
+    }
+    drop(f);
+    let sam = dir.path().join("g.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(f, "@HD\tVN:1.6\tSO:queryname").unwrap();
+    writeln!(f, "@SQ\tSN:chr1\tLN:5000").unwrap();
+    writeln!(f, "r0\t0\tchr1\t2001\t60\t100M\t*\t0\t0\t*\t*\tAS:i:0").unwrap();
+    drop(f);
+
+    let gp = salmon_align::GenomeProjectOptions {
+        bam: sam,
+        annotation: gtf,
+        genome_fasta: Some(genome),
+        lib_type: "U".to_string(),
+        junc_miss_discount: None,
+        bias: true,
+        fld_mean: 250.0,
+        fld_sd: 25.0,
+        fld_max: 1000,
+        bias_seed_em_iters: 0,
+        em: Default::default(),
+        rad_codec: ChunkCodec::None,
+    };
+    let art = salmon_align::project_genome_bam_to_rad(&gp, &dir.path().join("g.rad")).unwrap();
+    let seqs = art.ref_seqs.expect("bias asks for sequences");
+    let seq_of = |name: &str| seqs[art.names.iter().position(|n| n == name).unwrap()].len();
+    assert_eq!(
+        seq_of("txA"),
+        0,
+        "an incomplete transcript must not get a shifted sequence"
+    );
+    assert_eq!(seq_of("txB"), 1000);
 }

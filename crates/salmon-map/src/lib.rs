@@ -56,7 +56,8 @@ pub mod score;
 pub mod sketch;
 
 pub use align::{
-    align_chain, align_chain_view, align_in_window, perfect_score, AlignConfig, Alignment,
+    align_chain, align_chain_clipped_view, align_chain_view, align_in_window, perfect_score,
+    AlignConfig, Alignment,
 };
 pub use chain::{chain_mems, ChainConfig, MemChain};
 pub use collect::{
@@ -72,11 +73,10 @@ pub use mapper::{
     take_last_map_stats, DebugMapping, MapConfig, MapStats, SeedMode,
 };
 pub use mem::Mem;
-pub use pair::{join_reads_and_filter, JointMapping, PairingConfig};
+pub use pair::{join_reads_and_filter, JointMapping, PairingConfig, DEFAULT_DOVETAIL_TOLERANCE};
 pub use salmon_core::RefProvider;
 pub use score::{
-    filter_sketch_decoys, finalize_mappings, DedupScratch, MapScratch, RawMapping, ScoreConfig,
-    ScoredMapping,
+    filter_sketch_decoys, DedupScratch, MapScratch, RawMapping, ScoreConfig, ScoredMapping,
 };
 pub use sketch::{
     map_read_pair_sketch, map_read_pair_sketch_into, map_single_read_sketch,

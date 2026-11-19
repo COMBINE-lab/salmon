@@ -36,23 +36,14 @@ use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor};
 use paraseq::Record;
 use piscem_rs::mapping::hit_searcher::{HitSearcher, SkippingStrategy};
 
-use salmon_core::math::{log_add, LOG_0, LOG_1};
 use salmon_core::{is_compatible, observed_paired_format, LibraryFormat, MateStatus};
-use salmon_eqclass::{
-    range_factorize_bins, EquivalenceClassBuilder, NaiveEqBuilder, NaivePlacement, TranscriptGroup,
-    NAIVE_NO_FMT,
-};
+use salmon_eqclass::{NaiveEqBuilder, NaivePlacement, NAIVE_NO_FMT};
 use salmon_index::SalmonIndex;
-use salmon_infer::OnlineInference;
 use salmon_map::{
     map_read_pair_into, map_read_pair_sketch_into, map_single_read_into,
     map_single_read_sketch_into, MapConfig, ScoredMapping,
 };
-use salmon_model::seqbias::{SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
-use salmon_model::{
-    gc_desc, FragmentLengthDistribution, GcFragModel, LibraryTypeDetector, PairObs, SimplePosBias,
-    NUM_LENGTH_CLASSES,
-};
+use salmon_model::{LibraryTypeDetector, PairObs};
 
 /// Shared, thread-safe state (all `Copy` references).
 ///
@@ -75,9 +66,7 @@ pub(crate) struct Shared<'a> {
     /// flat out. See `thread_broker::BusyMeter`.
     pub busy: &'a thread_broker::BusyMeter,
     pub salmon: &'a SalmonIndex,
-    pub eq: &'a EquivalenceClassBuilder,
-    pub fld: &'a FragmentLengthDistribution,
-    /// library-type detector. `quantify()` always constructs one — not just
+    /// library-type detector. `map_to_rad()` always constructs one — not just
     /// under `-l A`: with an explicit `-l` it still observes the orientation
     /// distribution (sampled pre-strand-filter) to power the
     /// `library_type_mismatch` diagnostic, without ever overriding the choice.
@@ -88,14 +77,9 @@ pub(crate) struct Shared<'a> {
     /// k-mers (strict), instead of the default empty-accepted-target rule
     /// (`--sketchStrictOrphans`)
     pub sketch_strict_orphan: bool,
-    /// fragments processed without the auxiliary (FLD) model before it is folded
-    /// into the online posterior (salmon's `--numPreAuxModelSamples`)
-    pub pre_burnin: u64,
     /// discard a fragment mapping to more than this many places (`--maxReadOcc`)
     pub max_read_occ: usize,
     pub skip: SkippingStrategy,
-    /// range-factorization bins (0 = disabled)
-    pub range_factorization_bins: u32,
     /// expected library format for strand-compatibility filtering; `None` when
     /// auto-detecting (filtering only applies with an explicit `-l`)
     pub expected_format: Option<LibraryFormat>,
@@ -103,53 +87,6 @@ pub(crate) struct Shared<'a> {
     pub incompat_prior: f64,
     /// drop incompatible mappings entirely (set when `incompat_prior <= 0`)
     pub ignore_incompat: bool,
-    /// collect observed sequence-bias contexts (`--seqBias`)
-    pub collect_seqbias: bool,
-    /// shared observed (fw, rc) sequence-bias models to merge per-thread results into
-    pub seqbias_obs: Option<&'a Mutex<(SBModel, SBModel)>>,
-    /// collect observed fragment-GC contexts (`--gcBias`)
-    pub collect_gcbias: bool,
-    /// GC bias model bin counts (`--conditionalGCBins` × `--numGCBins`)
-    pub cond_gc_bins: usize,
-    pub gc_bins: usize,
-    /// per-transcript cumulative-GC source (dense or rank), when GC-correcting
-    pub gc_store: Option<salmon_model::GcStore<'a>>,
-    /// shared observed fragment-GC model to merge per-thread results into
-    pub gcbias_obs: Option<&'a Mutex<GcFragModel>>,
-    /// collect observed positional bias (`--posBias`)
-    pub collect_posbias: bool,
-    /// per-transcript length-class index (for positional bias), when pos-correcting
-    pub length_class: Option<&'a [usize]>,
-    /// shared observed (5', 3') positional-bias models (per length class) to merge into
-    pub posbias_obs: Option<&'a Mutex<(Vec<SimplePosBias>, Vec<SimplePosBias>)>>,
-    /// online (dual-phase) inference state; when present, observed bias models
-    /// are collected with abundance-aware posteriors instead of score-only weights
-    pub online: Option<&'a OnlineInference>,
-    /// whether the library is paired (for the online orphan penalty)
-    pub paired_lib: bool,
-    /// model the fragment-length probability of orphan / single-end mappings via
-    /// the bounded-CMF "ambiguous" weight (salmon default). When `false`
-    /// (`--noSingleFragProb`) orphans fall back to a flat penalty / weight-1.
-    pub model_single_frag_prob: bool,
-    /// disable the fragment-length distribution in the per-fragment assignment
-    /// probability entirely (`--noFragLengthDist`).
-    pub no_frag_length_dist: bool,
-    /// `--noLengthCorrection`: leave the start-position term (the transcript
-    /// length) out of the online posterior, as salmon 1.x did.
-    pub no_length_correction: bool,
-    /// assemble equivalence classes during the mapping pass (consumed by the EM
-    /// or an eq-class dump): `!skip_quant || dump_eq || dump_eq_weights`. When
-    /// `false` (a map-only `--writeRad` run) [`record`] still counts fragments and
-    /// trains the FLD but builds no classes. Orthogonal to range-factorization
-    /// (driven by `range_factorization_bins`) and to [`Self::use_online`].
-    pub build_eq: bool,
-    /// compute the abundance-aware online posterior and train the FLD by online
-    /// acceptance sampling. When `false` the FLD is trained deterministically from
-    /// uniquely-mapped fragments (order-independent; matches the RAD reader's
-    /// `derive_fld`) and bias weights fall back to score-only. False whenever the
-    /// run does not quantify (`skip_quant`), where the online estimate has no
-    /// consumer.
-    pub use_online: bool,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
     /// mapped fragments whose representative mapping is an orphan (only one mate
@@ -197,11 +134,9 @@ pub(crate) struct Shared<'a> {
     pub bam: Option<&'a crate::bam::BamOutput>,
     /// when set, write per-fragment mappings to a RAD file (`--writeRad`)
     pub rad: Option<&'a salmon_rad::RadOutputWriter>,
-    /// `--deterministic` mode: collect an order-independent fragment-length
-    /// distribution (+ library-format tally) from the proper pairs
-    /// during the mapping pass, instead of training the online (log-space) FLD or
-    /// using the prefix library-type detector. Built into a baked FLD at end of
-    /// pass. When `Some`, the per-fragment work is the cheap [`record_discrete`].
+    /// paired libraries: collect an order-independent fragment-length
+    /// distribution (+ library-format tally) from the proper pairs during the
+    /// mapping pass. Built into a baked FLD at end of pass. When `Some`, the per-fragment work is the cheap [`record_discrete`].
     pub discrete_fld: Option<&'a salmon_model::DiscreteFld>,
     /// `--deterministic` with bias: also build *naive* (uniform-weight, no-FLD)
     /// equivalence classes during the mapping pass, so a rough EM at end of mapping
@@ -296,72 +231,14 @@ impl MapIdx {
     }
 }
 
-/// Position within `compat`, and so within every buffer aligned to it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(transparent)]
-pub(crate) struct CompatIdx(usize);
-
-/// A per-fragment buffer holding exactly one entry per `compat` element.
-///
-/// Indexable only by [`CompatIdx`], so indexing it with a [`MapIdx`] does not
-/// compile. The alignment was previously enforced by comments alone.
-///
-/// `#[repr(transparent)]` with `#[inline]` accessors, so this compiles to the
-/// same code as indexing the `Vec` directly.
-#[derive(Default)]
-#[repr(transparent)]
-pub(crate) struct CompatAligned<T>(Vec<T>);
-
-impl<T> CompatAligned<T> {
-    #[inline]
-    fn clear(&mut self) {
-        self.0.clear();
-    }
-    #[inline]
-    fn extend<I: IntoIterator<Item = T>>(&mut self, it: I) {
-        self.0.extend(it);
-    }
-    #[inline]
-    fn iter(&self) -> std::slice::Iter<'_, T> {
-        self.0.iter()
-    }
-}
-
-impl<T> From<Vec<T>> for CompatAligned<T> {
-    #[inline]
-    fn from(v: Vec<T>) -> Self {
-        Self(v)
-    }
-}
-
-impl<T> std::ops::Index<CompatIdx> for CompatAligned<T> {
-    type Output = T;
-    #[inline]
-    fn index(&self, i: CompatIdx) -> &T {
-        &self.0[i.0]
-    }
-}
-
 /// Reusable per-fragment working buffers for [`record`].
 ///
-/// `record` runs once per fragment and used to allocate five throwaway `Vec`s
-/// every time (the compatible-mapping list, the online-posterior inputs, the
-/// bias weights, the per-mapping fragment-length terms, and the tid/weight
-/// pairs). Only the two vectors that are *moved* into the equivalence-class
-/// builder genuinely have to be fresh; the rest are scratch and live here for
-/// the lifetime of the worker.
+/// `record` runs once per fragment; its compatible-mapping list lives here for
+/// the lifetime of the worker instead of being reallocated per fragment.
 #[derive(Default)]
 pub(crate) struct RecordScratch {
     /// strand-compatible mappings and their (possibly penalised) weights
     compat: Vec<(MapIdx, f64)>,
-    /// `(tid, log-weight)` inputs to the online posterior
-    online_in: Vec<(u32, f64)>,
-    /// abundance-aware (or score-only) per-mapping bias-collection weights
-    bias_w: CompatAligned<f64>,
-    /// per-mapping fragment-length log-probability
-    log_fps: CompatAligned<f64>,
-    /// `(tid, conditional probability)` before duplicate-tid merging
-    pairs: Vec<(u32, f64)>,
     /// reusable buffers the mapper fills per fragment: raw mappings, the mate
     /// reverse complement used in orphan recovery, and the dedup table for
     /// fragments large enough to take the hashed path
@@ -377,12 +254,6 @@ pub(crate) struct QuantProcessor<'a> {
     pub hs: Option<HitSearcher<'a>>,
     /// per-thread reusable sketch caches (avoids per-read MappingCache allocs)
     pub sketch_scratch: Option<salmon_map::SketchScratch>,
-    /// per-thread observed (fw, rc) sequence-bias models (when collecting)
-    pub seqbias: Option<(SBModel, SBModel)>,
-    /// per-thread observed fragment-GC model (when collecting)
-    pub gcbias: Option<GcFragModel>,
-    /// per-thread observed (5', 3') positional-bias models, per length class
-    pub posbias: Option<(Vec<SimplePosBias>, Vec<SimplePosBias>)>,
     /// per-thread unmapped-fragment name lines, flushed to the shared writer per
     /// batch (like `sam_buf`) rather than held for the whole run. This used to be
     /// a `Vec<String>` that grew until the process exited — one heap `String` per
@@ -403,31 +274,12 @@ pub(crate) struct QuantProcessor<'a> {
 
 impl<'a> QuantProcessor<'a> {
     pub fn new(shared: Shared<'a>) -> Self {
-        let seqbias = shared
-            .collect_seqbias
-            .then(|| (SBModel::new(), SBModel::new()));
-        let gcbias = shared
-            .collect_gcbias
-            .then(|| GcFragModel::new(shared.cond_gc_bins, shared.gc_bins));
-        let posbias = shared.collect_posbias.then(|| {
-            (
-                (0..NUM_LENGTH_CLASSES)
-                    .map(|_| SimplePosBias::default())
-                    .collect(),
-                (0..NUM_LENGTH_CLASSES)
-                    .map(|_| SimplePosBias::default())
-                    .collect(),
-            )
-        });
         Self {
             shared,
             counters: Counters::default(),
             scratch: RecordScratch::default(),
             hs: None,
             sketch_scratch: None,
-            seqbias,
-            gcbias,
-            posbias,
             unmapped: String::new(),
             sam_buf: String::new(),
             bam_scratch: shared.bam.map(|output| output.scratch()),
@@ -445,216 +297,6 @@ impl Clone for QuantProcessor<'_> {
     fn clone(&self) -> Self {
         // Per-thread scratch is rebuilt fresh in each worker.
         QuantProcessor::new(self.shared)
-    }
-}
-
-/// salmon's `LOG_EPSILON = log(0.375e-10)` — the small log-probability assigned
-/// to implausible placements (out-of-range fragment lengths, unexpected orphans).
-///
-/// Small but finite: a placement that looks impossible is heavily penalized
-/// rather than discarded outright, so a fragment whose every placement is
-/// implausible still contributes somewhere instead of vanishing.
-const LOG_EPSILON: f64 = -23.998_158_637_57; // (0.375e-10f64).ln()
-/// salmon's `numPreBurninFrags`: fold the fragment-length term into the online
-/// posterior only after this many fragments have been assigned.
-pub(crate) const NUM_PRE_BURNIN: u64 = 5000;
-
-/// Per-mapping fragment-length log-probability (`logFragProb`) — the single term
-/// shared by the abundance-aware online posterior and the persistent eq-class
-/// weight. C++ salmon computes this once as part of `aln.logProb` and reuses it
-/// for both; the Rust port previously duplicated it inconsistently (online used a
-/// flat `LOG_EPSILON` for orphans, the eq-class used `LOG_1`), so this unifies
-/// them.
-///
-/// * proper pair → length-conditioned `pmf(flen) − cmf(txpLen)` (salmon's
-///   `lenProb − refLengthCM`); `cmf(txpLen)` ≈ 0 for transcripts longer than the
-///   FLD support, so this only differs from the bare PMF for short transcripts.
-/// * orphan / single-end → the bounded-CMF "ambiguous" weight
-///   ([`ambig_frag_log_prob`](salmon_model::ambig_frag_log_prob)), which is
-///   already conditioned on the transcript length.
-///
-/// `pmf`/`cmf` are the per-fragment FLD snapshots (empty before the auxiliary
-/// model is trained). With `model_single_frag_prob` off (`--noSingleFragProb`)
-/// orphans fall back to a flat `LOG_EPSILON` (paired library) / `LOG_1`
-/// (single-end), matching salmon. Returns `LOG_1` (= 0, unmodelled) before the
-/// model is trained or when no position is available (sketch mode).
-#[allow(clippy::too_many_arguments)]
-fn frag_log_prob(
-    m: &ScoredMapping,
-    txp_len: i32,
-    use_aux: bool,
-    model_single_frag_prob: bool,
-    paired_lib: bool,
-    no_frag_length_dist: bool,
-    pmf: &[f64],
-    cmf: &[f64],
-) -> f64 {
-    // --noFragLengthDist: do not consider the fragment-length distribution in the
-    // per-fragment assignment probability (salmon's flag). Applies to both the
-    // proper-pair PMF term and the orphan/single-end ambiguous term.
-    if no_frag_length_dist {
-        return LOG_1;
-    }
-    if m.status == MateStatus::PairedEndPaired && m.fragment_len > 0 {
-        if use_aux && !pmf.is_empty() {
-            let flen = (m.fragment_len as usize).min(pmf.len() - 1);
-            // length-conditioning normalizer log P(L ≤ txpLen); ~0 for long txps.
-            let cond = cmf[(txp_len.max(0) as usize).min(cmf.len().saturating_sub(1))];
-            pmf[flen] - cond
-        } else {
-            LOG_1
-        }
-    } else {
-        // orphan (PairedEndLeft / PairedEndRight) or single-end read
-        let pos = if m.is_fw { m.fw_pos } else { m.rc_pos };
-        if model_single_frag_prob && use_aux && pos >= 0 {
-            salmon_model::ambig_frag_log_prob(cmf, m.is_fw, pos, m.read_len, txp_len)
-        } else if paired_lib
-            && matches!(
-                m.status,
-                MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-            )
-        {
-            LOG_EPSILON // unexpected orphan, fragment length unmodelled
-        } else {
-            LOG_1
-        }
-    }
-}
-
-thread_local! {
-    /// Per-thread PRNG state for stochastic FLD-sample acceptance (mirrors
-    /// salmon's per-thread RNG used when training the fragment-length model).
-    static FLD_RNG: std::cell::Cell<u64> = const { std::cell::Cell::new(0x2545_F491_4F6C_DD1D) };
-}
-
-/// Draw a pseudo-random value in `[0, 1)` from the per-thread xorshift state.
-///
-/// Used only for acceptance sampling when training the fragment-length
-/// distribution online: rather than folding every fragment into the model (which
-/// would over-weight the early, poorly-mapped ones), a fragment is accepted with
-/// some probability. Per-thread state means no contention; the resulting
-/// thread-order dependence is exactly why `--deterministic` uses the integer
-/// histogram instead.
-fn fld_rng_u01() -> f64 {
-    FLD_RNG.with(|s| {
-        let mut x = s.get();
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        s.set(x);
-        ((x >> 11) as f64) * (1.0 / ((1u64 << 53) as f64))
-    })
-}
-
-/// Collect the orientation-aware 5'/3' sequence-bias contexts for one mapping,
-/// weighted by `weight` (the fragment-transcript posterior). A forward read's 5'
-/// context feeds the forward model; a reverse read's 5' context
-/// (reverse-complemented) feeds the RC model. For a paired fragment the opposite
-/// end feeds the other model.
-fn collect_context(
-    salmon: &SalmonIndex,
-    m: &ScoredMapping,
-    weight: f64,
-    obs: &mut (SBModel, SBModel),
-) {
-    let seq = salmon.ref_seq(m.tid);
-    let n = seq.len() as i32;
-    let (cl, cr, k) = (
-        CONTEXT_LEFT as i32,
-        CONTEXT_RIGHT as i32,
-        CONTEXT_LENGTH as i32,
-    );
-
-    let add_fwd = |obs: &mut SBModel, five_prime: i32| {
-        let s = five_prime - cl;
-        if s >= 0 && s + k <= n {
-            obs.add_context(&seq[s as usize..(s + k) as usize], false, weight);
-        }
-    };
-    let add_rev = |obs: &mut SBModel, five_prime: i32| {
-        let s = five_prime - cr;
-        if s >= 0 && s + k <= n {
-            obs.add_context(&seq[s as usize..(s + k) as usize], true, weight);
-        }
-    };
-
-    if m.fragment_len > 0 {
-        // Paired fragment: `ref_pos` is the fragment's leftmost base whichever
-        // mate is forward, so the forward mate's 5' is `ref_pos` and the
-        // reverse mate's 5' is the fragment's last base (e.g. ISR libraries,
-        // where mate 1 is the reverse one).
-        add_fwd(&mut obs.0, m.ref_pos);
-        add_rev(&mut obs.1, m.ref_pos + m.fragment_len - 1);
-    } else if m.is_fw {
-        add_fwd(&mut obs.0, m.ref_pos); // 5' -> forward model
-    } else {
-        add_rev(&mut obs.1, m.ref_pos); // reverse read's 5' -> RC model
-    }
-}
-
-/// Collect observed fragment-GC contexts for one fragment's compatible paired
-/// mappings, each weighted by `bias_w[k]` (the abundance-aware posterior under
-/// online inference, else the normalized aux weight). Mirrors salmon's
-/// per-alignment `observedGCMass.inc(gcDesc(start, stop), logProb)`.
-fn collect_gc(
-    sh: &Shared,
-    placements: &[ScoredMapping],
-    compat: &[(MapIdx, f64)],
-    bias_w: &CompatAligned<f64>,
-    gc: &mut GcFragModel,
-) {
-    let Some(store) = sh.gc_store else { return };
-    for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
-        let m = i.get(placements);
-        if m.status != MateStatus::PairedEndPaired || m.fragment_len <= 0 {
-            continue;
-        }
-        let start = m.ref_pos;
-        let stop = m.ref_pos + m.fragment_len - 1;
-        let view = store.view(m.tid as usize);
-        let ref_len = view.ref_len() as i32;
-        if start < 0 || stop >= ref_len {
-            continue;
-        }
-        if let Some((ff, cf)) = gc_desc(&view, start, stop) {
-            // `bias_w` is aligned to `compat`, so it is indexed by the position
-            // in `compat` (`k`), not by the mapping index (`i`).
-            gc.inc(ff, cf, bias_w[k]);
-        }
-    }
-}
-
-/// Collect observed positional-bias mass for one fragment's compatible mappings,
-/// each weighted by `bias_w[k]` (log space). Mirrors salmon's
-/// `observedPosBias{Fwd,RC}[lengthClass].addMass(pos, refLen, logProb)`.
-fn collect_pos(
-    sh: &Shared,
-    placements: &[ScoredMapping],
-    compat: &[(MapIdx, f64)],
-    bias_w: &CompatAligned<f64>,
-    pos: &mut (Vec<SimplePosBias>, Vec<SimplePosBias>),
-) {
-    let Some(length_class) = sh.length_class else {
-        return;
-    };
-    for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
-        let m = i.get(placements);
-        // `bias_w` is aligned to `compat`, indexed by `k`, not by `i`.
-        if bias_w[k] <= 0.0 {
-            continue;
-        }
-        let lc = length_class[m.tid as usize];
-        let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
-        // add_mass now takes LINEAR mass (accumulated in fixed-point); pass the
-        // posterior weight directly rather than its log.
-        let mass = bias_w[k];
-        if m.fw_pos >= 0 {
-            pos.0[lc].add_mass(m.fw_pos, ref_len, mass);
-        }
-        if m.rc_pos >= 0 {
-            pos.1[lc].add_mass(m.rc_pos, ref_len, mass);
-        }
     }
 }
 
@@ -685,13 +327,11 @@ fn tally_observed_formats(
     }
 }
 
-/// Cheap per-fragment work for `--deterministic`'s mapping pass: count the
+/// Per-fragment work for a paired library's mapping pass: count the
 /// fragment and, for a proper pair, record its shortest implied length (and, if
 /// it maps uniquely, its observed format) into the order-independent
-/// [`salmon_model::DiscreteFld`]. No online
-/// inference, eq-class assembly, bias collection, or prefix library-type
-/// detection — the FLD and library format are derived deterministically from the
-/// accumulator at end of pass and baked into the RAD.
+/// [`salmon_model::DiscreteFld`]. The FLD and library format are derived
+/// deterministically from the accumulator at end of pass and baked into the RAD.
 fn record_discrete(
     sh: &Shared,
     placements: &[ScoredMapping],
@@ -702,27 +342,12 @@ fn record_discrete(
     if placements.is_empty() {
         return;
     }
-    // Stays shared, unlike the other tallies: `record` reads this running total
-    // to gate the auxiliary models (see `use_aux`), so a per-worker count merged
-    // at thread end would leave it at zero for the whole run.
-    sh.num_mapped.fetch_add(1, Ordering::Relaxed);
-    // Same orphan definition `record` uses: a fragment's surviving mappings share
-    // one status, so the first is representative. Counting it here is what lets
-    // `--deterministic` report the concordant/orphan split in
-    // `lib_format_counts.json` instead of calling every mapped fragment
-    // concordant.
-    if matches!(
-        placements[0].status,
-        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
-    ) {
-        counters.orphan += 1;
-    }
-    tally_observed_formats(placements, &mut counters.lib_fmt);
     // Library-format accounting (see `record`). The deterministic pass does no
     // strand filtering (incompatible placements are dropped later, when the RAD
     // is quantified), but with an explicit `-l` the expected format is already
     // known here, so the same wrong-strand tally is free. Under `-l A` the format
     // is only resolved at end of pass, so nothing is counted.
+    let mut wrong_strand_dropped = false;
     if let Some(exp) = sh.expected_format {
         if placements
             .iter()
@@ -731,13 +356,35 @@ fn record_discrete(
             counters.frags_compat += 1;
         } else {
             counters.frags_incompat += 1;
+            wrong_strand_dropped = sh.ignore_incompat;
+        }
+    }
+    tally_observed_formats(placements, &mut counters.lib_fmt);
+    // A fragment whose every placement is wrong-strand is dropped when the RAD
+    // is quantified, so it is not mapped: counting it here made `--skipQuant`
+    // (which reports these phase-1 totals) disagree with the full run.
+    if !wrong_strand_dropped {
+        // Stays shared, unlike the other tallies: `record` reads this running
+        // total to gate the auxiliary models (see `use_aux`), so a per-worker
+        // count merged at thread end would leave it at zero for the whole run.
+        sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+        // Same orphan definition `record` uses: a fragment's surviving mappings
+        // share one status, so the first is representative. Counting it here is
+        // what lets `--deterministic` report the concordant/orphan split in
+        // `lib_format_counts.json` instead of calling every mapped fragment
+        // concordant.
+        if matches!(
+            placements[0].status,
+            MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+        ) {
+            counters.orphan += 1;
         }
     }
     // Each concordant fragment adds its shortest implied length to the FLD (see
     // `DiscreteFld::add_fragment`); a unique one's observed format also feeds
-    // order-independent `-l A` detection. Uses the raw mapping (like the RAD
-    // records written this pass, and like the reader's `derive_fld`), so a baked
-    // FLD matches a re-derived one. Orientation comes from the mate strands
+    // order-independent `-l A` detection. Uses the length the RAD record stores
+    // (`clip_pair_start`, as the reader's `derive_fld` sees it), so a baked FLD
+    // matches a re-derived one. Orientation comes from the mate strands
     // rather than `m.format`, exactly as `build_rad_record` derives the RAD hit,
     // for the same reason. Tallied per worker and merged at thread end.
     let fld = counters.fld.get_or_insert_with(|| acc.local());
@@ -745,9 +392,12 @@ fn record_discrete(
         placements.len() == 1,
         placements
             .iter()
-            .filter(|m| m.status == MateStatus::PairedEndPaired && m.fragment_len > 0)
-            .map(|m| PairObs {
-                len: m.fragment_len as usize,
+            .filter_map(|m| {
+                let len = salmon_rad::clip_pair_start(m.ref_pos, m.fragment_len).1;
+                (m.status == MateStatus::PairedEndPaired && len > 0).then_some((m, len))
+            })
+            .map(|(m, len)| PairObs {
+                len: len as usize,
                 tid: m.tid,
                 is_fw: m.is_fw,
                 mate_fw: m.r2_fw,
@@ -780,58 +430,23 @@ fn record_discrete(
     }
 }
 
-/// Record one fragment's weighted mappings into the shared accumulators.
-///
-/// The per-fragment quant work decomposes into independent axes, each gated by a
-/// flag on [`Shared`] so a run does exactly what it needs and no more:
-///   * [`Shared::use_online`] — compute the abundance-aware online posterior
-///     (advancing the online masses) and train the fragment-length distribution
-///     by online acceptance sampling. When `false` the FLD is instead trained
-///     *deterministically* from each concordant pair's shortest implied length
-///     (the order-independent, commutative-histogram estimate the RAD reader's
-///     `derive_fld` also uses) and bias weights fall back to score-only.
-///   * [`Shared::build_eq`] — assemble the equivalence class and add it to the
-///     shared builder (consumed by the EM or an eq-class dump). Whether those
-///     classes are *range-factorized* is a further, orthogonal choice driven by
-///     `range_factorization_bins` (0 ⇒ basic classes, e.g. for a rough warm-up
-///     EM). When `false` (a map-only `--writeRad` run) no eq-class is built.
-///
-/// Counting, library detection, and FLD training always run; `log_fm` is the
-/// current minibatch's forgetting mass (used only when `use_online`).
-///
-/// `fld_pmf`/`fld_cmf` are the batch's fragment-length snapshot pair, taken once
-/// by the caller (see the batch loops). They are passed in rather than read here
-/// because the snapshot only changes at `refresh_online`, which runs at the batch
-/// boundary — so re-reading it per fragment would re-acquire two `RwLock`s and
-/// bump two `Arc` refcounts, on cache lines every worker shares, to obtain a value
-/// that provably cannot have changed.
-#[allow(clippy::too_many_arguments)]
+/// Account one fragment of a single-end library in the mapping pass: the
+/// processed / mapped / orphan counters, library-type detection, the
+/// observed-format histogram and the strand-compatibility tallies. (Paired
+/// libraries take [`record_discrete`], which also tallies the order-independent
+/// fragment-length distribution.) No equivalence classes are built here: they
+/// are assembled by the requant pass from the RAD.
 fn record(
     sh: &Shared,
     placements: &[ScoredMapping],
-    log_fm: f64,
-    fld_pmf: &[f64],
-    fld_cmf: &[f64],
     counters: &mut Counters,
     scratch: &mut RecordScratch,
-    seqbias: Option<&mut (SBModel, SBModel)>,
-    gcbias: Option<&mut GcFragModel>,
-    posbias: Option<&mut (Vec<SimplePosBias>, Vec<SimplePosBias>)>,
 ) {
     counters.processed += 1;
     if placements.is_empty() {
         return;
     }
-    // Independent `&mut` borrows of the reusable buffers.
-    let RecordScratch {
-        compat,
-        online_in,
-        bias_w,
-        log_fps,
-        pairs,
-        // Belongs to the mapping step, not to `record`.
-        map: _,
-    } = scratch;
+    let compat = &mut scratch.compat;
 
     // Sample the observed library format for auto-detection (auto mode only).
     // Sampled from the raw mappings, before the strand-compatibility filter
@@ -911,16 +526,8 @@ fn record(
     // quantifies as nothing — which also broke the invariant `Σ NumReads ==
     // num_mapped`. C++ salmon likewise counts a fragment as mapped only once it
     // has a compatible mapping.
-    // `fetch_add` returns the count *before* this fragment, which is what the
-    // burn-in gate below needs: the online gate reads `num_assigned()` before its
-    // own increment, and C++ evaluates `useAuxParams` before counting the current
-    // read. Reading the post-increment value would gate this fragment on a total
-    // that includes itself, differing from both by one.
-    //
-    // This one counter therefore stays shared while the rest became per-worker:
-    // it is *read* during the run, not merely accumulated, so a thread-local
-    // tally merged at thread end would gate every fragment on zero.
-    let assigned_before_this = sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+    // (Shared rather than per-worker so the progress display can poll it.)
+    sh.num_mapped.fetch_add(1, Ordering::Relaxed);
     // Classify the fragment as orphan when only one mate of a pair was placed
     // (PairedEndLeft / PairedEndRight). Single-end libraries never count as
     // orphan here.
@@ -962,257 +569,6 @@ fn record(
     if is_orphan(compat[0].0) {
         counters.orphan += 1;
     }
-
-    // `fld_pmf`/`fld_cmf` are ONE immutable FLD snapshot pair (PMF + CMF), taken
-    // once per batch by the caller and shared here between the online posterior
-    // and the persistent eq-class weight. Indexing the same snapshot for every
-    // mapping guarantees that transcripts sharing a fragment length (in
-    // particular exact-duplicate transcripts) receive an identical
-    // fragment-length probability even if another thread refreshes the shared
-    // snapshot meanwhile. Reading the live FLD per mapping (racing atomic loads
-    // on a concurrently-updated distribution) returned slightly different values
-    // for the same length and let the VBEM α<1 prior break duplicate symmetry.
-    // Mirrors C++ salmon's per-worker `LogCMFCache`. Empty until the first online
-    // refresh (the pre-burn-in window, where the FLD term is not folded in
-    // anyway).
-
-    // Per-fragment bias-collection weights. With online (dual-phase) inference
-    // these are abundance-aware posteriors `softmax(mass_t + log w_t)`, which
-    // also advances the online masses by `logForgettingMass + log(posterior)`;
-    // without it they fall back to the normalized aux (score) weights.
-    let collecting = seqbias.is_some() || gcbias.is_some() || posbias.is_some();
-    // Abundance-aware online posterior, computed once per fragment within the
-    // model-training window (`o.collecting()`), advancing the online masses.
-    // Mirrors salmon's `aln.logProb = transcriptLogCount + auxProb + startPosProb`
-    // normalized over the fragment's mappings, where
-    //   logFragCov   = ln(score weight)
-    //   startPosProb = proper pair -> -ln(refLen - flen + 1) (flen<=refLen, else
-    //                  LOG_EPSILON); otherwise -ln(refLen); a constant (0) under
-    //                  --noLengthCorrection, as in salmon 1.x
-    //   logFragProb  = the shared `frag_log_prob` term (proper-pair conditioned
-    //                  PMF, or the orphan / single-end ambiguous-length weight).
-    // Used for abundance-aware bias collection and abundance-aware FLD training.
-    let online_post: Option<CompatAligned<f64>> = sh
-        .online
-        .filter(|o| sh.use_online && o.collecting())
-        .map(|online| {
-            let use_aux = online.num_assigned() >= sh.pre_burnin;
-            online_in.clear();
-            online_in.extend(compat.iter().map(|&(i, w)| {
-                let m = i.get(placements);
-                {
-                    let ref_len = sh.salmon.ref_len(m.tid as usize);
-                    let rl = ref_len.max(1) as f64;
-                    let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
-                    let flen = m.fragment_len as f64;
-                    let start_pos_prob = if sh.no_length_correction {
-                        0.0
-                    } else if proper {
-                        if flen <= rl {
-                            -((rl - flen + 1.0).ln())
-                        } else {
-                            LOG_EPSILON
-                        }
-                    } else {
-                        -(rl.ln())
-                    };
-                    let log_frag_prob = frag_log_prob(
-                        m,
-                        ref_len as i32,
-                        use_aux,
-                        sh.model_single_frag_prob,
-                        sh.paired_lib,
-                        sh.no_frag_length_dist,
-                        fld_pmf,
-                        fld_cmf,
-                    );
-                    let log_cov = if w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
-                    (m.tid, log_cov + start_pos_prob + log_frag_prob)
-                }
-            }));
-            CompatAligned::from(online.assign_fragment(online_in, log_fm))
-        });
-    bias_w.clear();
-    if collecting {
-        if let Some(post) = &online_post {
-            bias_w.extend(post.iter().copied());
-        } else {
-            let wsum: f64 = compat.iter().map(|&(_, w)| w).sum();
-            bias_w.extend(
-                compat
-                    .iter()
-                    .map(|&(_, w)| if wsum > 0.0 { w / wsum } else { 0.0 }),
-            );
-        }
-    }
-    // After burn-in salmon freezes model collection (still advances masses).
-    let collect_now = collecting && sh.online.is_none_or(|o| o.collecting());
-
-    if collect_now {
-        if let Some(obs) = seqbias {
-            for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
-                collect_context(sh.salmon, i.get(placements), bias_w[k], obs);
-            }
-        }
-        if let Some(gc) = gcbias {
-            collect_gc(sh, placements, compat, bias_w, gc);
-        }
-        if let Some(pos) = posbias {
-            collect_pos(sh, placements, compat, bias_w, pos);
-        }
-    }
-
-    // Train the fragment-length distribution from this fragment. The FLD is
-    // always needed — to quantify now, to set effective lengths, or to bake into
-    // a `--writeRad` header — so this runs regardless of `build_eq`. Two methods,
-    // selected by `use_online`:
-    if let Some(post) = &online_post {
-        // Online (abundance-aware) acceptance: accept each concordant compatible
-        // pair's fragment length with probability = its online posterior
-        // (salmon's `if (r < exp(aln.logProb)) fragLengthDist.addVal(...)`, where
-        // aln.logProb includes transcriptLogCount). For reads shared between
-        // near-duplicates this preferentially samples the dominant transcript's
-        // implied length, concentrating the FLD as salmon does (vs adding every
-        // best pair at full weight, which overdisperses it). Frozen after the
-        // training window (`online_post` is `None`).
-        for (k, &(i, _)) in compat.iter().enumerate().map(|(k, e)| (CompatIdx(k), e)) {
-            let m = i.get(placements);
-            let conc = m.status == MateStatus::PairedEndPaired
-                && m.fragment_len > 0
-                && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status));
-            if conc && fld_rng_u01() < post[k] {
-                sh.fld.add_val(m.fragment_len as usize, 0.0);
-            }
-        }
-    } else if !sh.use_online {
-        // Deterministic: each concordant fragment adds the shortest length its
-        // compatible placements imply, at full weight (the rule
-        // `DiscreteFld::add_fragment` documents). That is order-independent (a
-        // commutative histogram) and matches the RAD reader's `derive_fld`, so a
-        // baked FLD reproduces on requant. (When `use_online` is true but
-        // `online_post` is `None`, the training window has closed and the FLD is
-        // intentionally frozen — so this branch is skipped.)
-        let shortest = compat
-            .iter()
-            .map(|&(i, _)| i.get(placements))
-            .filter(|m| {
-                m.status == MateStatus::PairedEndPaired
-                    && m.fragment_len > 0
-                    && expected.is_none_or(|exp| is_compatible(exp, m.format, m.is_fw, m.status))
-            })
-            .map(|m| m.fragment_len)
-            .min();
-        if let Some(len) = shortest {
-            sh.fld.add_val(len as usize, 0.0);
-        }
-    }
-
-    // Equivalence-class assembly is pure quantification machinery (consumed by
-    // the EM or an eq-class dump). A map-only `--writeRad` run produces the RAD
-    // above and stops here. Range-factorization of the weights below is a further,
-    // orthogonal choice driven by `range_factorization_bins` (0 ⇒ basic classes).
-    if !sh.build_eq {
-        return;
-    }
-
-    // Fold the fragment-length probability into the equivalence-class weight.
-    // salmon's eq-class auxProb is `logFragProb + logFragCov + logAlignCompatProb`
-    // (SalmonQuantify.cpp) -- i.e. it includes the FLD term but NOT the
-    // start-position term (that enters only the abundance/`aln.logProb`; the
-    // effective-length factor is applied separately in `update_eff_lengths`).
-    // The port previously built the eq-class weight from the bare coverage
-    // weight, flattening it for paralogs/isoforms whose implied insert size
-    // differs and coarsening the range-factorized classes. The FLD term is only
-    // applied once the auxiliary model is trained (after `pre_burnin` fragments),
-    // matching salmon's `numPreAuxModelSamples` gating.
-    // Gate on *assigned* fragments, matching the online path above
-    // (`online.num_assigned()`) and C++'s `useAuxParams`, which tests
-    // `localNumAssignedFragments + numAssignedFragments` against
-    // `numPreBurninFrags`. This previously read `num_processed`, which counts
-    // every fragment reaching `record` — including ones with no mappings at all,
-    // and ones whose mappings were all library-incompatible — so the gate opened
-    // earlier than salmon intends, by a margin that grows as the mapping rate
-    // falls. See #1089.
-    let use_aux = assigned_before_this >= sh.pre_burnin;
-    // Per-mapping FLD log-probability via the shared `frag_log_prob` term — the
-    // same one the online posterior uses, reading the same per-fragment snapshot
-    // pair captured above (so the two paths share one consistent FLD view, as
-    // C++ does via a single `aln.logProb`). Proper pairs get the length-
-    // conditioned PMF; orphans / single-end reads get the bounded-CMF ambiguous
-    // weight. `LOG_1` (= 0) before the auxiliary model is trained. The snapshot
-    // is primed from the prior before the run starts and refreshed at every
-    // mini-batch boundary, so it is never empty here.
-    log_fps.clear();
-    log_fps.extend(compat.iter().map(|&(i, _)| {
-        let m = i.get(placements);
-        let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
-        frag_log_prob(
-            m,
-            ref_len,
-            use_aux,
-            sh.model_single_frag_prob,
-            sh.paired_lib,
-            sh.no_frag_length_dist,
-            fld_pmf,
-            fld_cmf,
-        )
-    }));
-    // Per-fragment conditional probabilities, normalized in *log* space — the
-    // log weight of each mapping is `ln(score weight) + logFragProb`, and we
-    // subtract the log-sum-exp over the fragment's mappings (C++'s
-    // `exp(auxProb - auxDenom)`). This is the same normalization salmon's
-    // C++ does and is mathematically identical to the linear `w/Σw`, but doing it
-    // in log space keeps it well-defined when every FLD weight underflows: a
-    // fragment whose implied lengths all have ~0 FLD probability (logFragProb at
-    // the no-mass sentinel) would, in linear space, give all-zero weights — the
-    // `wsum > 0` normalization below then leaves them zero, the eq-class denom is
-    // 0, and the VBEM silently drops the fragment's count (lost mapped mass; the
-    // EM's degenerate-class branch is a no-op, as in C++). In log space the same
-    // fragment yields well-defined relative weights, so no mass is lost.
-    let log_denom = compat
-        .iter()
-        .zip(log_fps.iter())
-        .fold(LOG_0, |acc, (&(_, w), &lfp)| log_add(acc, w.ln() + lfp));
-    pairs.clear();
-    pairs.extend(
-        compat
-            .iter()
-            .zip(log_fps.iter())
-            .map(|(&(i, w), &lfp)| (i.get(placements).tid, (w.ln() + lfp - log_denom).exp())),
-    );
-
-    // Build the equivalence class: sorted transcript ids + weights, combining
-    // duplicate ids by SUMMING their conditional probabilities. A fragment that
-    // maps to the same transcript more than once (e.g. both orientations of an
-    // unstranded library, or two positions) contributes P = Σ of the placements,
-    // not just the first — matching the RAD path's per-tid `logsumexp`.
-    pairs.sort_by_key(|p| p.0);
-    pairs.dedup_by(|a, b| {
-        if a.0 == b.0 {
-            b.1 += a.1;
-            true
-        } else {
-            false
-        }
-    });
-    let tids: Vec<u32> = pairs.iter().map(|p| p.0).collect();
-    let mut weights: Vec<f64> = pairs.iter().map(|p| p.1).collect();
-
-    // Normalize to per-fragment conditional probabilities (sum to 1).
-    let wsum: f64 = weights.iter().sum();
-    if wsum > 0.0 {
-        for w in &mut weights {
-            *w /= wsum;
-        }
-    }
-
-    let group = if sh.range_factorization_bins > 0 {
-        let bins = range_factorize_bins(&weights, sh.range_factorization_bins);
-        TranscriptGroup::with_bins(tids, bins)
-    } else {
-        TranscriptGroup::from_sorted(tids)
-    };
-    sh.eq.add_group(group, weights, 1);
 }
 
 /// Fold the most recent fragment's selective-alignment [`MapStats`] into the
@@ -1300,32 +656,6 @@ fn flush_unmapped(proc: &mut QuantProcessor) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Merge this worker's private bias models into the shared ones.
-///
-/// Called once per thread at the end of its work, not per fragment: the mutexes
-/// below would be ruinously contended otherwise. The merges are integer sums, so
-/// the result does not depend on the order threads finish in.
-fn merge_bias(proc: &QuantProcessor) {
-    if let (Some(local), Some(shared_mtx)) = (proc.seqbias.as_ref(), proc.shared.seqbias_obs) {
-        let mut g = shared_mtx.lock().unwrap();
-        g.0.combine_counts(&local.0);
-        g.1.combine_counts(&local.1);
-    }
-    if let (Some(local), Some(shared_mtx)) = (proc.gcbias.as_ref(), proc.shared.gcbias_obs) {
-        let mut g = shared_mtx.lock().unwrap();
-        g.combine_counts(local);
-    }
-    if let (Some(local), Some(shared_mtx)) = (proc.posbias.as_ref(), proc.shared.posbias_obs) {
-        let mut g = shared_mtx.lock().unwrap();
-        for (a, b) in g.0.iter_mut().zip(&local.0) {
-            a.combine(b);
-        }
-        for (a, b) in g.1.iter_mut().zip(&local.1) {
-            a.combine(b);
-        }
-    }
-}
-
 // The paired-end entry point. `PairedParallelProcessor` is paraseq's interface
 // for "given a batch of mate pairs, do something with them"; paraseq owns the
 // reading and the threading, this owns the per-fragment work.
@@ -1345,9 +675,6 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             scratch,
             hs,
             sketch_scratch,
-            seqbias,
-            gcbias,
-            posbias,
             unmapped,
             sam_buf,
             bam_scratch,
@@ -1365,21 +692,6 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         if sh.sketch && sketch_scratch.is_none() {
             *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
         }
-        // one forgetting-mass timestep per minibatch (online inference)
-        let log_fm = if sh.use_online {
-            sh.online.map_or(0.0, |o| o.next_log_fm())
-        } else {
-            0.0
-        };
-        // One FLD snapshot pair for the whole batch. The shared snapshot is only
-        // replaced by `refresh_online`, which runs at the batch boundary, so a
-        // per-fragment re-read would take two `RwLock`s and bump two `Arc`
-        // refcounts — on cache lines shared by every worker — to fetch a value
-        // that cannot have changed. Taking it here also makes the per-fragment
-        // view *more* stable than before: previously a concurrent refresh could
-        // land between two fragments of the same batch.
-        let fld_pmf = sh.fld.online_snapshot();
-        let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it), so the
         // per-fragment result Vec isn't reallocated per read.
         let mut placements: Vec<ScoredMapping> = Vec::new();
@@ -1476,28 +788,13 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if let Some(acc) = sh.discrete_fld {
                 record_discrete(&sh, &placements, acc, counters);
             } else {
-                record(
-                    &sh,
-                    &placements,
-                    log_fm,
-                    &fld_pmf,
-                    &fld_cmf,
-                    counters,
-                    scratch,
-                    seqbias.as_mut(),
-                    gcbias.as_mut(),
-                    posbias.as_mut(),
-                );
+                record(&sh, &placements, counters, scratch);
             }
         }
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
-        // next batch's per-fragment reads are stable (see `record`). No-op once the
-        // final FLD cache is taken; amortized over the whole batch.
-        self.shared.fld.refresh_online();
         flush_processed(self);
         flush_unmapped(self)?;
         flush_sam(self)?;
@@ -1508,7 +805,6 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_counters(self);
-        merge_bias(self);
         flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;
@@ -1532,9 +828,6 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             scratch,
             hs,
             sketch_scratch,
-            seqbias,
-            gcbias,
-            posbias,
             unmapped,
             sam_buf,
             bam_scratch,
@@ -1549,14 +842,6 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         if sh.sketch && sketch_scratch.is_none() {
             *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
         }
-        let log_fm = if sh.use_online {
-            sh.online.map_or(0.0, |o| o.next_log_fm())
-        } else {
-            0.0
-        };
-        // One FLD snapshot pair for the whole batch (see the paired-end loop).
-        let fld_pmf = sh.fld.online_snapshot();
-        let fld_cmf = sh.fld.online_cmf_snapshot();
         // Reused across the batch's reads (the `*_into` calls clear it).
         let mut placements: Vec<ScoredMapping> = Vec::new();
         for rec in records {
@@ -1630,28 +915,13 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if let Some(acc) = sh.discrete_fld {
                 record_discrete(&sh, &placements, acc, counters);
             } else {
-                record(
-                    &sh,
-                    &placements,
-                    log_fm,
-                    &fld_pmf,
-                    &fld_cmf,
-                    counters,
-                    scratch,
-                    seqbias.as_mut(),
-                    gcbias.as_mut(),
-                    posbias.as_mut(),
-                );
+                record(&sh, &placements, counters, scratch);
             }
         }
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Refresh the FLD online PMF snapshot at the mini-batch boundary so the
-        // next batch's per-fragment reads are stable (see `record`). No-op once the
-        // final FLD cache is taken; amortized over the whole batch.
-        self.shared.fld.refresh_online();
         flush_processed(self);
         flush_unmapped(self)?;
         flush_sam(self)?;
@@ -1662,7 +932,6 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_counters(self);
-        merge_bias(self);
         flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;

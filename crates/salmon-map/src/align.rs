@@ -159,12 +159,38 @@ pub fn align_chain_view(
     chain: &MemChain,
     cfg: &AlignConfig,
 ) -> Option<Alignment> {
+    align_chain_clipped_view(read, ref_seq, chain, cfg, (0, 0))
+}
+
+/// [`align_chain_view`] scoring only the query (the read, or its reverse
+/// complement for a reverse-strand chain, in reference-forward order) with
+/// `clip.0` bases removed from its left end and `clip.1` from its right.
+///
+/// The clipped bases are adapter read-through of a dovetailed pair: they lie
+/// past the other mate's 5' end, outside the fragment. They contribute nothing
+/// to the score, as a soft clip does under `--softclip`, and the acceptance
+/// threshold is `minScoreFraction` of a perfect alignment of the kept bases,
+/// since those are all the insert the read holds. MEMs reaching into a clipped
+/// end are cut back to the kept bases. With no clip this is
+/// [`align_chain_view`].
+pub fn align_chain_clipped_view(
+    read: &[u8],
+    ref_seq: RefView<'_>,
+    chain: &MemChain,
+    cfg: &AlignConfig,
+    clip: (i32, i32),
+) -> Option<Alignment> {
+    let kept = read.len() as i32 - clip.0.max(0) - clip.1.max(0);
+    if kept <= 0 {
+        return None;
+    }
     align_chain_above(
         read,
         ref_seq,
         chain,
         cfg,
-        min_accepted_score(read.len(), cfg),
+        min_accepted_score(kept as usize, cfg),
+        clip,
     )
 }
 
@@ -175,7 +201,23 @@ pub fn align_chain_exact(
     chain: &MemChain,
     cfg: &AlignConfig,
 ) -> Option<Alignment> {
-    align_chain_above(read, ref_seq, chain, cfg, NO_FLOOR)
+    align_chain_above(read, ref_seq, chain, cfg, NO_FLOOR, (0, 0))
+}
+
+/// `mems` cut to the query interval `[lo, hi)` and shifted so `lo` is offset 0;
+/// anchors wholly outside it are dropped.
+fn clip_mems(mems: &[crate::mem::Mem], lo: i32, hi: i32) -> Vec<crate::mem::Mem> {
+    mems.iter()
+        .filter_map(|m| {
+            let s = m.read_start.max(lo);
+            let e = m.read_end().min(hi);
+            (e > s).then(|| crate::mem::Mem {
+                read_start: s - lo,
+                ref_start: m.ref_start + (s - m.read_start),
+                len: e - s,
+            })
+        })
+        .collect()
 }
 
 fn align_chain_above(
@@ -184,12 +226,15 @@ fn align_chain_above(
     chain: &MemChain,
     cfg: &AlignConfig,
     floor: i32,
+    clip: (i32, i32),
 ) -> Option<Alignment> {
     if read.is_empty() || ref_seq.is_empty() {
         return None;
     }
+    let (clip_l, clip_r) = (clip.0.max(0), clip.1.max(0));
 
-    let diag_origin = chain.ref_start() - chain.read_start();
+    // The kept query starts `clip_l` bases right of the read's projected start.
+    let diag_origin = chain.ref_start() - chain.read_start() + clip_l;
     let win_start = diag_origin.max(0);
     let reflen_i = ref_seq.len() as i32;
 
@@ -197,12 +242,15 @@ fn align_chain_above(
     // times per read, so a read's reverse complement is kept between calls.
     ALIGN_QUERY.with(|memo| {
         let mut memo = memo.borrow_mut();
-        let query: &[u8] = if chain.is_fw {
+        let full: &[u8] = if chain.is_fw {
             read
         } else {
             memo.revcomp_of(read)
         };
-        let qlen = query.len() as i32;
+        let full_len = full.len() as i32;
+        if clip_l + clip_r >= full_len {
+            return None;
+        }
 
         // Invariant boundary: every MEM must lie within the read and the reference.
         // Seeding guarantees this; a violation is an upstream bug. We `debug_assert`
@@ -214,16 +262,26 @@ fn align_chain_above(
             m.read_start < 0
                 || m.ref_start < 0
                 || m.len <= 0
-                || m.read_end() > qlen
+                || m.read_end() > full_len
                 || m.ref_end() > reflen_i
         });
         debug_assert!(
             !out_of_bounds,
-            "align_chain: chain MEM outside read/reference bounds (qlen={qlen} reflen={reflen_i}) — upstream seeding bug"
+            "align_chain: chain MEM outside read/reference bounds (qlen={full_len} reflen={reflen_i}) — upstream seeding bug"
         );
         if out_of_bounds {
             return None;
         }
+        // Score only the kept bases (all of them unless a dovetail clips some).
+        let query = &full[clip_l as usize..(full_len - clip_r) as usize];
+        let qlen = query.len() as i32;
+        let clipped_mems;
+        let mems: &[crate::mem::Mem] = if clip_l == 0 && clip_r == 0 {
+            &chain.mems
+        } else {
+            clipped_mems = clip_mems(&chain.mems, clip_l, full_len - clip_r);
+            &clipped_mems
+        };
 
         let score = if cfg.full_length_alignment {
             // Full-read DP over the implied window.
@@ -238,7 +296,7 @@ fn align_chain_above(
             })
         } else {
             // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
-            anchored_score_above(query, ref_seq, &chain.mems, cfg, floor)
+            anchored_score_above(query, ref_seq, mems, cfg, floor)
         };
 
         let valid = score > min_accepted_score(query.len(), cfg);
@@ -993,15 +1051,14 @@ pub struct WindowAlignment {
 }
 
 /// Align `query` as a substring of `window` (free reference gaps at both ends),
-/// used for orphan recovery where the mate's position within a fragment-length
+/// as orphan recovery does, where the mate's position within a fragment-length
 /// window is unknown. The query must align in full; the reference may overhang
 /// on either side for free, and the best reference end column is reported.
 ///
 /// This is a "fitting" affine-gap alignment (global on the query, free ends on
-/// the reference). It's a plain scalar DP — orphan recovery is opt-in
-/// (`recover_orphans`, off by default) and infrequent, so it is not on the hot
-/// path; keeping it scalar avoids any SIMD/platform dependency here. Returns
-/// `None` if either sequence is empty.
+/// the reference), as a plain scalar DP over the whole window. It is the
+/// definition [`find_in_window`], which recovery calls, must agree with.
+/// Returns `None` if either sequence is empty.
 pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option<WindowAlignment> {
     if query.is_empty() || window.is_empty() {
         return None;
@@ -1029,9 +1086,15 @@ pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option
         h_cur[0] = NEG;
         ix_cur[0] = NEG;
         let mut iy = NEG; // gap consuming a reference base (deletion in the read)
-        let qi = query[i - 1];
+
+        // Case-insensitive like the rest of the mapper: reads reach here raw.
+        let qi = query[i - 1].to_ascii_uppercase();
         for j in 1..=m {
-            let s = if qi == window[j - 1] { ma } else { -mp };
+            let s = if qi == window[j - 1].to_ascii_uppercase() {
+                ma
+            } else {
+                -mp
+            };
             let diag = h_prev[j - 1].saturating_add(s);
             ix_cur[j] = (h_prev[j].saturating_sub(go))
                 .max(ix_prev[j].saturating_sub(ge))
@@ -1059,6 +1122,616 @@ pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option
         valid: best > min_accepted_score(n, cfg),
         end_col,
     })
+}
+
+/// [`align_in_window`] for a caller that only wants a *valid* placement: `Some`
+/// with the same score and end column exactly when `align_in_window` reports
+/// `valid`, `None` otherwise. Orphan recovery discards invalid placements, so
+/// this is what it calls.
+///
+/// Exact shortcuts make it cheap, all resting on how much an alignment may
+/// lose against a perfect one and still be accepted:
+///
+/// - A valid alignment leaves enough of the query's q-grams intact, all on
+///   diagonals close to its own (see `Seeds::ranges`). So only the parts of
+///   the window around such q-gram hits are searched, and a window without
+///   enough hits is not searched at all.
+/// - The ungapped (or narrowly banded) alignment on the most hit diagonal is
+///   a real one, so the search need only look for alignments scoring as much.
+/// - The DP skips the cells that cannot reach that score (see `window_dp`).
+pub fn find_in_window(
+    query: &[u8],
+    window: &[u8],
+    cfg: &AlignConfig,
+    scratch: &mut WindowScratch,
+) -> Option<WindowAlignment> {
+    if query.is_empty() || window.is_empty() {
+        return None;
+    }
+    let ma = cfg.match_score as i32;
+    let mp = cfg.mismatch_pen as i32;
+    let go = cfg.gap_open_pen as i32;
+    let ge = cfg.gap_extend_pen as i32;
+    // Both shortcuts need every step to add at most `match_score` and gaps to
+    // cost at least `ge > 0` per base; the DP's gap recurrence needs `go >= ge`.
+    if ma < 0 || mp < 0 || ge <= 0 || go < ge {
+        return align_in_window(query, window, cfg).filter(|a| a.valid);
+    }
+    let WindowScratch { win, seeds, dp } = scratch;
+    win.clear();
+    win.extend(window.iter().map(u8::to_ascii_uppercase));
+    if !seeds.ranges(query, win, cfg) {
+        let all = (i32::MIN / 4, i32::MAX / 4);
+        return window_dp(query, win, all, i32::MIN, cfg, &mut dp.rows).map(|(score, end_col)| {
+            WindowAlignment {
+                score,
+                valid: true,
+                end_col,
+            }
+        });
+    }
+    // First a narrow search around each group's most hit diagonal (widened to
+    // where an alignment overhanging an end of the window must start or end):
+    // what it finds is a real alignment, so the best scores at least as much,
+    // and the parts need only look for alignments reaching that. A typical
+    // placement has few indels, and is found here.
+    let mut floor = i32::MIN;
+    let (n, m) = (query.len() as i32, win.len() as i32);
+    for &d in &seeds.modes {
+        if d >= 0 && d + n <= m {
+            // the ungapped alignment on that diagonal
+            let score: i32 = query
+                .iter()
+                .zip(&win[d as usize..])
+                .map(|(&a, &b)| if a.to_ascii_uppercase() == b { ma } else { -mp })
+                .sum();
+            floor = floor.max(score);
+            continue;
+        }
+        let (d_lo, d_hi) = (d.min(m - n) - FLOOR_BAND, d.max(0) + FLOOR_BAND);
+        let lo = d_lo.max(0);
+        let hi = (n + d_hi).min(m);
+        if lo >= hi {
+            continue;
+        }
+        let part = &win[lo as usize..hi as usize];
+        if let Some((score, _)) = dp.run(query, part, (d_lo - lo, d_hi - lo), i32::MIN, cfg) {
+            floor = floor.max(score);
+        }
+    }
+    // Each part holds every valid alignment whose hits it was built from, with
+    // its exact score, and only real alignments; so the best over the parts,
+    // at the leftmost end reaching it, is the full window's.
+    let mut best: Option<(i32, usize)> = None;
+    for &(lo, hi, diags) in &seeds.ranges {
+        if let Some((score, end)) = dp.run(query, &win[lo..hi], diags, floor, cfg) {
+            let end = lo + end;
+            if best.is_none_or(|(s, e)| score > s || (score == s && end < e)) {
+                best = Some((score, end));
+            }
+        }
+    }
+    best.map(|(score, end_col)| WindowAlignment {
+        score,
+        valid: true,
+        end_col,
+    })
+}
+
+/// The pruned DP behind [`find_in_window`]: the best score of `query` fitted
+/// into `win` (uppercase) with every cell on a diagonal (column - row) in
+/// `diags`, and the leftmost end column reaching it, if that score is above
+/// the acceptance threshold and at least `floor`; `None` when no end is.
+///
+/// Every row adds at most `match_score`, so a cell whose score plus
+/// `match_score` per remaining query base is below that bar cannot be on a
+/// wanted alignment (call it dead). Every cell on the best path to a wanted end is
+/// live, and is computed exactly from its live predecessors, so treating dead
+/// cells as `-inf` changes no wanted end. Each row is computed only over the
+/// columns the previous row's live cells can reach, and the search stops when
+/// a row has none.
+fn window_dp(
+    query: &[u8],
+    win: &[u8],
+    diags: (i32, i32),
+    floor: i32,
+    cfg: &AlignConfig,
+    buf: &mut DpRows,
+) -> Option<(i32, usize)> {
+    let n = query.len();
+    let m = win.len();
+    if m == 0 {
+        return None;
+    }
+    let ma = cfg.match_score as i32;
+    let mp = cfg.mismatch_pen as i32;
+    let go = cfg.gap_open_pen as i32;
+    let ge = cfg.gap_extend_pen as i32;
+    // Far below any real score, and far enough above i32::MIN that the few
+    // penalties subtracted from it before it is overwritten cannot overflow.
+    const NEG: i32 = i32::MIN / 4;
+    // an end is wanted when its score exceeds this
+    let bar = min_accepted_score(n, cfg).max(floor.saturating_sub(1));
+
+    let DpRows {
+        h_prev,
+        ix_prev,
+        h_cur,
+        ix_cur,
+    } = buf;
+    // Row 0: the read may start opposite any reference column for free.
+    h_prev.clear();
+    h_prev.resize(m + 1, 0);
+    ix_prev.clear();
+    ix_prev.resize(m + 1, NEG);
+    h_cur.clear();
+    h_cur.resize(m + 1, NEG);
+    ix_cur.clear();
+    ix_cur.resize(m + 1, NEG);
+
+    // Live columns of the previous row. Outside them, and one column past
+    // either end, the previous row holds `NEG` or a dead cell's score; both are
+    // at most the true score, which is all the argument above needs.
+    let (mut lo, mut hi) = (0usize, m);
+    for i in 1..=n {
+        // A cell in this row is live when its score exceeds this.
+        let live = bar - ma * (n - i) as i32;
+        let qi = query[i - 1].to_ascii_uppercase();
+        // Cells off `diags` are dead too. Both limits only grow from row to
+        // row, so the columns either side of a row stay `NEG` or computed.
+        let first = lo.max(1).max((i as i32 + diags.0).max(0) as usize);
+        let end = ((i as i32 + diags.1).max(0) as usize).min(m);
+        let last = (hi + 1).min(end);
+        if first > last {
+            return None;
+        }
+        h_cur[first - 1] = NEG;
+        ix_cur[first - 1] = NEG;
+        // Everything but a reference gap: the diagonal and a gap consuming a
+        // query base (`ix`), neither of which depends on this row.
+        {
+            let len = last + 1 - first;
+            let h_diag = &h_prev[first - 1..first - 1 + len];
+            let h_up = &h_prev[first..first + len];
+            let ix_up = &ix_prev[first..first + len];
+            let w = &win[first - 1..first - 1 + len];
+            let h_out = &mut h_cur[first..first + len];
+            let ix_out = &mut ix_cur[first..first + len];
+            for k in 0..len {
+                let s = if qi == w[k] { ma } else { -mp };
+                let ix = (h_up[k] - go).max(ix_up[k] - ge);
+                ix_out[k] = ix;
+                h_out[k] = (h_diag[k] + s).max(ix);
+            }
+        }
+        // Then reference gaps, along the row. With `go >= ge` reopening a gap
+        // never beats extending one, so the best gap into column `j` is
+        // `max over k < j of d[k] - go - ge*(j-1-k)`, `d` being the score
+        // before gaps: a running maximum of `d[k] + ge*k`, which keeps the
+        // loop-carried work to one `max` per cell.
+        let run = gap_pass(&mut h_cur[first..=last], first as i32, go, ge);
+        let row = &h_cur[first..=last];
+        // gaps past the last column only lose score, so a row with no live
+        // cell in it has none at all
+        let new_lo = first + row.iter().position(|&h| h > live)?;
+        let mut new_hi = first + row.iter().rposition(|&h| h > live).unwrap();
+        // Past the previous row's live columns only a reference gap opened in
+        // this row can still be live; it only loses score, so stop once dead.
+        let mut j = last + 1;
+        while j <= end {
+            let iy = run - go - ge * (j as i32 - 1);
+            if iy <= live {
+                break;
+            }
+            h_cur[j] = iy;
+            ix_cur[j] = NEG;
+            new_hi = j;
+            j += 1;
+        }
+        if j <= m {
+            h_cur[j] = NEG;
+            ix_cur[j] = NEG;
+        }
+        lo = new_lo;
+        hi = new_hi;
+        std::mem::swap(h_prev, h_cur);
+        std::mem::swap(ix_prev, ix_cur);
+    }
+
+    // Live cells in the last row are exactly the wanted ends, with their exact
+    // scores; every other end scores at most the bar.
+    let mut best = (NEG, 0usize);
+    for (j, &h) in h_prev.iter().enumerate().take(hi + 1).skip(lo) {
+        if h > best.0 {
+            best = (h, j);
+        }
+    }
+    Some(best)
+}
+
+/// The reference-gap pass of [`window_dp`] over `row`, whose first cell is
+/// column `first`: each cell's score before gaps `d` becomes the larger of it
+/// and the best gap into the cell, `max over k < j of d[k] - go - ge*(j-1-k)`.
+/// Returns the running maximum of `d[k] + ge*k` over the row, for the gaps
+/// past it. Whole chunks of four columns go through [`gap_scan4`] where the
+/// target has it, the rest through [`gap_pass_scalar`].
+fn gap_pass(row: &mut [i32], first: i32, go: i32, ge: i32) -> i32 {
+    let (run, rest) = gap_scan4(row, first, go, ge);
+    gap_pass_scalar(&mut row[(rest - first) as usize..], rest, go, ge, run)
+}
+
+/// [`gap_pass`] one column at a time, carrying `run` in from the columns
+/// before `row`: the reference the vector versions must match.
+fn gap_pass_scalar(row: &mut [i32], first: i32, go: i32, ge: i32, mut run: i32) -> i32 {
+    for (j, h) in (first..).zip(row) {
+        let d = *h;
+        *h = d.max(run - go - ge * (j - 1));
+        run = run.max(d + ge * j);
+    }
+    run
+}
+
+// The vector versions of the pass take four columns at a time: prefix maxima
+// of `e = d[k] + ge*k` within the chunk by two maxes with `e` shifted one and
+// two lanes (shifting in `NEG`), then one max with the carry from the chunks
+// before. Lane `l` of a chunk at column `j0` is column `j0 + l`. Each returns
+// the running maximum and the first column it left to the scalar pass.
+// Integer `max`, `add` and `sub` are exact, so the scores are the scalar
+// pass's.
+
+/// [`gap_pass`]'s whole chunks of four columns, with SSE4.1.
+#[cfg(all(target_arch = "x86_64", target_feature = "sse4.1"))]
+#[allow(unsafe_code)] // SSE4.1 intrinsics; see the SAFETY note
+fn gap_scan4(row: &mut [i32], first: i32, go: i32, ge: i32) -> (i32, i32) {
+    use std::arch::x86_64::*;
+    const NEG: i32 = i32::MIN / 4;
+    let mut j0 = first;
+    // SAFETY: SSE4.1 is enabled at compile time, and every load and store is
+    // an unaligned one of exactly the four `i32`s of `c`.
+    unsafe {
+        let negv = _mm_set1_epi32(NEG);
+        let mut runv = negv;
+        let mut jv = _mm_setr_epi32(ge * j0, ge * (j0 + 1), ge * (j0 + 2), ge * (j0 + 3));
+        let step = _mm_set1_epi32(4 * ge);
+        let open = _mm_set1_epi32(go - ge);
+        for c in row.as_chunks_mut::<4>().0 {
+            let d = _mm_loadu_si128(c.as_ptr() as *const __m128i);
+            let e = _mm_add_epi32(d, jv);
+            // [NEG, e0, e1, e2] and [NEG, NEG, p0, p1]
+            let p = _mm_max_epi32(e, _mm_alignr_epi8(e, negv, 12));
+            let p = _mm_max_epi32(p, _mm_alignr_epi8(p, negv, 8));
+            // the maximum over the columns before each lane: [run, p0, p1, p2]
+            let before = _mm_max_epi32(_mm_alignr_epi8(p, runv, 12), runv);
+            // before - go - ge*(j - 1) = before - (ge*j + go - ge)
+            let h = _mm_max_epi32(d, _mm_sub_epi32(before, _mm_add_epi32(jv, open)));
+            _mm_storeu_si128(c.as_mut_ptr() as *mut __m128i, h);
+            runv = _mm_max_epi32(runv, _mm_shuffle_epi32(p, 0xFF));
+            jv = _mm_add_epi32(jv, step);
+            j0 += 4;
+        }
+        (_mm_cvtsi128_si32(runv), j0)
+    }
+}
+
+/// [`gap_pass`]'s whole chunks of four columns, with NEON (baseline on
+/// aarch64): the SSE4.1 version lane for lane.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[allow(unsafe_code)] // NEON intrinsics; see the SAFETY note
+fn gap_scan4(row: &mut [i32], first: i32, go: i32, ge: i32) -> (i32, i32) {
+    use std::arch::aarch64::*;
+    const NEG: i32 = i32::MIN / 4;
+    let mut j0 = first;
+    // SAFETY: NEON is enabled at compile time, and every load and store is
+    // one of exactly the four `i32`s of `c`.
+    unsafe {
+        let negv = vdupq_n_s32(NEG);
+        let mut runv = negv;
+        let lanes = [ge * j0, ge * (j0 + 1), ge * (j0 + 2), ge * (j0 + 3)];
+        let mut jv = vld1q_s32(lanes.as_ptr());
+        let step = vdupq_n_s32(4 * ge);
+        let open = vdupq_n_s32(go - ge);
+        for c in row.as_chunks_mut::<4>().0 {
+            let d = vld1q_s32(c.as_ptr());
+            let e = vaddq_s32(d, jv);
+            // `vextq_s32(a, b, n)` is lanes `n..4` of `a` then `0..n` of `b`:
+            // [NEG, e0, e1, e2] and [NEG, NEG, p0, p1]
+            let p = vmaxq_s32(e, vextq_s32::<3>(negv, e));
+            let p = vmaxq_s32(p, vextq_s32::<2>(negv, p));
+            // the maximum over the columns before each lane: [run, p0, p1, p2]
+            let before = vmaxq_s32(vextq_s32::<3>(runv, p), runv);
+            // before - go - ge*(j - 1) = before - (ge*j + go - ge)
+            let h = vmaxq_s32(d, vsubq_s32(before, vaddq_s32(jv, open)));
+            vst1q_s32(c.as_mut_ptr(), h);
+            runv = vmaxq_s32(runv, vdupq_laneq_s32::<3>(p));
+            jv = vaddq_s32(jv, step);
+            j0 += 4;
+        }
+        (vgetq_lane_s32::<0>(runv), j0)
+    }
+}
+
+/// Without SSE4.1 or NEON the scalar pass does all of the row.
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "sse4.1"),
+    all(target_arch = "aarch64", target_feature = "neon")
+)))]
+fn gap_scan4(_row: &mut [i32], first: i32, _go: i32, _ge: i32) -> (i32, i32) {
+    (i32::MIN / 4, first)
+}
+
+/// Diagonals either side of a group's most hit one that [`find_in_window`]
+/// searches first.
+const FLOOR_BAND: i32 = 8;
+
+/// 2-bit codes of `ACGT` (upper case only), 4 for any other byte.
+static BASE_CODE: [u8; 256] = {
+    let mut t = [4u8; 256];
+    t[b'A' as usize] = 0;
+    t[b'C' as usize] = 1;
+    t[b'G' as usize] = 2;
+    t[b'T' as usize] = 3;
+    t
+};
+
+/// Length of the q-grams [`Seeds::ranges`] looks up.
+const QGRAM: usize = 7;
+
+/// More q-gram hits than this per window base and [`Seeds::ranges`] gives up.
+const MAX_HITS_PER_BASE: usize = 4;
+
+/// Reusable buffers for [`find_in_window`].
+#[derive(Debug, Default)]
+pub struct WindowScratch {
+    win: Vec<u8>,
+    seeds: Seeds,
+    dp: Parts,
+}
+
+impl WindowScratch {
+    /// Forget the searches remembered so far; call when the queries change
+    /// (each fragment), so the memo stays small.
+    pub fn forget(&mut self) {
+        if !self.dp.memo.is_empty() {
+            self.dp.memo.clear();
+        }
+    }
+}
+
+/// [`window_dp`] remembered by its inputs. Isoforms sharing the exon where the
+/// mate lies give different windows but often the same part to search.
+#[derive(Debug, Default)]
+struct Parts {
+    /// keyed by the query length, diagonals and floor, then query and part
+    memo: ahash::AHashMap<Vec<u8>, Option<(i32, usize)>>,
+    key: Vec<u8>,
+    rows: DpRows,
+}
+
+impl Parts {
+    fn run(
+        &mut self,
+        query: &[u8],
+        win: &[u8],
+        diags: (i32, i32),
+        floor: i32,
+        cfg: &AlignConfig,
+    ) -> Option<(i32, usize)> {
+        let k = &mut self.key;
+        k.clear();
+        for x in [query.len() as i32, diags.0, diags.1, floor] {
+            k.extend_from_slice(&x.to_le_bytes());
+        }
+        k.extend_from_slice(query);
+        k.extend_from_slice(win);
+        if let Some(&hit) = self.memo.get(k.as_slice()) {
+            return hit;
+        }
+        let r = window_dp(query, win, diags, floor, cfg, &mut self.rows);
+        self.memo.insert(k.clone(), r);
+        r
+    }
+}
+
+/// DP rows for [`window_dp`].
+#[derive(Debug, Default)]
+struct DpRows {
+    h_prev: Vec<i32>,
+    ix_prev: Vec<i32>,
+    h_cur: Vec<i32>,
+    ix_cur: Vec<i32>,
+}
+
+/// The q-gram seeding behind [`find_in_window`].
+#[derive(Debug, Default)]
+struct Seeds {
+    /// for each q-gram code, 1 + the last query position holding it, or 0;
+    /// all zero between calls
+    head: Vec<u16>,
+    /// 1 + the previous query position holding the same q-gram, or 0
+    next: Vec<u16>,
+    /// a bit per q-gram code set for the query's, a small (cached) first test
+    /// before `head`; all zero between calls
+    present: Vec<u64>,
+    /// diagonals (window position - query position) of the q-gram hits
+    hits: Vec<i32>,
+    /// the parts of the window to search: `[lo, hi)` column ranges, with the
+    /// diagonals to search within each (relative to `lo`)
+    ranges: Vec<(usize, usize, (i32, i32))>,
+    /// the most hit diagonal of each group of hits searched
+    modes: Vec<i32>,
+}
+
+impl Seeds {
+    /// Fill `self.ranges` with the parts of `win` (uppercase) that hold every
+    /// valid placement of `query`, or return `false` when this cannot narrow
+    /// the search and the whole window must be searched.
+    ///
+    /// An alignment loses `max_loss` points at most against a perfect one, and
+    /// each event in it (mismatch, read insertion, read deletion) destroys a
+    /// bounded number of the query's q-grams per point lost; every q-gram it
+    /// does not destroy is a hit, an exact match on the alignment's own
+    /// diagonal. So a valid alignment has at least `need` hits. Its gaps cost
+    /// at least `ge` per base, so its diagonal moves by at most
+    /// `reach = max_loss / ge` overall: its hits are within `reach` of each
+    /// other, and its cells within `reach` of any of its hits. Grouping hits
+    /// that are within `reach` of the next, an alignment's hits fall in one
+    /// group, which must then have `need` hits, and its cells in the columns
+    /// spanned by that group's diagonals widened by `reach`.
+    ///
+    /// A q-gram with a base other than `ACGT` cannot be looked up, and since
+    /// the DP compares such bases by byte it may still be intact; `need` is
+    /// lowered by their number.
+    fn ranges(&mut self, query: &[u8], win: &[u8], cfg: &AlignConfig) -> bool {
+        let q = QGRAM;
+        let n = query.len();
+        let m = win.len();
+        if n < q || n >= u16::MAX as usize {
+            return false;
+        }
+        let ma = cfg.match_score as i64;
+        let mp = cfg.mismatch_pen as i64;
+        let go = cfg.gap_open_pen as i64;
+        let ge = cfg.gap_extend_pen as i64;
+        let qq = q as i64;
+        // q-grams destroyed per point lost, as `num / den`: a mismatch destroys
+        // `q` for `ma + mp`; a read insertion of `L` bases `L + q - 1` for
+        // `ma*L + go + ge*(L-1)`, a ratio largest at `L = 1` or as `L` grows;
+        // a read deletion `q - 1` for at least `go`.
+        let rates = [(qq, ma + mp), (qq, ma + go), (1, ma + ge), (qq - 1, go)];
+        if rates.iter().any(|&(_, den)| den <= 0) {
+            return false;
+        }
+        let (num, den) =
+            rates.into_iter().fold(
+                (0, 1),
+                |(a, b), (c, d)| {
+                    if c * b > a * d {
+                        (c, d)
+                    } else {
+                        (a, b)
+                    }
+                },
+            );
+        self.ranges.clear();
+        self.modes.clear();
+        let max_loss = ma * n as i64 - min_accepted_score(n, cfg) as i64 - 1;
+        if max_loss < 0 {
+            return true; // not even a perfect alignment is valid
+        }
+        let reach = max_loss / ge;
+
+        let code = |b: u8| {
+            let c = BASE_CODE[b as usize];
+            (c < 4).then_some(c as u32)
+        };
+        let mask = (1u32 << (2 * q)) - 1;
+        self.head.resize(1 << (2 * q), 0);
+        self.present.resize(1 << (2 * q - 6), 0);
+        self.next.clear();
+        self.next.resize(n, 0);
+        // Index the query's q-grams by their start.
+        let mut other = 0i64;
+        let (mut h, mut run) = (0u32, 0usize);
+        for (e, &b) in query.iter().enumerate() {
+            match code(b.to_ascii_uppercase()) {
+                Some(c) => {
+                    h = (h << 2 | c) & mask;
+                    run += 1;
+                }
+                None => run = 0,
+            }
+            if e + 1 < q {
+                continue;
+            }
+            if run >= q {
+                let p = e + 1 - q;
+                self.next[p] = self.head[h as usize];
+                self.head[h as usize] = p as u16 + 1;
+                self.present[(h >> 6) as usize] |= 1 << (h & 63);
+            } else {
+                other += 1;
+            }
+        }
+        let need = (n - q + 1) as i64 - max_loss * num / den - other;
+        let narrow = need > 0;
+        if narrow {
+            // Look the window's q-grams up.
+            self.hits.clear();
+            let (mut h, mut run) = (0u32, 0usize);
+            for (e, &b) in win.iter().enumerate() {
+                match code(b) {
+                    Some(c) => {
+                        h = (h << 2 | c) & mask;
+                        run += 1;
+                    }
+                    None => run = 0,
+                }
+                if run >= q && self.present[(h >> 6) as usize] >> (h & 63) & 1 != 0 {
+                    let t = (e + 1 - q) as i32;
+                    let mut p = self.head[h as usize];
+                    while p != 0 {
+                        self.hits.push(t - (p as i32 - 1));
+                        p = self.next[p as usize - 1];
+                    }
+                }
+            }
+        }
+        // Leave `head` all zero for the next call.
+        let (mut h, mut run) = (0u32, 0usize);
+        for &b in query {
+            match code(b.to_ascii_uppercase()) {
+                Some(c) => {
+                    h = (h << 2 | c) & mask;
+                    run += 1;
+                }
+                None => run = 0,
+            }
+            if run >= q {
+                self.head[h as usize] = 0;
+                self.present[(h >> 6) as usize] = 0;
+            }
+        }
+        // A low-complexity query in a low-complexity window can hit almost
+        // everywhere; then grouping would not narrow the search anyway.
+        if !narrow || self.hits.len() > MAX_HITS_PER_BASE * m {
+            return false;
+        }
+
+        self.hits.sort_unstable();
+        let (reach, need) = (reach as i32, need as usize);
+        let mut start = 0;
+        while start < self.hits.len() {
+            let mut end = start + 1;
+            while end < self.hits.len() && self.hits[end] - self.hits[end - 1] <= reach {
+                end += 1;
+            }
+            if end - start >= need {
+                let group = &self.hits[start..end];
+                let mode = group
+                    .chunk_by(|a, b| a == b)
+                    .max_by_key(|c| c.len())
+                    .map_or(0, |c| c[0]);
+                self.modes.push(mode);
+                let d_lo = self.hits[start] - reach;
+                let d_hi = self.hits[end - 1] + reach;
+                match self.ranges.last_mut() {
+                    Some(last) if d_lo <= last.2 .1 + 1 => last.2 .1 = d_hi,
+                    _ => self.ranges.push((0, 0, (d_lo, d_hi))),
+                }
+            }
+            start = end;
+        }
+        // Columns of the cells on diagonals `[d_lo, d_hi]`: from the free start
+        // opposite column `d_lo` to row n's column `n + d_hi`.
+        self.ranges.retain_mut(|(lo, hi, (d_lo, d_hi))| {
+            *lo = (*d_lo).max(0) as usize;
+            *hi = (n as i64 + *d_hi as i64).clamp(0, m as i64) as usize;
+            *d_lo -= *lo as i32;
+            *d_hi -= *lo as i32;
+            lo < hi
+        });
+        true
+    }
 }
 
 #[cfg(test)]
@@ -1245,6 +1918,71 @@ mod tests {
     }
 
     #[test]
+    /// A dovetailed mate's read-through bases are clipped from scoring: the read
+    /// is 80 insert bases plus 30 adapter bases. Unclipped, the adapter costs it
+    /// validity; with the 30 bases clipped on the right (forward mate) it scores
+    /// exactly a perfect 80-base alignment and is judged against the threshold
+    /// for 80 bases. The same holds for a reverse-strand mate clipped on the
+    /// left, and in full-length mode; MEMs reaching into the clip are cut back.
+    fn clipped_read_through_scores_only_insert_bases() {
+        let reference = gen_seq(400, 11);
+        let adapter = gen_seq(30, 0xADA);
+        let mut read = reference[100..180].to_vec();
+        read.extend_from_slice(&adapter);
+        // A MEM over the whole insert and one into the adapter: the second is
+        // spurious and lies wholly in the clip.
+        let chain = MemChain::new(vec![Mem::new(0, 100, 80)], 80.0, true);
+        for full in [false, true] {
+            let cfg = AlignConfig {
+                full_length_alignment: full,
+                ..Default::default()
+            };
+            let unclipped = align_chain(&read, &reference, &chain, &cfg).unwrap();
+            assert!(!unclipped.valid, "full={full} {unclipped:?}");
+            let a =
+                align_chain_clipped_view(&read, RefView::Bytes(&reference), &chain, &cfg, (0, 30))
+                    .unwrap();
+            assert_eq!(a.score, perfect_score(80, &cfg), "full={full}");
+            assert!(a.valid);
+        }
+        // Reverse-strand mate: the query is the read's reverse complement in
+        // reference order, and its read-through lies on the left.
+        let mut rc_query = adapter.clone();
+        rc_query.extend_from_slice(&reference[100..180]);
+        let rc_read = revcomp(&rc_query);
+        let chain = MemChain::new(vec![Mem::new(25, 95, 85)], 85.0, false);
+        let cfg = AlignConfig::default();
+        let a =
+            align_chain_clipped_view(&rc_read, RefView::Bytes(&reference), &chain, &cfg, (30, 0))
+                .unwrap();
+        assert_eq!(a.score, perfect_score(80, &cfg));
+        // Clipping everything leaves nothing to align.
+        assert!(align_chain_clipped_view(
+            &read,
+            RefView::Bytes(&reference),
+            &chain,
+            &cfg,
+            (60, 50)
+        )
+        .is_none());
+        // MEMs are cut to the kept interval and shifted.
+        let cut = clip_mems(&[Mem::new(0, 100, 80), Mem::new(85, 190, 20)], 0, 80);
+        assert_eq!(
+            cut.iter()
+                .map(|m| (m.read_start, m.ref_start, m.len))
+                .collect::<Vec<_>>(),
+            [(0, 100, 80)]
+        );
+        let cut = clip_mems(&[Mem::new(25, 95, 85)], 30, 110);
+        assert_eq!(
+            cut.iter()
+                .map(|m| (m.read_start, m.ref_start, m.len))
+                .collect::<Vec<_>>(),
+            [(0, 100, 80)]
+        );
+    }
+
+    #[test]
     /// A read identical to its reference window must reach exactly the perfect
     /// score, which is the denominator every acceptance threshold is relative to.
     fn exact_match_scores_perfect() {
@@ -1423,6 +2161,19 @@ mod tests {
     }
 
     #[test]
+    /// Lowercase (soft-masked) read bases match their uppercase reference: the
+    /// forward-strand orphan partner is passed in as read from the FASTQ.
+    fn fitting_window_ignores_case() {
+        let window = gen_seq(200, 91);
+        let read = window[40..120].to_ascii_lowercase();
+        let cfg = AlignConfig::default();
+        let a = align_in_window(&read, &window, &cfg).unwrap();
+        assert_eq!(a.score, perfect_score(read.len(), &cfg));
+        assert!(a.valid);
+        assert_eq!(a.end_col, 120);
+    }
+
+    #[test]
     /// Same, with a sequencing error present.
     fn fitting_window_one_mismatch() {
         let window = gen_seq(200, 92);
@@ -1448,6 +2199,187 @@ mod tests {
             !a.valid,
             "unrelated read should not validate (score {})",
             a.score
+        );
+    }
+
+    /// The vector reference-gap pass (SSE4.1 or NEON, where the target has
+    /// one) must give the scalar pass's scores and running maximum on every
+    /// row shape: no whole chunk, chunks with tails of 0-3 columns, maxima
+    /// carried across chunks, `NEG` cells and both gap penalties.
+    #[test]
+    fn gap_pass_matches_scalar() {
+        const NEG: i32 = i32::MIN / 4;
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut rnd = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let (mut vector, mut chunked) = (0, 0);
+        for &(go, ge) in &[(6, 2), (5, 1), (2, 2), (3, 1), (30, 7), (6, 0)] {
+            for _ in 0..20_000 {
+                let len = rnd(41) as usize;
+                let first = 1 + rnd(1100) as i32;
+                let row: Vec<i32> = (0..len)
+                    .map(|_| match rnd(8) {
+                        // dead cells, as the DP leaves them
+                        0 => NEG - rnd(40) as i32,
+                        // a spike whose gap carries into later chunks
+                        1 => 200 + rnd(400) as i32,
+                        _ => rnd(600) as i32 - 400,
+                    })
+                    .collect();
+                let mut want = row.clone();
+                let want_run = gap_pass_scalar(&mut want, first, go, ge, NEG);
+                let mut got = row.clone();
+                let got_run = gap_pass(&mut got, first, go, ge);
+                assert_eq!(
+                    (got, got_run),
+                    (want, want_run),
+                    "row {row:?} first {first} go {go} ge {ge}"
+                );
+                // and the vector part on its own against the scalar pass over
+                // the same columns
+                let mut part = row.clone();
+                let (run, rest) = gap_scan4(&mut part, first, go, ge);
+                let done = (rest - first) as usize;
+                let mut want = row[..done].to_vec();
+                assert_eq!(run, gap_pass_scalar(&mut want, first, go, ge, NEG));
+                assert_eq!(part[..done], want[..]);
+                assert_eq!(part[done..], row[done..]);
+                if done > 0 {
+                    vector += 1;
+                    chunked += (done > 4) as usize;
+                }
+            }
+        }
+        if cfg!(any(
+            all(target_arch = "x86_64", target_feature = "sse4.1"),
+            all(target_arch = "aarch64", target_feature = "neon")
+        )) {
+            assert!(vector > 50_000 && chunked > 40_000, "{vector} {chunked}");
+        }
+    }
+
+    /// `find_in_window` must report exactly the placements `align_in_window`
+    /// accepts, with the same score and end column, and nothing else: over
+    /// reads placed in, across the ends of, and away from their window, with
+    /// substitutions, indels, `N`s, soft-masking, low complexity and repeats,
+    /// under several scoring schemes (including ones its shortcuts decline).
+    #[test]
+    fn find_in_window_matches_align_in_window() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let mut scratch = WindowScratch::default();
+        let (mut valid, mut total) = (0, 0);
+        for &(ma, mp, go, ge, frac) in &[
+            (2i8, 4i8, 6i8, 2i8, 0.65f32),
+            (2, 4, 6, 2, 0.3),
+            (2, 4, 6, 2, 0.9),
+            (1, 3, 5, 1, 0.65),
+            (2, 2, 3, 1, 0.5),
+            (3, 2, 2, 3, 0.65), // go < ge: falls back to the plain DP
+            (2, 4, 6, 0, 0.65), // ge = 0: likewise
+        ] {
+            let cfg = AlignConfig {
+                match_score: ma,
+                mismatch_pen: mp,
+                gap_open_pen: go,
+                gap_extend_pen: ge,
+                min_score_fraction: frac,
+                ..AlignConfig::default()
+            };
+            for _ in 0..1500 {
+                let wlen = 1 + rnd(400) as usize;
+                let mut window: Vec<u8> = match rnd(6) {
+                    // low complexity: few distinct bases, or a short repeat
+                    0 => (0..wlen).map(|_| b"AAAC"[rnd(4) as usize]).collect(),
+                    1 => {
+                        let unit = gen_seq(1 + rnd(12) as usize, rnd(1 << 30));
+                        unit.iter().cycle().take(wlen).copied().collect()
+                    }
+                    _ => gen_seq(wlen, rnd(1 << 30)),
+                };
+                if rnd(5) == 0 {
+                    let at = rnd(wlen as u64) as usize;
+                    window[at] = b'N';
+                }
+                let qlen = 1 + rnd(160) as usize;
+                // where the read comes from: inside the window, overhanging
+                // either end, or unrelated
+                let mut read: Vec<u8> = if rnd(6) == 0 {
+                    gen_seq(qlen, rnd(1 << 30))
+                } else {
+                    let start = rnd(wlen as u64 + qlen as u64) as i64 - qlen as i64 / 2;
+                    (0..qlen as i64)
+                        .map(|k| {
+                            let p = start + k;
+                            if p >= 0 && (p as usize) < wlen {
+                                window[p as usize]
+                            } else {
+                                b"ACGT"[rnd(4) as usize]
+                            }
+                        })
+                        .collect()
+                };
+                for _ in 0..rnd(8) {
+                    if read.is_empty() {
+                        break;
+                    }
+                    let at = rnd(read.len() as u64) as usize;
+                    match rnd(4) {
+                        0 => read[at] = b"ACGTN"[rnd(5) as usize],
+                        1 => {
+                            for _ in 0..1 + rnd(6) {
+                                read.insert(at, b"ACGT"[rnd(4) as usize]);
+                            }
+                        }
+                        2 => {
+                            let k = (1 + rnd(6) as usize).min(read.len() - at);
+                            read.drain(at..at + k);
+                        }
+                        _ => read[at] = read[at].to_ascii_lowercase(),
+                    }
+                }
+                let want = align_in_window(&read, &window, &cfg);
+                let got = find_in_window(&read, &window, &cfg, &mut scratch);
+                total += 1;
+                match (want, got) {
+                    (Some(w), Some(g)) if w.valid => {
+                        valid += 1;
+                        assert_eq!(
+                            (w.score, w.end_col),
+                            (g.score, g.end_col),
+                            "read {:?} window {:?}",
+                            String::from_utf8_lossy(&read),
+                            String::from_utf8_lossy(&window)
+                        );
+                        assert!(g.valid);
+                    }
+                    (w, None) => assert!(
+                        !w.is_some_and(|w| w.valid),
+                        "missed: read {:?} window {:?}",
+                        String::from_utf8_lossy(&read),
+                        String::from_utf8_lossy(&window)
+                    ),
+                    (w, Some(g)) => panic!(
+                        "invalid placement reported: {w:?} vs {g:?}, read {:?} window {:?}",
+                        String::from_utf8_lossy(&read),
+                        String::from_utf8_lossy(&window)
+                    ),
+                }
+            }
+        }
+        // the cases must exercise both outcomes
+        assert!(
+            valid > total / 5 && valid < total * 4 / 5,
+            "{valid} of {total} valid"
         );
     }
 

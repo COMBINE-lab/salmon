@@ -27,8 +27,7 @@
 use crate::gcbias::{GcContext, GcFragModel, GcView};
 use crate::posbias::{length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS};
 use crate::seqbias::{
-    conditional_cdf, revcomp_bytes, LogBiasTable, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
-    MIN_CDF_MASS,
+    conditional_cdf, revcomp_bytes, LogBiasTable, CONTEXT_LENGTH, MIN_ALPHA, MIN_CDF_MASS,
 };
 
 /// salmon's `EPSILON` (mass cutoff for adding positional expected mass).
@@ -52,6 +51,19 @@ const POS_SMOOTH_FRAC: f64 = 0.1;
 /// This is the standard fix for a ratio of two noisy estimates: adding the same
 /// constant to numerator and denominator leaves well-measured ratios essentially
 /// unchanged while pulling ill-measured ones toward the neutral value.
+///
+/// Each end's factor is the **square root** of its smoothed ratio, so a
+/// fragment's positional weight `posFW[start]·posRC[end]` is the geometric mean
+/// of the two ends' ratios, not their product. The 5' model (fragment starts)
+/// and the 3' model (fragment ends) are fit separately, each as a marginal
+/// obs/exp ratio, so each one already measures the whole positional effect on a
+/// fragment. On a transcript much longer than a fragment, start and end sit at
+/// almost the same fractional position, so the two ratios are two estimates of
+/// the same number `r`. Their product is `r²`: the effect counted twice. The
+/// product model then predicts a start histogram `exp·r²`, not the `exp·r` it
+/// was fit to, and it inflates every effective length by `E[r²] = 1 + Var(r)`
+/// (m500k, longest length class: 1.28× even with correctly placed knots). The
+/// geometric mean reproduces both observed marginals and averages to 1.
 pub fn positional_factor(obs: &[f64], exp: &[f64]) -> Vec<f64> {
     let mut out = Vec::new();
     positional_factor_into(obs, exp, &mut out);
@@ -74,7 +86,11 @@ pub fn positional_factor_into(obs: &[f64], exp: &[f64], out: &mut Vec<f64>) {
     // of the arbitrary units the densities happen to be in.
     let mean_exp: f64 = exp.iter().sum::<f64>() / n as f64;
     let c = (POS_SMOOTH_FRAC * mean_exp).max(f64::MIN_POSITIVE);
-    out.extend(obs.iter().zip(exp).map(|(&o, &e)| (o + c) / (e + c)));
+    out.extend(
+        obs.iter()
+            .zip(exp)
+            .map(|(&o, &e)| ((o + c) / (e + c)).sqrt()),
+    );
 }
 
 /// The enabled bias terms for one transcript's effective-length correction.
@@ -157,23 +173,12 @@ pub fn corrected_effective_length_full(
         debug_assert_eq!(seq.len(), ref_len);
         fw = vec![1.0f64; ref_len];
         rc = vec![1.0f64; ref_len];
-        let cu = CONTEXT_LEFT;
         // The 3' factor reads the reverse complement, because the second read of
-        // a pair is sequenced from the opposite strand.
+        // a pair is sequenced from the opposite strand. Each factor is indexed by
+        // the *read* start, which sits `CONTEXT_LEFT` bases into the window.
         let rc_seq = revcomp_bytes(seq);
-        for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
-            // The factor is indexed by the *read* start, which sits `CONTEXT_LEFT`
-            // bases into the context window.
-            let read_start = frag_start + cu;
-            if read_start < ref_len {
-                fw[read_start] = tab_fw
-                    .eval(&seq[frag_start..frag_start + CONTEXT_LENGTH], false)
-                    .exp();
-                rc[read_start] = tab_rc
-                    .eval(&rc_seq[frag_start..frag_start + CONTEXT_LENGTH], false)
-                    .exp();
-            }
-        }
+        tab_fw.fill_exp_factors(seq, &mut fw);
+        tab_rc.fill_exp_factors(&rc_seq, &mut rc);
         // `rc` was filled in reverse-complement coordinates; flipping it puts it
         // back in forward coordinates so both arrays index the same way.
         rc.reverse();
@@ -244,6 +249,7 @@ pub fn corrected_effective_length_full(
     // than a fresh lookup pair.
     let mut prev_mass = cond(sp);
     let mut eff = 0.0f64;
+    let mut frag_tab: Vec<i32> = Vec::new();
     while !done {
         // With a stride > 1 the last step can overshoot; clamp and finish.
         if fl >= max_len {
@@ -267,10 +273,20 @@ pub fn corrected_effective_length_full(
             // Specialized GC-only loop: one lookup per fragment, no branches on
             // absent models.
             (false, Some((gc, ctx)), None) => {
+                // Tabulating this length's GC fractions pays off once the
+                // sweep is at least as long as the table.
+                let tab = (kmax >= fl).then(|| {
+                    crate::gcbias::frag_frac_table(fl, &mut frag_tab);
+                    &frag_tab[..]
+                });
                 let mut kstart = 0i32;
                 while kstart < kmax {
                     let frag_end = kstart + fl - 1;
-                    if let Some((ff, cf)) = ctx.desc(kstart, frag_end) {
+                    let d = match tab {
+                        Some(t) => ctx.desc_tab(kstart, frag_end, t),
+                        None => ctx.desc(kstart, frag_end),
+                    };
+                    if let Some((ff, cf)) = d {
                         mass += gc.get(ff, cf);
                     } else {
                         // No usable GC context (too close to an end): neutral.
@@ -281,6 +297,10 @@ pub fn corrected_effective_length_full(
             }
             // General loop: multiply in whichever factors are present.
             _ => {
+                let tab = (gc_model.is_some() && kmax >= fl).then(|| {
+                    crate::gcbias::frag_frac_table(fl, &mut frag_tab);
+                    &frag_tab[..]
+                });
                 let mut kstart = 0i32;
                 while kstart < kmax {
                     let frag_start = kstart;
@@ -291,7 +311,11 @@ pub fn corrected_effective_length_full(
                         1.0
                     };
                     if let (Some(gc), Some(ctx)) = (gc_model, gc_ctx.as_ref()) {
-                        if let Some((ff, cf)) = ctx.desc(frag_start, frag_end) {
+                        let d = match tab {
+                            Some(t) => ctx.desc_tab(frag_start, frag_end, t),
+                            None => ctx.desc(frag_start, frag_end),
+                        };
+                        if let Some((ff, cf)) = d {
                             frag_factor *= gc.get(ff, cf);
                         }
                     }
@@ -506,6 +530,37 @@ mod tests {
             diff2 < 1e-9,
             "zero-alpha target must not contribute (diff={diff2})"
         );
+    }
+
+    /// The positional ratio is `obs/exp` of two distributions over the same
+    /// bins, so along a long transcript (where the expected start density is
+    /// flat) the weight a fragment gets from both ends must average to 1: it
+    /// moves mass along the transcript, it does not create any. On a long
+    /// transcript a fragment's start and end share one fractional position, so
+    /// that weight is `factor(p)²` when both ends see the same model. A bump in
+    /// the middle bins made the old ratio average 1.26 when the spline knots sat
+    /// at the Cufflinks positions instead of the bin centres, and the old
+    /// product of the two end ratios (no square root) averaged 1.26 even with
+    /// correct knots.
+    #[test]
+    fn positional_factor_averages_to_one_on_a_flat_expected_density() {
+        let len = 20_000;
+        let mut obs = SimplePosBias::new(NUM_POS_BINS);
+        let mut exp = SimplePosBias::new(NUM_POS_BINS);
+        for bin in 0..NUM_POS_BINS {
+            // Observed: three times the mass in bins 8..12, else flat.
+            let o = if (8..12).contains(&bin) { 3.0 } else { 1.0 };
+            obs.add_mass_bin(bin, o * 1e5);
+            exp.add_mass_bin(bin, 1e5);
+        }
+        obs.finalize();
+        exp.finalize();
+        let (mut o, mut e) = (vec![0.0; len], vec![0.0; len]);
+        obs.project_weights(&mut o);
+        exp.project_weights(&mut e);
+        let f = positional_factor(&o, &e);
+        let mean = f.iter().map(|x| x * x).sum::<f64>() / len as f64;
+        assert!((mean - 1.0).abs() < 0.01, "mean fragment weight {mean}");
     }
 
     /// A transcript shorter than every fragment length has nothing to convolve,

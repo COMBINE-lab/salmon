@@ -284,14 +284,23 @@ fn orphan_recovery_promotes_to_pair() {
 
 #[test]
 /// A rescue may not pair mates that normal pairing rejects as dovetailed: here
-/// the rescued mate lies inside the anchor, so the anchor's overhang stays an
-/// orphan, whichever mate anchored.
+/// the rescued mate lies inside the anchor, so with no dovetail tolerance the
+/// anchor's 20-base overhang stays an orphan, whichever mate anchored. Within
+/// the default tolerance (32) it pairs, as normal pairing does.
 fn orphan_recovery_refuses_a_dovetailed_mate() {
     let transcript = gen_seq(600, 0xFACE);
     let (idx, _tmp) = build_index_for(&transcript);
     let mut hs = HitSearcher::new(idx.inner());
     let refs = IdxRefs(&idx);
     let recover = MapConfig {
+        recover_orphans: true,
+        pair: salmon_map::PairingConfig {
+            dovetail_tolerance: 0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let tolerant = MapConfig {
         recover_orphans: true,
         ..Default::default()
     };
@@ -302,6 +311,12 @@ fn orphan_recovery_refuses_a_dovetailed_mate() {
     let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &recover);
     assert_eq!(m.len(), 1, "{m:?}");
     assert_eq!(m[0].status, MateStatus::PairedEndLeft, "{m:?}");
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &tolerant);
+    assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
+    assert_eq!((m[0].ref_pos, m[0].fragment_len), (200, 80), "{m:?}");
+    // The anchor's 20 bases past the rescued mate's 5' end are not scored: its
+    // score is a perfect 80-base alignment.
+    assert_eq!(m[0].r1_score, perfect_score(80, &tolerant.align), "{m:?}");
 
     // A reverse anchor whose rescued forward mate starts after the anchor does.
     let r1 = break_kmers(&transcript[220..280], 25);
@@ -309,6 +324,9 @@ fn orphan_recovery_refuses_a_dovetailed_mate() {
     let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &recover);
     assert_eq!(m.len(), 1, "{m:?}");
     assert_eq!(m[0].status, MateStatus::PairedEndRight, "{m:?}");
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &tolerant);
+    assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
+    assert_eq!((m[0].ref_pos, m[0].fragment_len), (220, 80), "{m:?}");
 
     // Allowing dovetails allows the rescue too.
     let allow = MapConfig {
@@ -321,6 +339,26 @@ fn orphan_recovery_refuses_a_dovetailed_mate() {
     };
     let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
     assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
+    // Measured as normal pairing does, between the mates' 5' ends: the forward
+    // mate starts at 220 and the reverse anchor ends at 300, so [220, 300); the
+    // anchor's 20 bases before 220 are read-through, not insert.
+    assert_eq!(
+        (m[0].ref_pos, m[0].fragment_len, m[0].rc_pos),
+        (220, 80, 299),
+        "{m:?}"
+    );
+
+    // Same with the forward mate anchoring: [200, 280), the anchor's bases past
+    // the rescued reverse mate's 5' end (280) being read-through.
+    let r1 = transcript[200..300].to_vec();
+    let r2 = break_kmers(&revcomp(&transcript[220..280]), 25);
+    let m = map_read_pair(idx.inner(), &mut hs, &refs, &r1, &r2, &allow);
+    assert_eq!(m[0].status, MateStatus::PairedEndPaired, "{m:?}");
+    assert_eq!(
+        (m[0].ref_pos, m[0].fragment_len, m[0].rc_pos),
+        (200, 80, 279),
+        "{m:?}"
+    );
 }
 
 #[test]
@@ -405,6 +443,82 @@ fn pseudoalignment_only_mode() {
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "sketch pair: {sp:?}"
     );
+    // The fragment is [50, 430): 380 bases ending at 429, as selective alignment
+    // measures it. piscem-rs before the fix reported 381 (`+ 1` in its `tlen`),
+    // which shifted every sketch FLD sample and put `rc_pos` one past the
+    // fragment.
+    let pair = sp
+        .iter()
+        .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+        .unwrap();
+    assert_eq!(pair.fragment_len, 380, "{pair:?}");
+    assert_eq!(pair.rc_pos, 429, "{pair:?}");
+}
+
+#[test]
+/// A short insert read through into adapter: the 80-base fragment [200, 280)
+/// read by 95-base mates, each ending in 15 adapter bases. Selective alignment
+/// pairs it by default (overhang 15 <= 32) as [200, 280), and not with the
+/// tolerance at 0.
+fn short_insert_read_through_pairs_by_default() {
+    let transcript = gen_seq(600, 0xADA9);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let refs = IdxRefs(&idx);
+    let mut hs = HitSearcher::new(idx.inner());
+    let adapter = gen_seq(15, 0x1111);
+    let mut r1 = transcript[200..280].to_vec();
+    r1.extend_from_slice(&adapter);
+    let mut r2 = revcomp(&transcript[200..280]);
+    r2.extend_from_slice(&adapter);
+    let def = MapConfig::default();
+    let mut strict = MapConfig::default();
+    strict.pair.dovetail_tolerance = 0;
+    for (a, b) in [(&r1, &r2), (&r2, &r1)] {
+        let m = map_read_pair(idx.inner(), &mut hs, &refs, a, b, &def);
+        let pair = m
+            .iter()
+            .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+            .unwrap_or_else(|| panic!("no pair: {m:?}"));
+        assert_eq!(
+            (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+            (200, 80, 200, 279),
+            "{pair:?}"
+        );
+        // Scored over the insert only: two perfect 80-base alignments.
+        assert_eq!(pair.score, 2 * perfect_score(80, &def.align), "{pair:?}");
+        let m = map_read_pair(idx.inner(), &mut hs, &refs, a, b, &strict);
+        assert!(
+            m.iter().all(|m| m.status != MateStatus::PairedEndPaired),
+            "{m:?}"
+        );
+    }
+}
+
+#[test]
+/// With 30 adapter bases on each 110-base mate of an 80-base insert, the full
+/// reads fail the minimum score (the adapter costs more than a third of a
+/// read), so without clipping the read-through the pair cannot form even
+/// within the tolerance. Scored over the insert bases, against the threshold
+/// for those bases, it pairs as [200, 280) with a perfect score.
+fn long_read_through_is_scored_on_the_insert() {
+    let transcript = gen_seq(600, 0xADA9);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let refs = IdxRefs(&idx);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut r1 = transcript[200..280].to_vec();
+    r1.extend_from_slice(&gen_seq(30, 0x2222));
+    let mut r2 = revcomp(&transcript[200..280]);
+    r2.extend_from_slice(&gen_seq(30, 0x3333));
+    let cfg = MapConfig::default();
+    for (a, b) in [(&r1, &r2), (&r2, &r1)] {
+        let m = map_read_pair(idx.inner(), &mut hs, &refs, a, b, &cfg);
+        let pair = m
+            .iter()
+            .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+            .unwrap_or_else(|| panic!("no pair: {m:?}"));
+        assert_eq!((pair.ref_pos, pair.fragment_len), (200, 80), "{pair:?}");
+        assert_eq!(pair.score, 2 * perfect_score(80, &cfg.align), "{pair:?}");
+    }
 }
 
 #[test]
@@ -443,6 +557,18 @@ fn dovetail_pair_rejected_by_default_accepted_with_flag() {
             .iter()
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "SA --allowDovetail should pair the dovetail: {sa_allow:?}"
+    );
+    // The fragment runs between the mates' 5' ends, [200, 250): the bases each
+    // read has past the other's 5' end are read-through, not insert. (It was
+    // the union [150, 300), 150 bases.)
+    let pair = sa_allow
+        .iter()
+        .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+        .unwrap();
+    assert_eq!(
+        (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+        (200, 50, 200, 249),
+        "{pair:?}"
     );
 
     // --- sketch / pseudoalignment ---
@@ -489,6 +615,56 @@ fn dovetail_pair_rejected_by_default_accepted_with_flag() {
             .any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired),
         "sketch --allowDovetail should pair the dovetail: {sk_allow:?}"
     );
+    // Same fragment as selective alignment: it starts at the forward mate (200),
+    // not at the reverse mate's earlier start (150).
+    let pair = sk_allow
+        .iter()
+        .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+        .unwrap();
+    assert_eq!(
+        (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+        (200, 50, 200, 249),
+        "{pair:?}"
+    );
+}
+
+#[test]
+/// A sketch pair whose forward mate hangs 10 bases off the transcript start:
+/// the fragment [-10, 380) is clipped to [0, 380), 380 bases, so its 3' end
+/// (`rc_pos`) is the fragment's last base, 379, as piscem's RAD writer clips it.
+fn sketch_pair_overhanging_the_start_is_clipped() {
+    let transcript = gen_seq(600, 0x5EED);
+    let (idx, _tmp) = build_index_for(&transcript);
+    let mut hs = HitSearcher::new(idx.inner());
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
+    let mut r1 = gen_seq(10, 0xBAD);
+    r1.extend_from_slice(&transcript[0..70]);
+    let r2 = revcomp(&transcript[300..380]);
+    for (a, b) in [(&r1, &r2), (&r2, &r1)] {
+        let sp = map_read_pair_sketch(
+            idx.inner(),
+            &mut hs,
+            &mut scratch,
+            a,
+            b,
+            false,
+            false,
+            SkippingStrategy::Permissive,
+            256,
+            2500,
+            &idx,
+            false,
+        );
+        let pair = sp
+            .iter()
+            .find(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired)
+            .unwrap_or_else(|| panic!("no pair: {sp:?}"));
+        assert_eq!(
+            (pair.ref_pos, pair.fragment_len, pair.fw_pos, pair.rc_pos),
+            (0, 380, 0, 379),
+            "{pair:?}"
+        );
+    }
 }
 
 #[test]

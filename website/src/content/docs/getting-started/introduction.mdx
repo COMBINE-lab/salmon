@@ -6,8 +6,8 @@ description: What salmon does and how the 2.0 Rust release differs from the C++ 
 salmon[^salmon] estimates transcript-level abundances from RNA-seq reads. Rather
 than producing a full base-to-base alignment of every read to a genome, salmon
 maps reads directly to a **transcriptome** and uses a probabilistic model —
-streaming/online inference followed by an offline EM/VBEM, in the spirit of
-eXpress[^express] — to assign multi-mapping reads, correct for technical
+equivalence classes over a fixed fragment-length model, resolved by an EM/VBEM
+whose result is independent of the thread count — to assign multi-mapping reads, correct for technical
 biases[^roberts][^alpine], and report abundances in TPM and estimated read
 counts.
 

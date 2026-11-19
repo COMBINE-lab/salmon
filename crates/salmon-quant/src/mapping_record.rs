@@ -62,14 +62,15 @@ pub struct CigarOp {
     pub len: usize,
 }
 
-/// A CIGAR of at most two operations, stored inline.
+/// A CIGAR of at most three operations, stored inline.
 ///
-/// salmon's spoofed alignments never need more than two (`M`, or a clip plus a
-/// match at an overhanging end), so a fixed array avoids allocating one `Vec` per
-/// emitted record.
+/// salmon's spoofed alignments never need more than three (`M`; a clip plus a
+/// match at an overhanging end; or clips at both ends, when a dovetailed mate's
+/// read-through is clipped at one end and it overhangs the transcript at the
+/// other), so a fixed array avoids allocating one `Vec` per emitted record.
 #[derive(Clone, Copy)]
 pub struct Cigar {
-    ops: [CigarOp; 2],
+    ops: [CigarOp; 3],
     len: usize,
 }
 
@@ -212,11 +213,11 @@ fn overhang_cigar(pos: i32, read_len: i32, txp_len: i32) -> (Cigar, i32) {
         len: 0,
     };
     let one = |kind, len| Cigar {
-        ops: [CigarOp { kind, len }, empty],
+        ops: [CigarOp { kind, len }, empty, empty],
         len: 1,
     };
     let two = |a, b| Cigar {
-        ops: [a, b],
+        ops: [a, b, empty],
         len: 2,
     };
     // `<=` / `>=` below: a read with no overlapping base must be all soft-clip,
@@ -260,6 +261,48 @@ fn overhang_cigar(pos: i32, read_len: i32, txp_len: i32) -> (Cigar, i32) {
     }
 }
 
+/// The CIGAR and position for one mate of a proper pair whose fragment is the
+/// half-open `frag` (`[forward mate's start, reverse mate's end)`).
+///
+/// A mate's bases outside the fragment are adapter read-through of a dovetailed
+/// pair (selective alignment did not score them), so they are soft-clipped and
+/// the position moved to the first aligned base, as for bases overhanging a
+/// transcript end. A mate inside its fragment, every mate of a cleanly nested
+/// pair, gets [`overhang_cigar`] unchanged.
+fn pair_mate_cigar(pos: i32, read_len: i32, txp_len: i32, frag: (i32, i32)) -> (Cigar, i32) {
+    let end = pos + read_len.max(0);
+    if pos >= frag.0 && end <= frag.1 {
+        return overhang_cigar(pos, read_len, txp_len);
+    }
+    let lo = pos.max(frag.0).max(0);
+    let hi = end.min(frag.1).min(txp_len);
+    if hi <= lo {
+        return overhang_cigar(pos, read_len, txp_len);
+    }
+    let empty = CigarOp {
+        kind: CigarKind::Match,
+        len: 0,
+    };
+    let mut cigar = Cigar {
+        ops: [empty; 3],
+        len: 0,
+    };
+    for (kind, len) in [
+        (CigarKind::SoftClip, lo - pos),
+        (CigarKind::Match, hi - lo),
+        (CigarKind::SoftClip, end - hi),
+    ] {
+        if len > 0 {
+            cigar.ops[cigar.len] = CigarOp {
+                kind,
+                len: len as usize,
+            };
+            cigar.len += 1;
+        }
+    }
+    (cigar, lo)
+}
+
 /// Emit borrowed records immediately; no record, name, sequence, CIGAR, or tag
 /// allocation is retained between callback invocations.
 ///
@@ -299,18 +342,43 @@ pub fn emit_fragment_records(
 
         match mapping.status {
             MateStatus::PairedEndPaired => {
-                let (c1, p1) = overhang_cigar(mapping.r1_pos, r1_seq.len() as i32, txp_len);
-                let (c2, p2) = overhang_cigar(mapping.r2_pos, r2_seq.len() as i32, txp_len);
+                // Facing mates: the fragment runs from the forward mate's start
+                // to the reverse mate's end, and bases past it are clipped. Taken
+                // from the mates' own placements, so it holds for every producer.
+                let facing = mapping.is_fw != mapping.r2_fw;
+                let (r1_end, r2_end) = (
+                    mapping.r1_pos + r1_seq.len() as i32,
+                    mapping.r2_pos + r2_seq.len() as i32,
+                );
+                let frag = if mapping.is_fw {
+                    (mapping.r1_pos, r2_end)
+                } else {
+                    (mapping.r2_pos, r1_end)
+                };
+                let cigar_of = |pos: i32, len: usize| {
+                    if facing && frag.0 < frag.1 {
+                        pair_mate_cigar(pos, len as i32, txp_len, frag)
+                    } else {
+                        overhang_cigar(pos, len as i32, txp_len)
+                    }
+                };
+                let (c1, p1) = cigar_of(mapping.r1_pos, r1_seq.len());
+                let (c2, p2) = cigar_of(mapping.r2_pos, r2_seq.len());
                 // TLEN is the observed template (fragment) length, truncated at
                 // the transcript end for the same reason positions are clamped.
                 let mut fragment_length = mapping.fragment_len;
-                let min_pos = mapping.r1_pos.min(mapping.r2_pos);
+                let min_pos = if facing && frag.0 < frag.1 {
+                    frag.0
+                } else {
+                    mapping.r1_pos.min(mapping.r2_pos)
+                };
                 if min_pos + fragment_length > txp_len {
                     fragment_length = txp_len - min_pos;
                 }
                 // SAM signs TLEN: positive on the leftmost mate, negative on the
-                // rightmost, so the two records sum to zero.
-                let tlen1 = if mapping.r1_pos <= mapping.r2_pos {
+                // rightmost, so the two records sum to zero. A tie of reported
+                // positions (a clipped dovetail) falls back to the projections.
+                let tlen1 = if (p1, mapping.r1_pos) <= (p2, mapping.r2_pos) {
                     fragment_length
                 } else {
                     -fragment_length
@@ -464,6 +532,28 @@ mod tests {
                 format!("{}{k}", op.len)
             })
             .collect()
+    }
+
+    #[test]
+    /// A dovetailed mate's read-through (outside the fragment) is soft-clipped
+    /// and its position moved to the fragment; a mate inside its fragment is
+    /// exactly `overhang_cigar`; read-through and a transcript-start overhang
+    /// together give three operations.
+    fn pair_mate_cigar_clips_read_through() {
+        // forward mate [200, 295) of fragment [200, 280): 80M15S at 200
+        let (c, p) = pair_mate_cigar(200, 95, 600, (200, 280));
+        assert_eq!((cigar_string(c), p), ("80M15S".to_string(), 200));
+        // reverse mate [185, 280): 15S80M at 200
+        let (c, p) = pair_mate_cigar(185, 95, 600, (200, 280));
+        assert_eq!((cigar_string(c), p), ("15S80M".to_string(), 200));
+        // nested mate: unchanged
+        let (c, p) = pair_mate_cigar(300, 80, 600, (200, 400));
+        let (o, q) = overhang_cigar(300, 80, 600);
+        assert_eq!((cigar_string(c), p), (cigar_string(o), q));
+        // forward mate hanging 5 bases off the transcript start and reading
+        // 10 bases past the reverse mate's 5' end: 5S80M10S at 0
+        let (c, p) = pair_mate_cigar(-5, 95, 600, (-5, 80));
+        assert_eq!((cigar_string(c), p), ("5S80M10S".to_string(), 0));
     }
 
     #[test]

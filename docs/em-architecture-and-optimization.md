@@ -557,10 +557,10 @@ Benchmark VBEM unless you specifically mean to measure plain EM — the default
 - **Do not interleave arms with other work.** Wall-time comparisons taken from
   a script that ran other binaries between arms disagreed with back-to-back
   phase measurements by ~20 points.
-- **The online path has enormous variance at high `-p`.** Four repeats at
+- **The online path had enormous variance at high `-p`.** Four repeats at
   `-p 64` gave 103.6, 59.8, 104.5, 55.5 s — bimodal, an 88% spread — while the
   deterministic path held 39–42 s. Any single-run comparison against `--online`
-  at high thread counts is meaningless.
+  (removed in 2.12.0; use a ≤2.11 binary) at high thread counts is meaningless.
 - **`salmon --version` on a fresh binary first.** newton is Broadwell with no
   AVX-512; the build config floors at `x86-64-v2` with runtime SIMD dispatch,
   so binaries built on the AVX-512 submit host do run — but a

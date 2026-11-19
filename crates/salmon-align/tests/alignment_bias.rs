@@ -2,9 +2,17 @@
 //! point. RAD has more exhaustive invariance coverage; this test ensures the
 //! shared correction remains wired into BAM/SAM quantification.
 
-use salmon_align::{quantify_alignments, AlignQuantOptions};
+use salmon_align::{quantify_rad, write_alignment_rad, AlignQuantOptions, AlignQuantResult};
+use salmon_rad::ChunkCodec;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+/// The alignment-mode pipeline: BAM/SAM to an intermediate RAD, then quantify it.
+fn quantify_two_phase(opts: &AlignQuantOptions) -> anyhow::Result<AlignQuantResult> {
+    let rad = opts.output_dir.with_extension("rad");
+    write_alignment_rad(opts, &rad, ChunkCodec::None)?;
+    quantify_rad(opts, &rad)
+}
 
 fn write_fixture(dir: &Path) -> (PathBuf, PathBuf) {
     let sam = dir.join("bias.sam");
@@ -67,7 +75,7 @@ fn all_bias_alignment_mode_smoke() {
         .num_threads(4)
         .build()
         .unwrap()
-        .install(|| quantify_alignments(&opts).expect("all-bias alignment quantification"));
+        .install(|| quantify_two_phase(&opts).expect("all-bias alignment quantification"));
 
     assert_eq!(result.num_mapped, 600);
     assert!(result.eff_lengths.iter().all(|value| value.is_finite()));
@@ -77,4 +85,49 @@ fn all_bias_alignment_mode_smoke() {
     assert!(!result.bias_dump.exp5_seq.is_empty());
     assert!(!result.bias_dump.obs5_pos.is_empty());
     assert!(!result.bias_dump.exp5_pos.is_empty());
+    // `add_mass` takes a linear mass; this path passed its log (<= 0), which the
+    // fixed-point cast turned into 0, so every observed bin kept only its
+    // pseudocount and each (normalized) class came out flat.
+    let flat = |bins: &Vec<f64>| bins.iter().all(|&m| (m - bins[0]).abs() < 1e-12);
+    assert!(
+        !result.bias_dump.obs5_pos.iter().all(flat),
+        "the observed positional model saw no mass"
+    );
+}
+
+#[test]
+/// A `-t` FASTA whose transcripts carry the poly-A tails the salmon index clips
+/// (so the alignment header's LN lacks them) must correct over the header
+/// length, giving the same effective lengths as the untailed FASTA.
+fn bias_ignores_fasta_polya_tail_beyond_header_length() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (sam, fasta) = write_fixture(tmp.path());
+    let tailed = tmp.path().join("tailed.fa");
+    let text = std::fs::read_to_string(&fasta).unwrap();
+    let mut out = String::new();
+    for line in text.lines() {
+        out.push_str(line);
+        if !line.starts_with('>') {
+            out.push_str(&"A".repeat(40));
+        }
+        out.push('\n');
+    }
+    std::fs::write(&tailed, out).unwrap();
+
+    let run = |fa: PathBuf, dir: &str| {
+        let mut opts = AlignQuantOptions::new(sam.clone(), tmp.path().join(dir));
+        opts.lib_type = "IU".to_string();
+        opts.no_error_model = true;
+        opts.transcripts = Some(fa);
+        opts.seq_bias = true;
+        opts.gc_bias = true;
+        opts.pos_bias = true;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| quantify_two_phase(&opts).unwrap())
+            .eff_lengths
+    };
+    assert_eq!(run(fasta, "plain"), run(tailed, "tailed"));
 }

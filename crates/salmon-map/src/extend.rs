@@ -42,7 +42,7 @@ use sshash_lib::dispatch_on_k;
 
 use salmon_core::{RefProvider, RefView};
 
-use crate::align::revcomp;
+use crate::align::{revcomp, revcomp_into};
 use crate::chain::chain_mems;
 use crate::collect::{project_raw_hits, MappingCandidate, MemCollectorConfig};
 use crate::mem::Mem;
@@ -303,6 +303,8 @@ struct UnimemScratch {
     flat: Vec<(u32, bool, Mem)>,
     grouper: TidGrouper,
     merged: Vec<Mem>,
+    /// the read's reverse complement, reused across reads
+    rc: Vec<u8>,
 }
 
 thread_local! {
@@ -362,7 +364,6 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
     cfg: &MemCollectorConfig,
 ) -> Vec<MappingCandidate> {
     let read_len = read.len() as i32;
-    let rc = revcomp(read);
     let mut chain_cfg = cfg.chain.clone();
     chain_cfg.seed_len = k;
 
@@ -371,7 +372,10 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
             flat,
             grouper,
             merged,
+            rc,
         } = &mut *cell.borrow_mut();
+        revcomp_into(read, rc);
+        let rc: &[u8] = rc;
         flat.clear();
         // The previous (non-skipped) raw hit: (contig id, orientation on the
         // contig, per-orientation uni-MEM cache, span index of the first
@@ -407,7 +411,7 @@ pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
                 } else {
                     read_len - (*read_pos + k)
                 };
-                let query: &[u8] = if rp.is_fw { read } else { &rc };
+                let query: &[u8] = if rp.is_fw { read } else { rc };
                 let seed = Mem::new(rs, rp.pos as i32, k);
                 let e = extend_mem_within(
                     query,

@@ -23,7 +23,9 @@ Useful knobs:
   score.
 - `--ma / --mp / --go / --ge` — match score, mismatch penalty, gap-open and
   gap-extend penalties.
-- `--allowDovetail` — admit dovetailed (short-insert) fragments.
+- `--allowDovetail` — pair every inward dovetail (short-insert mates that
+  extend past each other's 5′ end). Without it, a dovetail whose overhang is at
+  most 32 bases still pairs, with the overhanging adapter bases soft-clipped.
 - `--orphanChainSubThresh`, `--postMergeChainSubThresh` — chain-pruning
   thresholds applied before alignment (see the note below).
 

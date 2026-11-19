@@ -407,3 +407,71 @@ fn bias_model_shapes_are_recorded() {
     );
     assert_eq!(meta(&tuned)["gc_bias_bins"], 120, "30 GC x 4 conditional");
 }
+
+/// Only proper pairs feed the observed fragment-GC model, so single-end reads
+/// leave it empty. A ratio over that flat table used to "correct" every
+/// effective length by the expected model alone, with `gc_bias_correct: true`.
+/// With nothing observed, `--gcBias` must leave the numbers untouched and say so.
+#[test]
+fn single_end_gc_bias_without_observations_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (index, r1, _) = fixture(dir.path());
+    {
+        let mode: &[&str] = &[];
+        let run = |extra: &[&str], out: &Path| -> String {
+            let o = Command::new(SALMON)
+                .args(["quant", "-i"])
+                .arg(&index)
+                .args(["-l", "U", "-r"])
+                .arg(&r1)
+                .args(["-p", "2"])
+                .args(mode)
+                .args(extra)
+                .arg("-o")
+                .arg(out)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{mode:?} {extra:?}");
+            String::from_utf8_lossy(&o.stderr).into_owned()
+        };
+        let plain = dir.path().join("plain");
+        let gc = dir.path().join("gc");
+        run(&[], &plain);
+        let log = run(&["--gcBias"], &gc);
+        assert!(
+            log.contains("no paired fragment was observed"),
+            "{mode:?}: {log}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(plain.join("quant.sf")).unwrap(),
+            std::fs::read_to_string(gc.join("quant.sf")).unwrap(),
+            "{mode:?}: --gcBias with no observation must not change quant.sf"
+        );
+        assert_eq!(meta(&gc)["gc_bias_correct"], false, "{mode:?}");
+    }
+}
+
+/// `--skipQuant --numBootstraps 30` draws no samples, yet `samp_type` read the
+/// requested count and said "bootstrap" next to `num_bootstraps: 0`; tximport
+/// keys off the pair (COMBINE-lab/salmon#1314).
+#[test]
+fn samp_type_says_none_when_no_samples_are_drawn() {
+    let dir = tempfile::tempdir().unwrap();
+    let (index, r1, r2) = fixture(dir.path());
+    let out = dir.path().join("q");
+    assert!(Command::new(SALMON)
+        .args(["quant", "-i"])
+        .arg(&index)
+        .args(["-l", "IU", "-1"])
+        .arg(&r1)
+        .arg("-2")
+        .arg(&r2)
+        .args(["-p", "2", "--skipQuant", "--numBootstraps", "30", "-o"])
+        .arg(&out)
+        .status()
+        .unwrap()
+        .success());
+    let m = meta(&out);
+    assert_eq!(m["num_bootstraps"], 0);
+    assert_eq!(m["samp_type"], "none");
+}

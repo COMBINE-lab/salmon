@@ -22,11 +22,15 @@
 //! The output [`ScoredMapping`]s are the read's contribution to the equivalence
 //! class consumed by the inference step.
 
+use ahash::AHashMap;
 use piscem_rs::index::reference_index::ReferenceIndex;
 use piscem_rs::mapping::hit_searcher::HitSearcher;
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
-use crate::align::{align_chain_view as align_chain, align_in_window, AlignConfig};
+use crate::align::{
+    align_chain_clipped_view as align_chain_clipped, align_chain_view as align_chain,
+    find_in_window, AlignConfig, WindowAlignment, WindowScratch,
+};
 use crate::collect::{
     best_per_target, collect_read_mems, consensus_filter, MappingCandidate, MemCollectorConfig,
 };
@@ -47,7 +51,10 @@ pub enum SeedMode {
     #[default]
     UniMem,
 }
-use crate::pair::{extents_dovetail, join_reads_and_filter, PairingConfig};
+use crate::pair::{
+    extents_admissible, extents_clips, fragment_extent, join_reads_and_filter, pair_clips,
+    pair_fragment, PairingConfig,
+};
 use crate::score::{
     finalize_mappings_counted_into, MapScratch, RawMapping, ScoreConfig, ScoredMapping,
 };
@@ -137,6 +144,13 @@ fn collect_candidates<'idx, R: RefProvider>(
     }
 }
 
+/// One chain per `(tid, is_fw)` among the chains that pass the consensus filter.
+/// Filtering first, as the paired path does: a target survives when any of its
+/// chains scores high enough, not only its highest-coverage one.
+fn single_end_candidates(cands: Vec<MappingCandidate>, cf: f32) -> Vec<MappingCandidate> {
+    best_per_target(consensus_filter(cands, cf))
+}
+
 /// Map a single-end read to weighted equivalence-class members.
 pub fn map_single_read<'idx, R: RefProvider>(
     index: &'idx ReferenceIndex,
@@ -169,15 +183,8 @@ pub fn map_single_read_into<'idx, R: RefProvider>(
     cfg: &MapConfig,
     scratch: &mut MapScratch,
 ) {
-    let cands = consensus_filter(
-        best_per_target(collect_candidates(
-            index,
-            hs,
-            refs,
-            read,
-            MATE_BUFFER_UNUSED,
-            cfg,
-        )),
+    let cands = single_end_candidates(
+        collect_candidates(index, hs, refs, read, MATE_BUFFER_UNUSED, cfg),
         cfg.collect.consensus_fraction,
     );
     let had_candidates = !cands.is_empty();
@@ -332,14 +339,19 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                 continue;
             }
             let refseq = refs.ref_view(j.tid);
-            let al = align_chain(r1, refseq, &j.left.as_ref().unwrap().chain, &cfg.align);
-            let ar = align_chain(r2, refseq, &j.right.as_ref().unwrap().chain, &cfg.align);
+            let (l, r) = (j.left.as_ref().unwrap(), j.right.as_ref().unwrap());
+            let (cl, cr) = pair_clips(l, r);
+            let al = align_chain_clipped(r1, refseq, &l.chain, &cfg.align, cl);
+            let ar = align_chain_clipped(r2, refseq, &r.chain, &cfg.align, cr);
             pre.push((k, al, ar));
             if !refs.is_decoy(j.tid) && al.is_some_and(|a| a.valid) && ar.is_some_and(|a| a.valid) {
                 skip_orphans = true;
                 break;
             }
         }
+    }
+    if cfg.recover_orphans {
+        scratch.rescue.new_fragment();
     }
     let mut pre_next = 0;
     for (k, j) in joints.into_iter().enumerate() {
@@ -354,10 +366,13 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                         pre_next += 1;
                         (al, ar)
                     }
-                    _ => (
-                        align_chain(r1, refseq, &l.chain, &cfg.align),
-                        align_chain(r2, refseq, &r.chain, &cfg.align),
-                    ),
+                    _ => {
+                        let (cl, cr) = pair_clips(l, r);
+                        (
+                            align_chain_clipped(r1, refseq, &l.chain, &cfg.align, cl),
+                            align_chain_clipped(r2, refseq, &r.chain, &cfg.align, cr),
+                        )
+                    }
                 };
                 if let (Some(al), Some(ar)) = (al, ar) {
                     if al.valid && ar.valid {
@@ -369,7 +384,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                         // the fragment 3' end, not the reverse mate's leftmost (which
                         // is 3'end - readLen) — fixing a coordinate mismatch between
                         // the observed and expected 3' positional models.
-                        let frag_start = l.proj_start().min(r.proj_start());
+                        let (frag_start, _) = pair_fragment(l, r);
                         let (fw_pos, rc_pos) = if l.is_fw != r.is_fw {
                             (frag_start.max(0), frag_start + j.fragment_len - 1)
                         } else {
@@ -437,7 +452,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                     refs,
                     cfg,
                     j.tid,
-                    &mut scratch.revcomp,
+                    &mut scratch.rescue,
                 );
             }
             MateStatus::PairedEndRight => {
@@ -452,7 +467,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
                     refs,
                     cfg,
                     j.tid,
-                    &mut scratch.revcomp,
+                    &mut scratch.rescue,
                 );
             }
             MateStatus::SingleEnd => {}
@@ -469,7 +484,7 @@ pub fn map_read_pair_into<'idx, R: RefProvider>(
     // otherwise lose its transcript evidence entirely (the decoy pair leaves no
     // surviving non-decoy mapping, so `best_valid` is None and even
     // `--allowDecoyOrphans` cannot rescue it). Instead we keep both and let the
-    // decoy-domination logic in `finalize_mappings_counted` adjudicate
+    // decoy-domination logic in `finalize_mappings_counted_into` adjudicate
     // (default: drop the decoy-dominated transcript orphan; `--allowDecoyOrphans`:
     // keep it), matching C++ salmon's orphan handling on a decoy-aware index.
     if raw
@@ -571,15 +586,8 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
     read: &[u8],
     cfg: &MapConfig,
 ) -> Option<DebugMapping> {
-    let cands = consensus_filter(
-        best_per_target(collect_candidates(
-            index,
-            hs,
-            refs,
-            read,
-            MATE_BUFFER_UNUSED,
-            cfg,
-        )),
+    let cands = single_end_candidates(
+        collect_candidates(index, hs, refs, read, MATE_BUFFER_UNUSED, cfg),
         cfg.collect.consensus_fraction,
     );
     let best = cands.iter().max_by_key(|c| c.chain.covered_read_bases())?;
@@ -614,7 +622,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
     refs: &R,
     cfg: &MapConfig,
     tid: u32,
-    revcomp_buf: &mut Vec<u8>,
+    rescue: &mut RescueScratch,
 ) {
     let Some(anchor_aln) = align_chain(anchor_read, refseq, &anchor.chain, &cfg.align) else {
         return;
@@ -625,8 +633,20 @@ fn push_orphan_or_recovered<R: RefProvider>(
     let is_decoy = refs.is_decoy(tid);
 
     if cfg.recover_orphans {
-        if let Some((partner_score, frag_len)) =
-            recover_mate(partner_read, refseq, anchor, cfg, revcomp_buf)
+        if let Some((partner_score, partner_start, frag_start, frag_len, anchor_score)) =
+            recover_mate(partner_read, refseq, anchor, anchor_is_left, cfg, rescue).and_then(
+                |(ps, pst, fs, fl, clip)| {
+                    // Re-score the anchor over its insert bases when it reads
+                    // past the partner's 5' end.
+                    let a = if clip == (0, 0) {
+                        anchor_aln
+                    } else {
+                        align_chain_clipped(anchor_read, refseq, &anchor.chain, &cfg.align, clip)
+                            .filter(|a| a.valid)?
+                    };
+                    Some((ps, pst, fs, fl, a.score))
+                },
+            )
         {
             // Which physical mate is which. `anchor_is_left` says the anchor is
             // mate 1; otherwise the *rescued* read is mate 1. The rescue searches
@@ -642,22 +662,12 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 !anchor.is_fw
             };
             let mate2_fw = !mate1_fw;
-            // Leftmost base of the fragment and of the recovered partner: a
-            // forward anchor starts the fragment and the partner ends it; a
-            // reverse anchor ends it and the partner starts it.
-            let (frag_start, partner_start) = if anchor.is_fw {
-                let fs = anchor.proj_start();
-                (fs, fs + frag_len - partner_read.len() as i32)
-            } else {
-                let fs = anchor.proj_end() - frag_len;
-                (fs, fs)
-            };
             let anchor_start = anchor.proj_start();
             raw.push(RawMapping {
                 tid,
                 is_fw: mate1_fw,
                 status: MateStatus::PairedEndPaired,
-                score: anchor_aln.score + partner_score,
+                score: anchor_score + partner_score,
                 fragment_len: frag_len,
                 read_len: 0, // recovered proper pair: fragment_len carries the length signal
                 is_decoy,
@@ -668,11 +678,10 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 rc_pos: frag_start + frag_len - 1,
                 // The recovered pair's orientation IS observed: the anchor's
                 // strand is real evidence and the rescued mate is opposite by
-                // construction. Filling it lets the one-pass strand filter judge
-                // recovered pairs the way the deterministic path always has —
-                // the RAD stores both strand bits, so a requant judged these
-                // while one-pass waved them through on `format: None` (#1140,
-                // the #1136 pattern surviving on this one site).
+                // construction. Filling it lets the mapping pass's library-format
+                // tallies judge recovered pairs the way the requant does from the
+                // RAD's strand bits, instead of waving them through on
+                // `format: None` (#1140, the #1136 pattern on this one site).
                 format: Some(salmon_core::observed_paired_format(mate1_fw, mate2_fw)),
                 r1_pos: if anchor_is_left {
                     anchor_start
@@ -686,7 +695,7 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 },
                 r2_fw: mate2_fw,
                 r1_score: if anchor_is_left {
-                    anchor_aln.score
+                    anchor_score
                 } else {
                     partner_score
                 },
@@ -734,47 +743,111 @@ fn push_orphan_or_recovered<R: RefProvider>(
     });
 }
 
+/// Orphan-recovery buffers, reused across fragments.
+#[derive(Debug, Default)]
+pub(crate) struct RescueScratch {
+    revcomp: Vec<u8>,
+    window: Vec<u8>,
+    placements: Placements,
+}
+
+impl RescueScratch {
+    /// Forget the previous fragment's placements.
+    fn new_fragment(&mut self) {
+        if !self.placements.memo.is_empty() {
+            self.placements.memo.clear();
+        }
+        self.placements.dp.forget();
+    }
+}
+
+/// The partner placements already searched for in this fragment. A fragment's
+/// anchor often has the same window on many targets (duplicate transcripts,
+/// isoforms sharing the anchor's exons), and the search is the expensive part
+/// of recovery; its result depends only on the query and the window bases.
+#[derive(Debug, Default)]
+struct Placements {
+    /// keyed by one byte naming the query, followed by the window bases
+    memo: AHashMap<Vec<u8>, Option<WindowAlignment>>,
+    key: Vec<u8>,
+    dp: WindowScratch,
+}
+
+impl Placements {
+    /// [`find_in_window`] of `query` in `window`, memoized per fragment;
+    /// `query_id` must name the query uniquely within the fragment.
+    fn find(
+        &mut self,
+        query_id: u8,
+        query: &[u8],
+        window: &[u8],
+        cfg: &AlignConfig,
+    ) -> Option<WindowAlignment> {
+        self.key.clear();
+        self.key.push(query_id);
+        self.key.extend_from_slice(window);
+        if let Some(&hit) = self.memo.get(self.key.as_slice()) {
+            return hit;
+        }
+        let aln = find_in_window(query, window, cfg, &mut self.dp);
+        self.memo.insert(self.key.clone(), aln);
+        aln
+    }
+}
+
 /// Try to place the partner mate within a fragment-length window of the anchor.
-/// Returns `(partner_alignment_score, fragment_length)` on success. A placement
-/// that normal pairing would reject (too long, or dovetailed) is not a success.
+/// Returns `(partner_alignment_score, partner_start, fragment_start,
+/// fragment_length, anchor_clip)` on success, the fragment running between the
+/// two mates' 5' ends as in `join_reads_and_filter`; `anchor_clip` is the
+/// anchor's read-through to drop when re-scoring it (`(0, 0)` unless dovetailed). A placement that normal pairing would reject
+/// (too long, or dovetailed) is not a success.
 fn recover_mate(
     partner_read: &[u8],
     refseq: RefView<'_>,
     anchor: &MappingCandidate,
+    anchor_is_left: bool,
     cfg: &MapConfig,
-    revcomp_buf: &mut Vec<u8>,
-) -> Option<(i32, i32)> {
+    rescue: &mut RescueScratch,
+) -> Option<(i32, i32, i32, i32, (i32, i32))> {
     let max_frag = cfg.pair.max_fragment_len;
     let reflen = refseq.len() as i32;
-    let mut window = Vec::new();
+    let RescueScratch {
+        revcomp,
+        window,
+        placements,
+    } = rescue;
+    // The query is the partner mate, reverse-complemented when the anchor is
+    // forward; these two bits name it within the fragment.
+    let query_id = (anchor_is_left as u8) << 1 | anchor.is_fw as u8;
     // Projected read extent (may overhang the transcript ends).
     let a_s = anchor.proj_start();
     let a_e = anchor.proj_end();
     let plen = partner_read.len() as i32;
-    let allow_dovetail = cfg.pair.allow_dovetail;
 
-    let (score, frag_len) = if anchor.is_fw {
+    let (score, p_s, p_e) = if anchor.is_fw {
         // The partner lies downstream and maps to the reverse strand.
         let win_start = a_s.max(0);
         let win_end = (a_s + max_frag).min(reflen);
         if win_end <= win_start {
             return None;
         }
-        crate::align::revcomp_into(partner_read, revcomp_buf);
-        let aln = align_in_window(
-            revcomp_buf,
-            refseq.slice(win_start as usize, win_end as usize, &mut window),
+        crate::align::revcomp_into(partner_read, revcomp);
+        let aln = placements.find(
+            query_id,
+            revcomp,
+            refseq.slice(win_start as usize, win_end as usize, window),
             &cfg.align,
         )?;
-        if !aln.valid {
-            return None;
-        }
         // partner ends `end_col` bases past the window start -> fragment length
         let partner_end = win_start + aln.end_col as i32;
-        if !allow_dovetail && extents_dovetail((a_s, a_e), (partner_end - plen, partner_end)) {
+        if !extents_admissible((a_s, a_e), (partner_end - plen, partner_end), &cfg.pair) {
             return None;
         }
-        (aln.score, partner_end - a_s)
+        (
+            aln.score,
+            partner_end - plen,
+            (partner_end, win_start, win_end),
+        )
     } else {
         // The partner lies upstream and maps to the forward strand.
         let win_end = a_e.min(reflen);
@@ -782,22 +855,64 @@ fn recover_mate(
         if win_end <= win_start {
             return None;
         }
-        let aln = align_in_window(
+        let aln = placements.find(
+            query_id,
             partner_read,
-            refseq.slice(win_start as usize, win_end as usize, &mut window),
+            refseq.slice(win_start as usize, win_end as usize, window),
             &cfg.align,
+        )?;
+        let partner_end_abs = win_start + aln.end_col as i32;
+        let partner_start_abs = partner_end_abs - plen;
+        if !extents_admissible((partner_start_abs, partner_end_abs), (a_s, a_e), &cfg.pair) {
+            return None;
+        }
+        (
+            aln.score,
+            partner_start_abs,
+            (partner_end_abs, win_start, win_end),
+        )
+    };
+    let (score, p_s, p_e, win_start, win_end) = (score, p_s, p_e.0, p_e.1, p_e.2);
+    // Delimited by the two 5' ends, like normal pairing (`fragment_extent`): with
+    // dovetails allowed the partner can sit inside the anchor, and the anchor's
+    // bases past the partner's 5' end are read-through, not insert.
+    let (fw, rc) = if anchor.is_fw {
+        ((a_s, a_e), (p_s, p_e))
+    } else {
+        ((p_s, p_e), (a_s, a_e))
+    };
+    let (frag_start, frag_len) = fragment_extent(fw, rc);
+    if !(frag_len > 0 && frag_len <= max_frag) {
+        return None;
+    }
+    // A dovetailed rescue is scored, like a dovetailed pair, over insert bases
+    // only: the partner is re-aligned without its read-through, and the anchor
+    // clip is returned for the caller to re-score the anchor.
+    let (fw_clip, rc_clip) = extents_clips(fw, rc);
+    let (anchor_clip, partner_clip) = if anchor.is_fw {
+        (fw_clip, rc_clip)
+    } else {
+        (rc_clip, fw_clip)
+    };
+    let score = if partner_clip == (0, 0) {
+        score
+    } else {
+        let query: &[u8] = if anchor.is_fw { revcomp } else { partner_read };
+        let kept = &query[partner_clip.0 as usize..query.len() - partner_clip.1 as usize];
+        // Not memoized: the memo key names the full query, and a dovetailed
+        // rescue is rare.
+        let aln = find_in_window(
+            kept,
+            refseq.slice(win_start as usize, win_end as usize, window),
+            &cfg.align,
+            &mut placements.dp,
         )?;
         if !aln.valid {
             return None;
         }
-        let partner_end_abs = win_start + aln.end_col as i32;
-        let partner_start_abs = partner_end_abs - plen;
-        if !allow_dovetail && extents_dovetail((partner_start_abs, partner_end_abs), (a_s, a_e)) {
-            return None;
-        }
-        (aln.score, (a_e - partner_start_abs).max(0))
+        aln.score
     };
-    (frag_len > 0 && frag_len <= max_frag).then_some((score, frag_len))
+    Some((score, p_s, frag_start, frag_len, anchor_clip))
 }
 
 #[cfg(test)]
@@ -822,5 +937,34 @@ mod orphan_as_tests {
             anchor_score - orphan_read1_score(false, anchor_score),
             anchor_score
         );
+    }
+
+    /// Target 0's highest-coverage chain carries a gap penalty that drops it
+    /// below the consensus cutoff, but its other chain clears it. The target
+    /// must survive, as it does for a mate on the paired path.
+    #[test]
+    fn single_end_keeps_target_whose_other_chain_passes_consensus() {
+        use crate::chain::MemChain;
+        use crate::mem::Mem;
+        let cand = |tid, mems, score| MappingCandidate {
+            tid,
+            is_fw: true,
+            chain: MemChain::new(mems, score, true),
+            read_len: 100,
+        };
+        let cands = vec![
+            // coverage 60, score 20 (gapped)
+            cand(0, vec![Mem::new(0, 100, 30), Mem::new(30, 180, 30)], 20.0),
+            // coverage 55, score 55
+            cand(0, vec![Mem::new(0, 500, 55)], 55.0),
+            cand(1, vec![Mem::new(0, 100, 60)], 60.0),
+        ];
+        let kept = single_end_candidates(cands, 0.65);
+        let t0: Vec<f32> = kept
+            .iter()
+            .filter(|c| c.tid == 0)
+            .map(|c| c.chain.score)
+            .collect();
+        assert_eq!(t0, [55.0]);
     }
 }

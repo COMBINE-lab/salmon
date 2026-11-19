@@ -1,36 +1,35 @@
-//! `salmon-quant`: the reads-mode quantification driver.
+//! `salmon-quant`: the reads-mode mapping pass.
 //!
-//! Ties the pipeline together for FASTQ input: parse reads in parallel
-//! (paraseq) → map each fragment ([`salmon_map`]) → accumulate weighted
-//! equivalence classes ([`salmon_eqclass`]) and fragment lengths
-//! ([`salmon_model`]) → compute effective lengths → estimate abundances by EM
-//! ([`salmon_infer`]) → write `quant.sf` and the JSON metadata
-//! (the `output` module).
+//! Turns FASTQ input into an intermediate RAD file: parse reads in parallel
+//! (paraseq) → map each fragment ([`salmon_map`]) → write its placements to
+//! the RAD, while deriving — order-independently — the fragment-length
+//! distribution and library format ([`salmon_model`]), which are baked into
+//! the RAD header together with the run's mapping counters.
+//!
+//! [`map_to_rad`] estimates **no abundances**. Quantification is the second
+//! phase: `salmon_align::quantify_rad` reads the RAD this pass wrote. That
+//! split is what makes `salmon quant` byte-identical at any thread count; the
+//! `salmon` binary's reads-mode driver chains the two phases. (Before 2.12 this
+//! crate also had a one-pass "online" path that quantified during mapping; it
+//! was deprecated in 2.6.0 and removed in 2.12.0.)
 //!
 //! Selective alignment is the default; set [`QuantOptions::sketch`] for the
 //! alignment-free pseudoalignment path.
 //!
 //! # The shape of a run
 //!
-//! [`quantify`] is one long function because a quant run *is* one long sequence
-//! of phases, each depending on the last:
-//!
 //! 1. **Load the index** (optionally without the reference sequence, which is
 //!    only needed for alignment and sequence-dependent bias).
-//! 2. **Map**, in parallel over the input reads. This is the expensive phase and
-//!    the one that populates everything else: equivalence classes, the
-//!    fragment-length distribution, the library-type tally, the observed bias
-//!    models, and any SAM/BAM/RAD output.
-//! 3. **Finalize the models** learned during mapping, and from them compute each
-//!    transcript's effective length.
-//! 4. **Infer** abundances by EM/VBEM over the equivalence classes, optionally
-//!    with a bias-correction round and posterior sampling.
-//! 5. **Write** `quant.sf` and the metadata.
-//!
-//! Bias correction adds a wrinkle to step 4: the bias models must be weighted by
-//! abundance, but abundance is what we are estimating. salmon resolves this by
-//! running a rough EM first, using its output to weight the bias models,
-//! recomputing effective lengths, and then running the real EM.
+//! 2. **Map**, in parallel over the input reads, writing the RAD records and
+//!    any SAM/BAM output, and tallying the order-independent fragment-length /
+//!    library-format accumulator (paired) or the whole-input library-type
+//!    detector (single-end).
+//! 3. **Finalize** the fragment-length distribution and, when bias correction
+//!    was requested, run a short EM over naive equivalence classes for rough
+//!    abundances that seed the requant's bias model.
+//! 4. **Bake** the FLD, library format, counters and seed abundances into the
+//!    RAD header, and write the mapping-pass metadata (what `--skipQuant`
+//!    ships).
 
 mod bam;
 pub mod decode;
@@ -39,7 +38,7 @@ mod output;
 mod processor;
 mod sam;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
@@ -48,13 +47,10 @@ use piscem_rs::io::fastx::{Collection, CollectionType};
 use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 
 use salmon_core::{LibraryFormat, PhaseTimer, ReadType};
-use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::{RefseqLoad, SalmonIndex};
-use salmon_infer::optimize_packed_with_init;
 pub use salmon_infer::{EmAccel, EmOptions, EmStop};
 use salmon_map::MapConfig;
-use salmon_model::dumps::{dump_bias_models_to_file, BiasDump};
-use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
+use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector};
 pub use salmon_rad::ChunkCodec;
 
 use processor::{QuantProcessor, Shared, UnmappedWriter};
@@ -105,6 +101,8 @@ pub struct QuantOptions {
     pub incompat_prior: f64,
     /// write `aux_info/eq_classes.txt.gz` (salmon format: transcript list + index
     /// classes). `dump_eq_weights` additionally writes per-transcript weights.
+    /// The classes are built by the quantification pass, so these are for the
+    /// two-phase driver to forward there; [`map_to_rad`] ignores them.
     pub dump_eq: bool,
     pub dump_eq_weights: bool,
     /// write `aux_info/unmapped_names.txt` (names of unmapped fragments + status)
@@ -120,17 +118,11 @@ pub struct QuantOptions {
     /// compression just keeps up with record production; set it only to
     /// benchmark or to compensate for unusually slow/fast storage.
     pub bam_compress_threads: Option<std::num::NonZeroUsize>,
-    /// write per-fragment mappings to this RAD file (`--writeRad`); sketch or
-    /// selective-alignment profile is chosen from `sketch`. Quantification still
-    /// runs; combine with `skip_quant` to map only.
+    /// an explicit location for the run's RAD (`--writeRad`), which the
+    /// two-phase driver then keeps. [`map_to_rad`] ignores it and writes to the
+    /// path it is given; sketch or selective-alignment profile is chosen from
+    /// `sketch`.
     pub write_rad: Option<PathBuf>,
-    /// `--deterministic` mapping pass: derive the fragment-length distribution and
-    /// library format **order-independently** (integer count histograms over
-    /// proper pairs; see [`salmon_model::DiscreteFld`]) instead of
-    /// the online log-space FLD + prefix detector, then bake them. This makes the
-    /// baked values — and hence the downstream requant — byte-identical across
-    /// thread counts.
-    pub deterministic_fld: bool,
     /// enable sequence-specific bias correction (`--seqBias`)
     pub seq_bias: bool,
     /// enable fragment-GC bias correction (`--gcBias`)
@@ -178,8 +170,6 @@ pub struct QuantOptions {
     /// defaults); forwarded to the deterministic requant, which widens a merely
     /// default single-end prior for the single-end length term.
     pub fld_prior_user_supplied: bool,
-    /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
-    pub forgetting_factor: f64,
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
@@ -189,38 +179,20 @@ pub struct QuantOptions {
     /// fragment-length sampling stride for the GC bias convolution (salmon's
     /// `--biasSpeedSamp`, default 5)
     pub bias_speed_samp: usize,
-    /// online-phase model-training window: the first N fragments train the
-    /// auxiliary models (FLD/bias/error), after which they are fixed (salmon's
-    /// `--numAuxModelSamples`, default 5,000,000)
-    pub num_aux_model_samples: u64,
     /// disable the lower barrier on how short bias correction may make an
     /// effective length (salmon's `--noBiasLengthThreshold`)
     pub no_bias_length_threshold: bool,
-    /// `--initUniform`: start the optimizer from a uniform abundance vector.
-    ///
-    /// In reads mode this is already the only initialization: the offline EM
-    /// always starts uniform, both one-pass and under `--deterministic` (the
-    /// C++ online-blended warm start was deliberately not ported — measured
-    /// not to change the converged estimate, and dropping it removed an
-    /// order-dependent step). The flag is therefore honoured by construction
-    /// here; the one path where it toggles behavior is online alignment mode
-    /// (`-a`), whose EM otherwise warm-starts from the online estimates.
-    pub init_uniform: bool,
     /// number of fragment-GC bins in the GC bias model (salmon's `--numGCBins`,
     /// default 25)
     pub gc_bins: usize,
     /// number of conditioning (context) bins in the GC bias model (salmon's
     /// `--conditionalGCBins`, default 3)
     pub cond_gc_bins: usize,
-    /// skip the abundance estimation (EM + Gibbs/bootstrap) and `quant.sf`,
-    /// emitting only equivalence classes, library type, and metadata
-    /// (salmon's `--skipQuant`)
+    /// stop after the mapping pass, keeping the RAD as the run's output
+    /// (salmon's `--skipQuant`). For the two-phase driver; [`map_to_rad`]
+    /// never estimates abundances, so it ignores this.
     pub skip_quant: bool,
-    /// fragments processed before the auxiliary (FLD) model is folded into the
-    /// online posterior (salmon's `--numPreAuxModelSamples`; salmon's default is
-    /// 1,000,000, this port's prior hardcoded value is 5,000)
-    pub num_pre_aux_model_samples: u64,
-    /// Optional shared progress counters. When `Some`, [`quantify`] reports
+    /// Optional shared progress counters. When `Some`, [`map_to_rad`] reports
     /// processed/mapped fragment counts here as it runs so the caller can drive
     /// a live progress display. `None` (the default) disables sharing.
     pub progress: Option<std::sync::Arc<ProgressCounters>>,
@@ -261,7 +233,6 @@ impl QuantOptions {
             write_bam: None,
             bam_compress_threads: None,
             write_rad: None,
-            deterministic_fld: false,
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
@@ -279,17 +250,13 @@ impl QuantOptions {
             fld_sd: 25.0,
             fld_max: 1000,
             fld_prior_user_supplied: false,
-            forgetting_factor: 0.65,
             sig_digits: 3,
             max_read_occ: 250,
             bias_speed_samp: 5,
-            num_aux_model_samples: 5_000_000,
             no_bias_length_threshold: false,
-            init_uniform: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
-            num_pre_aux_model_samples: processor::NUM_PRE_BURNIN,
             progress: None,
         }
     }
@@ -301,20 +268,17 @@ impl QuantOptions {
 
 pub use salmon_core::{Diagnostic, MissingMetaField};
 
-/// Quantification results (also written to disk by [`write_outputs`]).
+/// Mapping-pass results (also written to disk by [`write_outputs`]): the
+/// counters and provenance that end up in `meta_info.json` and
+/// `lib_format_counts.json`. There are no abundances here — those come from
+/// quantifying the RAD the pass wrote.
 ///
-/// The abundance vectors are indexed by reference id and cover *all* references
-/// including decoys; the output writer selects the rows that belong in
-/// `quant.sf`. The remaining fields are the counters and provenance that end up
-/// in `meta_info.json`.
+/// Per-reference vectors are indexed by reference id and cover *all*
+/// references including decoys.
 #[derive(Debug, Clone)]
-pub struct QuantResult {
+pub struct MapResult {
     pub names: Vec<String>,
     pub lengths: Vec<u32>,
-    pub eff_lengths: Vec<f64>,
-    pub tpm: Vec<f64>,
-    /// estimated read counts per transcript
-    pub counts: Vec<f64>,
     pub num_processed: u64,
     pub num_mapped: u64,
     /// mapped fragments placed as orphans (only one mate of a pair mapped)
@@ -342,11 +306,6 @@ pub struct QuantResult {
     /// `lib_format_counts.json`'s per-format keys and its
     /// concordant/inconsistent/strand-bias derivations.
     pub lib_format_counts: salmon_core::LibFormatCountsArray,
-    /// fragment mass (sum of equivalence-class counts) that could not be assigned
-    /// to any transcript in the final min-alpha redistribution because every
-    /// member of the class was truncated; reported, not rescaled. Normally 0.
-    pub inference_truncated_mass: f64,
-    pub num_eq_classes: usize,
     /// index of the first decoy reference (`None` if the index has no decoys).
     /// The decoy block is `[first_decoy_index, first_decoy_index + num_decoys)`;
     /// any references beyond it are short (sub-`k`, never-seeded) transcripts that
@@ -394,20 +353,11 @@ pub struct QuantResult {
     /// the library type used: the detected format when `-l A`, else the
     /// user-specified one
     pub library_type: String,
-    /// posterior samples (bootstrap or Gibbs), one abundance vector each; empty
-    /// when neither was requested
-    pub bootstraps: Vec<Vec<f64>>,
-    /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
-    pub ambig: (Vec<u64>, Vec<u64>),
-    /// observed/expected bias-model tables for the aux dumps; each component is
-    /// empty unless the corresponding `--seqBias`/`--gcBias`/`--posBias` ran
-    pub bias_dump: BiasDump,
-    /// EM/VBEM convergence: iterations actually run and whether the
-    /// relative-difference criterion was met before `max_iter`
+    /// iterations of the rough bias-seed EM (0 when it did not run)
     pub em_iters: u32,
+    /// whether that seed EM met its convergence criterion (it is cut short on
+    /// purpose, so usually not), and its per-component summary
     pub em_converged: bool,
-    /// how each connected component's iteration ended (see
-    /// [`salmon_infer::ComponentSummary`]); `None` off the component engine
     pub em_components: Option<salmon_infer::ComponentSummary>,
     /// total wall-clock seconds for the quantification call
     pub total_seconds: f64,
@@ -421,11 +371,19 @@ pub struct QuantResult {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Run quantification end-to-end, writing outputs and returning the results.
+/// Map the reads to a RAD file at `rad_path`, baking the fragment-length
+/// distribution, library format, mapping counters and (with bias correction
+/// requested) rough seed abundances into its header, and write the
+/// mapping-pass metadata into `opts.output_dir`.
+///
+/// This estimates **no abundances**: quantify the RAD with
+/// `salmon_align::quantify_rad` for those. [`QuantOptions::write_rad`],
+/// [`QuantOptions::skip_quant`] and the eq-class dump flags describe the whole
+/// run and are for the caller's two-phase driver; this pass ignores them.
 ///
 /// See the module documentation for the phases; the `PhaseTimer` marks below
 /// delimit them in the log.
-pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
+pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
     anyhow::ensure!(
         opts.write_mappings.is_none() || opts.write_bam.is_none(),
         "--writeMappings and --writeBam are mutually exclusive"
@@ -452,17 +410,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let num_refs = salmon.num_refs();
     timer.mark("index_load");
 
-    let eq_builder = EquivalenceClassBuilder::new();
-    // Gaussian-prior fragment length distribution (mean 250, sd 25); empirical
-    // observations from concordant pairs refine it.
+    // The fragment-length prior (mean 250, sd 25 by default). A paired run
+    // replaces it at end of pass with the order-independent `DiscreteFld`
+    // estimate; a single-end run observes no lengths and bakes the prior.
     let mut fld =
         FragmentLengthDistribution::new(1.0, opts.fld_max, opts.fld_mean, opts.fld_sd, 4, 0.5, 1);
-    // Prime the online PMF snapshot from the prior so it is never empty: once
-    // `use_aux` turns on (after the pre-burn-in count) a fragment could otherwise
-    // be processed before the first mini-batch boundary refresh and fall back to a
-    // racy live read. With it primed, every per-fragment read is from a stable
-    // snapshot, keeping exact-duplicate transcripts symmetric.
-    fld.refresh_online();
     // `processed`/`mapped` live in a (possibly caller-shared) `ProgressCounters`
     // so a CLI progress bar can poll them live; the rest are local.
     let progress = opts.progress.clone().unwrap_or_default();
@@ -515,65 +467,64 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         }
         None => None,
     };
-    // RAD sink for `--writeRad` (prelude + file tags written here). Sketch vs
+    // The RAD sink (prelude + file tags written here). Sketch vs
     // selective-alignment profile follows the mapping mode salmon is already in.
-    let mut rad_writer: Option<salmon_rad::RadOutputWriter> = match &opts.write_rad {
-        Some(path) => {
-            let names: Vec<&str> = (0..num_refs).map(|t| salmon.ref_name(t)).collect();
-            let lens: Vec<u32> = (0..num_refs).map(|t| salmon.ref_len(t) as u32).collect();
-            let profile = if opts.sketch {
-                salmon_rad::RadProfile::Sketch
-            } else {
-                salmon_rad::RadProfile::SelectiveAlignment
-            };
-            // Reserve an FLD slot matching the cached log-PMF length (max_val+1).
-            let fld_len = opts.fld_max + 1;
-            Some(
-                salmon_rad::RadOutputWriter::create(
-                    path,
-                    &names,
-                    &lens,
-                    opts.is_paired(),
-                    profile,
-                    fld_len,
-                    opts.rad_codec,
-                    // Identity of the index these mappings were made against, so a
-                    // requant reports the provenance of the run that produced the
-                    // records rather than of whatever index it was handed.
-                    &salmon_rad::WriterProvenance {
-                        mapping_type: if opts.sketch {
-                            salmon_rad::MappingType::Pseudo
-                        } else {
-                            salmon_rad::MappingType::Mapping
-                        },
-                        index: Some(salmon_rad::IndexProvenance {
-                            seq_hash: salmon.info().seq_hash.clone(),
-                            name_hash: salmon.info().name_hash.clone(),
-                            seq_hash512: salmon.info().seq_hash512.clone(),
-                            name_hash512: salmon.info().name_hash512.clone(),
-                            decoy_seq_hash: salmon.info().decoy_seq_hash.clone(),
-                            decoy_name_hash: salmon.info().decoy_name_hash.clone(),
-                            // `None` for an index built before this was
-                            // recorded; the RAD then omits the tag, so a
-                            // requant reports it unknown rather than `false`.
-                            keep_duplicates: salmon.info().keep_duplicates,
-                            // The decoy boundary, so a requant can exclude the
-                            // decoy block from quant.sf as this mode does
-                            // (#1140). The header must carry every reference
-                            // (records index into it), so the boundary is the
-                            // only way a reader can tell decoys apart.
-                            first_decoy_index: salmon.info().first_decoy_index.map(|i| i as u64),
-                            num_decoys: (salmon.info().num_decoys > 0)
-                                .then_some(salmon.info().num_decoys as u64),
-                        }),
-                        // No BAM behind reads; nothing an aligner said to carry.
-                        source_programs: Vec::new(),
+    // An `Option` only so it can be `take`n for finalization after the pass.
+    let mut rad_writer: Option<salmon_rad::RadOutputWriter> = {
+        let path = rad_path;
+        let names: Vec<&str> = (0..num_refs).map(|t| salmon.ref_name(t)).collect();
+        let lens: Vec<u32> = (0..num_refs).map(|t| salmon.ref_len(t) as u32).collect();
+        let profile = if opts.sketch {
+            salmon_rad::RadProfile::Sketch
+        } else {
+            salmon_rad::RadProfile::SelectiveAlignment
+        };
+        // Reserve an FLD slot matching the cached log-PMF length (max_val+1).
+        let fld_len = opts.fld_max + 1;
+        Some(
+            salmon_rad::RadOutputWriter::create(
+                path,
+                &names,
+                &lens,
+                opts.is_paired(),
+                profile,
+                fld_len,
+                opts.rad_codec,
+                // Identity of the index these mappings were made against, so a
+                // requant reports the provenance of the run that produced the
+                // records rather than of whatever index it was handed.
+                &salmon_rad::WriterProvenance {
+                    mapping_type: if opts.sketch {
+                        salmon_rad::MappingType::Pseudo
+                    } else {
+                        salmon_rad::MappingType::Mapping
                     },
-                )
-                .context("opening RAD output")?,
+                    index: Some(salmon_rad::IndexProvenance {
+                        seq_hash: salmon.info().seq_hash.clone(),
+                        name_hash: salmon.info().name_hash.clone(),
+                        seq_hash512: salmon.info().seq_hash512.clone(),
+                        name_hash512: salmon.info().name_hash512.clone(),
+                        decoy_seq_hash: salmon.info().decoy_seq_hash.clone(),
+                        decoy_name_hash: salmon.info().decoy_name_hash.clone(),
+                        // `None` for an index built before this was
+                        // recorded; the RAD then omits the tag, so a
+                        // requant reports it unknown rather than `false`.
+                        keep_duplicates: salmon.info().keep_duplicates,
+                        // The decoy boundary, so a requant can exclude the
+                        // decoy block from quant.sf as this mode does
+                        // (#1140). The header must carry every reference
+                        // (records index into it), so the boundary is the
+                        // only way a reader can tell decoys apart.
+                        first_decoy_index: salmon.info().first_decoy_index.map(|i| i as u64),
+                        num_decoys: (salmon.info().num_decoys > 0)
+                            .then_some(salmon.info().num_decoys as u64),
+                    }),
+                    // No BAM behind reads; nothing an aligner said to carry.
+                    source_programs: Vec::new(),
+                },
             )
-        }
-        None => None,
+            .context("opening RAD output")?,
+        )
     };
     // Auto-detect the library type when requested (`-l A`).
     let auto_detect = LibraryFormat::is_auto(&opts.lib_type);
@@ -591,17 +542,18 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     //
     // `--deterministic` single-end: the prefix would depend on the thread order,
     // and the paired accumulator below has no single-end form, so tally everything.
-    let whole_input_detector = opts.deterministic_fld && !opts.is_paired();
+    let whole_input_detector = !opts.is_paired();
     let detector = Some(if whole_input_detector {
         LibraryTypeDetector::over_whole_input(read_type)
     } else {
         LibraryTypeDetector::new(read_type)
     });
 
-    // `--deterministic`: an order-independent FLD / library-format accumulator,
-    // populated during the mapping pass instead of the online FLD + prefix
-    // detector (see `processor::record_discrete`), then baked at end of pass.
-    let discrete_fld = (opts.deterministic_fld && opts.is_paired())
+    // Paired: an order-independent FLD / library-format accumulator, populated
+    // during the mapping pass (see `processor::record_discrete`), then baked at
+    // end of pass.
+    let discrete_fld = opts
+        .is_paired()
         .then(|| salmon_model::DiscreteFld::new(opts.fld_max));
     // `--deterministic` + bias: also build naive eq-classes during mapping so a
     // rough end-of-mapping EM can bake `initial_abundances` to seed the requant's
@@ -625,79 +577,6 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     };
     let ignore_incompat = opts.incompat_prior <= 0.0;
 
-    // Observed-bias models exist to feed the post-EM bias correction, whose
-    // sole consumer block below is gated `bias_on && !skip_quant`. Match that
-    // gate at construction: a skip-quant pass (--skipQuant, and every
-    // deterministic phase 1 — the requant re-derives observation from the RAD
-    // plus the reference) and a --noLengthCorrection run otherwise paid for
-    // the full GcRank bitvector over the reference concatenation and
-    // per-fragment model updates on the mapping hot path, all discarded
-    // (#1140, computed-but-unused).
-    let observe_bias = !opts.skip_quant && opts.length_correction().is_effective();
-
-    // Shared observed sequence-bias models (merged per-thread) for `--seqBias`.
-    let seqbias_obs = (opts.seq_bias && observe_bias)
-        .then(|| std::sync::Mutex::new((SBModel::new(), SBModel::new())));
-
-    // For `--gcBias`: per-transcript cumulative G+C counts via a single rank
-    // bitvector over the concatenated references (~1 bit/base; salmon's
-    // `--reduceGCMemory`). Benchmarked faster and ~2x leaner than the old dense
-    // `Vec<Vec<u32>>` (4 bytes/base) with effectively identical results, so it
-    // is now the default; `--reduceGCMemory` is accepted as a no-op. `gc_store`
-    // presents per-transcript [`GcView`]s.
-    let gc_rank: Option<salmon_model::GcRank> =
-        (opts.gc_bias && observe_bias).then(|| salmon_model::GcRank::new(salmon.refseq_concat()));
-    let gc_store: Option<salmon_model::GcStore> =
-        gc_rank.as_ref().map(|r| salmon_model::GcStore::Rank {
-            rank: r,
-            offsets: salmon.ref_offsets(),
-        });
-    let gcbias_obs = (opts.gc_bias && observe_bias).then(|| {
-        std::sync::Mutex::new(salmon_model::GcFragModel::new(
-            opts.cond_gc_bins,
-            opts.gc_bins,
-        ))
-    });
-
-    // For `--posBias`: transcript length-class quantiles + per-transcript class,
-    // and the shared observed (5', 3') positional-bias models per length class.
-    let length_quantiles: Option<Vec<u32>> = (opts.pos_bias && observe_bias).then(|| {
-        let lens: Vec<u32> = (0..num_refs).map(|t| salmon.ref_len(t) as u32).collect();
-        salmon_model::compute_length_quantiles(&lens, salmon_model::NUM_LENGTH_CLASSES)
-    });
-    let length_class: Option<Vec<usize>> = length_quantiles.as_ref().map(|q| {
-        (0..num_refs)
-            .map(|t| salmon_model::length_class_index(q, salmon.ref_len(t) as u32))
-            .collect()
-    });
-    let posbias_obs = (opts.pos_bias && observe_bias).then(|| {
-        let mk = || {
-            (0..salmon_model::NUM_LENGTH_CLASSES)
-                .map(|_| salmon_model::SimplePosBias::default())
-                .collect::<Vec<_>>()
-        };
-        std::sync::Mutex::new((mk(), mk()))
-    });
-
-    // Online (dual-phase) inference: when any bias model is collected, develop
-    // running per-transcript abundances during the mapping pass so the observed
-    // bias models are weighted by abundance-aware posteriors (salmon's online
-    // phase), not score-only weights. The offline EM still gives the final
-    // point estimate.
-    // The online estimate runs unconditionally: besides weighting the observed
-    // bias models (when bias correction is on), it provides the abundance-aware
-    // posterior used to train the fragment-length distribution (salmon's
-    // `r < exp(aln.logProb)` acceptance). The offline EM does not read it.
-    let online = {
-        let ref_lens: Vec<u64> = (0..num_refs).map(|t| salmon.ref_len(t)).collect();
-        Some(salmon_infer::OnlineInference::new(
-            &ref_lens,
-            0.05,
-            opts.forgetting_factor,
-            opts.num_aux_model_samples,
-        ))
-    };
-
     // ---- parallel mapping pass (borrows the accumulators) -------------------
     {
         // Built before `Shared` because `Shared` borrows the plan's busy meter,
@@ -718,7 +597,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             opts.decoder,
             decode::engagement_policy(
                 opts.sketch,
-                opts.deterministic_fld && opts.is_paired(),
+                opts.is_paired(),
                 opts.thread_policy.as_deref(),
             )?,
         )?;
@@ -726,42 +605,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let shared = Shared {
             busy: &plan.busy,
             salmon: &salmon,
-            eq: &eq_builder,
-            fld: &fld,
             detector: detector.as_ref(),
             map_cfg: &opts.map_config,
             sketch: opts.sketch,
             sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
-            pre_burnin: opts.num_pre_aux_model_samples,
             skip: SkippingStrategy::Permissive,
-            range_factorization_bins: opts.range_factorization_bins,
             expected_format,
             incompat_prior: opts.incompat_prior,
             ignore_incompat,
-            collect_seqbias: seqbias_obs.is_some(),
-            seqbias_obs: seqbias_obs.as_ref(),
-            collect_gcbias: gcbias_obs.is_some(),
-            cond_gc_bins: opts.cond_gc_bins,
-            gc_bins: opts.gc_bins,
-            gc_store,
-            gcbias_obs: gcbias_obs.as_ref(),
-            collect_posbias: posbias_obs.is_some(),
-            length_class: length_class.as_deref(),
-            posbias_obs: posbias_obs.as_ref(),
-            online: online.as_ref(),
-            paired_lib: opts.is_paired(),
-            model_single_frag_prob: opts.model_single_frag_prob,
-            no_frag_length_dist: opts.no_frag_length_dist,
-            no_length_correction: opts.no_length_correction,
-            // Assemble eq-classes only if something consumes them: the EM (unless
-            // `--skipQuant`) or an eq-class dump. A map-only `--writeRad` run skips
-            // assembly but still trains the FLD (to bake) — see `processor::record`.
-            build_eq: !opts.skip_quant || opts.dump_eq || opts.dump_eq_weights,
-            // The online estimate is consumed only by the EM-bound FLD / bias
-            // weighting; with `--skipQuant` it has no consumer, so train the FLD
-            // deterministically (also makes a baked FLD reproduce on requant).
-            use_online: !opts.skip_quant,
             num_processed,
             num_mapped,
             num_orphan: &num_orphan,
@@ -901,9 +753,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             );
         }
     }
-    // `--deterministic`: replace the (untrained) online FLD with one built ONCE,
-    // deterministically, from the order-independent accumulator, and take the
-    // library format it inferred (overriding the unused prefix detector).
+    // Paired: replace the prior with the FLD built ONCE, deterministically, from
+    // the order-independent accumulator, and take the library format it inferred
+    // (overriding the prefix detector, kept only for the mismatch diagnostic).
     let det_fmt = if let Some(acc) = &discrete_fld {
         let (df, fmt) = acc.finish(opts.fld_mean, opts.fld_sd);
         fld = df;
@@ -924,8 +776,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         tracing::info!("mapped {m} / {p} fragments ({pct:.2}%)");
     }
     timer.mark("mapping");
-    if let Some(sw) = &sam_writer {
-        sw.flush().context("flushing SAM output")?;
+    if let Some(sw) = sam_writer {
+        sw.finish().context("finalizing SAM output")?;
     }
     if let Some(output) = bam_output {
         output.finish().context("finalizing BAM output")?;
@@ -983,79 +835,23 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // truncated-PMF `Σ pmf(l)·(refLen−l+1)` estimate, which falls back to the raw
     // reference length for any transcript shorter than the FLD mean.
     fld.cache();
-    let log_pmf = fld.log_pmf();
     let cond_means = fld.conditional_means();
     let length_correction = opts.length_correction();
-    let mut eff_lengths = vec![0f64; num_refs];
-    for tid in 0..num_refs {
-        eff_lengths[tid] =
-            length_correction.effective_length(&cond_means, salmon.ref_len(tid) as usize);
-    }
+    let eff_lengths: Vec<f64> = (0..num_refs)
+        .map(|tid| length_correction.effective_length(&cond_means, salmon.ref_len(tid) as usize))
+        .collect();
+    timer.mark("eff_length");
 
-    // ---- inference ----------------------------------------------------------
-    //
-    // `finish` drains the concurrent builder into a flat, sorted vector, which is
-    // what makes the class ordering (and hence the EM) reproducible.
-    let mut collapsed = eq_builder.finish();
-    collapsed.update_eff_lengths(&eff_lengths);
-    let num_eq_classes = collapsed.len();
-    timer.mark("eff_length_collapse");
-
-    if opts.dump_eq || opts.dump_eq_weights {
-        let names: Vec<String> = (0..salmon.num_refs())
-            .map(|t| salmon.ref_name(t).to_string())
-            .collect();
-        salmon_eqclass::write_eq_classes(
-            &opts.output_dir,
-            &names,
-            &collapsed,
-            opts.dump_eq_weights,
-        )
-        .context("writing eq_classes.txt.gz")?;
-    }
-    let bias_on =
-        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && length_correction.is_effective();
-    // salmon runs a *single* offline EM: after a short burn-in (`targetIt = 10`
-    // iterations) it corrects effective lengths in place using that early
-    // abundance estimate to weight the expected bias models, then continues the
-    // same alpha vector to convergence. We mirror that: when bias-correcting,
-    // run EM only `bias_seed_em_iters` iterations here to weight the expected
-    // models, then warm-start the single full convergence after correction
-    // (below). Without bias, this is the final EM and runs to convergence.
-    // Avoids a wasteful second full convergence (~20s on the 36M PE set).
-    if !opts.skip_quant {
-        tracing::info!(
-            "estimating abundances ({})",
-            if opts.em.use_vbem { "VBEM" } else { "EM" }
-        );
-    }
-    // The packed CSR layout is built ONCE and reused by every consumer below: the
-    // burn-in EM, the warm-started EM after bias correction, and bootstrap /
-    // Gibbs. `optimize` builds its own internally, so
-    // going through it meant re-copying labels, counts and weights (hundreds of
-    // MB on a human-scale run) two to three times over data that is bit-identical
-    // apart from `combined`, which `refresh_combined` rewrites in place.
-    //
-    // `weights` (the raw conditional weights) is only read by Gibbs, so it is
-    // populated only when Gibbs will actually run.
-    // One resolution of which posterior method (if any) this run will use; the
-    // packed layout and the dispatch below both read it, so the precedence is
-    // stated once rather than restated at each site.
-    let posterior = salmon_infer::PosteriorMethod::resolve(
-        opts.skip_quant,
-        opts.num_bootstraps,
-        opts.num_gibbs_samples,
-    );
-    let mut packed =
-        salmon_infer::PackedEqClasses::from_collapsed_for(&collapsed, num_refs, posterior);
-    let mut em = if opts.skip_quant && want_rough_abund {
-        // `--deterministic` + bias map-only pass: run a SHORT EM on the NAIVE
-        // eq-classes (uniform-weight, with library-incompatible placements dropped
-        // against the resolved type) to produce rough abundances baked as
-        // `initial_abundances` — these seed the requant's bias expected model.
-        // Deliberately under-converged (a rough seed avoids overfitting the bias
-        // model on uncorrected estimates) and computed from the fixed FLD's
-        // effective lengths, so it is deterministic.
+    // ---- rough abundance seed (bias only) -----------------------------------
+    // With bias correction requested, run a SHORT EM on the NAIVE eq-classes
+    // (uniform-weight, with library-incompatible placements dropped against the
+    // resolved type) to produce rough abundances baked as `initial_abundances`
+    // — these seed the requant's bias expected model. Deliberately
+    // under-converged (a rough seed avoids overfitting the bias model on
+    // uncorrected estimates) and computed from the fixed FLD's effective
+    // lengths, so it is deterministic. Otherwise no abundances are estimated
+    // here: quantification happens in the requant pass.
+    let (counts, em_iters, em_converged, em_components) = if want_rough_abund {
         let resolved = expected_format.or(det_fmt);
         let mut naive_collapsed = naive_eq.as_ref().unwrap().finish(resolved);
         naive_collapsed.update_eff_lengths(&eff_lengths);
@@ -1063,299 +859,28 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         ro.min_iter = opts.bias_seed_em_iters;
         ro.max_iter = opts.bias_seed_em_iters;
         ro.min_alpha = 0.0;
-        salmon_infer::optimize(
+        let em = salmon_infer::optimize(
             &naive_collapsed,
             num_refs,
             &ro,
             salmon_infer::EffLens::new(&eff_lengths),
-        )
-    } else if opts.skip_quant {
-        // `--skipQuant`: emit equivalence classes + library type + metadata but
-        // skip the optimizer (and Gibbs/bootstrap below, and quant.sf). Leave
-        // abundances at zero.
-        salmon_infer::EmResult {
-            alphas: vec![0.0; num_refs],
-            iters: 0,
-            converged: true,
-            components: None,
-            dropped_mass: 0.0,
-        }
-    } else if bias_on {
-        let mut pre = opts.em.clone();
-        pre.min_iter = opts.bias_seed_em_iters;
-        pre.max_iter = opts.bias_seed_em_iters;
-        // No min-alpha truncation: these alphas continue into the warm-started
-        // EM, and a zeroed alpha can never recover under the multiplicative
-        // update (salmon keeps one continuous, untruncated vector).
-        pre.min_alpha = 0.0;
-        optimize_packed_with_init(
-            &packed,
-            &pre,
-            true,
-            salmon_infer::InitAlphas::NONE,
-            salmon_infer::EffLens::new(&eff_lengths),
-        )
+        );
+        // Cut short on purpose: its stopping is not a convergence claim.
+        tracing::info!("EM: {} iterations to seed the bias models", em.iters);
+        (em.alphas, em.iters, em.converged, em.components)
     } else {
-        optimize_packed_with_init(
-            &packed,
-            &opts.em,
-            true,
-            salmon_infer::InitAlphas::NONE,
-            salmon_infer::EffLens::new(&eff_lengths),
-        )
+        (vec![0.0; num_refs], 0, true, None)
     };
 
-    // ---- bias correction: re-estimate effective lengths --------------------
-    // Build the expected (background) bias models from the initial abundance
-    // estimate, recompute bias-corrected effective lengths, then re-run
-    // inference. Composes `--seqBias`, `--gcBias`, and `--posBias` in any
-    // combination via the unified convolution (salmon's updateEffectiveLengths).
-    let mut bias_dump = BiasDump::default();
-    if bias_on && !opts.skip_quant {
-        use rayon::prelude::*;
-        // Expected-bias models are built only over quantification targets: decoys
-        // (the contiguous tail at `first_decoy_index`) are never expressed and so
-        // contribute nothing, but a decoy chromosome would otherwise hand one
-        // rayon worker an O(ref_len) sweep over hundreds of Mbp. See issue #1019.
-        let num_targets = salmon.info().first_decoy_index.unwrap_or(num_refs);
-        let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
-        let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
-        // K excludes the leading sequence context only when seq-correcting.
-        let k = if opts.seq_bias {
-            salmon_model::seqbias::CONTEXT_LENGTH
-        } else {
-            1
-        };
-
-        // Sequence-bias observed + expected models.
-        let seq = seqbias_obs.map(|m| {
-            let (mut obs_fw, mut obs_rc) = m.into_inner().unwrap();
-            obs_fw.normalize();
-            obs_rc.normalize();
-            let (exp_fw, exp_rc) = salmon_model::build_expected(
-                num_targets,
-                |t| salmon.ref_seq(t as u32),
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-            );
-            (obs_fw, obs_rc, exp_fw, exp_rc)
-        });
-        if let Some((ofw, orc, efw, erc)) = seq.as_ref() {
-            bias_dump.obs5_seq = ofw.dump().to_vec();
-            bias_dump.obs3_seq = orc.dump().to_vec();
-            bias_dump.exp5_seq = efw.dump().to_vec();
-            bias_dump.exp3_seq = erc.dump().to_vec();
-        }
-        // Precompute the 5'/3' (obs − exp) log-bias tables once; the per-position
-        // factor build in the correction sweep evaluates these instead of
-        // re-evaluating both models per context (~1.4× on that build).
-        let seq_tab = seq.as_ref().map(|(of, or, ef, er)| {
-            (
-                salmon_model::LogBiasTable::new(of, ef),
-                salmon_model::LogBiasTable::new(or, er),
-            )
-        });
-
-        // Fragment-GC observed + expected models -> clamped ratio model.
-        let store = gc_store;
-        let gc_ratio_model = if let Some(m) = gcbias_obs {
-            let mut obs = m.into_inner().unwrap();
-            let mut exp = salmon_model::build_expected_gc(
-                num_targets,
-                |t| salmon.ref_seq(t as u32),
-                |t| store.unwrap().view(t),
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-                fld_low,
-                fld_high,
-                opts.cond_gc_bins,
-                opts.gc_bins,
-                k,
-                opts.bias_speed_samp,
-            );
-            // Capture the (normalized) observed/expected GC tables for the dumps
-            // before gc_ratio consumes them (normalize is idempotent).
-            obs.normalize();
-            exp.normalize();
-            bias_dump.obs_gc = obs.dump().to_vec();
-            bias_dump.exp_gc = exp.dump().to_vec();
-            Some(salmon_model::gc_ratio(
-                &mut obs,
-                &mut exp,
-                salmon_model::gcbias::GC_MAX_RATIO,
-            ))
-        } else {
-            None
-        };
-
-        // Positional-bias observed (finalized) + expected (5'/3' per length class).
-        let pos_models = posbias_obs.map(|m| {
-            let (mut obs_fw, mut obs_rc) = m.into_inner().unwrap();
-            for x in obs_fw.iter_mut().chain(obs_rc.iter_mut()) {
-                x.finalize();
-            }
-            let (exp_fw, exp_rc) = salmon_model::build_expected_pos(
-                num_targets,
-                |t| salmon.ref_len(t) as usize,
-                &em.alphas,
-                &eff_lengths,
-                &fld_cdf,
-                length_quantiles.as_ref().unwrap(),
-                k,
-            );
-            (obs_fw, obs_rc, exp_fw, exp_rc)
-        });
-        if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
-            let masses =
-                |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
-            bias_dump.obs5_pos = masses(ofw);
-            bias_dump.obs3_pos = masses(orc);
-            bias_dump.exp5_pos = masses(efw);
-            bias_dump.exp3_pos = masses(erc);
-        }
-
-        // `--dumpBiasModels` (hidden): write the observed+expected seq/GC/pos
-        // models to a text file for debugging / C++-parity comparison. The output
-        // dir is normally created later by `write_outputs`, so ensure it here.
-        if opts.dump_bias_models {
-            std::fs::create_dir_all(&opts.output_dir)
-                .with_context(|| format!("creating {}", opts.output_dir.display()))?;
-            dump_bias_models_to_file(&opts.output_dir.join("bias_models.txt"), &bias_dump)
-                .context("writing bias_models.txt")?;
-        }
-
-        // Per-worker scratch for the positional-bias factors. Without it each
-        // transcript allocated six `Vec<f64>` of its own length — four for the
-        // projected obs/exp densities and two for the smoothed factors — inside
-        // a `par_iter` over the whole transcriptome. `map_init` hands each rayon
-        // worker one set to refill, so the allocation count goes from six per
-        // transcript to six per worker.
-        #[derive(Default)]
-        struct PosScratch {
-            o5: Vec<f64>,
-            e5: Vec<f64>,
-            o3: Vec<f64>,
-            e3: Vec<f64>,
-            pf: Vec<f64>,
-            pr: Vec<f64>,
-        }
-        let corrected: Vec<f64> = (0..num_refs)
-            .into_par_iter()
-            .map_init(PosScratch::default, |scratch, tid| {
-                // Decoys (the contiguous tail at `first_decoy_index`) are never
-                // quantified or reported, so their bias-corrected effective length
-                // is unused. Skipping them here avoids a second, single-threaded
-                // #1019-style stall: a decoy that catches a few non-decoy-dominated
-                // fragments gets a tiny non-zero alpha, and the per-reference
-                // `corrected_effective_length_full` sweep over a whole genome-decoy
-                // chromosome (up to ~250 Mb) then serializes the entire phase while
-                // the other worker threads sit idle. Mirrors PR #1020's exclusion of
-                // decoys from the expected bias models.
-                if tid >= num_targets || em.alphas[tid] < 1e-8 {
-                    return eff_lengths[tid];
-                }
-                // Only sequence bias reads the bases; the other terms need the
-                // length alone, so `--posBias` needs no sequence held as bytes.
-                let ref_len = salmon.ref_len(tid) as usize;
-                // Per-position 5'/3' positional-bias factors (obs/exp projected).
-                // `project_weights` derives its output length from the slice it is
-                // given, so each buffer is resized to this transcript before use.
-                if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
-                    let lc = length_class.as_ref().unwrap()[tid];
-                    for b in [
-                        &mut scratch.o5,
-                        &mut scratch.e5,
-                        &mut scratch.o3,
-                        &mut scratch.e3,
-                    ] {
-                        // Grows or shrinks to exactly `ref_len`; the fill value is
-                        // irrelevant since `project_weights` overwrites every slot.
-                        b.resize(ref_len, 0.0);
-                    }
-                    ofw[lc].project_weights(&mut scratch.o5);
-                    efw[lc].project_weights(&mut scratch.e5);
-                    orc[lc].project_weights(&mut scratch.o3);
-                    erc[lc].project_weights(&mut scratch.e3);
-                    // additively-smoothed obs/exp (no hard floor; neutral tails)
-                    salmon_model::positional_factor_into(&scratch.o5, &scratch.e5, &mut scratch.pf);
-                    salmon_model::positional_factor_into(&scratch.o3, &scratch.e3, &mut scratch.pr);
-                }
-                let bias = salmon_model::BiasInputs {
-                    seq: seq_tab
-                        .as_ref()
-                        .map(|(f, r)| (f, r, salmon.ref_seq(tid as u32))),
-                    gc: gc_ratio_model
-                        .as_ref()
-                        .map(|g| (g, store.unwrap().view(tid))),
-                    pos: pos_models
-                        .as_ref()
-                        .map(|_| (scratch.pf.as_slice(), scratch.pr.as_slice())),
-                };
-                salmon_model::corrected_effective_length_full(
-                    ref_len,
-                    &fld_cdf,
-                    fld_low,
-                    fld_high,
-                    &bias,
-                    eff_lengths[tid],
-                    opts.bias_speed_samp,
-                    opts.no_bias_length_threshold,
-                )
-            })
-            .collect();
-        eff_lengths = corrected;
-        collapsed.update_eff_lengths(&eff_lengths);
-        // Only the combined weights changed, so patch them into the existing
-        // packed layout rather than rebuilding it.
-        packed.refresh_combined(&collapsed);
-        // Warm-start the single full convergence from the burn-in alphas, as
-        // salmon continues the same vector after its in-loop correction.
-        let warm = std::mem::take(&mut em.alphas);
-        em = optimize_packed_with_init(
-            &packed,
-            &opts.em,
-            true,
-            salmon_infer::InitAlphas::new(&warm),
-            salmon_infer::EffLens::new(&eff_lengths),
-        );
-    }
-    // The min-alpha truncation is applied inside the EM as a mass-preserving
-    // redistribution (see `redistribute_truncated`): the truncated mass flows to
-    // eq-class co-members, so `counts` already sum to `total_count` minus only the
-    // mass in fully-truncated classes (`dropped_mass`, normally 0). No rescale.
-    let inference_truncated_mass = em.dropped_mass;
-    let (em_iters, em_converged) = (em.iters, em.converged);
-    let em_components = em.components.clone();
-    if opts.skip_quant && want_rough_abund {
-        // Cut short on purpose (see above): its stopping is not a convergence claim.
-        tracing::info!("EM: {em_iters} iterations to seed the bias models");
-    } else if let Some(c) = &em_components {
-        let (line, warn) = c.describe(em_iters);
-        if warn {
-            tracing::warn!("{line}");
-        } else {
-            tracing::info!("{line}");
-        }
-    }
-    let counts = em.alphas;
-
-    // Finalize RAD output now that the FLD and abundances are known: bake the
-    // cached FLD (always — exact-parity, single-pass requant) and, when this run
-    // actually quantified, the abundance estimates (a prior for future bias-aware
-    // requant; the precise iteration count to bake is deferred to that work —
-    // likely under-converged to avoid overfitting bias models). `--skipQuant`
-    // leaves `counts` at zero, so only the FLD is baked.
+    // Finalize RAD output now that the FLD is known: bake the cached FLD
+    // (always — exact-parity, single-pass requant) and, with bias requested, the
+    // rough seed abundances.
     if let Some(mut rw) = rad_writer.take() {
-        // Bake the FLD (in `--deterministic` mode this is the order-independent
-        // `DiscreteFld`-built one; otherwise the online-trained FLD) and, when this
-        // run quantified, the abundance estimates (a prior for future bias-aware
-        // requant). `--skipQuant` leaves `counts` at zero, so only the FLD is baked.
+        // The FLD is the order-independent `DiscreteFld`-built one (paired) or
+        // the prior (single-end).
         rw.set_frag_length_dist(fld.log_pmf());
-        // Bake abundances from a full quant, or the rough EM run for `--deterministic`
-        // + bias (its `--skipQuant` map pass) — both seed a requant's bias model.
-        if !opts.skip_quant || want_rough_abund {
+        // The rough seed EM's abundances seed the requant's bias model.
+        if want_rough_abund {
             rw.set_initial_abundances(&counts);
         }
         // Bake the resolved library format so a reader can apply concordance
@@ -1383,71 +908,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         rw.finalize().context("finalizing RAD output")?;
     }
 
-    timer.mark("em_bias");
-
-    // ---- posterior uncertainty (bootstrap / Gibbs) + ambiguity --------------
-    // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
-    let ambig = salmon_infer::ambiguity_counts(&packed);
-    // Same `posterior` the packed layout was built for, so the run cannot decide
-    // it needs Gibbs after the weights it reads were skipped.
-    let bootstraps: Vec<Vec<f64>> = match posterior {
-        salmon_infer::PosteriorMethod::None => Vec::new(),
-        salmon_infer::PosteriorMethod::Bootstrap { replicates } => salmon_infer::bootstrap(
-            &packed,
-            &opts.em,
-            salmon_infer::EffLens::new(&eff_lengths),
-            replicates,
-            0x5A13_0000,
-        ),
-        salmon_infer::PosteriorMethod::Gibbs { samples } => {
-            // Gibbs prior follows the main optimizer (salmon): with VBEM and a
-            // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
-            // 1e-3 per transcript. Under `--perNucleotidePrior` (a VBEM option)
-            // it is `vbPrior` per nucleotide, scaled by effective length,
-            // matching the point estimate.
-            let per_nucleotide = opts.em.use_vbem && opts.em.per_nucleotide_prior;
-            let prior = if per_nucleotide {
-                opts.em.vb_prior
-            } else if opts.em.use_vbem {
-                opts.em.vb_prior.max(1.0)
-            } else {
-                1e-3
-            };
-            let gopts = salmon_infer::GibbsOptions {
-                num_samples: samples,
-                thinning: opts.thinning_factor,
-                prior,
-                // Honour --perNucleotidePrior here as the EM does; hardcoding a
-                // per-transcript prior made the flag a no-op for Gibbs on every
-                // path (#1140, audit D13).
-                per_transcript_prior: !per_nucleotide,
-            };
-            salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, 0x6217_0000)
-        }
-    };
-    timer.mark("posterior");
-
-    // ---- TPM ----------------------------------------------------------------
-    let rates: Vec<f64> = (0..num_refs)
-        .map(|i| {
-            if eff_lengths[i] > 0.0 {
-                counts[i] / eff_lengths[i]
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    let rate_sum: f64 = rates.iter().sum();
-    let tpm: Vec<f64> = rates
-        .iter()
-        .map(|r| {
-            if rate_sum > 0.0 {
-                r / rate_sum * 1e6
-            } else {
-                0.0
-            }
-        })
-        .collect();
+    timer.mark("rad_finalize");
 
     // ---- run diagnostics: bad-input red flags from already-computed aggregates
     // (evaluated once here → no per-fragment cost). Emitted to the log AND to
@@ -1478,22 +939,17 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         }
     }
 
-    let result = QuantResult {
+    let result = MapResult {
         names: (0..num_refs)
             .map(|i| salmon.ref_name(i).to_string())
             .collect(),
         lengths: (0..num_refs).map(|i| salmon.ref_len(i) as u32).collect(),
-        eff_lengths,
-        tpm,
-        counts,
         num_processed: num_processed.load(Ordering::Relaxed),
         num_mapped: num_mapped.load(Ordering::Relaxed),
         num_orphan: num_orphan.load(Ordering::Relaxed),
         num_compatible_fragments: num_frags_compat.load(Ordering::Relaxed),
         num_incompatible_fragments: num_frags_incompat.load(Ordering::Relaxed),
         lib_format_counts: std::array::from_fn(|i| lib_format_counts[i].load(Ordering::Relaxed)),
-        inference_truncated_mass,
-        num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,
         num_decoys: salmon.info().num_decoys,
         keep_duplicates: salmon.info().keep_duplicates,
@@ -1527,9 +983,6 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         index_decoy_seq_hash: salmon.info().decoy_seq_hash.clone(),
         index_decoy_name_hash: salmon.info().decoy_name_hash.clone(),
         library_type,
-        bootstraps,
-        ambig,
-        bias_dump,
         em_iters,
         em_converged,
         em_components,
@@ -1545,12 +998,4 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     Ok(result)
 }
 
-/// Current local time as an asctime-style string (`Wed Jun 10 20:34:58 2026`),
-/// matching salmon's `start_time`/`end_time` format.
-///
-/// Matched exactly because downstream tools parse these fields.
-pub(crate) fn asctime_now() -> String {
-    jiff::Zoned::now()
-        .strftime("%a %b %e %H:%M:%S %Y")
-        .to_string()
-}
+pub(crate) use salmon_core::asctime_now;

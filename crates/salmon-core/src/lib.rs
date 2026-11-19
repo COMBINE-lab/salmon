@@ -64,6 +64,14 @@ pub use error::{Result, SalmonError};
 pub use libtype::{LibraryFormat, ReadOrientation, ReadStrandedness, ReadType};
 pub use mate::MateStatus;
 
+/// Current local time as an asctime-style string (`Wed Jun 10 20:34:58 2026`),
+/// matching salmon's `start_time`/`end_time` format, which downstream tools parse.
+pub fn asctime_now() -> String {
+    jiff::Zoned::now()
+        .strftime("%a %b %e %H:%M:%S %Y")
+        .to_string()
+}
+
 /// Write `path` through a temporary name and rename it into place, so a run
 /// killed mid-write leaves no truncated file under the real name.
 pub fn write_via_rename(

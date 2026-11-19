@@ -157,16 +157,14 @@ fn mode_flag_matrix_end_to_end() {
         String::from_utf8_lossy(&o.stderr)
     );
 
-    // RAD-input mode: --online has no online path to select, and it must not
-    // suppress the inert-knob warning for the online knobs it used to mask;
-    // the RAD-shaping flags have nothing to act on either.
+    // RAD-input mode: the removed online knobs warn as inert, and the
+    // RAD-shaping flags have nothing to act on either.
     let o = salmon(&[
         os("quant"),
         os("--rad"),
         rad.as_os_str(),
         os("-l"),
         os("IU"),
-        os("--online"),
         os("--forgettingFactor"),
         os("0.9"),
         os("--keepRad"),
@@ -175,18 +173,7 @@ fn mode_flag_matrix_end_to_end() {
     ]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let err = String::from_utf8_lossy(&o.stderr).into_owned();
-    assert!(
-        err.contains("--online has no effect in RAD-input mode"),
-        "{err}"
-    );
-    assert!(
-        err.contains("--forgettingFactor"),
-        "--online must not suppress the inert-knob warning in --rad mode: {err}"
-    );
-    assert!(
-        !err.contains("deprecated one-pass quantification path"),
-        "--rad --online must not claim the one-pass path will run: {err}"
-    );
+    assert!(err.contains("--forgettingFactor"), "{err}");
     assert!(err.contains("--keepRad"), "{err}");
 
     // --genome / --juncMissDiscount are genome-projection knobs; without

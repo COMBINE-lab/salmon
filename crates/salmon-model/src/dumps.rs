@@ -96,6 +96,60 @@ pub fn gz_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// gzip `n` byte segments to `path` as one gzip stream that decompresses to
+/// `segment(0) ++ … ++ segment(n - 1)`, compressing segments in parallel (level
+/// 6). Each segment is raw deflate ended by a sync flush, so their
+/// concatenation is one valid deflate stream (pigz's layout); a single-threaded
+/// encoder made this most of the output phase for `--numBootstraps`.
+pub fn write_gz_segments(
+    path: &Path,
+    n: usize,
+    segment: impl Fn(usize, &mut Vec<u8>) + Sync,
+) -> std::io::Result<()> {
+    use flate2::{Compress, Compression, Crc, FlushCompress};
+    use rayon::prelude::*;
+    // Compressed segments held at once; bounds memory, not the result.
+    const BATCH: usize = 64;
+    let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
+    // gzip header: deflate, no flags, no mtime, unknown OS
+    w.write_all(&[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff])?;
+    let mut crc = Crc::new();
+    for start in (0..n).step_by(BATCH) {
+        let parts: Vec<std::io::Result<(Vec<u8>, Crc)>> = (start..(start + BATCH).min(n))
+            .into_par_iter()
+            .map(|i| {
+                let mut raw = Vec::new();
+                segment(i, &mut raw);
+                let mut c = Crc::new();
+                c.update(&raw);
+                let mut z = Compress::new(Compression::new(6), false);
+                let mut out = Vec::with_capacity(raw.len() / 2 + 64);
+                // The flush is complete once all input is in and output room is left.
+                loop {
+                    let done = z.total_in() as usize;
+                    z.compress_vec(&raw[done..], &mut out, FlushCompress::Sync)
+                        .map_err(std::io::Error::other)?;
+                    if z.total_in() as usize == raw.len() && out.len() < out.capacity() {
+                        break;
+                    }
+                    out.reserve(out.capacity().max(4096));
+                }
+                Ok((out, c))
+            })
+            .collect();
+        for part in parts {
+            let (bytes, c) = part?;
+            w.write_all(&bytes)?;
+            crc.combine(&c);
+        }
+    }
+    // An empty final fixed-Huffman block, then the trailer (CRC-32, length mod 2^32).
+    w.write_all(&[0x03, 0x00])?;
+    w.write_all(&crc.sum().to_le_bytes())?;
+    w.write_all(&crc.amount().to_le_bytes())?;
+    w.flush()
+}
+
 /// gzip of a raw little-endian `f64` array.
 ///
 /// "Little-endian" is stated explicitly rather than using the host's byte order,
@@ -206,4 +260,35 @@ pub fn write_aux_bias_dumps(aux_dir: &Path, dump: &BiasDump) -> std::io::Result<
         write_pos_gz(&aux_dir.join("exp3_pos.gz"), &dump.exp3_pos)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    /// The parallel segments must decompress, as one ordinary gzip stream, to
+    /// their plain concatenation: empty input, empty segments, and more
+    /// segments than one batch included.
+    #[test]
+    fn gz_segments_round_trip() {
+        for n in [0usize, 1, 3, 130] {
+            let seg = |i: usize, b: &mut Vec<u8>| {
+                b.extend((0..(i * 977) % 5000).map(|k| ((k * 31 + i) % 251) as u8));
+            };
+            let path =
+                std::env::temp_dir().join(format!("salmon_gzseg_{}_{n}.gz", std::process::id()));
+            write_gz_segments(&path, n, seg).unwrap();
+            let mut want = Vec::new();
+            for i in 0..n {
+                seg(i, &mut want);
+            }
+            let mut got = Vec::new();
+            flate2::read::GzDecoder::new(std::fs::File::open(&path).unwrap())
+                .read_to_end(&mut got)
+                .unwrap();
+            std::fs::remove_file(&path).unwrap();
+            assert_eq!(got, want, "n={n}");
+        }
+    }
 }
