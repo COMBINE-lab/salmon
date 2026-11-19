@@ -16,7 +16,7 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-needletail = "0.7"
+needletail = "0.7.4"
 sha2 = { workspace = true }
 ahash = { workspace = true }
 rapidgzip-core = { workspace = true }

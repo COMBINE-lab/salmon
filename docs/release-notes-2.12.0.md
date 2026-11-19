@@ -378,7 +378,11 @@ Details are under [Changes to results](#other-options-and-modes).
 ## Dependencies
 
 - bramble-rs 0.2.2 (from 0.2.0): when several alignments of a fragment sit at the same positions, mates are paired by `HI`. (#1359)
-- piscem-rs 0.12.4: the paired-end template length no longer adds 1, and `SimpleHit::pair_start()` is new. (#1360)
+- piscem-rs 0.13.0 retains the paired-end template-length and `SimpleHit::pair_start()` fixes from 0.12.4 (#1360), uses an arena for reference names, and improves strict contig walking. The name arena saves about 10.48 MB on the reviewed full GENCODE index; no general speedup is claimed for Salmon's default permissive mapping. Existing indexes remain readable. Rust callers of `RefInfo::names()` now receive an iterator of `&str` instead of `&[String]`.
+- sshash-lib and tiny-dict 0.8.2: lazy streaming minimizers, widened bucket starts, and the empty-skew-partition correctness fix, with existing index formats preserved.
+- cf1-rs 0.6.1: batched small-reference output, reuse of walked unitigs, four-base packing, and MPHF construction selected using the configured soft memory budget. The budget is not an RSS limit; large inputs may use slower streaming construction to reduce memory. Output formats and unitig IDs are unchanged from 0.6.0.
+- ksw2rs 0.3.1 (from 0.2.1): improved exact-score/CIGAR NEON kernels and the fix for the 0.3.0 `KSW_EZ_NO_MAX` slowdown. It also corrects banded traceback and scalar scoring, so affected CIGARs or scalar results can change. Default SIMD score-only results are unchanged. Salmon's usual short score-only extensions are approximately at parity in the upstream measurements; these kernel results are not an end-to-end Salmon speedup claim. Genome projection through bramble-rs 0.2.2 still uses that crate's ksw2rs 0.2.1 dependency.
+- Upstream paraseq 0.6.3 replaces paraseq-temp 0.6.3-pre.1. It includes the fork's named input errors and truncated-FASTQ rejection, and retains resizable worker pools. Downstream libraries sharing parser types with piscem must also use upstream paraseq.
 - libradicl 0.21.2. (#1312)
 - Patch updates to `flate2` 1.1.11, `zstd` 0.14.4, `jiff` 0.2.45 and `sux` 0.15.4. Index files are byte-identical with them. (#1365)
 - Website: Starlight 0.42.9, Astro 7.4.7. (#1310)
