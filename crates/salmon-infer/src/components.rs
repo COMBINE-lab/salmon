@@ -606,20 +606,26 @@ impl CompView<'_> {
         cutoff: f64,
     ) -> (f64, f64) {
         match pull {
-            Some(pl) => self.step_pull::<VB, G>(pl, s, cutoff),
+            Some(pl) => self.step_pull::<VB, G>(pl, s, cutoff, true, None),
             None => self.step_push::<VB, G>(s, cutoff),
         }
     }
 
     /// [`Self::step_push`], parallel: the same terms in the same order.
+    /// Without `fill`, `s.et` already holds the expectations of `s.alpha`.
+    /// With `ahead` (VBEM), the expectations of `s.next` are written there,
+    /// chunk by chunk as [`fill_et`] would fill them, saving the next step
+    /// its own pass.
     fn step_pull<const VB: bool, const G: bool>(
         &self,
         pl: &Pull,
         s: &mut CompState,
         cutoff: f64,
+        fill: bool,
+        ahead: Option<&mut [f64]>,
     ) -> (f64, f64) {
         const CH: usize = L1_CHUNK;
-        if VB {
+        if VB && fill {
             s.et.par_chunks_mut(CH)
                 .zip(s.alpha.par_chunks(CH))
                 .zip(s.prior.par_chunks(CH))
@@ -648,11 +654,17 @@ impl CompView<'_> {
                 }
             });
         let scale = &s.scale;
+        let prior = s.prior;
+        let ahead_chunks: Vec<Option<&mut [f64]>> = match ahead {
+            Some(a) => a.chunks_mut(CH).map(Some).collect(),
+            None => (0..s.next.len().div_ceil(CH)).map(|_| None).collect(),
+        };
         s.next
             .par_chunks_mut(CH)
             .zip(s.alpha.par_chunks(CH))
+            .zip(ahead_chunks)
             .enumerate()
-            .map(|(chunk, (nx, al))| {
+            .map(|(chunk, ((nx, al), ah))| {
                 let mut max_d = f64::NEG_INFINITY;
                 let mut l1 = 0.0f64;
                 for (j, (o, &a_in)) in nx.iter_mut().zip(al).enumerate() {
@@ -674,6 +686,10 @@ impl CompView<'_> {
                     *o = acc;
                     max_d = fold_d(max_d, a_in, acc, cutoff);
                     l1 += (acc - a_in).abs();
+                }
+                if let Some(ah) = ah {
+                    let p0 = chunk * CH;
+                    fill_et(ah, nx, &prior[p0..p0 + nx.len()]);
                 }
                 (max_d, l1)
             })
@@ -1252,6 +1268,9 @@ struct Reduced {
     alpha: Vec<f64>,
     next: Vec<f64>,
     et: Vec<f64>,
+    /// the expectations of `alpha`, when the last step filled them
+    et_ahead: Vec<f64>,
+    ahead: bool,
     scale: Vec<f64>,
     pull: Option<Pull>,
 }
@@ -1305,6 +1324,8 @@ impl Reduced {
             alpha: pick(s.alpha),
             next: vec![0.0; live.len()],
             et: pick(s.et),
+            et_ahead: Vec::new(),
+            ahead: false,
             scale: Vec::new(),
             pull: None,
             live,
@@ -1313,6 +1334,7 @@ impl Reduced {
             let counts = &plan.counts[plan.comp_cls[c]..plan.comp_cls[c + 1]];
             r.pull = Some(r.view(counts, labels, weights).transpose());
             r.scale = vec![0.0; ncls];
+            r.et_ahead = vec![0.0; r.live.len()];
         }
         r
     }
@@ -1351,6 +1373,11 @@ impl Reduced {
             counts,
             singleton: &self.singleton,
         };
+        // `et` keeps this step's expectations (what `settle_dead` reads),
+        // `et_ahead` gets the next step's.
+        if self.ahead {
+            std::mem::swap(&mut self.et, &mut self.et_ahead);
+        }
         let mut s = CompState {
             alpha: &mut self.alpha,
             next: &mut self.next,
@@ -1359,7 +1386,21 @@ impl Reduced {
             changed: true,
             scale: std::mem::take(&mut self.scale),
         };
-        let d = v.step::<true, false>(self.pull.as_ref(), &mut s, set.cutoff);
+        let d = match self.pull.as_ref() {
+            Some(pl) => {
+                let fill = !self.ahead;
+                let d = v.step_pull::<true, false>(
+                    pl,
+                    &mut s,
+                    set.cutoff,
+                    fill,
+                    Some(&mut self.et_ahead),
+                );
+                self.ahead = true;
+                d
+            }
+            None => v.step::<true, false>(None, &mut s, set.cutoff),
+        };
         self.scale = s.scale;
         std::mem::swap(&mut self.alpha, &mut self.next);
         d
@@ -1813,8 +1854,13 @@ mod tests {
 
     /// One component in which every class pairs a strong transcript (with its
     /// own reads) with weak ones, which VBEM drives far below their prior.
-    fn dying_fixture() -> PackedEqClasses {
+    /// `slow` adds a pair of strong transcripts that mix slowly (a large
+    /// shared class), so the component still moves while others are frozen.
+    fn dying_fixture(slow: bool) -> PackedEqClasses {
         let b = EquivalenceClassBuilder::new();
+        if slow {
+            b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 100_000);
+        }
         let (strong, weak) = (41usize, 400usize);
         let num_txps = strong + weak;
         for t in 0..strong {
@@ -1843,11 +1889,48 @@ mod tests {
         PackedEqClasses::from_collapsed(&eq, num_txps)
     }
 
+    /// A reduced component stepped in parallel (with the next expectations
+    /// filled by the pull pass) gives the same bits as stepped serially.
+    #[test]
+    fn a_reduced_component_steps_the_same_in_parallel() {
+        let p = dying_fixture(true);
+        let (init, prior) = start(&p);
+        // Iterated long enough for transcripts to be frozen.
+        let set = Settings {
+            stop: EmStop::Projected,
+            squarem: false,
+            tol: -1.0,
+            max_iter: 1500,
+            ..settings(true, false)
+        };
+        let mut seq = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
+        let got = run(&mut seq, &init, &prior, &set);
+        let mut par = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
+        par.lazy_pull_min = 0;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let par = pool.install(|| {
+            run(
+                &mut par,
+                &init,
+                &prior,
+                &Settings {
+                    parallel: true,
+                    ..set
+                },
+            )
+        });
+        assert_eq!(bits(&got.0), bits(&par.0));
+        assert_eq!(got.1, par.1);
+    }
+
     /// Taking dead transcripts out stops at the same iteration and leaves every
     /// abundance that survives the final truncation where it was.
     #[test]
     fn dead_transcripts_do_not_move_the_result() {
-        let p = dying_fixture();
+        let p = dying_fixture(false);
         let (init, prior) = start(&p);
         let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
         assert_eq!(plan.num_components(), 1);
