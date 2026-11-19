@@ -310,14 +310,14 @@ dependencies = [
 
 [[package]]
 name = "bramble-rs"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e1da606844ed6d72c0872368710dba1cd5bd7f1e64901ada5bedd6ac124d961"
+checksum = "6ccb06a52ffbd853207f6f5d9edb3d3c6ce319427f321755c1453382a05a797d"
 dependencies = [
  "ahash",
  "anyhow",
  "coitrees",
- "ksw2rs 0.2.1",
+ "ksw2rs",
  "needletail",
  "noodles",
 ]
@@ -1450,15 +1450,6 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "ksw2rs"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "174a142b8d417d13b720b26f3b3ead48cb755399e83dc96fbcd5ba19e5b8be01"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -2716,7 +2707,7 @@ dependencies = [
  "ahash",
  "divan",
  "hashbrown 0.17.1",
- "ksw2rs 0.3.1",
+ "ksw2rs",
  "piscem-rs",
  "salmon-core",
  "salmon-index",
