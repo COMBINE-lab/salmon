@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.11.0"
+version = "2.12.0"
 edition = "2021"
 rust-version = "1.91"
 license = "BSD-3-Clause"
@@ -25,15 +25,15 @@ authors = ["Rob Patro and the COMBINE-lab"]
 [workspace.dependencies]
 # internal salmon crates — path for local builds, version for `cargo publish`.
 # bump_and_publish.sh bumps the shared [workspace.package] version, which flows here.
-salmon-core = { path = "crates/salmon-core", version = "2.11.0" }
-salmon-eqclass = { path = "crates/salmon-eqclass", version = "2.11.0" }
-salmon-model = { path = "crates/salmon-model", version = "2.11.0" }
-salmon-index = { path = "crates/salmon-index", version = "2.11.0" }
-salmon-infer = { path = "crates/salmon-infer", version = "2.11.0" }
-salmon-map = { path = "crates/salmon-map", version = "2.11.0" }
-salmon-align = { path = "crates/salmon-align", version = "2.11.0" }
-salmon-quant = { path = "crates/salmon-quant", version = "2.11.0" }
-salmon-rad = { path = "crates/salmon-rad", version = "2.11.0" }
+salmon-core = { path = "crates/salmon-core", version = "2.12.0" }
+salmon-eqclass = { path = "crates/salmon-eqclass", version = "2.12.0" }
+salmon-model = { path = "crates/salmon-model", version = "2.12.0" }
+salmon-index = { path = "crates/salmon-index", version = "2.12.0" }
+salmon-infer = { path = "crates/salmon-infer", version = "2.12.0" }
+salmon-map = { path = "crates/salmon-map", version = "2.12.0" }
+salmon-align = { path = "crates/salmon-align", version = "2.12.0" }
+salmon-quant = { path = "crates/salmon-quant", version = "2.12.0" }
+salmon-rad = { path = "crates/salmon-rad", version = "2.12.0" }
 # error handling
 thiserror = "2"
 anyhow = "1"
@@ -61,10 +61,10 @@ rand_distr = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 # compression
 flate2 = { version = "1", features = ["zlib-rs"] }
-zstd = "0.14.3"
+zstd = "0.14.4"
 # format-sniffing decompression (gzip/BGZF, bzip2, xz, zstd) for user-supplied
 # annotation files; already in the tree via paraseq and piscem-rs.
-niffler = "3"
+niffler = "3.0.2"
 # logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -73,12 +73,11 @@ clap = { version = "4", features = ["derive"] }
 # hashing of reference sequences/names for index provenance
 sha2 = "0.11"
 # COMBINE-lab dependencies, from crates.io.
-cf1-rs = "0.6.0"
-# 0.9.0 brings the adaptive thread broker: `-t` becomes a single execution-slot
-# budget shared between gzip decoding and mapping, solved from live measurement
-# rather than split by a fixed guess. `rapidgzip` enables the parallel decoder
-# that budget is worth dividing in the first place.
-piscem-rs = { version = "0.12.4", features = ["rapidgzip"] }
+cf1-rs = "0.6.1"
+# Published SSHash 0.8.2, arena-backed reference names, and upstream paraseq.
+# `rapidgzip` retains the parallel decoder and exact busy-time accounting used
+# by the adaptive thread broker to share the execution budget with mapping.
+piscem-rs = { version = "0.13.0", features = ["rapidgzip"] }
 # The control law piscem-rs 0.9.0 is built on. Taken directly so salmon can
 # implement `Consumer` for its own mapping pool; must resolve to the same
 # version piscem-rs uses or the trait would not match across the boundary.
@@ -86,10 +85,10 @@ thread-broker = "0.1.0"
 # Named directly only to hold the decoder pool for the run's lifetime; the
 # decoding itself is driven through piscem-rs. Must match the version piscem-rs
 # resolves, or the pool handed to `open_input_pooled` would be a different type.
-rapidgzip-core = "0.3"
+rapidgzip-core = "0.3.1"
 # RAD-format I/O (chunk compression + backpatchable file tags); the `zstd`
 # feature enables zstd-compressed RAD chunks (lz4 is always available).
-libradicl = { version = "0.21.1", default-features = false, features = ["zstd"] }
+libradicl = { version = "0.21.2", default-features = false, features = ["zstd"] }
 
 # dev / test helpers
 tempfile = "3"
@@ -98,21 +97,10 @@ tempfile = "3"
 divan = "0.1"
 
 # io / parsing
-# TEMPORARY: a republication of paraseq's released 0.6.2 plus two fixes offered
-# upstream: a FASTQ cut short inside its last record is an error rather than
-# reading as complete (which is what lets salmon detect truncation in a single
-# read, pipes included), and format errors name their input. `paraseq` is the
-# official crate -- move back once a release includes both. Must match what
-# piscem-rs resolves, or two paraseq copies end up either side of its API.
-#
-# Declared under its real name rather than renamed to `paraseq`: the rename was
-# never needed (the crate's library target is itself named `paraseq`, so
-# `use paraseq::...` works either way) and it made the dependency invisible to
-# tooling. Dependabot's cargo parser skips a renamed manifest entry outright
-# (`next unless name == name_from_declaration(...)`), so this crate reached it
-# only through Cargo.lock, as an indirect dependency no version update would
-# ever be raised for.
-paraseq-temp = { version = "=0.6.3-pre.1", default-features = false }
+# Upstream includes the fork's truncated-FASTQ and named-format-error fixes,
+# plus resizable worker pools. Must match piscem-rs so readers and pools passed
+# through its API have the same types.
+paraseq = { version = "0.6.3", default-features = false }
 
 # Workspace-wide lints. Member crates opt in with `[lints] workspace = true`.
 [workspace.lints.rust]
