@@ -941,6 +941,15 @@ chunk and added up serially in class order, so its abundance is the same
 sum as before. The component drops from 6.4–6.7 s to 5.5–5.8 s, with an
 identical `quant.sf`.
 
+Each M-step of a reduced component used to start with its own parallel pass
+filling the expectations of the current abundances (`fill_et`, about 0.55 s
+over the run). The previous step's pull pass now fills them instead, on the
+same chunks of 2,048 transcripts and with the same function, so the values
+are identical. `settle_dead` still reads the expectations the step used. In
+10 alternated pairs, the component went from a median of 6.21 s to 6.06 s
+(−2.5%, faster in 9 pairs out of 10), with an identical `quant.sf`. Steps
+before the first reduction (about 240 of 3,800) keep their own pass.
+
 **The RAD pass.** libradicl's producer decompresses every lz4 chunk itself
 before it queues it. On the 6.3 GB intermediate RAD of ERR188044 that kept the
 producer busy 75% of the pass, and the 16 workers waited on it about half the
