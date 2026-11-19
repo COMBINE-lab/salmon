@@ -950,6 +950,18 @@ are identical. `settle_dead` still reads the expectations the step used. In
 (−2.5%, faster in 9 pairs out of 10), with an identical `quant.sf`. Steps
 before the first reduction (about 240 of 3,800) keep their own pass.
 
+The two remaining passes of a parallel step now index without bounds checks.
+The scale pass reads `basis[t]` unchecked, as `push_fast` already does:
+every label is below the component's size, which is checked when the plan
+or the reduced layout is built. The pull pass walks each transcript's classes
+and weights as slices, and reads `scale[k]` unchecked: a `Pull` records its
+class count, and every class index is below it by construction. Each part
+was measured on its own (pull slices 6.23 → 5.72 s, the scale gather
+5.45 → 5.21 s, the scale read 5.56 → 5.42 s in medians of 6 alternated
+pairs). Together, in 4 alternated pairs, the component went from a median
+of 6.03 s to 5.29 s (−12%), faster in every pair, with an identical
+`quant.sf`.
+
 **The RAD pass.** libradicl's producer decompresses every lz4 chunk itself
 before it queues it. On the 6.3 GB intermediate RAD of ERR188044 that kept the
 producer busy 75% of the pass, and the 16 workers waited on it about half the

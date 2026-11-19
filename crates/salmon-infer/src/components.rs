@@ -103,8 +103,10 @@ pub(crate) struct ComponentPlan<'p> {
 /// choosing between them is a scheduling decision.
 struct Pull {
     start: Vec<usize>,
+    /// every entry is below `ncls`
     cls: Vec<u32>,
     w: Vec<f64>,
+    ncls: usize,
 }
 
 /// Components with at least this many incidences are stepped in parallel
@@ -587,7 +589,12 @@ impl CompView<'_> {
                 cursor[t] += 1;
             }
         }
-        Pull { start, cls, w }
+        Pull {
+            start,
+            cls,
+            w,
+            ncls: self.counts.len(),
+        }
     }
 
     /// The component's fragments: its multi-transcript class counts, then its
@@ -616,6 +623,7 @@ impl CompView<'_> {
     /// With `ahead` (VBEM), the expectations of `s.next` are written there,
     /// chunk by chunk as [`fill_et`] would fill them, saving the next step
     /// its own pass.
+    #[allow(unsafe_code)]
     fn step_pull<const VB: bool, const G: bool>(
         &self,
         pl: &Pull,
@@ -632,6 +640,7 @@ impl CompView<'_> {
                 .for_each(|((et, al), pr)| fill_et(et, al, pr));
         }
         let basis: &[f64] = if VB { s.et } else { s.alpha };
+        assert!(basis.len() == self.singleton.len());
         s.scale
             .par_chunks_mut(CH)
             .enumerate()
@@ -642,8 +651,13 @@ impl CompView<'_> {
                         self.cls_start[k] - self.base,
                         self.cls_start[k + 1] - self.base,
                     );
-                    let denom =
-                        class_denom::<VB, G>(&self.labels[lo..hi], &self.weights[lo..hi], basis);
+                    // `class_denom`, unchecked as in `push_fast`.
+                    let mut denom = 0.0;
+                    for (&t, &w) in self.labels[lo..hi].iter().zip(&self.weights[lo..hi]) {
+                        // SAFETY: t < n (plan invariant) and basis.len() == n
+                        let e = unsafe { *basis.get_unchecked(t as usize) };
+                        denom += if !VB || !G || e > 0.0 { e * w } else { 0.0 };
+                    }
                     // A class the push step skips is marked NaN, which a valid
                     // scale (a count over a positive denominator) never is.
                     *out = if denom > MIN_EQ_CLASS_WEIGHT {
@@ -654,6 +668,7 @@ impl CompView<'_> {
                 }
             });
         let scale = &s.scale;
+        assert!(scale.len() == pl.ncls);
         let prior = s.prior;
         let ahead_chunks: Vec<Option<&mut [f64]>> = match ahead {
             Some(a) => a.chunks_mut(CH).map(Some).collect(),
@@ -672,12 +687,14 @@ impl CompView<'_> {
                     let b = basis[t];
                     let mut acc = self.singleton[t];
                     if !(VB && G) || b > 0.0 {
-                        for e in pl.start[t]..pl.start[t + 1] {
-                            let inv = scale[pl.cls[e] as usize];
+                        let (lo, hi) = (pl.start[t], pl.start[t + 1]);
+                        for (&k, &w) in pl.cls[lo..hi].iter().zip(&pl.w[lo..hi]) {
+                            // SAFETY: k < pl.ncls (`Pull` invariant) == scale.len()
+                            let inv = unsafe { *scale.get_unchecked(k as usize) };
                             if inv.is_nan() {
                                 continue;
                             }
-                            let v = b * pl.w[e];
+                            let v = b * w;
                             if VB || !v.is_nan() {
                                 acc += v * inv;
                             }
