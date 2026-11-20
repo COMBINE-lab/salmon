@@ -1,0 +1,105 @@
+# Publish a Debian/Ubuntu apt repository for salmon on each release, so users can
+# `apt install salmon` and `apt upgrade` to stay current automatically.
+#
+# On every published stable release this:
+#   1. downloads the prebuilt cargo-dist Linux binaries from the release,
+#   2. packages them into .deb files (amd64 + arm64) with dpkg-deb (no compile),
+#   3. attaches the .deb files to the GitHub release, and
+#   4. publishes a flat apt repository to GitHub Pages (under /apt), regenerating
+#      the Packages/Release indices.
+#
+# One-time setup (maintainer): enable GitHub Pages for this repo (Settings ->
+# Pages -> deploy from the `gh-pages` branch). No secrets are required; the repo
+# is consumed with `[trusted=yes]` (add a Signed-By GPG key later to drop that).
+#
+# Users then run:
+#   echo 'deb [trusted=yes] https://combine-lab.github.io/salmon/apt ./' \
+#     | sudo tee /etc/apt/sources.list.d/salmon.list
+#   sudo apt update && sudo apt install salmon
+name: APT
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package (e.g. v2.1.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  apt:
+    name: Build .deb + publish apt repo
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    steps:
+      - name: Resolve tag/version
+        id: ver
+        run: |
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build .deb packages from the release binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends apt-utils xz-utils >/dev/null
+          mkdir -p debs
+          build_deb() {
+            target="$1"; arch="$2"
+            asset="salmon-cli-${target}.tar.xz"
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir dl --clobber
+            rm -rf "stage-$arch" "pkg-$arch"
+            mkdir -p "stage-$arch" "pkg-$arch/DEBIAN" "pkg-$arch/usr/bin"
+            tar -xJf "dl/$asset" -C "stage-$arch" --strip-components=1
+            install -m 0755 "stage-$arch/salmon" "pkg-$arch/usr/bin/salmon"
+            {
+              echo "Package: salmon"
+              echo "Version: ${VERSION}"
+              echo "Architecture: ${arch}"
+              echo "Maintainer: COMBINE-lab <salmon@cs.umd.edu>"
+              echo "Section: science"
+              echo "Priority: optional"
+              echo "Depends: libc6, libgcc-s1, libstdc++6"
+              echo "Homepage: https://github.com/COMBINE-lab/salmon"
+              echo "Description: Transcript-level quantification from RNA-seq reads"
+              echo " salmon 2.0 is a from-scratch Rust rewrite distributed as a single"
+              echo " binary; same workflow and outputs as before."
+            } > "pkg-$arch/DEBIAN/control"
+            dpkg-deb --root-owner-group --build "pkg-$arch" "debs/salmon_${VERSION}_${arch}.deb"
+          }
+          build_deb "x86_64-unknown-linux-gnu" "amd64"
+          build_deb "aarch64-unknown-linux-gnu" "arm64"
+          ls -l debs
+
+      - name: Attach .deb files to the release
+        if: ${{ github.event_name == 'release' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.ver.outputs.tag }}" debs/*.deb --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Build the flat apt repository
+        run: |
+          set -euo pipefail
+          mkdir -p apt
+          cp debs/*.deb apt/
+          cd apt
+          dpkg-scanpackages --multiversion . > Packages
+          gzip -9c Packages > Packages.gz
+          apt-ftparchive release . > Release
+
+      - name: Publish apt repo to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ github.token }}
+          publish_dir: ./apt
+          destination_dir: apt
+          keep_files: true
