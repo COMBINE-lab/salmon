@@ -751,10 +751,11 @@ struct QuantArgs {
     /// the default `none`.
     #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
     em_accel: EmAccelArg,
-    /// When unaccelerated EM/VBEM stops (expert): `projected` stops each
-    /// connected component once salmon's criterion holds over it and its
-    /// projected remaining movement is small; `global` is salmon ≤ 2.8's rule
-    /// over all transcripts at once, and reproduces its results.
+    /// When unaccelerated EM/VBEM stops (expert): `global` (the default) is
+    /// salmon ≤ 2.8's and 1.x's rule over all transcripts at once; `projected`
+    /// (2.9–2.12's VBEM default) stops each connected component once salmon's
+    /// criterion holds over it and its projected remaining movement is small,
+    /// which is faster but can zero isoforms that `global` supports.
     #[arg(long = "stopRule", value_enum, hide = true)]
     stop_rule: Option<EmStopArg>,
     /// Mean of the fragment-length distribution prior [default: 250].

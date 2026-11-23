@@ -135,15 +135,15 @@ aggregates (no per-fragment cost) and are emitted for every mode — reads,
 ##### `em_components` — per-component convergence
 
 The EM/VBEM iterates each connected component of the equivalence-class graph
-(a set of transcripts linked by shared fragments) on its own. VBEM, the
-default, stops each component once the relative-difference criterion holds
-over it **and** its projected remaining movement — the last step's size over
-`1 − ρ`, with `ρ` its estimated rate of convergence — is below 0.1% of the
-component's fragments. A component whose steps are growing rather than
-shrinking (`ρ ≥ 1`, typically VBEM slowly draining one of two near-identical
-isoforms) stops on the criterion alone, keeping the split salmon ≤ 2.8 and 1.x
-report. Plain EM (`--useEM`) stops all components together, as salmon always
-has.
+(a set of transcripts linked by shared fragments) on its own. By default
+(`global`) all components stop together, at the first iteration at which the
+relative-difference criterion holds over every transcript, as in salmon 1.x.
+Under the expert option `--stopRule projected` (VBEM's default in 2.9–2.12),
+each component stops once the criterion holds over it **and** its projected
+remaining movement — the last step's size over `1 − ρ`, with `ρ` its
+estimated rate of convergence — is below 0.1% of the component's fragments.
+That is faster, but iterating near-identical isoforms further toward VBEM's
+sparse fixpoint can leave well-supported ones at zero.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -302,11 +302,11 @@ fragment is judged before the filter acts on it, so on a stranded `-l` a
 wrong-strand library shows both signals at once: a low
 `compatible_fragment_ratio` explaining a collapsed mapping rate.
 
-`-l A` is likewise resolved from the data in every mode: the mapping pass (reads
-or `-a`) detects from the whole run's records and the quantification pass
-filters against the result, as RAD-input quantification does. (The one-pass
-`--online` path, removed in 2.12.0, instead locked in after a prefix.)
-`expected_format` always reports the resolved type.
+`-l A` is likewise resolved from the data in every mode: the one-pass reads
+modes and online alignment mode sample a prefix with the library-type detector
+(detect, lock in, filter the rest of the run), while `--deterministic` and
+RAD-input quantification detect from the whole run's records and filter the
+quantification pass. `expected_format` always reports the resolved type.
 
 One caveat for alignment input (`-a`): detection treats the reported
 alignments as an unfiltered sample of the library, but they are whatever the

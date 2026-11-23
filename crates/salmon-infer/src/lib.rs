@@ -78,11 +78,15 @@ pub enum EmAccel {
 pub enum EmStop {
     /// Each connected component on its own, once salmon's relative-change
     /// criterion holds over it and its projected remaining movement is below
-    /// 0.1% of its fragments. Default.
-    #[default]
+    /// 0.1% of its fragments. Opt-in (`--stopRule projected`): it iterates
+    /// slowly mixing isoform families closer to VBEM's sparse fixpoint, which
+    /// can drive isoforms that salmon 1.x supports with hundreds of reads to
+    /// zero (trinityrnaseq/trinityrnaseq#1481).
     Projected,
     /// salmon's rule: after `min_iter`, the first iteration at which the
-    /// criterion holds over all transcripts at once. Reproduces salmon ≤ 2.8.
+    /// criterion holds over all transcripts at once. Reproduces salmon ≤ 2.8
+    /// and 1.x. Default.
+    #[default]
     Global,
 }
 
@@ -195,7 +199,7 @@ pub struct EmOptions {
     pub per_nucleotide_prior: bool,
     /// convergence acceleration scheme (default [`EmAccel::None`]).
     pub accel: EmAccel,
-    /// stopping rule of unaccelerated VBEM (default [`EmStop::Projected`])
+    /// stopping rule of unaccelerated VBEM (default [`EmStop::Global`])
     pub vb_stop: EmStop,
     /// stopping rule of unaccelerated plain EM (default [`EmStop::Global`])
     pub em_stop: EmStop,
@@ -213,7 +217,7 @@ impl Default for EmOptions {
             vb_prior: 1e-2,
             per_nucleotide_prior: false,
             accel: EmAccel::None,
-            vb_stop: EmStop::Projected,
+            vb_stop: EmStop::Global,
             em_stop: EmStop::Global,
         }
     }
@@ -775,6 +779,16 @@ fn squarem_loop(
 mod tests {
     use super::*;
     use salmon_eqclass::{EquivalenceClassBuilder, TranscriptGroup};
+
+    /// VBEM and EM both stop on salmon 1.x's global rule unless asked
+    /// otherwise: the projected rule zeroes isoforms Trinity's filter keeps
+    /// (trinityrnaseq/trinityrnaseq#1481).
+    #[test]
+    fn global_stop_is_the_default() {
+        let o = EmOptions::default();
+        assert_eq!((o.vb_stop, o.em_stop), (EmStop::Global, EmStop::Global));
+        assert_eq!(EmStop::default(), EmStop::Global);
+    }
 
     /// Build a collapsed eq-class set and set unit effective lengths.
     ///
