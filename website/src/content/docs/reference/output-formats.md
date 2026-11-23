@@ -139,8 +139,11 @@ The EM/VBEM iterates each connected component of the equivalence-class graph
 default, stops each component once the relative-difference criterion holds
 over it **and** its projected remaining movement — the last step's size over
 `1 − ρ`, with `ρ` its estimated rate of convergence — is below 0.1% of the
-component's fragments. Plain EM (`--useEM`) stops all components together, as
-salmon always has.
+component's fragments. A component whose steps are growing rather than
+shrinking (`ρ ≥ 1`, typically VBEM slowly draining one of two near-identical
+isoforms) stops on the criterion alone, keeping the split salmon ≤ 2.8 and 1.x
+report. Plain EM (`--useEM`) stops all components together, as salmon always
+has.
 
 | Field | Type | Meaning |
 | --- | --- | --- |

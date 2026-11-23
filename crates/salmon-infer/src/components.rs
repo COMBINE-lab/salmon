@@ -1394,7 +1394,11 @@ struct CompEnd {
 /// ratio of successive step sizes over the last [`RATE_WINDOW`] steps (capped
 /// at [`RATE_CAP`]), and `l/(1 − ρ)` must be small next to the component's
 /// fragment count. Fast-mixing components stop where the criterion alone
-/// would; slow ones keep iterating.
+/// would; slow ones keep iterating. A component whose steps are not shrinking
+/// (`ρ ≥ 1`) is not converging to anything the projection can measure: VBEM's
+/// prior is slowly pushing a near-even split of near-identical isoforms to
+/// zero one of them. It stops on the criterion alone, keeping the split
+/// salmon ≤ 2.8 reports.
 ///
 /// A component's iterate depends only on its own data and its stopping test
 /// only on its own step sizes (each summed in a data-defined order), so
@@ -1485,8 +1489,12 @@ fn run_projected_lent(
                 }
                 if d < set.tol {
                     met = true;
-                    let rho = ratios.iter().copied().fold(0.0f64, f64::max).min(RATE_CAP);
-                    if l1 / (1.0 - rho) < PROJECTED_EPS * mass {
+                    let rho = ratios.iter().copied().fold(0.0f64, f64::max);
+                    // Steps not shrinking: VBEM is leaving a near-even split of
+                    // near-identical isoforms for a winner-takes-all corner, not
+                    // approaching a fixpoint, so there is nothing to project.
+                    // Stop on the criterion, as salmon ≤ 2.8 does (Trinity #1481).
+                    if rho >= 1.0 || l1 / (1.0 - rho.min(RATE_CAP)) < PROJECTED_EPS * mass {
                         break 'iterate CompEnd {
                             comp: c,
                             iters: it,
@@ -1962,6 +1970,31 @@ mod tests {
             assert!(err(&got) * 10.0 < err(&global.0), "vb={vb}");
             assert!(err(&got) < PROJECTED_EPS * 100_080.0, "vb={vb}");
         }
+    }
+
+    /// Two isoforms sharing all their reads, one aligning 1% worse: VBEM's
+    /// prior slowly drains the weaker one (each step larger than the last), so
+    /// the projection never shrinks. The projected rule must stop where the
+    /// global one does, not run on until one well-supported isoform is at
+    /// zero (Trinity #1481: isoforms with 70-170 reads under salmon 1.x).
+    #[test]
+    fn projected_stop_keeps_a_diverging_split() {
+        let b = EquivalenceClassBuilder::new();
+        b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 0.99], 300);
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[1000.0, 1000.0]);
+        let p = PackedEqClasses::from_collapsed(&eq, 2);
+        let (init, prior) = start(&p);
+        let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, true);
+        let global = run(&mut plan, &init, &prior, &settings(true, false));
+        let set = Settings {
+            stop: EmStop::Projected,
+            ..settings(true, false)
+        };
+        let (got, iters, converged, _) = run(&mut plan, &init, &prior, &set);
+        assert!(converged);
+        assert!(global.0[1] > 100.0, "{:?}", global.0);
+        assert_eq!((got, iters), (global.0, global.1));
     }
 
     /// A component cut off by `max_iter` is counted with its fragments, and
