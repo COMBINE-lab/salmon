@@ -140,7 +140,8 @@ default, stops each component once the relative-difference criterion holds
 over it **and** its projected remaining movement — the last step's size over
 `1 − ρ`, with `ρ` its estimated rate of convergence — is below 0.1% of the
 component's fragments. Plain EM (`--useEM`) stops all components together, as
-salmon always has.
+salmon always has. `--stopRule global|projected` chooses the rule for either
+optimizer: `global` is the rule of salmon 1.x and ≤ 2.8.
 
 | Field | Type | Meaning |
 | --- | --- | --- |

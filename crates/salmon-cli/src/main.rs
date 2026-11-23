@@ -200,10 +200,11 @@ impl From<EmAccelArg> for EmAccel {
 /// CLI surface for [`EmStop`]: when an unaccelerated EM/VBEM run stops.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum EmStopArg {
-    /// salmon's rule: the whole problem at once (salmon ≤ 2.8).
+    /// Stop all transcripts together at the first iteration where the
+    /// relative-change criterion holds over all of them (salmon 1.x and ≤ 2.8).
     Global,
-    /// Each connected component on its own, once its projected remaining
-    /// movement is small.
+    /// Stop each connected component on its own, once the criterion holds over
+    /// it and its projected remaining movement is small.
     Projected,
 }
 
@@ -217,9 +218,15 @@ impl From<EmStopArg> for EmStop {
 }
 
 /// Apply `--stopRule` to whichever optimizer will run; without it each keeps
-/// its default.
+/// its default. Call after `em.accel` is set: the accelerators have their own
+/// stopping test, so the rule is a no-op there, and that is worth a warning.
 fn apply_stop_rule(em: &mut salmon_quant::EmOptions, rule: Option<EmStopArg>) {
     if let Some(r) = rule {
+        if em.accel != EmAccel::None {
+            tracing::warn!(
+                "--stopRule has no effect with --emAccel: the accelerators use their own stopping test"
+            );
+        }
         em.vb_stop = r.into();
         em.em_stop = r.into();
     }
@@ -751,11 +758,20 @@ struct QuantArgs {
     /// the default `none`.
     #[arg(long = "emAccel", value_enum, default_value_t = EmAccelArg::None)]
     em_accel: EmAccelArg,
-    /// When unaccelerated EM/VBEM stops (expert): `projected` stops each
-    /// connected component once salmon's criterion holds over it and its
-    /// projected remaining movement is small; `global` is salmon ≤ 2.8's rule
-    /// over all transcripts at once, and reproduces its results.
-    #[arg(long = "stopRule", value_enum, hide = true)]
+    /// When EM/VBEM stops iterating [default: projected with VBEM, global with
+    /// --useEM].
+    ///
+    /// `projected` stops each connected component (transcripts linked by
+    /// shared fragments) once salmon's relative-change criterion holds over it
+    /// and its projected remaining movement is below 0.1% of its fragments, so
+    /// each component runs until it converges. `global` stops all transcripts
+    /// together at the first iteration where the criterion holds over all of
+    /// them: salmon 1.x's and ≤ 2.8's rule, kept so 2.8's results can be
+    /// reproduced. It can stop a family of near-identical isoforms at the
+    /// minimum iteration count while its estimates are still drifting, so one
+    /// family's result depends on when the whole run stops, and so on what
+    /// else is quantified with it. Has no effect with --emAccel.
+    #[arg(long = "stopRule", value_enum)]
     stop_rule: Option<EmStopArg>,
     /// Mean of the fragment-length distribution prior [default: 250].
     ///
@@ -3335,6 +3351,28 @@ mod tests {
             Command::Quant(args) => Ok(args),
             _ => unreachable!("parsed a non-quant subcommand"),
         }
+    }
+
+    /// `--stopRule` is a supported option: without it each optimizer keeps its
+    /// own default (VBEM projected, plain EM global), and with it both use the
+    /// rule given.
+    #[test]
+    fn stop_rule_defaults_and_overrides() {
+        let rule_of = |extra: &[&str]| {
+            let mut em = salmon_quant::EmOptions::default();
+            apply_stop_rule(&mut em, quant_args(extra).unwrap().stop_rule);
+            (em.vb_stop, em.em_stop)
+        };
+        assert_eq!(rule_of(&[]), (EmStop::Projected, EmStop::Global));
+        assert_eq!(
+            rule_of(&["--stopRule", "global"]),
+            (EmStop::Global, EmStop::Global)
+        );
+        assert_eq!(
+            rule_of(&["--stopRule", "projected"]),
+            (EmStop::Projected, EmStop::Projected)
+        );
+        assert!(quant_args(&["--stopRule", "componentwise"]).is_err());
     }
 
     use std::path::Path;
