@@ -278,4 +278,8 @@ pub struct EmComponentsMeta {
     pub fraction_reads_at_max_iter: f64,
     /// median, over components, of the iterations each ran
     pub median_iterations: u32,
+    /// `global` only: the relative-change test passed at its first check, at
+    /// the minimum iteration count, while estimates were still moving (logged
+    /// as a warning) — a stop that does not mean the run converged
+    pub stopped_at_min_iter: bool,
 }

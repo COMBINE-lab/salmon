@@ -82,7 +82,8 @@ pub enum EmStop {
     #[default]
     Projected,
     /// salmon's rule: after `min_iter`, the first iteration at which the
-    /// criterion holds over all transcripts at once. Reproduces salmon ≤ 2.8.
+    /// criterion holds over all transcripts at once. salmon 1.x pairs it with
+    /// a `min_iter` of 100 (the CLI does too); salmon 2.0–2.8 used 50.
     Global,
 }
 
