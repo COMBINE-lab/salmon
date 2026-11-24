@@ -33,6 +33,7 @@ xxhash-rust = { workspace = true }
 ensure_simd = { version = "0.1.0", features = ["scalar"] }
 
 [dev-dependencies]
+flate2 = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

@@ -419,7 +419,9 @@ fn compute_ref_hashes(
 ) -> Result<RefHashes> {
     let mut digests = RefDigests::default();
     for path in transcripts {
-        let mut reader = needletail::parse_fastx_file(path)
+        let mut reader = salmon_core::compress::open_maybe_compressed_raw(path)
+            .map_err(anyhow::Error::from)
+            .and_then(fasta_reader)
             .with_context(|| format!("opening {} for hashing", path.display()))?;
         while let Some(rec) = reader.next() {
             let rec = rec.context("reading FASTA record for hashing")?;
@@ -877,30 +879,36 @@ fn is_pure_acgt(seq: &[u8]) -> bool {
 /// only buffer more decoded data ahead of it.
 const MAX_DECODE_THREADS: usize = 4;
 
-/// Open a FASTA (optionally gzipped) for record-by-record reading.
+/// Open a FASTA (optionally compressed) for record-by-record reading.
 ///
 /// A gzipped regular file is decoded in parallel (up to `threads` workers, at
-/// most [`MAX_DECODE_THREADS`]); anything else goes through needletail's own
-/// (serial) decompression.
+/// most [`MAX_DECODE_THREADS`]); anything else is decoded serially by
+/// [`salmon_core::compress`].
 ///
 /// Anything but a regular file (a FIFO, or process substitution such as
-/// `-t <(curl ...)`) is opened exactly once and handed to needletail, which
-/// detects compression from the stream itself: sniffing the magic through a
+/// `-t <(curl ...)`) is opened exactly once, and its compression is detected
+/// from the bytes read from the stream itself: sniffing the magic through a
 /// second open would consume the start of the stream.
 fn open_fasta(path: &Path, threads: usize) -> Result<Box<dyn needletail::FastxReader>> {
     use std::io::Read as _;
+    let opening = || format!("opening {}", path.display());
     if !path.metadata().is_ok_and(|m| m.is_file()) {
-        let file =
-            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        return needletail::parse_fastx_reader(file)
-            .with_context(|| format!("opening {}", path.display()));
+        let mut file = std::fs::File::open(path).with_context(opening)?;
+        let mut head = Vec::with_capacity(5);
+        (&mut file)
+            .take(5)
+            .read_to_end(&mut head)
+            .with_context(opening)?;
+        let stream = salmon_core::compress::maybe_decompress_stream(head, Box::new(file))
+            .with_context(opening)?;
+        return fasta_reader(stream).with_context(opening);
     }
     let mut magic = [0u8; 2];
     let gzipped = std::fs::File::open(path)
         .and_then(|mut f| f.read_exact(&mut magic))
         .is_ok()
         && magic == [0x1f, 0x8b];
-    let reader = if gzipped {
+    if gzipped {
         let decoder = rapidgzip_core::Decoder::builder()
             .decoder_threads(threads.clamp(1, MAX_DECODE_THREADS))
             .build()
@@ -908,11 +916,58 @@ fn open_fasta(path: &Path, threads: usize) -> Result<Box<dyn needletail::FastxRe
         let decoded = decoder
             .open(path)
             .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?;
-        needletail::parse_fastx_reader(decoded)
+        fasta_reader(decoded).with_context(opening)
     } else {
-        needletail::parse_fastx_file(path)
-    };
-    reader.with_context(|| format!("opening {}", path.display()))
+        let stream =
+            salmon_core::compress::open_maybe_compressed_raw(path).with_context(opening)?;
+        fasta_reader(stream).with_context(opening)
+    }
+}
+
+/// Parse an already decompressed FASTA stream, past any leading comment lines
+/// (see [`skip_leading_comments`]).
+fn fasta_reader<'a>(
+    stream: impl std::io::Read + Send + 'a,
+) -> Result<Box<dyn needletail::FastxReader + 'a>> {
+    use std::io::BufRead as _;
+    let mut reader = std::io::BufReader::new(stream);
+    if skip_leading_comments(&mut reader)? && reader.fill_buf()?.first() == Some(&b'@') {
+        anyhow::bail!("`;` comment lines are FASTA syntax, but the records after them are FASTQ");
+    }
+    Ok(needletail::parse_fastx_reader(reader)?)
+}
+
+/// Consume any `;` comment lines and blank lines before the first record, and
+/// say whether there were any.
+///
+/// Some FASTA files open with `;` comment lines, the original Pearson FASTA
+/// convention, e.g. FAIR-bioHeaders metadata written as `;~key: value`.
+/// salmon 1.x skipped them, but needletail picks FASTA or FASTQ from the very
+/// first byte and refuses anything else. Only whole lines are skipped, so a
+/// `>` inside a comment never starts a record, and nothing from the first
+/// record on is touched: a file that already starts with `>` reads exactly as
+/// before. Lines are consumed through the buffer, so a long comment costs no
+/// extra memory.
+fn skip_leading_comments(reader: &mut impl std::io::BufRead) -> std::io::Result<bool> {
+    let mut skipped = false;
+    // Whether the bytes still to come continue a line being skipped.
+    let mut mid_line = false;
+    loop {
+        let buf = reader.fill_buf()?;
+        let Some(&first) = buf.first() else {
+            return Ok(skipped);
+        };
+        if !mid_line && !matches!(first, b';' | b'\n' | b'\r') {
+            return Ok(skipped);
+        }
+        let (n, eol) = match buf.iter().position(|&b| b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (buf.len(), false),
+        };
+        reader.consume(n);
+        mid_line = !eol;
+        skipped = true;
+    }
 }
 
 /// The reference sequence store (`refseq.bin`) as staged during preprocessing,
@@ -1972,6 +2027,70 @@ mod tests {
             writeln!(f, ">{name}\n{seq}").unwrap();
         }
         path
+    }
+
+    /// Leading `;` comment lines and blank lines are skipped whole, in a buffer
+    /// far shorter than a line, and nothing from the first record on is touched.
+    #[test]
+    fn leading_comments_are_skipped_up_to_the_first_record() {
+        use std::io::Read as _;
+        let skip = |input: &[u8]| {
+            let mut reader = std::io::BufReader::with_capacity(4, input);
+            skip_leading_comments(&mut reader).unwrap();
+            let mut rest = Vec::new();
+            reader.read_to_end(&mut rest).unwrap();
+            rest
+        };
+        let body = b">t1 x\nACGT\n;not a comment here\n>t2\nGG\n";
+        let long = format!(";{}\n", "~".repeat(10_000));
+        for head in [
+            &b""[..],
+            b";~schema: x\n;~a: >b\n",
+            b"; crlf\r\n\r\n\n;\n",
+            long.as_bytes(),
+        ] {
+            assert_eq!(skip(&[head, &body[..]].concat()), body);
+        }
+        assert_eq!(skip(b"@r1\nACGT\n+\nIIII\n"), b"@r1\nACGT\n+\nIIII\n");
+        assert_eq!(skip(b";only a comment\n\n"), b"");
+        assert_eq!(skip(b";no newline"), b"");
+        assert_eq!(skip(b""), b"");
+        // Comments belong to FASTA: FASTQ after them is refused, not parsed.
+        assert!(fasta_reader(&b";c\n@r1\nACGT\n+\nIIII\n"[..]).is_err());
+    }
+
+    /// A transcriptome that opens with `;` comment lines (FAIR-bioHeaders
+    /// metadata, say) builds the same index as the same records without them,
+    /// plain or gzipped.
+    #[test]
+    fn leading_comments_do_not_change_the_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plain = write_fasta(tmp.path());
+        let records = std::fs::read(&plain).unwrap();
+        let headed = tmp.path().join("headed.fa");
+        let mut bytes = b";~schema: https://example.org/fht\n;~note: >not a record\n\n".to_vec();
+        bytes.extend_from_slice(&records);
+        std::fs::write(&headed, &bytes).unwrap();
+        let gzipped = tmp.path().join("headed.fa.gz");
+        let mut gz = flate2::write::GzEncoder::new(
+            std::fs::File::create(&gzipped).unwrap(),
+            flate2::Compression::default(),
+        );
+        gz.write_all(&bytes).unwrap();
+        gz.finish().unwrap();
+
+        let index = |fasta: &Path, name: &str| {
+            let out = tmp.path().join(name);
+            let mut opts = IndexBuildOptions::new(vec![fasta.to_path_buf()], out.clone());
+            opts.threads = 1;
+            let info = build(&opts).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            let refseq = std::fs::read(out.join(REFSEQ_FILE)).unwrap();
+            (info.num_refs, info.seq_hash512, info.name_hash512, refseq)
+        };
+        let expected = index(&plain, "plain");
+        assert_eq!(expected.0, 3);
+        assert_eq!(index(&headed, "headed"), expected);
+        assert_eq!(index(&gzipped, "gzipped"), expected);
     }
 
     /// Two records named `t1` gave two `t1` rows in `quant.sf`, which gene maps
