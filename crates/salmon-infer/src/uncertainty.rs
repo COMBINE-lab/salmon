@@ -37,7 +37,7 @@ use rand_pcg::Pcg64Mcg;
 use rayon::prelude::*;
 
 use crate::packed::{PackedEqClasses, MIN_EQ_CLASS_WEIGHT};
-use crate::{run_em_counts, EffLens, EmOptions, InitAlphas};
+use crate::{run_em_counts, BootstrapMode, EffLens, EmAccel, EmOptions, EmStop, InitAlphas};
 
 /// Draw a multinomial count vector: `total` draws over categories with the given
 /// (non-normalized) `weights`, via the conditional-binomial method — `O(k)` in
@@ -96,16 +96,23 @@ fn multinomial_into(total: u64, weights: &[f64], rng: &mut impl Rng, out: &mut V
 
 /// Run `num_bootstraps` multinomial bootstrap replicates. Each resamples the
 /// per-class counts (multinomial over the original counts, `total_count` draws),
-/// runs EM/VBEM to convergence (min 50 iters), and rescales the abundances to sum
-/// to the input total `p.total_count` (the summed equivalence-class counts that
-/// were resampled). The rescale restores the mass the `min_alpha` truncation
-/// below removes, so each replicate sums to exactly what the point estimate does
-/// (`Σ alphas == p.total_count`). We rescale to this *intrinsic* total — not an
-/// externally-computed mapped-fragment counter — so the replicates stay
-/// self-consistent with the resampled input regardless of how (or whether)
-/// `num_mapped` is computed elsewhere. (This is also unconditional, unlike C++'s
-/// mode-gated `useScaledCounts`, which corrects prior-inflated VBEM alphas we do
-/// not have.) Returns one abundance vector per replicate.
+/// optimizes the abundances on the resampled counts as `opts.bootstrap` says
+/// ([`BootstrapMode`]), and finalizes them like the point estimate. Each
+/// replicate sums to the input total `p.total_count` (the summed
+/// equivalence-class counts that were resampled): the finalization
+/// redistributes the mass its `min_alpha` truncation removes. We hold to this
+/// *intrinsic* total — not an externally-computed mapped-fragment counter — so
+/// the replicates stay self-consistent with the resampled input regardless of
+/// how (or whether) `num_mapped` is computed elsewhere. Returns one abundance
+/// vector per replicate.
+///
+/// Under the default [`BootstrapMode::RandomStartEm`], every replicate runs
+/// plain EM from a uniform-random split of the fragments (Dirichlet(1) over the
+/// transcripts), with each component stopping on its own
+/// ([`EmStop::Componentwise`](crate::EmStop::Componentwise)), whichever
+/// optimizer produced the point estimate. Under [`BootstrapMode::Legacy`] it
+/// runs the point estimate's own optimizer (prior, stopping rule, accelerator)
+/// from a uniform start, as salmon ≤ 2.12 did.
 ///
 /// Resampling *classes* rather than individual fragments is what makes this
 /// affordable: a class is a group of identical fragments, so one multinomial draw
@@ -119,6 +126,21 @@ pub fn bootstrap(
 ) -> Vec<Vec<f64>> {
     let sample_weights: Vec<f64> = p.counts.iter().map(|&c| c as f64).collect();
     let total = p.total_count;
+    let random_start = opts.bootstrap == BootstrapMode::RandomStartEm;
+    // The replicates' optimizer. The random-start mode swaps in plain EM with
+    // per-component stopping; the rest (tolerances, caps, truncation) is the
+    // point estimate's.
+    let rep_opts = if random_start {
+        EmOptions {
+            use_vbem: false,
+            accel: EmAccel::None,
+            em_stop: EmStop::Componentwise,
+            ..opts.clone()
+        }
+    } else {
+        opts.clone()
+    };
+    let unit = Gamma::new(1.0, 1.0).expect("Gamma(1, 1)");
     (0..num_bootstraps)
         .into_par_iter()
         .map(|bs| {
@@ -128,29 +150,43 @@ pub fn bootstrap(
             let mut rng =
                 Pcg64Mcg::seed_from_u64(seed ^ (bs as u64).wrapping_mul(0x9E3779B97F4A7C15));
             let resampled = multinomial(total, &sample_weights, &mut rng);
+            // The random start: normalized Gamma(1, 1) draws are a Dirichlet(1)
+            // split, scaled to the resampled total. It is drawn after the
+            // resample, from the same stream, so a replicate is a function of
+            // (seed, index) alone. Its transcripts with no class get no mass at
+            // the first M-step, whatever they start with.
+            let init_vec: Option<Vec<f64>> = random_start.then(|| {
+                let w: Vec<f64> = (0..p.num_txps).map(|_| unit.sample(&mut rng)).collect();
+                let sw: f64 = w.iter().sum();
+                w.iter().map(|x| x / sw * total as f64).collect()
+            });
+            let init = match &init_vec {
+                Some(v) => InitAlphas::new(v),
+                None => InitAlphas::NONE,
+            };
             // Effective lengths reach the replicate EM so `--perNucleotidePrior`
-            // shapes the prior here exactly as it does the point estimate;
-            // passing `None` silently fell back to the flat prior, which made
-            // the flag a no-op inside every replicate (#1140, audit D13).
+            // shapes the prior here exactly as it does the point estimate (when
+            // the replicates run VBEM, i.e. legacy mode); passing `None` silently
+            // fell back to the flat prior, which made the flag a no-op inside
+            // every replicate (#1140, audit D13).
             //
-            // NOTE the argument order: `init_alphas` precedes `eff_lens` and
-            // both are `Option<&[f64]>`, so swapping them type-checks. The
+            // NOTE the argument order: `init_alphas` precedes `eff_lens` and the
+            // two newtypes exist because swapping them used to type-check. The
             // first attempt at this fix did exactly that — the prior stayed
             // flat AND every replicate warm-started from the effective-length
-            // vector. Keep `None` explicit for the uniform start.
+            // vector.
             let (alphas, _, _, _) =
-                run_em_counts(p, &resampled, opts, false, 50, InitAlphas::NONE, eff_lens);
+                run_em_counts(p, &resampled, &rep_opts, false, 50, init, eff_lens);
             // Finalize like the point estimate: truncate the negligible
             // abundances, then redistribute that mass to eq-class co-members via a
             // masked final M-step over the *resampled* counts (no rescale-up). The
             // replicate's `dropped` mass is negligible and not reported (only the
             // point estimate surfaces `inference_truncated_mass`).
             //
-            // Finalizing identically to the point estimate is what makes the
-            // spread interpretable: any systematic difference in post-processing
-            // would show up as bias, not variance.
+            // Finalizing the same way as the point estimate keeps post-processing
+            // from showing up as spread.
             let (alphas, _dropped) =
-                crate::finalize_truncate_redistribute(p, &resampled, alphas, opts, eff_lens);
+                crate::finalize_truncate_redistribute(p, &resampled, alphas, &rep_opts, eff_lens);
             alphas
         })
         .collect()
@@ -683,6 +719,61 @@ mod tests {
         );
     }
 
+    /// Two transcripts no read tells apart: every split of their shared reads
+    /// fits equally well. Replicates from one fixed start split them the same
+    /// way every time, showing no uncertainty at all; random-start EM
+    /// replicates land in different places, showing that the data leave the
+    /// split open. Either way the resampled pair total is conserved.
+    #[test]
+    fn random_start_replicates_show_what_the_data_cannot_split() {
+        let p = packed(&[(vec![0, 1], 1000), (vec![2], 200)], 3);
+        let spread = |mode| {
+            let opts = EmOptions {
+                use_vbem: true,
+                bootstrap: mode,
+                ..EmOptions::default()
+            };
+            let bs = bootstrap(&p, &opts, EffLens::NONE, 40, 0xB007);
+            for b in &bs {
+                assert!(((b[0] + b[1] + b[2]) - 1200.0).abs() < 1e-6);
+            }
+            bs.iter().map(|b| (b[0] - b[1]).abs()).sum::<f64>() / bs.len() as f64
+        };
+        let legacy = spread(crate::BootstrapMode::Legacy);
+        let random = spread(crate::BootstrapMode::RandomStartEm);
+        assert!(
+            legacy < 1e-6,
+            "fixed start: the pair is always split evenly ({legacy})"
+        );
+        assert!(
+            random > 100.0,
+            "random starts must spread the split ({random})"
+        );
+    }
+
+    /// Random starts come from each replicate's own stream, so replicates
+    /// reproduce exactly and do not depend on the thread count.
+    #[test]
+    fn random_start_replicates_are_thread_count_independent() {
+        let p = packed(
+            &[
+                (vec![0, 1], 500),
+                (vec![1, 2], 300),
+                (vec![0], 40),
+                (vec![3], 90),
+            ],
+            4,
+        );
+        let run = |n| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .unwrap()
+                .install(|| bootstrap(&p, &EmOptions::default(), EffLens::NONE, 12, 5))
+        };
+        assert_eq!(run(1), run(8));
+    }
+
     /// Gibbs samples are stochastic, so this checks the invariant that must hold
     /// for every sample — the scale — rather than the values themselves.
     #[test]
@@ -779,9 +870,12 @@ mod per_nucleotide_prior_reaches_replicates {
         eq.update_eff_lengths(&eff_lens);
         let packed = PackedEqClasses::from_collapsed(&eq, 2);
 
+        // The legacy replicates run the point estimate's VBEM, with its prior;
+        // the default random-start replicates run plain EM, which has none.
         let mut opts = EmOptions {
             use_vbem: true,
             vb_prior: 10.0,
+            bootstrap: crate::BootstrapMode::Legacy,
             ..EmOptions::default()
         };
 

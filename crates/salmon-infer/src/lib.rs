@@ -85,6 +85,41 @@ pub enum EmStop {
     /// criterion holds over all transcripts at once. salmon 1.x pairs it with
     /// a `min_iter` of 100 (the CLI does too); salmon 2.0–2.8 used 50.
     Global,
+    /// Each connected component on its own, once the relative-change
+    /// criterion holds over its transcripts (after `min_iter`), without the
+    /// projection [`EmStop::Projected`] adds. The test of [`EmStop::Global`],
+    /// applied per component: a settled component stops instead of iterating
+    /// until the slowest one in the run passes.
+    ///
+    /// Bootstrap replicates use it (see [`BootstrapMode::RandomStartEm`]). From
+    /// a random start, plain EM barely moves along directions the data do not
+    /// determine, which is what the replicates should show; the projection would
+    /// keep iterating along them, at many times the cost, for the same result.
+    Componentwise,
+}
+
+/// How bootstrap replicates are optimized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BootstrapMode {
+    /// Each replicate runs plain EM from a random start (a uniform-random split
+    /// of the fragments over the transcripts), every component stopping on its
+    /// own ([`EmStop::Componentwise`]), whichever optimizer produced the point
+    /// estimate. Default.
+    ///
+    /// Resampling the counts and re-running the main optimizer from one fixed
+    /// start shows how the estimate moves with the counts, but not how weakly
+    /// the data determine it. VBEM's sparsity zeroes some truly expressed
+    /// isoforms that have almost no unique reads; it zeroes them again in every
+    /// replicate, so the replicates call them certainly absent. Plain EM's
+    /// objective has no spurious optima, so from different starts its
+    /// replicates differ only along directions the data leave open. (Random
+    /// starts under VBEM would instead pick among its many sparse optima at
+    /// random, spreading replicates where the data are informative.)
+    #[default]
+    RandomStartEm,
+    /// salmon ≤ 2.12: each replicate runs the point estimate's own optimizer,
+    /// with its prior, stopping rule and accelerator, from a uniform start.
+    Legacy,
 }
 
 /// Effective lengths, one per transcript, or their absence.
@@ -200,6 +235,9 @@ pub struct EmOptions {
     pub vb_stop: EmStop,
     /// stopping rule of unaccelerated plain EM (default [`EmStop::Global`])
     pub em_stop: EmStop,
+    /// how bootstrap replicates are optimized (default
+    /// [`BootstrapMode::RandomStartEm`])
+    pub bootstrap: BootstrapMode,
 }
 
 impl Default for EmOptions {
@@ -216,6 +254,7 @@ impl Default for EmOptions {
             accel: EmAccel::None,
             vb_stop: EmStop::Projected,
             em_stop: EmStop::Global,
+            bootstrap: BootstrapMode::RandomStartEm,
         }
     }
 }

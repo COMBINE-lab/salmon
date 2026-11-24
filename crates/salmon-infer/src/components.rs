@@ -127,7 +127,7 @@ impl<'p> ComponentPlan<'p> {
         };
         match stop {
             EmStop::Global => Self::with_pull_min(p, counts, pull_min, false),
-            EmStop::Projected => Self {
+            EmStop::Projected | EmStop::Componentwise => Self {
                 lazy_pull_min: pull_min,
                 ..Self::with_pull_min(p, counts, usize::MAX, true)
             },
@@ -809,7 +809,8 @@ pub(crate) struct Settings {
     /// skips, always taken, are compiled out (bit-identical either way).
     pub(crate) guard_zero_et: bool,
     /// When a run stops: [`EmStop::Global`] runs [`run_tiled`],
-    /// [`EmStop::Projected`] [`run_projected`].
+    /// [`EmStop::Projected`] and [`EmStop::Componentwise`] [`run_projected`]
+    /// (the latter without its projection test).
     pub(crate) stop: EmStop,
 }
 
@@ -845,6 +846,7 @@ impl ComponentSummary {
             stop_rule: match self.stop {
                 EmStop::Projected => "projected",
                 EmStop::Global => "global",
+                EmStop::Componentwise => "componentwise",
             }
             .to_string(),
             num_components: self.num_components,
@@ -875,7 +877,7 @@ impl ComponentSummary {
                 "EM: {} iterations over {} connected components (stopping rule: global)",
                 iters, self.num_components
             ),
-            EmStop::Projected => format!(
+            EmStop::Projected | EmStop::Componentwise => format!(
                 "EM: {} connected components, each iterated until it converged \
                  (median {} iterations, most {})",
                 self.num_components, self.median_iters, iters
@@ -1047,7 +1049,7 @@ pub(crate) fn run(
             };
             (it, ok, summary)
         }
-        EmStop::Projected => {
+        EmStop::Projected | EmStop::Componentwise => {
             let ends = run_projected(plan, &mut states, set);
             let mut iters: Vec<u32> = ends.iter().map(|e| e.iters).collect();
             iters.sort_unstable();
@@ -1509,7 +1511,8 @@ fn run_projected_lent(
                 if d < set.tol {
                     met = true;
                     let rho = ratios.iter().copied().fold(0.0f64, f64::max).min(RATE_CAP);
-                    if l1 / (1.0 - rho) < PROJECTED_EPS * mass {
+                    // Componentwise stops on the criterion alone.
+                    if set.stop == EmStop::Componentwise || l1 / (1.0 - rho) < PROJECTED_EPS * mass {
                         break 'iterate CompEnd {
                             comp: c,
                             iters: it,
@@ -2109,6 +2112,55 @@ mod tests {
         let (iters, summary) = run_one(&faster, 5);
         assert!(iters > 5);
         assert!(!summary.stopped_at_min_iter, "{summary:?}");
+    }
+
+    /// Componentwise is the global test applied per component: a component
+    /// that settled at once stops at `min_iter` while a drifting one runs on,
+    /// and the drifting one stops at the same iteration, with the same values,
+    /// as a global run, where it is the one that holds everything up.
+    #[test]
+    fn componentwise_stops_each_component_on_the_global_test() {
+        let b = EquivalenceClassBuilder::new();
+        // Component {0, 1}: a near-identical pair still drifting ~0.7% per
+        // iteration at iteration 5. Component {2}: unique reads, settled.
+        b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 10_000);
+        b.add_group(TranscriptGroup::new(vec![0]), vec![1.0], 300);
+        b.add_group(TranscriptGroup::new(vec![1]), vec![1.0], 100);
+        b.add_group(TranscriptGroup::new(vec![2]), vec![1.0], 500);
+        let mut eq = b.finish();
+        eq.update_eff_lengths(&[1000.0; 3]);
+        let p = PackedEqClasses::from_collapsed(&eq, 3);
+        let (init, prior) = start(&p);
+        let go = |stop| {
+            let mut plan = ComponentPlan::new(&p, &p.counts, false, stop);
+            let set = Settings {
+                stop,
+                min_iter: 5,
+                ..settings(false, false)
+            };
+            run(&mut plan, &init, &prior, &set)
+        };
+        let (global, g_iters, g_ok, _) = go(EmStop::Global);
+        let (comp, c_iters, c_ok, summary) = go(EmStop::Componentwise);
+        assert!(g_ok && c_ok);
+        assert!(g_iters > 5, "the pair must outlast the minimum: {g_iters}");
+        assert_eq!(c_iters, g_iters, "the slowest component sets both");
+        assert_eq!(summary.num_components, 2);
+        assert_eq!(summary.stop, EmStop::Componentwise);
+        for t in 0..3 {
+            assert!(
+                (comp[t] - global[t]).abs() < 1e-9,
+                "t{t}: {} vs {}",
+                comp[t],
+                global[t]
+            );
+        }
+        // The projection would keep the pair iterating well past this point.
+        let (_, p_iters, _, _) = go(EmStop::Projected);
+        assert!(
+            p_iters > c_iters,
+            "projected {p_iters} vs componentwise {c_iters}"
+        );
     }
 
     /// `exp_digamma` agrees with `statrs`'s `digamma(x).exp()` over the range
