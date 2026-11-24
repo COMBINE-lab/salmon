@@ -109,7 +109,7 @@ fn multinomial_into(total: u64, weights: &[f64], rng: &mut impl Rng, out: &mut V
 /// Under the default [`BootstrapMode::RandomStartEm`], every replicate runs
 /// plain EM from a uniform-random split of the fragments (Dirichlet(1) over the
 /// transcripts), with each component stopping on its own
-/// ([`EmStop::Componentwise`](crate::EmStop::Componentwise)), whichever
+/// ([`EmStop::Componentwise`]), whichever
 /// optimizer produced the point estimate. Under [`BootstrapMode::Legacy`] it
 /// runs the point estimate's own optimizer (prior, stopping rule, accelerator)
 /// from a uniform start, as salmon ≤ 2.12 did.
