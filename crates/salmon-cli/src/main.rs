@@ -230,7 +230,19 @@ fn apply_stop_rule(em: &mut salmon_quant::EmOptions, rule: Option<EmStopArg>) {
         em.vb_stop = r.into();
         em.em_stop = r.into();
     }
+    // The global rule's minimum is salmon 1.x's (`CollapsedEMOptimizer::optimize`
+    // sets `minIter = 100`), so `--stopRule global` reproduces 1.x. On a small run
+    // the relative-change test can pass at its first check, so the minimum alone
+    // decides where such a run stops. Bootstrap replicates keep their own minimum
+    // of 50, as in 1.x; the projected rule and the accelerators keep theirs.
+    let stop = if em.use_vbem { em.vb_stop } else { em.em_stop };
+    if em.accel == EmAccel::None && stop == EmStop::Global {
+        em.min_iter = em.min_iter.max(GLOBAL_RULE_MIN_ITER);
+    }
 }
+
+/// Minimum EM/VBEM iterations under the global stopping rule (salmon 1.x's).
+const GLOBAL_RULE_MIN_ITER: u32 = 100;
 
 /// Defaults for the fragment-length prior flags. Held here (rather than in
 /// `default_value_t`) so the flags can stay `Option` and salmon can distinguish
@@ -765,12 +777,13 @@ struct QuantArgs {
     /// shared fragments) once salmon's relative-change criterion holds over it
     /// and its projected remaining movement is below 0.1% of its fragments, so
     /// each component runs until it converges. `global` stops all transcripts
-    /// together at the first iteration where the criterion holds over all of
-    /// them: salmon 1.x's and ≤ 2.8's rule, kept so 2.8's results can be
-    /// reproduced. It can stop a family of near-identical isoforms at the
-    /// minimum iteration count while its estimates are still drifting, so one
-    /// family's result depends on when the whole run stops, and so on what
-    /// else is quantified with it. Has no effect with --emAccel.
+    /// together at the first iteration, after at least 100, where the
+    /// criterion holds over all of them: salmon 1.x's rule, kept so 1.x's
+    /// results can be reproduced. On a small run that test can pass at its
+    /// first check while a family of near-identical isoforms is still
+    /// drifting (salmon then warns), so one family's result depends on when
+    /// the whole run stops, and so on what else is quantified with it. Has no
+    /// effect with --emAccel.
     #[arg(long = "stopRule", value_enum)]
     stop_rule: Option<EmStopArg>,
     /// Mean of the fragment-length distribution prior [default: 250].
@@ -3373,6 +3386,31 @@ mod tests {
             (EmStop::Projected, EmStop::Projected)
         );
         assert!(quant_args(&["--stopRule", "componentwise"]).is_err());
+    }
+
+    /// The global rule runs at least salmon 1.x's 100 iterations; everything
+    /// else keeps the default minimum of 50.
+    #[test]
+    fn global_rule_uses_salmon_1x_minimum_iterations() {
+        let min_iter = |use_vbem: bool, accel: EmAccel, extra: &[&str]| {
+            let mut em = salmon_quant::EmOptions {
+                use_vbem,
+                accel,
+                ..Default::default()
+            };
+            apply_stop_rule(&mut em, quant_args(extra).unwrap().stop_rule);
+            em.min_iter
+        };
+        let none = EmAccel::None;
+        assert_eq!(min_iter(true, none, &[]), 50, "VBEM default: projected");
+        assert_eq!(min_iter(true, none, &["--stopRule", "global"]), 100);
+        assert_eq!(min_iter(false, none, &[]), 100, "--useEM default: global");
+        assert_eq!(min_iter(false, none, &["--stopRule", "projected"]), 50);
+        assert_eq!(min_iter(false, EmAccel::Daarem, &[]), 50);
+        assert_eq!(
+            min_iter(false, EmAccel::Squarem, &["--stopRule", "global"]),
+            50
+        );
     }
 
     use std::path::Path;
