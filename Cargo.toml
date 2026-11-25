@@ -73,7 +73,7 @@ clap = { version = "4", features = ["derive"] }
 # hashing of reference sequences/names for index provenance
 sha2 = "0.11"
 # COMBINE-lab dependencies, from crates.io.
-cf1-rs = "0.6.1"
+cf1-rs = "0.6.2"
 # Published SSHash 0.8.2, arena-backed reference names, and upstream paraseq.
 # `rapidgzip` retains the parallel decoder and exact busy-time accounting used
 # by the adaptive thread broker to share the execution budget with mapping.
