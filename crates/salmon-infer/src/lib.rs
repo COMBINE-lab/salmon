@@ -35,12 +35,26 @@ use salmon_eqclass::CollapsedEqClasses;
 
 mod components;
 mod daarem;
+#[cfg(any(gpu, test))]
+mod gpu;
+pub mod kmers;
 mod packed;
 pub mod uncertainty;
 
 pub use components::ComponentSummary;
 pub use packed::{PackedEqClasses, PosteriorMethod};
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
+
+/// The GPU backend compiled into this build for [`EmOptions::gpu`], if any.
+pub const GPU_BACKEND: Option<&str> = if cfg!(gpu = "metal") {
+    Some("metal")
+} else if cfg!(gpu = "cuda") {
+    Some("cuda")
+} else if cfg!(gpu = "rocm") {
+    Some("rocm")
+} else {
+    None
+};
 
 /// EM/VBEM acceleration scheme applied on top of the fixed-point map.
 ///
@@ -238,6 +252,11 @@ pub struct EmOptions {
     /// how bootstrap replicates are optimized (default
     /// [`BootstrapMode::RandomStartEm`])
     pub bootstrap: BootstrapMode,
+    /// experimental: warm-start parallel point-estimate runs on the GPU backend
+    /// in [`GPU_BACKEND`] when it finds a device and the problem is large enough
+    /// (ignored when none is compiled in). Off here; the CLI turns it on unless
+    /// `--no-gpu`. See `gpu`.
+    pub gpu: bool,
 }
 
 impl Default for EmOptions {
@@ -255,6 +274,7 @@ impl Default for EmOptions {
             vb_stop: EmStop::Projected,
             em_stop: EmStop::Global,
             bootstrap: BootstrapMode::RandomStartEm,
+            gpu: false,
         }
     }
 }
@@ -301,6 +321,9 @@ pub struct EmResult {
     /// reassigned to any surviving transcript (reported, not rescaled away). 0 in
     /// the normal case.
     pub dropped_mass: f64,
+    /// the GPU backend that warm-started this run ([`GPU_BACKEND`]), or `None`
+    /// when it ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
 }
 
 /// Relative-difference convergence check, matching salmon: the max over
@@ -411,7 +434,7 @@ pub fn optimize_packed_with_init(
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
 ) -> EmResult {
-    let (alphas, iters, converged, components) = run_em_counts(
+    let (alphas, iters, converged, components, gpu_backend) = run_em_counts(
         p,
         &p.counts,
         opts,
@@ -432,6 +455,7 @@ pub fn optimize_packed_with_init(
         converged,
         components,
         dropped_mass,
+        gpu_backend,
     }
 }
 
@@ -475,7 +499,7 @@ pub(crate) fn finalize_truncate_redistribute(
 }
 
 /// Run EM/VBEM to convergence on `p` with explicit per-class `counts`, returning
-/// `(alphas, iters, converged)` *without* the final min-alpha truncation (so
+/// `(alphas, iters, converged, components, gpu_backend)` *without* the final min-alpha truncation (so
 /// bootstrap can apply its own scaling first). `min_iter` is the minimum number
 /// of iterations before the convergence check engages.
 pub(crate) fn run_em_counts(
@@ -486,7 +510,13 @@ pub(crate) fn run_em_counts(
     min_iter: u32,
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
-) -> (Vec<f64>, u32, bool, Option<ComponentSummary>) {
+) -> (
+    Vec<f64>,
+    u32,
+    bool,
+    Option<ComponentSummary>,
+    Option<&'static str>,
+) {
     if let Err(e) = opts.validate() {
         // Callers are expected to validate up front (the CLI does); reaching
         // here is a programming error, not a data condition.
@@ -517,13 +547,35 @@ pub(crate) fn run_em_counts(
     // same fixed-point iteration and stopping rule, laid out and scheduled by
     // connected component (see `components`). The accelerators extrapolate
     // over whole vectors between M-steps, so they keep the global kernels.
-    if opts.accel == EmAccel::None && opts.max_iter > 0 {
-        let stop = if opts.use_vbem {
-            opts.vb_stop
-        } else {
-            opts.em_stop
-        };
-        let mut cplan = components::ComponentPlan::new(p, counts, parallel, stop);
+    let stop = if opts.use_vbem {
+        opts.vb_stop
+    } else {
+        opts.em_stop
+    };
+    let mut cplan = (opts.accel == EmAccel::None && opts.max_iter > 0)
+        .then(|| components::ComponentPlan::new(p, counts, parallel, stop));
+    #[allow(unused_mut)]
+    let (mut gpu_iters, mut min_iter, mut gpu_backend) = (0u32, min_iter, None);
+    // GPU only for open-ended point-estimate runs: bootstrap replicates pass
+    // `parallel = false`, bias-seed runs are fixed-length (`min_iter == max_iter`).
+    #[cfg(gpu)]
+    if opts.gpu && parallel && min_iter < opts.max_iter {
+        // the work the GPU would take over: the component engine's large
+        // components, or every incidence for the global kernels
+        let work = cplan
+            .as_ref()
+            .map_or(p.labels.len(), |c| c.large_incidences());
+        if let Some((warm, n)) =
+            gpu::converge(p, counts, &alphas, &prior_alphas, opts, min_iter, work)
+        {
+            alphas = warm;
+            gpu_iters = n;
+            gpu_backend = GPU_BACKEND;
+            // the GPU steps already served the minimum-iteration floor
+            min_iter = min_iter.saturating_sub(n);
+        }
+    }
+    if let Some(cplan) = &mut cplan {
         if cplan.num_components() > 0 {
             let set = components::Settings {
                 vb: opts.use_vbem,
@@ -536,8 +588,14 @@ pub(crate) fn run_em_counts(
                 stop,
             };
             let (alphas, iters, converged, summary) =
-                components::run(&mut cplan, &alphas, &prior_alphas, &set);
-            return (alphas, iters, converged, Some(summary));
+                components::run(cplan, &alphas, &prior_alphas, &set);
+            return (
+                alphas,
+                iters + gpu_iters,
+                converged,
+                Some(summary),
+                gpu_backend,
+            );
         }
     }
     let mut exp_theta = vec![0.0f64; num_txps];
@@ -670,7 +728,7 @@ pub(crate) fn run_em_counts(
             );
         }
     }
-    (alphas, it, converged, None)
+    (alphas, it + gpu_iters, converged, None, gpu_backend)
 }
 
 /// SQUAREM (SqS3) acceleration of the fixed-point iteration.

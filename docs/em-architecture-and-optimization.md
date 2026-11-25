@@ -573,3 +573,325 @@ For quick iteration without newton, the determinism test's synthetic generator
 (`packed.rs::shard_plan_determinism`) builds 20,000 classes over 5,000
 transcripts with non-representable weights — enough to shard several times and
 to expose grouping differences, and it runs in under a second.
+
+---
+
+## 10. Experimental GPU warm start (on by default; `--no-gpu`)
+
+A GPU path for the point estimate. The standard `salmon-cli` build carries
+two backends as default features: Metal on macOS (Apple GPUs) and ROCm on
+Linux (AMD GPUs: the same kernels in HIP C++, compiled at run time with
+hiprtc). A third, `--features cuda`, is written with NVIDIA's
+[CUDA Rust](https://github.com/NVIDIA/cuda-rust) Tile track (cuTile 0.5) and
+stays opt-in because it needs the CUDA headers to build.
+
+`quant` uses the GPU automatically when all of these hold:
+
+- the build has a backend for this platform;
+- that backend finds a device;
+- the CPU would iterate at least 250,000 class–transcript incidences as a
+  whole (see below);
+- `--no-gpu` is not given.
+
+Otherwise the run is CPU-only and §5 holds unchanged. A CPU-only build is
+`cargo build -p salmon-cli --no-default-features`. Library callers keep
+`EmOptions::gpu = false` unless they set it.
+
+The floor counts the work the GPU would take over, not the problem size. The
+default (unaccelerated) CPU engine works by connected component: each
+component runs until it converges on its own, and components under 65,536
+incidences run side by side. Only larger ones are stepped one at a time, in
+parallel. The GPU iterates every transcript until the slowest one converges:
+600–1,000 M-steps, about 0.1 s even on a small problem. It therefore only pays
+off on those large components, and the floor counts their incidences
+(`ComponentPlan::large_incidences`). With SQUAREM or DAAREM, which iterate the
+whole vector, it counts every incidence. The ignored test
+`gpu::tests::crossover` times these layouts on the machine below (default
+VBEM, best of 3, classes drawn within "genes", a quarter single-transcript).
+The GPU column was measured with the warm start always on, before this rule:
+
+| classes drawn within | incidences | CPU only | GPU warm start, always |
+|---|---:|---:|---:|
+| 40-transcript genes (as in a transcriptome) | 2.1M | 0.17 s | 0.28 s |
+| components of ~18k incidences | 0.59M | 0.06 s | 0.11 s |
+| components of ~49k incidences | 2.3M | 0.25 s | 0.29 s |
+| components of ~73k incidences | 2.3M | 0.51 s | 0.24 s |
+| one component | 0.59M | 0.20 s | 0.08 s |
+| one component | 2.3M | 0.63 s | 0.23 s |
+
+The first three rows now stay on the CPU. Before this rule the floor was 250,000
+incidences in all, which sent the 363k-incidence problem of the `--sketch` runs
+below (69,116 components, none large) to the GPU: 0.10–0.12 s there against
+0.04–0.05 s on the CPU.
+
+Because the GPU is used by default, the same command can give slightly
+different counts on a machine with a supported GPU and on one without.
+The two agree to the convergence tolerance, as described below. Use `--no-gpu`
+for bit-for-bit reproducibility across machines. In `meta_info.json`,
+`gpu_backend` names the backend that ran, or is `null` for a CPU-only run.
+
+### What it does
+
+The GPU does not replace the optimizer. `run_em_counts` hands the start
+vector to `gpu::converge`, which runs the same fixed-point iteration in `f32`
+until the global `max_rel_diff` criterion holds. The unchanged CPU engine
+(component engine, SQUAREM or DAAREM) then continues from that vector in `f64`
+under its own stopping rule. Its `min_iter` floor is reduced by the GPU steps
+already taken, so a converged warm start usually needs only a few CPU steps.
+The GPU is skipped for bootstrap replicates (`parallel = false`) and for the
+fixed-length bias-seed runs (`min_iter == max_iter`). With no device, a kernel
+compile failure or more than 2³¹ incidences, it logs a warning and the CPU
+runs exactly as with `--no-gpu`. A machine with no device is not a failure:
+the CPU runs, with only a debug-level log line.
+
+Layout (`gpu::Problem`): single-transcript classes are folded into a constant
+per transcript, the rest stay in packed order as a CSR plus its transpose
+(transcript → classes, ascending). Both CSRs are cut into chunks of at most
+32 incidences. Each M-step is a few gather-only kernels:
+
+1. VBEM only, `et[t] = exp(ψ(α_t + prior_t))`: an `f32` port of
+   `exp_digamma`. The global ψ normaliser is dropped, as in the component
+   engine.
+2. Per class, `scale[c] = count_c / Σ basis[t]·w`: `chunk_dot` sums each
+   chunk, one thread per chunk, then `class_finish` adds a class's chunks.
+3. Per transcript, `out[t] = single[t] + basis[t] · Σ w·scale[c]`: the same
+   `chunk_dot` over the transpose, then `txp_finish`.
+
+One thread per chunk keeps a SIMD group's threads about equally busy, whereas
+one thread per row would wait on the longest row: transcript degrees run from
+about 50 to about 45,000. There are no atomics and each thread sums in a fixed
+order, so GPU output is deterministic for a given device and driver. It is
+**not** bit-identical to a CPU-only run: it agrees to the convergence
+tolerance. Sorting classes by size and transcripts by degree was measured
+1.3–1.5× slower on Metal because it destroys gather locality, so packed order
+is kept.
+
+Known `f32` limit: `exp(ψ(x))` underflows below `x ≈ 0.0115`. A VBEM class
+whose members all sit below that is therefore dropped on the GPU, where `f64`
+still splits it. A class feeds its own count back to its members every step,
+so this takes a start vector that already holds such zeros, and the `f64` CPU
+finish restores the class.
+
+### Measurements (Metal, Apple M4 Max: 12P+4E CPU cores, 40-core GPU)
+
+These were taken with one thread per class or transcript, before the chunked
+kernels.
+
+These use a synthetic GENCODE-scale problem, not the RAD of §9: 536,311
+classes, 4,926,193 incidences, 238,442 transcripts and 3.96M fragments. Its
+classes are drawn mostly within 40-transcript "genes", 25% are singletons and
+the size distribution is skewed. Times are for `optimize_packed_with_init`
+with default options and 16 CPU threads.
+
+| | CPU only (`--no-gpu`) | GPU warm start | M-steps (GPU + CPU) | transcripts >1% apart (count > 1) | L1 / total |
+|---|---:|---:|---:|---:|---:|
+| VBEM | 0.95 s | 0.57–0.60 s | 610 + 28 | 19 of 130,762 | 6.3e-6 |
+| EM (`--useEM`) | 1.00 s | 0.44 s | 800 + 1 | 0 of 137,975 | 6.8e-7 |
+
+For scale, the same comparison between CPU SQUAREM and CPU without
+acceleration, two accepted settings, gives 92 transcripts (VBEM, L1 4.7e-5)
+and 102 transcripts (EM, L1 2.1e-5) more than 1% apart. The VBEM differences
+are at 2–6 reads, where the sparse objective has several optima (§8).
+
+The CUDA backend has not run on NVIDIA hardware. CI only compiles it against
+CUDA 13 headers (`gpu-cuda-check`). Running it needs CUDA 13.3 and compute
+capability ≥ 8.0, because cuTile JIT-compiles through Tile IR. The open items
+before the GPU path could leave experimental status are timings on the §9 RAD,
+and measurements on NVIDIA and AMD hardware.
+
+The ROCm backend has not run on AMD hardware either. It opens `libamdhip64`
+and `libhiprtc` (ROCm 7; earlier releases export hiprtc from `libamdhip64`) at
+run time, so the default Linux build needs no ROCm installed. CI's Linux
+`build-test` jobs lint it and run the GPU tests, which only reach their
+no-device skip there. hiprtc compiles the kernels for the current
+device's architecture with default IEEE math; the module API launches them,
+256 threads per block.
+
+```bash
+cargo build --release -p salmon-cli                    # Metal (macOS) / ROCm (Linux) built in
+cargo build --release -p salmon-cli --features cuda    # NVIDIA (CUDA 13 headers needed)
+cargo test -p salmon-infer --features metal gpu        # GPU tests skip without a device
+salmon quant ...            # GPU when a device is found and the problem is large enough
+salmon quant ... --no-gpu   # CPU only
+```
+
+### `--sketch` k-mer lookup on the GPU
+
+Under `--sketch`, the same backends also run the k-mer lookup of mapping, after
+kallisto's GPU port (bioRxiv 2026.03.04.709526). By default the device runs
+piscem's own lookup, the sshash dictionary, flattened for the GPU:
+
+1. A read k-mer's minimizer is computed exactly as sshash computes it, with
+   the same hasher seed and tie rule.
+2. The minimizer selects a bucket, whose super-k-mer positions give the
+   candidate k-mer starts.
+3. Each candidate is verified against the SPSS text, 2 bits per base.
+
+sshash's minimal perfect hash (minimizer → bucket) is replaced by an exact
+open-addressing table over the buckets' minimizers, which gives the same
+answer. Each entry is one 64-bit word: a 32-bit fingerprint of the minimizer
+(the half of its hash that does not pick the slot) and the bucket id, so a
+probe reads one word. The first entry on a probe sequence that carries the
+query's fingerprint is the query's own: the build refuses a table where
+another minimizer's entry with the same fingerprint comes first (about one
+chance in 600 for this index; the lookup then stays on the CPU). A minimizer
+that is not in the dictionary can match a fingerprint, but none of the
+k-mers of the bucket it reaches can equal the read k-mer, so the lookup still
+misses. A heavy bucket is scanned instead of going through the skew index;
+k-mers are unique, so the scan finds the same k-mer. The device holds the SPSS
+text, the bucket offsets and the bucket table: about 3.7 bytes per k-mer, or
+0.4 GB for the 106M k-mers of the index below (15M buckets; the table is
+0.24 GB of it).
+
+The structures are copied from the loaded index on a background thread
+(`gpu_kmer_table` in the timing log, about 0.13–0.2 s here). The CPU maps the
+first batches in the meantime, so the build does not delay the run. These
+things keep it short, because at 2M pairs the reads run out soon after it
+ends:
+
+- the Metal device is opened on that thread, beside the CPU half of the build
+  (about 50 ms);
+- sshash's compressed bucket and offset arrays are read in parallel;
+- Metal fills the bucket table on the device (`kmer_table`: a 32-bit
+  compare-and-swap on each entry's fingerprint word, which is never
+  0xFFFFFFFF, the empty value). ROCm and CUDA get it built on the CPU;
+- before mapping sees the device, the thread runs batches of reads taken from
+  the index until a call's time settles. The first ~20 calls otherwise take
+  9–17 ms instead of about 1 ms, slower than the CPU maps the same batch;
+- on macOS its threads run at the `USER_INTERACTIVE` QoS class. The 16
+  mapping threads, and on a busy machine other processes, otherwise get the
+  cores first, and the build then took up to twice as long.
+
+The earlier lookup, a flat table from every canonical k-mer to its unitig
+position, stays behind `SALMON_GPU_LOOKUP=table` while the two are compared.
+That table takes about 24 bytes per k-mer on the device, against 3.7, and
+about 1.1 s to build. It maps no faster.
+
+Each batch of reads then makes one GPU call, with one thread per read. The
+thread runs piscem's hit collection with the CPU's skipping strategy,
+`SkippingStrategy::Permissive` (piscem's and salmon's default,
+`collect_permissive`). From a hit, it jumps to the end of the hit's unitig, or
+of the read, and checks only that k-mer against the unitig's bases. When that
+check fails, it looks the k-mer there up, then the one halfway, and finally
+falls back to the `Strict` walk (`walk_safely_until`). The walk follows the
+read along the unitig while each next read k-mer is the next unitig k-mer. As
+in piscem, both compare the read with the unitig's own bases, which also go to
+the device at 2 bits per base. The kernel implements `Strict` too
+(`KmerGpu::new(table, false)`), which the tests check. Back on the CPU,
+`salmon_map::sketch_hits` replays piscem's target selection on those hits. The
+strategy only changes how raw hits are collected, not this selection. The
+replay covers live targets, occurrence recovery, ambiguous equivalence classes
+and the `--maxReadOcc` cut, and is followed by the usual pairing. A fragment
+therefore gets exactly the mappings of the CPU path. Two kinds of read are
+mapped on the CPU instead:
+
+- a read with more than 32 raw hits;
+- an index with a poison table, where the replay declines.
+
+`--no-gpu` therefore changes timing and not mappings. The equivalence classes
+are identical with and without a GPU. The counts differ, to the EM tolerance,
+only when the EM is also warm-started on the GPU, which the rule above skips
+on the runs below. Two tests check this without a GPU:
+
+- `crates/salmon-map/tests/sketch_hits_parity.rs`: piscem's raw hits and
+  mappings against the CPU reference `KmerTable::hits`, for both strategies
+  and both lookups. `Permissive` gives different raw hits from `Strict` on
+  about a third of its reads. With a device, the test also checks the kernel
+  against that reference;
+- `kmers::tests::gpu_hits_match_the_cpu_reference`: the GPU kernel against
+  that reference.
+
+Measured on the M4 Max with 16 threads, against 191k synthetic transcripts
+(208 Mb), with `salmon quant -l A --sketch -p 16 --dumpEq`. Each figure is
+the fastest of 3 (10M) or 5 (2M) alternated runs. "Run" is the whole `salmon quant`;
+"mapping" includes the background build on the GPU rows. The load average
+from other processes was 6–9. The equivalence classes and `quant.sf` are
+byte-identical between the GPU and CPU runs of each strategy, since the EM
+stays on the CPU here (rule above).
+
+| `--sketch`, 16 threads | GPU build | mapping | run |
+|---|---:|---:|---:|
+| 2M pairs, Metal, `Permissive` (default) | 0.14 s | 0.22 s | 0.54 s |
+| 2M pairs, CPU, `Permissive` (`--no-gpu`) | | 0.28 s | 0.60 s |
+| 10M pairs, Metal, `Permissive` (default) | 0.16 s | 0.74 s | 1.31 s |
+| 10M pairs, CPU, `Permissive` (`--no-gpu`) | | 1.33 s | 1.89 s |
+| 10M pairs, Metal, `Strict` (before the device-built table) | 0.24 s | 0.85 s | 1.42 s |
+| 10M pairs, CPU, `Strict` | | 1.77 s | 2.32 s |
+
+With `Permissive`, the whole GPU run is 1.44 times faster than the CPU at 10M
+pairs. At 2M pairs the median of 5 is 0.57 s against 0.61 s. A run whose build
+the machine slows to 0.3 s still costs about 0.03 s more than the CPU. Before
+the device-built table and the warm-up, the build took 0.2–0.45 s and the GPU
+run was 0.65 s at 2M, slower than the CPU.
+On the GPU both strategies cost about the same. On 1M reads from 16 threads
+the kernel takes 0.074 s with `Permissive` and 0.083 s with `Strict`. The
+kernel is one loop making one lookup per turn, so that the sshash lookup and
+the walk are each inlined once. A first version inlined the walk at four
+sites and the lookup at three. It took 0.11–0.12 s in both modes, against
+0.08 s for the `Strict`-only kernel, because the larger kernel got a lower
+GPU occupancy.
+
+Before the changes of this round, the same runs took 1.40 s (GPU) against
+1.23 s (CPU) at 2M and 2.51 s against 3.88 s at 10M, under a load of 28–73.
+The changes were:
+
+- the EM warm start rule above (0.06–0.3 s at both sizes);
+- the build changes above;
+- `--dumpEq` writing 0.35 s faster on both paths: it buffered after the gzip
+  encoder instead of before it, so every field went through the compressor
+  separately.
+
+### GEUVADIS (real human data)
+
+Two GEUVADIS samples (2×76 bp lymphoblastoid RNA-seq, gzip FASTQ from ENA)
+against GENCODE v50 (654,828 transcripts, `salmon index --gencode`), on the same
+M4 Max with `-p 16 --dumpEq`. Each figure is the fastest of 3 alternated runs;
+the machine's load average ranged from 20 to 110, most of it from these runs'
+own threads. "GPU memory" is the Metal device's allocation once the lookup is
+built (`device_mb` in the `gpu_kmer_table` log line). On Apple silicon it is
+unified memory and is also counted in the process RSS, so the two do not add.
+
+The index takes 10.9–12.9 s to build (4 builds), peaks at 5.3 GB of RSS and is
+1.9 GB on disk.
+
+| Sample | Mode | Run | Mapping | CPU RAM (peak RSS) | GPU memory | Mapped |
+|---|---|---:|---:|---:|---:|---:|
+| ERR188044, 36.3M pairs | `--sketch`, GPU | 29.1 s | 15.7 s | 2.5 GB | 785 MB | 92.8% |
+| | `--sketch`, CPU | 32.8 s | 20.9 s | 1.8 GB | | 92.8% |
+| | selective alignment, GPU EM | 75.5 s | 55.4 s | 2.9 GB | | 94.4% |
+| | selective alignment, CPU | 81.2 s | 60.4 s | 2.4 GB | | 94.4% |
+| ERR188428, 39.7M pairs | `--sketch`, GPU | 24.7 s | 11.3 s | 2.4 GB | 785 MB | 77.2% |
+| | `--sketch`, CPU | 29.0 s | 18.4 s | 1.6 GB | | 77.2% |
+| | selective alignment, GPU EM | 56.9 s | 41.4 s | 2.4 GB | | 76.1% |
+| | selective alignment, CPU | 54.5 s | 41.0 s | 2.0 GB | | 76.1% |
+
+The decompressed equivalence classes are identical between the GPU and CPU
+runs of every row pair. `quant.sf` differs to the EM tolerance (L1/total
+4.5e-4 with `--sketch`, 5.4e-4 with selective alignment on ERR188044), because
+on these problems the EM warm start also runs on the GPU.
+
+![Wall time and mapping time against read pairs](benchmarks/gpu-sketch-geuvadis/gpu-sketch-geuvadis.png)
+
+The figure ([data](benchmarks/gpu-sketch-geuvadis/gpu-sketch-geuvadis.csv))
+follows kallisto-GPU's Figure 1. Panels A and B use one sample, ERR188044, and
+its subsamples (first 2, 5, 10 and 20M pairs, recompressed with pigz); dots are
+runs, lines join the fastest run per size. Panel C compares the two full
+samples. ERR188428 is faster despite more pairs because fewer of its reads map
+(77% against 93%), so it is kept off the curve. Both curves still
+grow with the input, the GPU one more slowly: about 0.4 s per million pairs on
+the GPU path, where kallisto-GPU reports about 0.05 s. On ERR188044, the time
+outside the mapping phase is mostly the second (RAD) pass, 3.9 s, and the EM
+with the `--dumpEq` write, 10–12 s on either path. Two slowly mixing
+components take up to 13,800 iterations there, and the GPU warm start's 3,800
+M-steps make that phase slower than on the CPU.
+
+**Heavy buckets.** The first GPU run on this data did not finish in 10
+minutes. The kernel scanned every super-k-mer of the minimizer's bucket, while
+sshash looks buckets above 64 super-k-mers up in its skew index. In the
+GENCODE index, 3,436 such buckets (0.012%) took 6.3% of the lookups of 200k
+real reads and 94.5% of the positions scanned, about 2,000 per lookup and up
+to 18,597. A read that reaches one now goes to the CPU like a read past
+`HITS_CAP`: about 2% of reads, which keeps the mappings unchanged.
+
+The CUDA and ROCm lookups are compiled by NVRTC and hiprtc from the same C
+source as the Metal one, and have not run on hardware.
