@@ -36,18 +36,58 @@ salmon quant -i salmon_index -l A \
 The two methods answer different questions, which is why salmon provides both:
 
 - **Bootstrap:** how much would the estimates move if this library had yielded
-  slightly different counts? Each replicate resamples the equivalence-class counts
-  and re-runs the optimizer.
+  slightly different counts, and how weakly do the data determine them? Each
+  replicate resamples the equivalence-class counts and runs plain EM on them from
+  a random start.
 - **Gibbs sampling:** which abundances does the model support, given these
   counts? The sampler repeatedly reassigns fragments to transcripts in proportion
   to the current abundances, and draws the abundances again from the result, so
   its samples come from the posterior.
 
 They differ most where the likelihood is nearly flat, as it is across isoforms
-that share almost all of their sequence. Each bootstrap replicate re-runs the
-optimizer from the same starting point, so replicates can settle on similar
-allocations even when the data barely distinguish them. The Gibbs sampler moves
-along such directions, so it shows that ambiguity more fully.
+that share almost all of their sequence. There the data barely say how to divide
+the reads, and a replicate's EM run barely moves along that direction from
+wherever it starts, so replicates started at random land in different places.
+The Gibbs sampler moves along such directions as well.
+
+### How bootstrap replicates are optimized
+
+Replicates run plain EM whichever optimizer produced the point estimate. Each
+starts from a uniform-random split of the fragments over the transcripts, and
+each connected component of transcripts stops on its own once salmon's
+relative-change test holds over it.
+
+Up to salmon 2.12, each replicate re-ran the point estimate's own optimizer,
+VBEM by default, from the same uniform start. VBEM's sparse prior zeroes some
+isoforms that are expressed but have almost no reads of their own, and it zeroes
+them again in every replicate. The replicates then called those isoforms
+certainly absent where the data could not tell, and downstream tests that trust
+the replicates reported more false discoveries than they should:
+
+- In simulated two-group experiments (5 vs 5 samples) on the human GENCODE
+  annotation, swish and edgeR's `catchSalmon` workflow reported up to 8% false
+  discoveries at a nominal 5% with the old replicates. With the current ones they
+  stayed at or near it (at most 5.6%) and ranked changed transcripts better. On
+  the mouse annotation the old replicates did not overshoot, and the current ones
+  still ranked better.
+- Gibbs samples (`--numGibbsSamples`) also stayed near the nominal rate, and gave
+  edgeR slightly more power than either kind of bootstrap.
+- On real data (two lung cancer cell lines, 3 replicates each, checked against
+  long-read calls on the same samples), the current replicates recovered slightly
+  more of the long-read calls than the old ones, at the same rate of calls the
+  long reads contradict.
+
+Starting at random does not help VBEM itself. Its objective has many optima, one
+for each choice of winners among near-identical isoforms, so random starts make
+replicates jump between those choices even where the data decide them. Plain EM's
+objective has no such spurious optima.
+
+The replicates' mean stays close to the point estimate, but not equal to it: an
+isoform the point estimate zeroes can carry mass in some replicates. That is the
+uncertainty they report, not a second estimate.
+
+The replicates take about twice as long as before. To reproduce replicates from
+salmon 2.12 or earlier, pass the hidden flag `--legacyBootstraps`.
 
 ## What replicates do not measure
 
@@ -72,8 +112,8 @@ replicates of whole-blood total RNA](https://github.com/COMBINE-lab/salmon/issue
 sequenced two years apart at 2x51 and 2x59 bp, the between-library spread of this
 quantity was about twice what 30 bootstraps predicted. That is a single dataset,
 whose two runs also differed in platform and duplication rate, not a general
-calibration factor, and its replicates were bootstraps, which can understate
-isoform ambiguity as described above.
+calibration factor, and its replicates were bootstraps from before salmon 2.13,
+which could understate isoform ambiguity as described above.
 
 If you have technical replicates and proportions do not reproduce, these are useful
 checks:

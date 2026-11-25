@@ -244,6 +244,16 @@ fn apply_stop_rule(em: &mut salmon_quant::EmOptions, rule: Option<EmStopArg>) {
 /// Minimum EM/VBEM iterations under the global stopping rule (salmon 1.x's).
 const GLOBAL_RULE_MIN_ITER: u32 = 100;
 
+/// How bootstrap replicates are optimized: `--legacyBootstraps` keeps salmon
+/// ≤ 2.12's replicates (the main optimizer from a uniform start).
+fn bootstrap_mode(legacy: bool) -> salmon_quant::BootstrapMode {
+    if legacy {
+        salmon_quant::BootstrapMode::Legacy
+    } else {
+        salmon_quant::BootstrapMode::RandomStartEm
+    }
+}
+
 /// Defaults for the fragment-length prior flags. Held here (rather than in
 /// `default_value_t`) so the flags can stay `Option` and salmon can distinguish
 /// a supplied value from an inherited one — the distinction issue #1062 needs in
@@ -675,8 +685,19 @@ struct QuantArgs {
     #[arg(long = "noCompressRad")]
     no_compress_rad: bool,
     /// Number of bootstrap replicates for posterior uncertainty.
+    ///
+    /// Each replicate resamples the equivalence-class counts and runs plain EM
+    /// from a random start, whichever optimizer produced the point estimate, so
+    /// transcripts the data cannot tell apart show that in their spread.
     #[arg(long = "numBootstraps", default_value_t = 0)]
     num_bootstraps: u32,
+    /// Bootstrap replicates as salmon ≤ 2.12 ran them: the point estimate's own
+    /// optimizer (VBEM by default) from a uniform start. Kept to reproduce
+    /// earlier results; those replicates call isoforms VBEM zeroes certainly
+    /// absent even where the data cannot tell, which inflates false discoveries
+    /// downstream.
+    #[arg(long = "legacyBootstraps", hide = true)]
+    legacy_bootstraps: bool,
     /// Number of Gibbs posterior samples (mutually exclusive with bootstraps).
     ///
     /// `conflicts_with` makes that exclusivity real. It was previously only
@@ -2404,6 +2425,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.em.accel = args.em_accel.into();
+        opts.em.bootstrap = bootstrap_mode(args.legacy_bootstraps);
         apply_stop_rule(&mut opts.em, args.stop_rule);
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
@@ -2585,6 +2607,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.em.accel = args.em_accel.into();
+        opts.em.bootstrap = bootstrap_mode(args.legacy_bootstraps);
         apply_stop_rule(&mut opts.em, args.stop_rule);
         opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean.unwrap_or(DEFAULT_FLD_MEAN);
@@ -2945,6 +2968,7 @@ fn run_quant(args: QuantArgs, quiet: bool) -> Result<()> {
     opts.em.vb_prior = args.vb_prior;
     opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
     opts.em.accel = args.em_accel.into();
+    opts.em.bootstrap = bootstrap_mode(args.legacy_bootstraps);
     apply_stop_rule(&mut opts.em, args.stop_rule);
     opts.sig_digits = args.sig_digits;
     opts.max_read_occ = args.max_read_occ.unwrap_or(250);
@@ -3410,6 +3434,18 @@ mod tests {
         assert_eq!(
             min_iter(false, EmAccel::Squarem, &["--stopRule", "global"]),
             50
+        );
+    }
+
+    /// Bootstrap replicates default to random-start EM; `--legacyBootstraps`
+    /// restores salmon ≤ 2.12's.
+    #[test]
+    fn legacy_bootstraps_flag_selects_the_old_replicates() {
+        let mode = |extra: &[&str]| bootstrap_mode(quant_args(extra).unwrap().legacy_bootstraps);
+        assert_eq!(mode(&[]), salmon_quant::BootstrapMode::RandomStartEm);
+        assert_eq!(
+            mode(&["--legacyBootstraps"]),
+            salmon_quant::BootstrapMode::Legacy
         );
     }
 
