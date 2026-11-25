@@ -2674,6 +2674,7 @@ dependencies = [
  "anyhow",
  "cf1-rs",
  "ensure_simd",
+ "flate2",
  "needletail",
  "piscem-rs",
  "rapidgzip-core",
