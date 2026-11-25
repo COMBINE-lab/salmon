@@ -141,7 +141,8 @@ over it **and** its projected remaining movement — the last step's size over
 `1 − ρ`, with `ρ` its estimated rate of convergence — is below 0.1% of the
 component's fragments. Plain EM (`--useEM`) stops all components together, as
 salmon always has. `--stopRule global|projected` chooses the rule for either
-optimizer: `global` is the rule of salmon 1.x and ≤ 2.8.
+optimizer: `global` is the rule of salmon 1.x, including its minimum of 100
+iterations.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -151,11 +152,14 @@ optimizer: `global` is the rule of salmon 1.x and ≤ 2.8.
 | `num_at_max_iter` | int | components stopped by the iteration cap rather than the stopping rule |
 | `fraction_reads_at_max_iter` | float | fraction of the fragments in equivalence classes that those components hold |
 | `median_iterations` | int | median, over components, of the iterations each ran |
+| `stopped_at_min_iter` | bool | `global` only: the relative-change test passed at its first check, at the minimum iteration count, while estimates were still moving by more than a tenth of the tolerance per iteration (also logged as a warning) |
 
 A component at the iteration cap that met the criterion is a family of
 near-identical transcripts still trading a little mass between its members;
 `em_converged` stays `true`. A nonzero `num_unconverged` (also logged as a
-warning) means the criterion itself was never met there.
+warning) means the criterion itself was never met there. `stopped_at_min_iter`
+marks a small run whose estimates were drifting too slowly for the per-iteration
+test to notice: they stopped where the minimum put them, not where they converge.
 
 ##### `diagnostics` — machine-readable run warnings
 

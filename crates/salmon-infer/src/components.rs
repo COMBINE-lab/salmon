@@ -830,6 +830,12 @@ pub struct ComponentSummary {
     pub total_reads: f64,
     /// median, over components, of the iterations each ran
     pub median_iters: u32,
+    /// [`EmStop::Global`] only: the criterion held at its very first check, at
+    /// `min_iter`, while the last step still moved some transcript by more than
+    /// a tenth of the tolerance. On a small run, a slow drift can stay under the
+    /// per-iteration tolerance from the start, so this marks a run that stopped
+    /// because the check was allowed to engage, not because it had converged.
+    pub stopped_at_min_iter: bool,
 }
 
 impl ComponentSummary {
@@ -846,6 +852,7 @@ impl ComponentSummary {
             num_at_max_iter: self.num_at_max_iter,
             fraction_reads_at_max_iter: self.fraction_at_max_iter(),
             median_iterations: self.median_iters,
+            stopped_at_min_iter: self.stopped_at_min_iter,
         }
     }
 
@@ -860,7 +867,7 @@ impl ComponentSummary {
 
     /// One line for the run log, given the most iterations any component ran;
     /// `true` when it deserves a warning (some component never met salmon's
-    /// criterion).
+    /// criterion, or a global run stopped at its minimum while still moving).
     pub fn describe(&self, iters: u32) -> (String, bool) {
         let pct = |n: f64| 100.0 * n / self.total_reads.max(1.0);
         let mut line = match self.stop {
@@ -889,7 +896,14 @@ impl ComponentSummary {
                 iters
             );
         }
-        (line, self.num_unconverged > 0)
+        if self.stopped_at_min_iter {
+            line += &format!(
+                "; the convergence test passed at its first check, at the {iters}-iteration \
+                 minimum, while estimates were still moving, so they may be far from \
+                 converged (--stopRule projected iterates each component until it converges)"
+            );
+        }
+        (line, self.num_unconverged > 0 || self.stopped_at_min_iter)
     }
 }
 
@@ -1011,7 +1025,7 @@ pub(crate) fn run(
     let total_reads = reads.iter().sum();
     let (iters, converged, summary) = match set.stop {
         EmStop::Global => {
-            let (it, ok) = run_tiled(plan, &mut states, set);
+            let (it, ok, last) = run_tiled(plan, &mut states, set);
             // Cut off by the cap: only the components whose own criterion still
             // failed held the run up, and each knows from its last step.
             let capped = states.iter().filter(|(_, s)| !ok && s.changed);
@@ -1023,6 +1037,13 @@ pub(crate) fn run(
                 reads_at_max_iter: capped.map(|(c, _)| reads[*c]).sum(),
                 total_reads,
                 median_iters: it,
+                // `run_tiled` checks first at exactly `min_iter`, so stopping
+                // there means the first check passed. `min_iter == max_iter` is
+                // a fixed-length run (the bias seed), which claims nothing.
+                stopped_at_min_iter: ok
+                    && it == set.min_iter
+                    && set.min_iter < set.max_iter
+                    && last > set.tol / 10.0,
             };
             (it, ok, summary)
         }
@@ -1039,6 +1060,7 @@ pub(crate) fn run(
                 reads_at_max_iter: capped.map(|e| reads[e.comp]).sum(),
                 total_reads,
                 median_iters: iters.get(iters.len() / 2).copied().unwrap_or(0),
+                stopped_at_min_iter: false,
             };
             let max = iters.last().copied().unwrap_or(0);
             (max, summary.num_unconverged == 0, summary)
@@ -1064,9 +1086,9 @@ fn run_tiled(
     plan: &ComponentPlan,
     states: &mut [(usize, CompState)],
     set: &Settings,
-) -> (u32, bool) {
+) -> (u32, bool, f64) {
     if states.is_empty() {
-        return (0, false);
+        return (0, false, f64::NEG_INFINITY);
     }
     // Batch boundaries over the (component-ordered) states.
     let mut bounds = vec![0usize];
@@ -1082,6 +1104,7 @@ fn run_tiled(
         bounds.push(states.len());
     }
     let mut it = 0u32;
+    let mut d = f64::NEG_INFINITY;
     while it < set.max_iter {
         let cap = TILE.min(set.max_iter - it);
         let w = (0..states.len())
@@ -1133,12 +1156,12 @@ fn run_tiled(
                 .fold(f64::NEG_INFINITY, max_of)
         };
         it += taken;
-        let d = max_of(dw, others);
+        d = max_of(dw, others);
         if it >= set.min_iter && d < set.tol {
-            return (it, true);
+            return (it, true, d);
         }
     }
-    (it, false)
+    (it, false, d)
 }
 
 /// Each component iterated on its own until salmon's criterion holds over its
@@ -2031,6 +2054,61 @@ mod tests {
         assert_eq!(summary.num_at_max_iter, 1);
         assert_eq!(summary.reads_at_max_iter, 90.0);
         assert_eq!(summary.total_reads, 100_170.0);
+    }
+
+    /// A global run whose test passes at its first check while a near-identical
+    /// pair is still drifting is flagged as stopped at its minimum; a run with
+    /// nothing left to move, or one that iterates past the minimum, is not.
+    #[test]
+    fn a_global_run_that_stops_at_its_minimum_while_drifting_is_flagged() {
+        let run_one = |groups: &[(Vec<u32>, Vec<f64>, u64)], min_iter: u32| {
+            let b = EquivalenceClassBuilder::new();
+            for (t, w, n) in groups {
+                b.add_group(TranscriptGroup::new(t.clone()), w.clone(), *n);
+            }
+            let mut eq = b.finish();
+            eq.update_eff_lengths(&[1000.0; 2]);
+            let p = PackedEqClasses::from_collapsed(&eq, 2);
+            let (init, prior) = start(&p);
+            let mut plan = ComponentPlan::with_pull_min(&p, &p.counts, usize::MAX, false);
+            let set = Settings {
+                min_iter,
+                ..settings(false, false)
+            };
+            let (_, iters, converged, summary) = run(&mut plan, &init, &prior, &set);
+            assert!(converged);
+            (iters, summary)
+        };
+        // Shared reads dominate; the few unique ones pull the pair apart slowly.
+        // At iteration 5 its largest relative change is about 0.7% per
+        // iteration: under the 1% tolerance, but far from settled.
+        let drifting = [
+            (vec![0, 1], vec![1.0, 1.0], 10_000),
+            (vec![0], vec![1.0], 100),
+            (vec![1], vec![1.0], 30),
+        ];
+        let (iters, summary) = run_one(&drifting, 5);
+        assert_eq!(iters, 5);
+        assert!(summary.stopped_at_min_iter, "{summary:?}");
+        let (line, warn) = summary.describe(iters);
+        assert!(warn && line.contains("5-iteration minimum"), "{line}");
+        assert!(summary.to_meta().stopped_at_min_iter);
+        // Unambiguous reads: settled after one step, so nothing to flag.
+        let settled = [(vec![0], vec![1.0], 500), (vec![1], vec![1.0], 300)];
+        let (iters, summary) = run_one(&settled, 5);
+        assert_eq!(iters, 5);
+        assert!(!summary.stopped_at_min_iter, "{summary:?}");
+        assert!(!summary.describe(iters).1);
+        // Moving faster (about 1.8% at iteration 5), the pair fails the first
+        // check and stops later, on the test itself: not flagged.
+        let faster = [
+            (vec![0, 1], vec![1.0, 1.0], 10_000),
+            (vec![0], vec![1.0], 300),
+            (vec![1], vec![1.0], 100),
+        ];
+        let (iters, summary) = run_one(&faster, 5);
+        assert!(iters > 5);
+        assert!(!summary.stopped_at_min_iter, "{summary:?}");
     }
 
     /// `exp_digamma` agrees with `statrs`'s `digamma(x).exp()` over the range
