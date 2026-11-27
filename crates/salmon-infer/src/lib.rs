@@ -35,12 +35,26 @@ use salmon_eqclass::CollapsedEqClasses;
 
 mod components;
 mod daarem;
+#[cfg(any(gpu, test))]
+mod gpu;
+pub mod kmers;
 mod packed;
 pub mod uncertainty;
 
 pub use components::ComponentSummary;
 pub use packed::{PackedEqClasses, PosteriorMethod};
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
+
+/// The GPU backend compiled into this build for [`EmOptions::gpu`], if any.
+pub const GPU_BACKEND: Option<&str> = if cfg!(gpu = "metal") {
+    Some("metal")
+} else if cfg!(gpu = "cuda") {
+    Some("cuda")
+} else if cfg!(gpu = "rocm") {
+    Some("rocm")
+} else {
+    None
+};
 
 /// EM/VBEM acceleration scheme applied on top of the fixed-point map.
 ///
@@ -238,6 +252,11 @@ pub struct EmOptions {
     /// how bootstrap replicates are optimized (default
     /// [`BootstrapMode::RandomStartEm`])
     pub bootstrap: BootstrapMode,
+    /// experimental: warm-start parallel point-estimate runs on the GPU backend
+    /// in [`GPU_BACKEND`] when it finds a device and the problem is large enough
+    /// (ignored when none is compiled in). Off here; the CLI turns it on unless
+    /// `--no-gpu`. See `gpu`.
+    pub gpu: bool,
 }
 
 impl Default for EmOptions {
@@ -255,6 +274,7 @@ impl Default for EmOptions {
             vb_stop: EmStop::Projected,
             em_stop: EmStop::Global,
             bootstrap: BootstrapMode::RandomStartEm,
+            gpu: false,
         }
     }
 }
@@ -301,6 +321,9 @@ pub struct EmResult {
     /// reassigned to any surviving transcript (reported, not rescaled away). 0 in
     /// the normal case.
     pub dropped_mass: f64,
+    /// the GPU backend that warm-started this run ([`GPU_BACKEND`]), or `None`
+    /// when it ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
 }
 
 /// Relative-difference convergence check, matching salmon: the max over
@@ -314,13 +337,14 @@ pub struct EmResult {
 /// transcript hide behind thousands of settled ones.
 const VECTOR_REDUCTION_CHUNK: usize = 2048;
 
-fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
+fn max_rel_diff<T: Copy + Into<f64>>(alpha_in: &[T], alpha_out: &[T], cutoff: f64) -> f64 {
     let mut max_d = f64::NEG_INFINITY;
     for i in 0..alpha_in.len() {
+        let (a_in, a_out): (f64, f64) = (alpha_in[i].into(), alpha_out[i].into());
         // Skip negligible transcripts (see `alpha_check_cutoff`); a positive
         // cutoff also keeps the denominator non-zero.
-        if alpha_out[i] > cutoff {
-            let d = (alpha_out[i] - alpha_in[i]).abs() / alpha_out[i];
+        if a_out > cutoff {
+            let d = (a_out - a_in).abs() / a_out;
             if d > max_d {
                 max_d = d;
             }
@@ -335,9 +359,9 @@ fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
 /// ascending chunk order. Unlike a sum, max does not round, but retaining an
 /// explicit order also pins the treatment of non-finite candidates to the
 /// sequential `if d > max` semantics above.
-fn max_rel_diff_par(
-    alpha_in: &[f64],
-    alpha_out: &[f64],
+fn max_rel_diff_par<T: Copy + Into<f64> + Sync>(
+    alpha_in: &[T],
+    alpha_out: &[T],
     cutoff: f64,
     partials: &mut Vec<f64>,
 ) -> f64 {
@@ -411,7 +435,7 @@ pub fn optimize_packed_with_init(
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
 ) -> EmResult {
-    let (alphas, iters, converged, components) = run_em_counts(
+    let (alphas, iters, converged, components, gpu_backend) = run_em_counts(
         p,
         &p.counts,
         opts,
@@ -432,6 +456,7 @@ pub fn optimize_packed_with_init(
         converged,
         components,
         dropped_mass,
+        gpu_backend,
     }
 }
 
@@ -475,7 +500,7 @@ pub(crate) fn finalize_truncate_redistribute(
 }
 
 /// Run EM/VBEM to convergence on `p` with explicit per-class `counts`, returning
-/// `(alphas, iters, converged)` *without* the final min-alpha truncation (so
+/// `(alphas, iters, converged, components, gpu_backend)` *without* the final min-alpha truncation (so
 /// bootstrap can apply its own scaling first). `min_iter` is the minimum number
 /// of iterations before the convergence check engages.
 pub(crate) fn run_em_counts(
@@ -486,7 +511,13 @@ pub(crate) fn run_em_counts(
     min_iter: u32,
     init_alphas: InitAlphas<'_>,
     eff_lens: EffLens<'_>,
-) -> (Vec<f64>, u32, bool, Option<ComponentSummary>) {
+) -> (
+    Vec<f64>,
+    u32,
+    bool,
+    Option<ComponentSummary>,
+    Option<&'static str>,
+) {
     if let Err(e) = opts.validate() {
         // Callers are expected to validate up front (the CLI does); reaching
         // here is a programming error, not a data condition.
@@ -513,17 +544,44 @@ pub(crate) fn run_em_counts(
     // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
     // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
     let prior_alphas = prior_alphas_vec(opts, eff_lens, num_txps);
-    // Unaccelerated runs go through the component-decomposed engine: the
-    // same fixed-point iteration and stopping rule, laid out and scheduled by
-    // connected component (see `components`). The accelerators extrapolate
-    // over whole vectors between M-steps, so they keep the global kernels.
-    if opts.accel == EmAccel::None && opts.max_iter > 0 {
-        let stop = if opts.use_vbem {
-            opts.vb_stop
-        } else {
-            opts.em_stop
-        };
-        let mut cplan = components::ComponentPlan::new(p, counts, parallel, stop);
+    // Unaccelerated and SQUAREM runs go through the component-decomposed
+    // engine: the same fixed-point iteration, laid out and scheduled by
+    // connected component (see `components`). SQUAREM extrapolates and stops
+    // per component there, always under the projected rule. DAAREM's
+    // monotonicity control needs the whole objective, so it keeps the global
+    // kernels.
+    let squarem = opts.accel == EmAccel::Squarem;
+    let stop = if squarem {
+        EmStop::Projected
+    } else if opts.use_vbem {
+        opts.vb_stop
+    } else {
+        opts.em_stop
+    };
+    let mut cplan = (opts.accel != EmAccel::Daarem && opts.max_iter > 0)
+        .then(|| components::ComponentPlan::new(p, counts, parallel, stop));
+    #[allow(unused_mut)]
+    let (mut gpu_iters, mut min_iter, mut gpu_backend) = (0u32, min_iter, None);
+    // GPU only for open-ended point-estimate runs: bootstrap replicates pass
+    // `parallel = false`, bias-seed runs are fixed-length (`min_iter == max_iter`).
+    #[cfg(gpu)]
+    if opts.gpu && parallel && min_iter < opts.max_iter {
+        // the work the GPU would take over: the component engine's large
+        // components, or every incidence for the global kernels
+        let work = cplan
+            .as_ref()
+            .map_or(p.labels.len(), |c| c.large_incidences());
+        if let Some((warm, n)) =
+            gpu::converge(p, counts, &alphas, &prior_alphas, opts, min_iter, work)
+        {
+            alphas = warm;
+            gpu_iters = n;
+            gpu_backend = GPU_BACKEND;
+            // the GPU steps already served the minimum-iteration floor
+            min_iter = min_iter.saturating_sub(n);
+        }
+    }
+    if let Some(cplan) = &mut cplan {
         if cplan.num_components() > 0 {
             let set = components::Settings {
                 vb: opts.use_vbem,
@@ -534,10 +592,17 @@ pub(crate) fn run_em_counts(
                 parallel,
                 guard_zero_et: true,
                 stop,
+                squarem,
             };
             let (alphas, iters, converged, summary) =
-                components::run(&mut cplan, &alphas, &prior_alphas, &set);
-            return (alphas, iters, converged, Some(summary));
+                components::run(cplan, &alphas, &prior_alphas, &set);
+            return (
+                alphas,
+                iters + gpu_iters,
+                converged,
+                Some(summary),
+                gpu_backend,
+            );
         }
     }
     let mut exp_theta = vec![0.0f64; num_txps];
@@ -670,7 +735,74 @@ pub(crate) fn run_em_counts(
             );
         }
     }
-    (alphas, it, converged, None)
+    (alphas, it + gpu_iters, converged, None, gpu_backend)
+}
+
+/// The SqS3 point `xp` extrapolated from `x0` through its two M-steps `x1`
+/// and `x2` (`r`, `v` are scratch). `false`, leaving `xp` untouched, when the
+/// second differences vanish or are not finite: at the fixpoint, where the
+/// caller takes `x2`. See [`squarem_loop`].
+pub(crate) fn squarem_point(
+    x0: &[f64],
+    x1: &[f64],
+    x2: &[f64],
+    r: &mut [f64],
+    v: &mut [f64],
+    xp: &mut [f64],
+) -> bool {
+    let n = x0.len();
+    // r = x1 - x0 ; v = (x2 - x1) - r ; and their squared norms.
+    let mut r_sq = 0.0f64;
+    let mut v_sq = 0.0f64;
+    for i in 0..n {
+        let ri = x1[i] - x0[i];
+        let vi = (x2[i] - x1[i]) - ri;
+        r[i] = ri;
+        v[i] = vi;
+        r_sq += ri * ri;
+        v_sq += vi * vi;
+    }
+    // `v_sq <= 0.0` is false for NaN, so the finiteness check also guards
+    // NaN/inf.
+    if v_sq <= 0.0 || !v_sq.is_finite() {
+        return false;
+    }
+
+    // SqS3 steplength, clamped so |alpha| ≥ 1 (alpha = -1 ⇒ xp = x2).
+    // The ratio of step size to step-size *change* estimates how far the
+    // geometric series still has to run.
+    let mut alpha = -(r_sq.sqrt() / v_sq.sqrt());
+    if alpha > -1.0 {
+        alpha = -1.0;
+    }
+
+    // Extrapolate, backing off toward the double-step if a component < 0.
+    //
+    // Abundances are counts and cannot be negative; an over-long jump can
+    // overshoot past zero, so the step is repeatedly halved back toward the
+    // plain double step until every component is valid.
+    let mut tries = 0u32;
+    loop {
+        let a2 = alpha * alpha;
+        let mut ok = true;
+        for i in 0..n {
+            let val = x0[i] - 2.0 * alpha * r[i] + a2 * v[i];
+            xp[i] = val;
+            if val < 0.0 {
+                ok = false;
+            }
+        }
+        if ok {
+            return true;
+        }
+        if alpha >= -1.0 || tries >= 30 {
+            // Give up accelerating this cycle: fall back to the plain x2.
+            xp.copy_from_slice(x2);
+            return true;
+        }
+        alpha = (alpha - 1.0) / 2.0; // move toward -1
+        tries += 1;
+    }
 }
 
 /// SQUAREM (SqS3) acceleration of the fixed-point iteration.
@@ -728,60 +860,11 @@ fn squarem_loop(
         f(&x1, &mut x2);
         *it += 1;
 
-        // r = x1 - x0 ; v = (x2 - x1) - r ; and their squared norms.
-        let mut r_sq = 0.0f64;
-        let mut v_sq = 0.0f64;
-        for i in 0..n {
-            let ri = x1[i] - x0[i];
-            let vi = (x2[i] - x1[i]) - ri;
-            r[i] = ri;
-            v[i] = vi;
-            r_sq += ri * ri;
-            v_sq += vi * vi;
-        }
-
-        // Vanishing (or non-finite) second differences ⇒ at the fixpoint: take the
-        // plain step x2. `v_sq <= 0.0` is false for NaN, so the finiteness check
-        // also guards NaN/inf.
-        if v_sq <= 0.0 || !v_sq.is_finite() {
+        // Vanishing (or non-finite) second differences ⇒ at the fixpoint: take
+        // the plain step x2.
+        if !squarem_point(x0, &x1, &x2, &mut r, &mut v, &mut xp) {
             std::mem::swap(x0, &mut x2);
             return true;
-        }
-
-        // SqS3 steplength, clamped so |alpha| ≥ 1 (alpha = -1 ⇒ xp = x2).
-        // The ratio of step size to step-size *change* estimates how far the
-        // geometric series still has to run.
-        let mut alpha = -(r_sq.sqrt() / v_sq.sqrt());
-        if alpha > -1.0 {
-            alpha = -1.0;
-        }
-
-        // Extrapolate, backing off toward the double-step if a component < 0.
-        //
-        // Abundances are counts and cannot be negative; an over-long jump can
-        // overshoot past zero, so the step is repeatedly halved back toward the
-        // plain double step until every component is valid.
-        let mut tries = 0u32;
-        loop {
-            let a2 = alpha * alpha;
-            let mut ok = true;
-            for i in 0..n {
-                let val = x0[i] - 2.0 * alpha * r[i] + a2 * v[i];
-                xp[i] = val;
-                if val < 0.0 {
-                    ok = false;
-                }
-            }
-            if ok {
-                break;
-            }
-            if alpha >= -1.0 || tries >= 30 {
-                // Give up accelerating this cycle: fall back to the plain x2.
-                xp.copy_from_slice(&x2);
-                break;
-            }
-            alpha = (alpha - 1.0) / 2.0; // move toward -1
-            tries += 1;
         }
 
         // Stabilizing M-step, then converge-check on the whole cycle.

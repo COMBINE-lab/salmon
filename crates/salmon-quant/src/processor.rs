@@ -80,6 +80,8 @@ pub(crate) struct Shared<'a> {
     /// discard a fragment mapping to more than this many places (`--maxReadOcc`)
     pub max_read_occ: usize,
     pub skip: SkippingStrategy,
+    /// `--sketch` raw hits from the GPU k-mer lookup, when a device took the table
+    pub gpu: Option<crate::gpu_map::GpuMap<'a>>,
     /// expected library format for strand-compatibility filtering; `None` when
     /// auto-detecting (filtering only applies with an explicit `-l`)
     pub expected_format: Option<LibraryFormat>,
@@ -270,6 +272,8 @@ pub(crate) struct QuantProcessor<'a> {
     /// per-thread RAD chunk buffer (flushed as one chunk per batch); `None`
     /// unless `--writeRad` is set
     pub rad_buf: Option<salmon_rad::FragmentChunkBuf>,
+    /// this worker's GPU lookup buffers (`--sketch` with a device)
+    pub gpu_hits: crate::gpu_map::BatchHits,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -286,6 +290,7 @@ impl<'a> QuantProcessor<'a> {
             rad_buf: shared.rad.map(|rad| {
                 salmon_rad::FragmentChunkBuf::with_capacity_codec(64 * 1024, rad.codec())
             }),
+            gpu_hits: Default::default(),
         }
     }
 }
@@ -656,6 +661,73 @@ fn flush_unmapped(proc: &mut QuantProcessor) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Thread time of each stage of the paired mapping loop, summed over workers,
+/// for the `salmon::timing` debug breakdown. Off (no clock reads) unless
+/// `ON` is set before mapping.
+pub(crate) mod stage {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Instant;
+
+    pub const NAMES: [&str; 8] = [
+        "gpu_lookup",
+        "gpu_replay",
+        "cpu_map",
+        "post",
+        "rad_write",
+        "record",
+        "batch_flush",
+        "gpu_selected",
+    ];
+    pub const GPU_LOOKUP: usize = 0;
+    pub const GPU_REPLAY: usize = 1;
+    pub const CPU_MAP: usize = 2;
+    pub const POST: usize = 3;
+    pub const RAD: usize = 4;
+    pub const RECORD: usize = 5;
+    pub const FLUSH: usize = 6;
+    /// pairing from the device-selected targets (the rest of the GPU path's
+    /// mapping is `GPU_REPLAY`)
+    pub const GPU_SELECTED: usize = 7;
+    pub static ON: AtomicBool = AtomicBool::new(false);
+    pub static NS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    /// fragments mapped from the GPU hits, and on the CPU in a GPU batch
+    pub static FRAGS_GPU: AtomicU64 = AtomicU64::new(0);
+    pub static FRAGS_CPU_IN_GPU_BATCH: AtomicU64 = AtomicU64::new(0);
+    /// of `FRAGS_GPU`, those mapped from the device-selected targets
+    pub static FRAGS_SELECTED: AtomicU64 = AtomicU64::new(0);
+
+    /// A lap clock: `mark(s)` charges the time since the last mark to stage `s`.
+    pub struct Lap {
+        t: Option<Instant>,
+        ns: [u64; 8],
+    }
+    impl Lap {
+        pub fn new() -> Self {
+            Lap {
+                t: ON.load(Ordering::Relaxed).then(Instant::now),
+                ns: [0; 8],
+            }
+        }
+        #[inline]
+        pub fn mark(&mut self, s: usize) {
+            if let Some(t) = &mut self.t {
+                let now = Instant::now();
+                self.ns[s] += (now - *t).as_nanos() as u64;
+                *t = now;
+            }
+        }
+    }
+    impl Drop for Lap {
+        fn drop(&mut self) {
+            if self.t.is_some() {
+                for (a, n) in NS.iter().zip(self.ns) {
+                    a.fetch_add(n, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+}
+
 // The paired-end entry point. `PairedParallelProcessor` is paraseq's interface
 // for "given a batch of mate pairs, do something with them"; paraseq owns the
 // reading and the threading, this owns the per-fragment work.
@@ -669,6 +741,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // several of them mutably at once, which the borrow checker only permits
         // on distinct fields, not through repeated `self.` accesses.
         let mut busy = self.shared.busy.timer();
+        let mut lap = stage::Lap::new();
         let QuantProcessor {
             shared,
             counters,
@@ -679,6 +752,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             sam_buf,
             bam_scratch,
             rad_buf,
+            gpu_hits,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -695,7 +769,15 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         // Reused across the batch's reads (the `*_into` calls clear it), so the
         // per-fragment result Vec isn't reallocated per read.
         let mut placements: Vec<ScoredMapping> = Vec::new();
-        for (r1, r2) in pairs {
+        let pairs: Vec<_> = pairs.collect();
+        let on_gpu = sh.sketch
+            && sh.gpu.is_some_and(|g| {
+                gpu_hits.lookup(g, pairs.iter().flat_map(|(a, b)| [a.seq(), b.seq()]))
+            });
+        lap.mark(stage::GPU_LOOKUP);
+        let unitig_base = sh.gpu.map_or(&[][..], |g| g.unitig_base());
+        let (mut n_gpu, mut n_cpu, mut n_sel) = (0u64, 0u64, 0u64);
+        for (i, (r1, r2)) in pairs.into_iter().enumerate() {
             // Per fragment, not per batch: a batch runs far longer than one
             // broker sampling window, so a per-batch counter would leave whole
             // windows reading zero work and report a thread mapping flat out as
@@ -703,7 +785,54 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             busy.tick();
             let s1 = r1.seq();
             let s2 = r2.seq();
-            if sh.sketch {
+            let selected = on_gpu
+                .then(|| gpu_hits.selected(2 * i).zip(gpu_hits.selected(2 * i + 1)))
+                .flatten();
+            if let Some((t1, t2)) = selected {
+                salmon_map::sketch_hits::map_read_pair_selected_into(
+                    &mut placements,
+                    idx.k(),
+                    sketch_scratch.as_mut().unwrap(),
+                    (s1.len(), t1),
+                    (s2.len(), t2),
+                    sh.sketch_strict_orphan,
+                    sh.map_cfg.pair.allow_dovetail,
+                    sh.map_cfg.collect.max_hit_occ,
+                    sh.max_read_occ,
+                    sh.salmon,
+                    sh.map_cfg.score.allow_decoy_orphans,
+                );
+            }
+            let from_gpu = selected.is_some()
+                || on_gpu
+                    && match (gpu_hits.read(2 * i), gpu_hits.read(2 * i + 1)) {
+                        (Some(h1), Some(h2)) => salmon_map::sketch_hits::map_read_pair_hits_into(
+                            &mut placements,
+                            idx,
+                            sketch_scratch.as_mut().unwrap(),
+                            (s1.len(), h1),
+                            (s2.len(), h2),
+                            sh.sketch_strict_orphan,
+                            sh.map_cfg.pair.allow_dovetail,
+                            sh.map_cfg.collect.max_hit_occ,
+                            sh.max_read_occ,
+                            sh.salmon,
+                            sh.map_cfg.score.allow_decoy_orphans,
+                            unitig_base,
+                        ),
+                        _ => false,
+                    };
+            if from_gpu {
+                // mapped from the GPU's targets or raw hits
+                n_gpu += 1;
+                n_sel += selected.is_some() as u64;
+                lap.mark(if selected.is_some() {
+                    stage::GPU_SELECTED
+                } else {
+                    stage::GPU_REPLAY
+                });
+            } else if sh.sketch {
+                n_cpu += on_gpu as u64;
                 map_read_pair_sketch_into(
                     &mut placements,
                     idx,
@@ -730,6 +859,9 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     sh.map_cfg,
                     &mut scratch.map,
                 );
+            }
+            if !from_gpu {
+                lap.mark(stage::CPU_MAP);
             }
             // Sketch mappings carry no per-hit decoy flag and bypass the
             // selective-alignment finalize, so decoys would otherwise leak into
@@ -775,6 +907,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     )?;
                 }
             }
+            lap.mark(stage::POST);
             if let (Some(rad), Some(buf)) = (sh.rad, rad_buf.as_mut()) {
                 if !placements.is_empty() {
                     let rec = build_rad_record(&placements);
@@ -785,21 +918,30 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
                     })?;
                 }
             }
+            lap.mark(stage::RAD);
             if let Some(acc) = sh.discrete_fld {
                 record_discrete(&sh, &placements, acc, counters);
             } else {
                 record(&sh, &placements, counters, scratch);
             }
+            lap.mark(stage::RECORD);
+        }
+        if stage::ON.load(Ordering::Relaxed) {
+            stage::FRAGS_GPU.fetch_add(n_gpu, Ordering::Relaxed);
+            stage::FRAGS_CPU_IN_GPU_BATCH.fetch_add(n_cpu, Ordering::Relaxed);
+            stage::FRAGS_SELECTED.fetch_add(n_sel, Ordering::Relaxed);
         }
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        let mut lap = stage::Lap::new();
         flush_processed(self);
         flush_unmapped(self)?;
         flush_sam(self)?;
         flush_bam(self)?;
         flush_rad(self)?;
+        lap.mark(stage::FLUSH);
         Ok(())
     }
 
@@ -832,6 +974,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             sam_buf,
             bam_scratch,
             rad_buf,
+            gpu_hits,
         } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
@@ -844,10 +987,30 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         }
         // Reused across the batch's reads (the `*_into` calls clear it).
         let mut placements: Vec<ScoredMapping> = Vec::new();
-        for rec in records {
+        let records: Vec<_> = records.collect();
+        let on_gpu = sh.sketch
+            && sh
+                .gpu
+                .is_some_and(|g| gpu_hits.lookup(g, records.iter().map(|r| r.seq())));
+        for (i, rec) in records.into_iter().enumerate() {
             busy.tick(); // see the paired-end loop
             let s = rec.seq();
-            if sh.sketch {
+            let from_gpu = on_gpu
+                && gpu_hits.read(i).is_some_and(|h| {
+                    salmon_map::sketch_hits::map_single_read_hits_into(
+                        &mut placements,
+                        idx,
+                        sketch_scratch.as_mut().unwrap(),
+                        s.len(),
+                        h,
+                        sh.map_cfg.collect.max_hit_occ,
+                        sh.max_read_occ,
+                        sh.gpu.map_or(&[][..], |g| g.unitig_base()),
+                    )
+                });
+            if from_gpu {
+                // mapped from the GPU raw hits
+            } else if sh.sketch {
                 map_single_read_sketch_into(
                     &mut placements,
                     idx,

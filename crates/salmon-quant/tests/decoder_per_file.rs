@@ -61,6 +61,7 @@ fn plan_for(paths: Vec<PathBuf>) -> decode::MappingPlan {
             workers_per_file: None,
         },
         EngagementPolicy::always(),
+        false,
     )
     .expect("planning failed")
 }

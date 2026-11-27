@@ -11,6 +11,8 @@ description = "Equivalence-class data structures and concurrent builder for the 
 [dependencies]
 salmon-core = { workspace = true }
 flate2 = { workspace = true }
+crc32fast = "1"
+rayon = { workspace = true }
 dashmap = { workspace = true }
 hashbrown = { workspace = true }
 xxhash-rust = { workspace = true }

@@ -33,13 +33,14 @@
 
 mod bam;
 pub mod decode;
+mod gpu_map;
 mod mapping_record;
 mod output;
 mod processor;
 mod sam;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 
@@ -306,6 +307,9 @@ pub struct MapResult {
     /// `lib_format_counts.json`'s per-format keys and its
     /// concordant/inconsistent/strand-bias derivations.
     pub lib_format_counts: salmon_core::LibFormatCountsArray,
+    /// the GPU backend that ran the `--sketch` k-mer lookup, or `None` when
+    /// the mapping ran on the CPU only
+    pub gpu_backend: Option<&'static str>,
     /// index of the first decoy reference (`None` if the index has no decoys).
     /// The decoy block is `[first_decoy_index, first_decoy_index + num_decoys)`;
     /// any references beyond it are short (sub-`k`, never-seeded) transcripts that
@@ -405,10 +409,115 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
     } else {
         RefseqLoad::None
     };
-    let salmon = SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
-        .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
+    // shared with the thread that builds the GPU k-mer lookup
+    let salmon = std::sync::Arc::new(
+        SalmonIndex::load_with_opts(&opts.index_dir, refseq_load)
+            .with_context(|| format!("loading index {}", opts.index_dir.display()))?,
+    );
     let num_refs = salmon.num_refs();
     timer.mark("index_load");
+
+    // piscem's default; the GPU lookup reproduces it exactly
+    let skip = SkippingStrategy::Permissive;
+    // `--sketch` k-mer lookup on the GPU (same mappings as the CPU path).
+    // It is built on a thread while the CPU maps the first batches, so its
+    // build (`gpu_kmer_table` in the timing log) does not delay the run.
+    // shortcut: rebuilt every run; persist it beside the index if it ever
+    // outlasts the mapping.
+    let kmer_gpu = std::sync::Arc::new(std::sync::OnceLock::new());
+    let gpu_lookup = opts.sketch
+        && opts.em.gpu
+        && salmon_infer::kmers::KmerGpu::compiled()
+        && salmon.inner().poison_table().is_none();
+    if gpu_lookup {
+        let (salmon, slot) = (salmon.clone(), kmer_gpu.clone());
+        let max_hit_occ = opts.map_config.collect.max_hit_occ;
+        let max_read_occ = opts.max_read_occ.min(u32::MAX as usize) as u32;
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            gpu_map::urgent();
+            let idx = salmon.inner();
+            use salmon_infer::kmers::{KmerGpu, KmerTable};
+            use salmon_map::sketch_hits as sh;
+            // piscem's sshash dictionary by default; the flat k-mer table is
+            // kept behind a switch while the two are compared
+            // shortcut: env switch, drop the loser once measured on real data
+            let build = || {
+                if std::env::var("SALMON_GPU_LOOKUP").as_deref() == Ok("table") {
+                    let (kstart, keep, kmer) = sh::unitig_kmers(idx);
+                    KmerTable::build(idx.k(), kstart, keep, kmer).map(|t| (t, Vec::new()))
+                } else {
+                    sh::sshash_parts(idx).and_then(|p| {
+                        // `build_sshash` takes only offsets below 2^32
+                        let unitig_base = p.soff.iter().map(|&o| o as u32).collect();
+                        KmerTable::build_sshash(
+                            idx.k(),
+                            p.m,
+                            p.magic,
+                            p.spss,
+                            p.soff,
+                            sh::kept(idx),
+                            p.bstart,
+                            p.offs,
+                            // its minimizer table is built on the device where it can be
+                            !KmerGpu::builds_table(),
+                            salmon_infer::kmers::HEAVY_BUCKET,
+                        )
+                        .map(|t| (t, unitig_base))
+                    })
+                }
+            };
+            // its own pool, so its threads can take the build's priority; as
+            // many threads as the global pool, which `-p` sized
+            // opening the device takes ~50 ms: beside the CPU half of the build
+            let both = || rayon::join(build, KmerGpu::available);
+            let (table, available) = match rayon::ThreadPoolBuilder::new()
+                .num_threads(rayon::current_num_threads())
+                .start_handler(|_| gpu_map::urgent())
+                .build()
+            {
+                Ok(pool) => pool.install(both),
+                Err(_) => both(),
+            };
+            if !available {
+                return;
+            }
+            match table
+                .ok_or_else(|| "the index does not fit the GPU lookup".to_string())
+                .and_then(|(table, unitig_base)| {
+                    let mut gpu = KmerGpu::new(&table, skip == SkippingStrategy::Permissive)?;
+                    // here, not on the first mapping batches
+                    gpu.warm_up(&table);
+                    // the target selection too, on the backends that have it
+                    let select = sh::occurrences(idx).is_some_and(|(off, ent, ref_len_bits)| {
+                        let occ = salmon_infer::kmers::Occurrences {
+                            off,
+                            ent,
+                            ref_len_bits,
+                        };
+                        let max_occ = max_hit_occ.saturating_sub(1).min(u32::MAX as usize);
+                        gpu.set_occurrences(&occ, max_occ as u32, max_read_occ)
+                            .map_err(|e| tracing::debug!("GPU target selection off ({e})"))
+                            .is_ok()
+                    });
+                    Ok(gpu_map::GpuLookup {
+                        gpu,
+                        unitig_base,
+                        select,
+                    })
+                }) {
+                Ok(gpu) => {
+                    let device_mb = gpu.gpu.device_bytes().map_or(-1.0, |b| b as f64 / 1e6);
+                    let select = gpu.select;
+                    let _ = slot.set(gpu);
+                    let elapsed_s = t0.elapsed().as_secs_f64();
+                    tracing::info!(target: "salmon::timing", phase = "gpu_kmer_table", elapsed_s, device_mb, select, "phase complete");
+                }
+                Err(e) => tracing::warn!("GPU k-mer lookup off ({e}); mapping on the CPU"),
+            }
+        });
+    }
+    let (kmer_gpu_off, kmer_gpu_used) = (AtomicBool::new(false), AtomicBool::new(false));
 
     // The fragment-length prior (mean 250, sd 25 by default). A paired run
     // replaces it at end of pass with the order-independent `DiscreteFld`
@@ -600,6 +709,10 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
                 opts.is_paired(),
                 opts.thread_policy.as_deref(),
             )?,
+            // shortcut: decided before the device opens, so a build with a GPU
+            // backend but no usable device still reads ahead; harmless but
+            // two threads over `-p`
+            gpu_lookup,
         )?;
 
         let shared = Shared {
@@ -610,7 +723,12 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
             sketch: opts.sketch,
             sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
-            skip: SkippingStrategy::Permissive,
+            skip,
+            gpu: Some(gpu_map::GpuMap {
+                gpu: &kmer_gpu,
+                off: &kmer_gpu_off,
+                used: &kmer_gpu_used,
+            }),
             expected_format,
             incompat_prior: opts.incompat_prior,
             ignore_incompat,
@@ -648,11 +766,17 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
         };
         let collection = Collection::new(readers, kind)
             .map_err(|e| anyhow::anyhow!("building read collection: {e}"))?;
+        let stages = tracing::enabled!(target: "salmon::timing", tracing::Level::DEBUG);
+        processor::stage::ON.store(stages, Ordering::Relaxed);
+        let map_start = std::time::Instant::now();
         let mapped = if opts.is_paired() {
             collection.process_parallel_paired_pool(&mut proc, &plan.map_pool, None)
         } else {
             collection.process_parallel_pool(&mut proc, &plan.map_pool, None)
         };
+        if stages {
+            log_map_stages(map_start.elapsed().as_secs_f64(), nthreads);
+        }
 
         // Settle the broker before propagating a mapping error, and never let a
         // broker failure become the run's error. piscem shipped the opposite:
@@ -950,6 +1074,10 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
         num_compatible_fragments: num_frags_compat.load(Ordering::Relaxed),
         num_incompatible_fragments: num_frags_incompat.load(Ordering::Relaxed),
         lib_format_counts: std::array::from_fn(|i| lib_format_counts[i].load(Ordering::Relaxed)),
+        gpu_backend: kmer_gpu_used
+            .load(Ordering::Relaxed)
+            .then_some(salmon_infer::GPU_BACKEND)
+            .flatten(),
         first_decoy_index: salmon.info().first_decoy_index,
         num_decoys: salmon.info().num_decoys,
         keep_duplicates: salmon.info().keep_duplicates,
@@ -999,3 +1127,26 @@ pub fn map_to_rad(opts: &QuantOptions, rad_path: &Path) -> Result<MapResult> {
 }
 
 pub(crate) use salmon_core::asctime_now;
+
+/// Log the mapping loop's per-stage thread time (paired path) and what is left of `threads × wall`: reading, decompression and
+/// waiting in paraseq's reader.
+fn log_map_stages(wall_s: f64, threads: usize) {
+    use processor::stage;
+    let mut sum = 0.0;
+    for (name, ns) in stage::NAMES.iter().zip(&stage::NS) {
+        let s = ns.swap(0, Ordering::Relaxed) as f64 / 1e9;
+        sum += s;
+        tracing::debug!(target: "salmon::timing", stage = name, thread_s = s, "map stage");
+    }
+    tracing::debug!(
+        target: "salmon::timing",
+        wall_s,
+        threads,
+        thread_s = wall_s * threads as f64,
+        outside_s = wall_s * threads as f64 - sum,
+        frags_gpu = stage::FRAGS_GPU.swap(0, Ordering::Relaxed),
+        frags_cpu_in_gpu_batch = stage::FRAGS_CPU_IN_GPU_BATCH.swap(0, Ordering::Relaxed),
+        frags_selected = stage::FRAGS_SELECTED.swap(0, Ordering::Relaxed),
+        "map stages (outside = reading, decompression, waiting)"
+    );
+}
