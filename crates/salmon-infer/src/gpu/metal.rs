@@ -223,6 +223,37 @@ fn out_buffer(dev: &ProtocolObject<dyn MTLDevice>, len: usize) -> Result<Buf, St
         .ok_or_else(|| "Metal buffer allocation failed".to_string())
 }
 
+/// `slot`'s buffer, replaced by a larger one when it holds fewer than `bytes`.
+fn fit<'b>(
+    dev: &ProtocolObject<dyn MTLDevice>,
+    slot: &'b mut Option<Buf>,
+    bytes: usize,
+) -> Result<&'b Buf, String> {
+    if slot.as_ref().is_none_or(|b| b.length() < bytes) {
+        *slot = Some(out_buffer(dev, bytes.div_ceil(4))?);
+    }
+    Ok(slot.as_ref().unwrap())
+}
+
+/// [`fit`], holding `data`.
+fn fit_with<'b, T: Copy>(
+    dev: &ProtocolObject<dyn MTLDevice>,
+    slot: &'b mut Option<Buf>,
+    data: &[T],
+) -> Result<&'b Buf, String> {
+    let b = fit(dev, slot, std::mem::size_of_val(data))?;
+    // SAFETY: a shared-storage buffer of at least this many bytes, which no
+    // GPU work uses while its call holds it.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            data.as_ptr().cast::<u8>(),
+            b.contents().as_ptr().cast::<u8>(),
+            std::mem::size_of_val(data),
+        )
+    };
+    Ok(b)
+}
+
 fn pipeline(
     dev: &ProtocolObject<dyn MTLDevice>,
     lib: &ProtocolObject<dyn MTLLibrary>,
@@ -634,6 +665,10 @@ pub(crate) struct KmerDevice {
     kstart: Buf,
     useq: Buf,
     prm: Buf,
+    /// Each `run`'s input and output buffers, kept for a later call: fresh
+    /// ones cost a page fault per page on first use, which on ERR188044 was
+    /// a quarter of the lookup's thread time.
+    scratch: std::sync::Mutex<Vec<[Option<Buf>; 6]>>,
 }
 
 // SAFETY: MTLDevice, MTLCommandQueue, MTLComputePipelineState and MTLBuffer
@@ -676,6 +711,7 @@ impl KmerDevice {
                 kstart,
                 useq,
                 prm: prm_b,
+                scratch: Default::default(),
                 dev,
             })
         })
@@ -719,10 +755,14 @@ impl KmerDevice {
     ) -> Result<(), String> {
         autoreleasepool(|_| {
             let n = counts.len() as u32;
-            let seq_b = buffer(&self.dev, seq)?;
-            let off_b = buffer(&self.dev, off)?;
-            let hits_b = out_buffer(&self.dev, hits.len())?;
-            let counts_b = out_buffer(&self.dev, counts.len())?;
+            // every kernel writes each read's count and only the prefix it
+            // counts is read, so a reused buffer needs no clearing
+            let mut scratch = self.scratch.lock().unwrap().pop().unwrap_or_default();
+            let [seq_s, off_s, hits_s, counts_s, s_s, ns_s] = &mut scratch;
+            let seq_b = fit_with(&self.dev, seq_s, seq)?;
+            let off_b = fit_with(&self.dev, off_s, off)?;
+            let hits_b = fit(&self.dev, hits_s, hits.len() * 4)?;
+            let counts_b = fit(&self.dev, counts_s, counts.len() * 4)?;
             let cb = self
                 .queue
                 .commandBuffer()
@@ -731,28 +771,28 @@ impl KmerDevice {
                 .computeCommandEncoder()
                 .ok_or("no Metal compute encoder")?;
             let bufs = [
-                &seq_b,
-                &off_b,
+                seq_b,
+                off_b,
                 &self.keys,
                 &self.vals,
                 &self.kstart,
                 &self.useq,
                 &self.prm,
-                &hits_b,
-                &counts_b,
+                hits_b,
+                counts_b,
             ];
             dispatch(&enc, &self.pso, &bufs, n);
             // the default (serial) encoder runs this after the lookup
             let sel_bufs = match (&sel, &self.occ) {
                 (Some((s, ns)), Some([occ_off, occ_ent, sp])) => {
                     let (s_b, ns_b) = (
-                        out_buffer(&self.dev, s.len())?,
-                        out_buffer(&self.dev, ns.len())?,
+                        fit(&self.dev, s_s, s.len() * 4)?,
+                        fit(&self.dev, ns_s, ns.len() * 4)?,
                     );
                     let bufs = [
-                        &off_b,
-                        &hits_b,
-                        &counts_b,
+                        off_b,
+                        hits_b,
+                        counts_b,
                         &self.keys,
                         &self.vals,
                         &self.kstart,
@@ -761,8 +801,8 @@ impl KmerDevice {
                         occ_off,
                         occ_ent,
                         sp,
-                        &s_b,
-                        &ns_b,
+                        s_b,
+                        ns_b,
                     ];
                     dispatch_lanes(&enc, &self.sel_pso, &bufs, n, 32);
                     Some((s_b, ns_b))
@@ -793,18 +833,19 @@ impl KmerDevice {
                     out[r.clone()].copy_from_slice(&src[r]);
                 }
             };
-            counts.copy_from_slice(src(&counts_b, counts));
-            rows(&hits_b, hits, HITS_CAP, 3, counts);
+            counts.copy_from_slice(src(counts_b, counts));
+            rows(hits_b, hits, HITS_CAP, 3, counts);
             if let (Some((s, ns)), Some((s_b, ns_b))) = (sel.as_mut(), sel_bufs) {
-                ns.copy_from_slice(src(&ns_b, ns));
+                ns.copy_from_slice(src(ns_b, ns));
                 // `SEL_CPU`/`SEL_OVER` exceed the cap: nothing to copy
                 let ns: &[u32] = ns;
                 let keep: Vec<u32> = ns
                     .iter()
                     .map(|&c| if c as usize > SEL_CAP { 0 } else { c })
                     .collect();
-                rows(&s_b, s, SEL_CAP, 3, &keep);
+                rows(s_b, s, SEL_CAP, 3, &keep);
             }
+            self.scratch.lock().unwrap().push(scratch);
             Ok(())
         })
     }

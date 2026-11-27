@@ -1011,6 +1011,24 @@ phase goes from 8.8–9.3 s (median 9.2 s) to 8.3–9.1 s (median 8.5 s), and th
 run from a median of 20.6 s to 20.0 s. The CPU path keeps reading inside `fill`: its 16 mapping threads
 already fill the cores, and the extra threads only compete with them.
 
+**The lookup's buffers.** With the selection, the heavy-bucket table and the
+read-ahead, the mapping threads of ERR188044 spend 1.7 thread-s outside the
+stages, so they no longer wait on the input: the GPU call (`gpu_lookup`) is
+the largest stage, 58.6 of 140.5 thread-s. Timing its parts showed 40.6
+thread-s waiting on the command buffer (the device's own busy time sums to
+16.4 s over the 8.7 s phase), 1.6 s allocating and encoding, and 15.2 s
+copying the results out. Each call allocated its six shared buffers anew,
+about 17 MB per batch of 4,096 pairs, mostly the selection's 128-target
+rows, and the first CPU read of every page faulted. Each call now takes a
+set of buffers from a pool on the device and returns it, growing a buffer
+only when a batch needs more. Every kernel writes each read's count and only
+the prefix it counts is read, so a reused buffer needs no clearing. The
+copy-out drops to 5.1 thread-s and the allocation to 0.2. Over 4 alternated
+pairs the mapping phase goes from a median of 8.57 s to 8.22 s (−4%), faster in
+every pair, with identical equivalence classes and `quant.sf`. Most of what
+remains is waiting on the device, which now runs about two command buffers
+at all times.
+
 **Heavy buckets.** The first GPU run on this data did not finish in 10
 minutes. The kernel scanned every super-k-mer of the minimizer's bucket, while
 sshash looks buckets above 64 super-k-mers up in its skew index. In the
